@@ -7685,6 +7685,8 @@ const FunctionBuilder = struct {
                 if (enum_raw_target) |target| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.enum_raw), target.result_ty, expr.span);
                     try self.addCallTargetFact(.enum_raw, target.result_ty, node.callee.*.span);
+                    const receiver = (memberExpr(node.callee.*) orelse return error.UnsupportedMirConstruction).base.*;
+                    try self.appendTargetTypeFact(.typed_unary_operand, target.source_type_expr, target.source_ty, receiver.span);
                     try self.appendTargetTypeFact(.enum_raw_source, target.source_type_expr, target.source_ty, expr.span);
                     try self.appendTargetTypeFact(.enum_raw_result, target.result_type_expr, target.result_ty, expr.span);
                 }
@@ -7752,6 +7754,7 @@ const FunctionBuilder = struct {
                     try self.addCallTargetFact(.bitcast, bitcast_ty, node.callee.*.span);
                     const target_ty = node.type_args[0];
                     const source_ty = try self.explicitCastSourceTypeExpr(node.args[0], target_ty);
+                    try self.appendTargetTypeFact(.typed_unary_operand, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                     try self.appendTargetTypeFact(.bitcast_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                     try self.appendTargetTypeFact(.bitcast_target, target_ty, bitcast_ty, expr.span);
                 }
@@ -7759,6 +7762,10 @@ const FunctionBuilder = struct {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.phys), phys_ty, expr.span);
                     try self.addCallTargetFact(.phys, phys_ty, node.callee.*.span);
                     const result_ty = ast_query.simpleNameType("PAddr", expr.span);
+                    const source_ty = self.typeExprForExpr(node.args[0]) orelse
+                        self.simpleTypeExprForValueType(self.exprType(node.args[0]), node.args[0].span) orelse
+                        return error.UnsupportedMirConstruction;
+                    try self.appendTargetTypeFact(.typed_unary_operand, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                     try self.appendTargetTypeFact(.phys_result, result_ty, phys_ty, expr.span);
                 }
                 if (raw_target) |target| {
@@ -7809,6 +7816,7 @@ const FunctionBuilder = struct {
                     const conversion_result_ty = self.conversionCallResultValueType(conversion);
                     try self.addInstr(.call_target, @tagName(conversion.kind), call_ty, expr.span);
                     try self.addCallTargetFact(conversion.kind, conversion_result_ty, node.callee.*.span);
+                    try self.appendTargetTypeFact(.typed_unary_operand, conversion.source_ty, valueTypeFromTypeAlias(conversion.source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                     try self.appendTargetTypeFact(.conversion_source, conversion.source_ty, valueTypeFromTypeAlias(conversion.source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                     try self.appendTargetTypeFact(.conversion_target, conversion.target_ty, valueTypeFromTypeAlias(conversion.target_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }

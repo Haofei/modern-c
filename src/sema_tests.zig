@@ -1263,6 +1263,40 @@ test "pointer bitcast cannot reinterpret affine region or view pointees" {
     try std.testing.expectEqual(@as(usize, 6), countDiagnosticCode(&reporter, "E_BITCAST_TYPE"));
 }
 
+test "bitcast requires the same known fixed layout width" {
+    const source =
+        \\fn reject_widen(value: u32) -> u64 {
+        \\    return bitcast<u64>(value);
+        \\}
+        \\fn accept_same_width(value: f32) -> u32 {
+        \\    return bitcast<u32>(value);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bitcast_width.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    // DIAGNOSTIC_UNIT: E_BITCAST_TYPE
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_BITCAST_TYPE"));
+}
+
+test "bitcast rejects aggregate and storage-register layout mismatches" {
+    const source =
+        \\fn reject_bool(value: bool) -> u8 {
+        \\    return bitcast<u8>(value);
+        \\}
+        \\fn reject_slice(value: []const u8) -> u128 {
+        \\    return bitcast<u128>(value);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bitcast_non_scalar_layout.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    // DIAGNOSTIC_UNIT: E_BITCAST_TYPE
+    try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_BITCAST_TYPE"));
+}
+
 test "thread spawn boundaries require unsafe checked resource handoff" {
     const source =
         \\move struct Ticket { id: u32 }

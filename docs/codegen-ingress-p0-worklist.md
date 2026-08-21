@@ -13,15 +13,15 @@ the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. On the test corpus ~20–28% of distinct
 functions are fast-path admitted; the rest still ingest the AST body.
 
-### Census snapshot (C, 2026-08-20, after nested local call-chain admission)
+### Census snapshot (C, 2026-08-20, after typed unary call-target admission)
 
-1609 distinct functions, **434 admitted (27.0%)**, 1175 fallback. Remaining
+1611 distinct functions, **439 admitted (27.3%)**, 1172 fallback. Remaining
 fallbacks ranked by family (term / ret / blocks / traps):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
-| 200 | 17% | return `<ident>` 1 blk 0 trap | region_holds, nested | remaining local-computed / multi-statement forms |
-| 138 | 12% | return `<ident>` 2 blk 1 trap | frame_base, slice_of_struct | same + a bounds/repr trap |
+| 195 | 17% | return `<ident>` 1 blk 0 trap | region_holds, nested | remaining local-computed / multi-statement forms |
+| 140 | 12% | return `<ident>` 2 blk 1 trap | frame_base, slice_of_struct | same + a bounds/repr trap |
 | 82 | 7% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
 | 74 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
 | 43 | 4% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
@@ -66,8 +66,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 152 | 54 | 98 | 0 | 3552 |
-| LLVM | 152 | 55 | 97 | 0 | 3618 |
+| C | 155 | 57 | 98 | 0 | 3677 |
+| LLVM | 155 | 58 | 97 | 0 | 3741 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -77,10 +77,10 @@ in that baseline when the checked corpus improves.
 ### Closed this migration (direct-return / direct-void, all both-backend)
 
 Each was a recognizer family + gate case + render case, validated identically
-(both shards green, emitted C/LLVM compile under clang, source map has no
-`generated_c_line=0`, soundness/parity probes). Two real bugs were caught by
-that discipline before commit: an `?u32`-deref miscompile (a single load that
-dropped the optional tag) and an LLVM pointer-`icmp` render break.
+(both shards green, emitted C/LLVM compile under clang, all function source-map
+entries have nonzero generated lines, soundness/parity probes). The same discipline caught
+optional-deref, pointer-compare, evaluation-order, unequal-width bitcast, and
+typed-unary operand-descendant bugs before commit.
 
 | Family | Example | Commit |
 |---|---|---|
@@ -96,22 +96,26 @@ dropped the optional tag) and an LLVM pointer-`icmp` render break.
 | Pointer comparison | `return a == b` (ptr params) | `8591552e` |
 | Local call chain | `let x = f(); return g(x)` | (current batch) |
 | Nested local call initializer (C) | `let x = f(g(a), b); return h(x)` | (current batch) |
+| Leaf-operand typed unary call targets | numeric conversion, `phys`, `bitcast`, `enum.raw`; root keyed by `typed_unary_operand` SpanId/type fact | (current batch) |
 
 ### Remaining families, by tractability
 
 | Family | Example | Blocker | Effort |
 |---|---|---|---|
-| Builtin / `call_target` returns | `bitcast`, `bitcast_float_to_bits` | fast path emits single `return <expr>;`; bitcast needs addressable temps + `__builtin_memcpy` — **statement-level** emission the return path can't do | **large** |
+| Remaining builtin / `call_target` returns | wrapping/serial/counter/domain constructors | each kind still needs an explicit typed semantic descriptor and backend rendering; bitcast and enum raw no longer fall back | **medium per semantic family** |
 | Builtin / `call_target` void bodies | `store_release`, atomics | same statement-level/builtin gap (plain void calls already admitted) | **large** |
 | Checked-operand comparison | `return (a+b) == b` | `SimpleMirCompareBinary` operands are `SimpleMirArg` (no `checked_binary` variant); needs a richer operand type | **medium** |
 | Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | C now also covers one nested call inside the initializer; LLVM and the remaining shapes need a general MIR statement/value sequence | **large** |
 | Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points, not `#line` matching |
 
-The remaining chunk is no longer recognizer-shaped: it needs the fast path
-extended to **statement-level** emission (multi-statement returns, builtin/void
-bodies) and, for folded-`let`, a source-map-derived-from-MIR change. Plain
-function-call returns/voids are already admitted; only builtin (`call_target`)
-ones fall back.
+The remaining chunk is no longer mostly recognizer-shaped: it needs the fast
+path extended to **statement-level** emission (multi-statement returns,
+builtin/void bodies) and, for folded-`let`, a source-map-derived-from-MIR
+change. Plain function-call returns/voids are already admitted. Leaf-operand
+typed unary call targets now share one descriptor; complex roots remain on the
+full path until the entire expression is representable. New kinds must supply
+complete MIR type facts and explicit rendering rather than add another return
+union variant.
 
 ## Honest bottom line
 

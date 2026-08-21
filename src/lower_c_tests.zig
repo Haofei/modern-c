@@ -1947,6 +1947,58 @@ test "lower-c emits conversion literal return from MIR without body fallback" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits typed unary call-target returns from MIR without body fallback" {
+    const source =
+        \\open enum State: u8 { ready = 1 }
+        \\fn float_bits(value: f32) -> u32 {
+        \\    return bitcast<u32>(value);
+        \\}
+        \\fn bits_float(value: u32) -> f32 {
+        \\    return bitcast<f32>(value);
+        \\}
+        \\fn state_raw(state: State) -> u8 {
+        \\    return state.raw();
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_unary_call_target_returns.mc", source, &output);
+
+    const float_bits = try cFunctionBody(output.items, "static uint32_t float_bits(float value)");
+    try expectContains(float_bits, "__builtin_memcpy");
+    try expectContains(float_bits, "_Static_assert(sizeof(mc_bc_src");
+    try expectContains(float_bits, "return ({ float mc_bc_src");
+
+    const bits_float = try cFunctionBody(output.items, "static float bits_float(uint32_t value)");
+    try expectContains(bits_float, "__builtin_memcpy");
+    try expectContains(bits_float, "return ({ uint32_t mc_bc_src");
+
+    const state_raw = try cFunctionBody(output.items, "static uint8_t state_raw(State state)");
+    try expectContains(state_raw, "return state;");
+    try expectNotContains(state_raw, "raw(");
+}
+
+test "lower-c typed unary fast path never substitutes an operand descendant" {
+    const source =
+        \\fn masked_bits(x: u32, y: u32) -> f32 {
+        \\    return bitcast<f32>(x & y);
+        \\}
+        \\fn masked_phys(x: usize, y: usize) -> PAddr {
+        \\    return phys(x & y);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_typed_unary_operand_root.mc", source, &output);
+
+    const masked_bits = try cFunctionBody(output.items, "static float masked_bits(uint32_t x, uint32_t y)");
+    try expectContains(masked_bits, "(x & y)");
+    try expectContains(masked_bits, "__builtin_memcpy");
+
+    const masked_phys = try cFunctionBody(output.items, "static uintptr_t masked_phys(uintptr_t x, uintptr_t y)");
+    try expectContains(masked_phys, "return ((uintptr_t)((x & y)));");
+}
+
 test "lower-c emits char literal return from MIR without body fallback" {
     const source =
         \\fn char_value() -> u16 {

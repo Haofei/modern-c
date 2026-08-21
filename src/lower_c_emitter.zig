@@ -1722,11 +1722,9 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, "));\n");
                 },
                 .conversion_return => |conversion| {
-                    _ = conversion.kind;
-                    _ = conversion.source_fact;
-                    try self.out.print(self.allocator, "return (({s})(", .{try self.cTypeFor(conversion.target_fact.target_ty, .typedef_name)});
-                    try self.emitSimpleMirCallArg(conversion.operand);
-                    try self.out.appendSlice(self.allocator, "));\n");
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try self.emitSimpleMirConversionExpr(conversion);
+                    try self.out.appendSlice(self.allocator, ";\n");
                 },
                 .wrapping_binary => |binary| {
                     switch (binary.kind) {
@@ -2132,8 +2130,7 @@ pub const CEmitter = struct {
         if (std.mem.eql(u8, value_id, "cast")) {
             if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
         }
-        if (self.simpleMirConversionReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
-        if (self.simpleMirAddressConstructorReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
+        if (self.simpleMirTypedUnaryCallTargetReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
         if (std.mem.eql(u8, value_id, "struct_literal")) {
             if (self.simpleMirStructLiteralReturn(function, fn_mir, block)) |literal| return .{ .struct_literal = literal };
         }
@@ -3992,11 +3989,34 @@ pub const CEmitter = struct {
     }
 
     fn emitSimpleMirConversionExpr(self: *CEmitter, conversion: SimpleMirConversionReturn) !void {
-        _ = conversion.kind;
-        _ = conversion.source_fact;
+        switch (conversion.kind) {
+            .bitcast => return self.emitSimpleMirBitcastExpr(conversion),
+            .enum_raw => return self.emitSimpleMirCallArg(conversion.operand),
+            .conversion_from, .conversion_wrap_from, .conversion_from_mod, .phys => {},
+            else => return error.UnsupportedCEmission,
+        }
         try self.out.print(self.allocator, "(({s})(", .{try self.cTypeFor(conversion.target_fact.target_ty, .typedef_name)});
         try self.emitSimpleMirCallArg(conversion.operand);
         try self.out.appendSlice(self.allocator, "))");
+    }
+
+    fn emitSimpleMirBitcastExpr(self: *CEmitter, conversion: SimpleMirConversionReturn) !void {
+        const source_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_bc_src{d}", .{self.temp_index});
+        self.temp_index += 1;
+        const target_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_bc_dst{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ try self.cTypeFor(conversion.source_fact.target_ty, .typedef_name), source_name });
+        try self.emitSimpleMirCallArg(conversion.operand);
+        try self.out.print(self.allocator, "; {s} {s}; _Static_assert(sizeof({s}) == sizeof({s}), \"MC bitcast width mismatch\"); __builtin_memcpy(&{s}, &{s}, sizeof({s})); {s}; }})", .{
+            try self.cTypeFor(conversion.target_fact.target_ty, .typedef_name),
+            target_name,
+            source_name,
+            target_name,
+            target_name,
+            source_name,
+            source_name,
+            target_name,
+        });
     }
 
     fn emitSimpleMirWrappingBinaryExpr(self: *CEmitter, binary: SimpleMirWrappingBinary) !void {
@@ -4667,84 +4687,164 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn simpleMirConversionReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {
-        const call_source = blk: {
-            for (fn_mir.blocks) |block| {
-                for (block.instructions) |instruction| {
-                    if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, value_id)) break :blk instructionSourcePoint(instruction);
-                }
-            }
-            return null;
-        };
-        return self.simpleMirConversionAtSource(function, fn_mir, call_source);
-    }
-
-    // `return phys(v)`: an address-space constructor (usize -> PAddr) whose C
-    // representation is transparent, so it renders as the same `((repr)(v))` cast
-    // the numeric-conversion path emits. Unlike `as` conversions it carries no
-    // conversion_source/target facts, so it needs its own recognizer, but reuses
-    // SimpleMirConversionReturn (the render only reads the target fact + operand).
-    fn simpleMirAddressConstructorReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {
-        if (!std.mem.eql(u8, value_id, "phys")) return null;
-        const block, const call_source = blk: {
-            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
-                if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, "phys")) break :blk .{ block, instructionSourcePoint(instruction) };
-            };
-            return null;
-        };
-        var is_phys = false;
-        for (fn_mir.call_target_facts) |fact| {
-            if (sameMirSourceLocation(fact.source, call_source) and fact.kind == .phys) {
-                is_phys = true;
-                break;
-            }
-        }
-        if (!is_phys) return null;
-        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, call_source) orelse return null;
-        // phys builds an opaque address type whose C representation is uintptr_t;
-        // the render is `((uintptr_t)(v))`. Gate on that exact C type so a
-        // (pathological) user struct shadowing the address type declines to the
-        // fallback rather than emitting an invalid `((StructName)(v))` cast.
-        const c_type = self.cTypeFor(target_fact.target_ty, .typedef_name) catch return null;
-        if (!std.mem.eql(u8, c_type, "uintptr_t")) return null;
-        var after_call = false;
+    fn simpleMirTypedUnaryCallTargetReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {
+        const block = fn_mir.blocks[0];
+        const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
+        var matching_calls: usize = 0;
         for (block.instructions) |instruction| {
-            if (!after_call) {
-                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
-                continue;
-            }
-            if (instruction.kind == .return_value or instruction.kind == .call) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
-            const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse continue;
-            return .{ .kind = .phys, .source_fact = target_fact, .target_fact = target_fact, .operand = operand };
+            if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, value_id)) continue;
+            if (!sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) continue;
+            matching_calls += 1;
         }
-        return null;
+        if (matching_calls != 1) return null;
+        const result = self.simpleMirTypedUnaryCallTargetAtSource(function, fn_mir, call_source) orelse return null;
+        const declared_return = function.signature.transitionalReturnType() orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(result.target_fact.target_ty), self.resolveAliasType(declared_return))) return null;
+        return result;
     }
 
     fn simpleMirConversionAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirConversionReturn {
-        const block = blk: {
-            for (fn_mir.blocks) |block| {
-                for (block.instructions) |instruction| {
-                    if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) break :blk block;
-                }
-            }
-            return null;
+        const conversion = self.simpleMirTypedUnaryCallTargetAtSource(function, fn_mir, call_source) orelse return null;
+        return switch (conversion.kind) {
+            .conversion_from, .conversion_wrap_from, .conversion_from_mod => conversion,
+            else => null,
         };
-        const kind = self.simpleMirConversionCallTargetKindAt(fn_mir, call_source) orelse return null;
-        const source_fact = simpleMirTargetTypeFactKindAt(fn_mir, .conversion_source, call_source) orelse return null;
-        const target_fact = simpleMirTargetTypeFactKindAt(fn_mir, .conversion_target, call_source) orelse return null;
-        var after_call = false;
-        for (block.instructions) |instruction| {
-            if (!after_call) {
-                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
-                continue;
-            }
-            if (instruction.kind == .return_value or instruction.kind == .call) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
-            const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse continue;
-            return .{ .kind = kind, .source_fact = source_fact, .target_fact = target_fact, .operand = operand };
+    }
+
+    fn simpleMirTypedUnaryCallTargetAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirConversionReturn {
+        var call_block: ?mir.Block = null;
+        var canonical_call_source: mir.SourcePoint = undefined;
+        var call_count: usize = 0;
+        for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+            if (instruction.kind != .call or !sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) continue;
+            call_block = block;
+            canonical_call_source = instructionSourcePoint(instruction);
+            call_count += 1;
+        };
+        if (call_count != 1) return null;
+        const block = call_block orelse return null;
+        const call_target_fact = simpleMirTypedUnaryCallTargetFactAt(fn_mir, canonical_call_source) orelse return null;
+        const kind = call_target_fact.kind;
+        const initial_source_fact, const target_fact = switch (kind) {
+            .conversion_from, .conversion_wrap_from, .conversion_from_mod => .{
+                simpleMirUniqueTargetTypeFactKindAt(fn_mir, .conversion_source, canonical_call_source) orelse return null,
+                simpleMirUniqueTargetTypeFactKindAt(fn_mir, .conversion_target, canonical_call_source) orelse return null,
+            },
+            .bitcast => .{
+                simpleMirUniqueTargetTypeFactKindAt(fn_mir, .bitcast_source, canonical_call_source) orelse return null,
+                simpleMirUniqueTargetTypeFactKindAt(fn_mir, .bitcast_target, canonical_call_source) orelse return null,
+            },
+            .enum_raw => .{
+                simpleMirUniqueTargetTypeFactKindAt(fn_mir, .enum_raw_source, canonical_call_source) orelse return null,
+                simpleMirUniqueTargetTypeFactKindAt(fn_mir, .enum_raw_result, canonical_call_source) orelse return null,
+            },
+            .phys => blk: {
+                const target = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .phys_result, canonical_call_source) orelse return null;
+                const c_type = self.cTypeFor(target.target_ty, .typedef_name) catch return null;
+                if (!std.mem.eql(u8, c_type, "uintptr_t")) return null;
+                break :blk .{ target, target };
+            },
+            else => return null,
+        };
+        var source_fact = initial_source_fact;
+        if (!sameSimpleMirValueType(call_target_fact.result_ty, target_fact.result_ty)) return null;
+        switch (kind) {
+            .bitcast => {
+                const source_size = self.comptimeSizeOf(source_fact.target_ty, 0) orelse return null;
+                const target_size = self.comptimeSizeOf(target_fact.target_ty, 0) orelse return null;
+                if (source_size <= 0 or source_size != target_size) return null;
+            },
+            .enum_raw => {
+                const enum_name = self.enumNameForType(source_fact.target_ty) orelse return null;
+                const enum_decl = self.enums.get(enum_name) orelse return null;
+                const repr_ty = enum_decl.repr orelse type_bridge.simpleNameType("isize", enum_decl.name.span);
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(repr_ty), self.resolveAliasType(target_fact.target_ty))) return null;
+            },
+            else => {},
         }
-        return null;
+        const operand_fact = simpleMirUniqueTypedUnaryOperandFactAt(fn_mir, canonical_call_source) orelse return null;
+        const operand_instruction = simpleMirTypedUnaryOperandInstruction(block, operand_fact.source) orelse return null;
+        const operand = self.simpleMirTypedUnaryOperandAtInstruction(function, fn_mir, operand_instruction) orelse return null;
+        if (kind == .phys) {
+            const source_size = self.comptimeSizeOf(operand_fact.target_ty, 0) orelse return null;
+            const target_size = self.comptimeSizeOf(target_fact.target_ty, 0) orelse return null;
+            if (source_size <= 0 or source_size != target_size) return null;
+            source_fact = operand_fact;
+        } else if (!sameSimpleMirValueType(operand_fact.result_ty, source_fact.result_ty) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(operand_fact.target_ty), self.resolveAliasType(source_fact.target_ty))) return null;
+        return .{ .kind = kind, .source_fact = source_fact, .target_fact = target_fact, .operand = operand };
+    }
+
+    fn simpleMirTypedUnaryOperandAtInstruction(self: *CEmitter, function: anytype, fn_mir: mir.Function, instruction: mir.Instruction) ?SimpleMirCallArg {
+        const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+        return switch (operand) {
+            .param => |name| if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, name)) operand else null,
+            .integer_literal => |literal| if (instruction.kind == .integer_literal_conversion and std.mem.eql(u8, instruction.detail, literal)) operand else null,
+            else => null,
+        };
+    }
+
+    fn simpleMirUniqueTypedUnaryOperandFactAt(fn_mir: mir.Function, call_source: mir.SourcePoint) ?mir.TargetTypeFact {
+        var result: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind != .typed_unary_operand or !mirSourceContains(call_source, fact.source)) continue;
+            if (result != null) return null;
+            result = fact;
+        }
+        return result;
+    }
+
+    fn simpleMirTypedUnaryOperandInstruction(block: mir.Block, source: mir.SourcePoint) ?mir.Instruction {
+        var expr: ?mir.Instruction = null;
+        var integer: ?mir.Instruction = null;
+        for (block.instructions) |instruction| {
+            if (!sameMirSourcePoint(instructionSourcePoint(instruction), source)) continue;
+            switch (instruction.kind) {
+                .expr => if (expr == null) {
+                    expr = instruction;
+                } else return null,
+                .integer_literal_conversion => if (integer == null) {
+                    integer = instruction;
+                } else return null,
+                else => {},
+            }
+        }
+        return integer orelse expr;
+    }
+
+    fn mirSourceContains(outer: mir.SourcePoint, inner: mir.SourcePoint) bool {
+        if (outer.len == 0 or inner.len == 0) return false;
+        const outer_end = std.math.add(usize, outer.offset, outer.len) catch return false;
+        const inner_end = std.math.add(usize, inner.offset, inner.len) catch return false;
+        return outer.offset <= inner.offset and inner_end <= outer_end;
+    }
+
+    fn simpleMirTypedUnaryCallTargetFactAt(fn_mir: mir.Function, source: mir.SourcePoint) ?mir.CallTargetFact {
+        var result: ?mir.CallTargetFact = null;
+        for (fn_mir.call_target_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, source)) continue;
+            switch (fact.kind) {
+                .conversion_from, .conversion_wrap_from, .conversion_from_mod, .bitcast, .enum_raw, .phys => {},
+                else => continue,
+            }
+            if (result != null) return null;
+            result = fact;
+        }
+        return result;
+    }
+
+    fn simpleMirUniqueTargetTypeFactKindAt(fn_mir: mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
+        var result: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind != kind or !sameMirSourcePoint(fact.source, source)) continue;
+            if (result != null) return null;
+            result = fact;
+        }
+        return result;
+    }
+
+    fn sameSimpleMirValueType(left: mir.ValueType, right: mir.ValueType) bool {
+        return std.meta.activeTag(left) == std.meta.activeTag(right) and std.mem.eql(u8, left.name(), right.name());
     }
 
     fn simpleMirExplicitCastReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirExplicitCastReturn {

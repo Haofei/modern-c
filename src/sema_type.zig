@@ -171,7 +171,10 @@ pub fn isAddressClass(kind: TypeClass) bool {
 }
 
 pub fn isBitcastLayoutClass(kind: TypeClass) bool {
-    return isCheckedInt(kind) or isFloat(kind) or kind == .bool or isPointerLike(kind) or isAddressClass(kind);
+    return isCheckedInt(kind) or isFloat(kind) or isAddressClass(kind) or switch (kind) {
+        .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
+        else => false,
+    };
 }
 
 pub fn isDerefablePointerClass(kind: TypeClass) bool {

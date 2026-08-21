@@ -2658,6 +2658,56 @@ test "LLVM emits scalar comparison returns from MIR" {
     try expectNotContains(choose_float_body, "switch");
 }
 
+test "LLVM emits typed unary call-target returns from MIR without body fallback" {
+    const source =
+        \\open enum State: u8 { ready = 1 }
+        \\fn float_bits(value: f32) -> u32 {
+        \\    return bitcast<u32>(value);
+        \\}
+        \\fn bits_float(value: u32) -> f32 {
+        \\    return bitcast<f32>(value);
+        \\}
+        \\fn state_raw(state: State) -> u8 {
+        \\    return state.raw();
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_unary_call_target_returns.mc", source, &output);
+
+    const float_bits = try llvmFunctionBody(output.items, "define internal i32 @float_bits(float %value)");
+    try expectContains(float_bits, "bitcast float %value to i32");
+    try expectContains(float_bits, "ret i32 %t");
+
+    const bits_float = try llvmFunctionBody(output.items, "define internal float @bits_float(i32 %value)");
+    try expectContains(bits_float, "bitcast i32 %value to float");
+    try expectContains(bits_float, "ret float %t");
+
+    const state_raw = try llvmFunctionBody(output.items, "define internal i8 @state_raw(i8 %state)");
+    try expectContains(state_raw, "ret i8 %state");
+    try expectNotContains(state_raw, "call");
+}
+
+test "LLVM typed unary fast path never substitutes an operand descendant" {
+    const source =
+        \\fn masked_bits(x: u32, y: u32) -> f32 {
+        \\    return bitcast<f32>(x & y);
+        \\}
+        \\fn masked_phys(x: usize, y: usize) -> PAddr {
+        \\    return phys(x & y);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_typed_unary_operand_root.mc", source, &output);
+
+    const masked_bits = try llvmFunctionBody(output.items, "define internal float @masked_bits(i32 %x, i32 %y)");
+    try expectContains(masked_bits, "and i32 %x, %y");
+
+    const masked_phys = try llvmFunctionBody(output.items, "define internal i64 @masked_phys(i64 %x, i64 %y)");
+    try expectContains(masked_phys, "and i64 %x, %y");
+}
+
 test "LLVM emits checked arithmetic returns from MIR without body fallback" {
     const source =
         \\fn add_u32(a: u32, b: u32) -> u32 {

@@ -11,6 +11,7 @@ const eval = @import("eval.zig");
 const loader = @import("loader.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const sema_move = @import("sema_move.zig");
+const target_layout = @import("target_layout.zig");
 
 const sema_model = @import("sema_model.zig");
 const sema_builtin = @import("sema_builtin.zig");
@@ -5285,6 +5286,23 @@ pub const Checker = struct {
             }
         }
 
+        // `bitcast` is a representation-preserving reinterpretation, not a
+        // truncating or widening conversion. Reject a known-width mismatch in
+        // sema so every backend observes the same contract and no C lowering can
+        // copy the target width from a smaller source object. Types whose layout
+        // is not known here retain the existing fail-closed/type-class behavior.
+        if (target_ty) |tty| {
+            if (source_ty) |sty| {
+                if (knownBitcastLayoutBits(tty, ctx)) |target_bits| {
+                    if (knownBitcastLayoutBits(sty, ctx)) |source_bits| {
+                        if (target_bits != source_bits) {
+                            self.errorCode(span, "E_BITCAST_TYPE", "bitcast source and target must have the same fixed layout width");
+                        }
+                    }
+                }
+            }
+        }
+
         return target;
     }
 
@@ -9443,6 +9461,31 @@ fn addressableStorageIsMutable(expr: ast.Expr, ctx: Context) bool {
 
 fn isBitcastLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
     return isBitcastLayoutClass(classifyTypeCtx(resolveAliasType(ty, ctx), ctx));
+}
+
+fn knownBitcastLayoutBits(ty: ast.TypeExpr, ctx: Context) ?u16 {
+    return switch (classifyTypeCtx(resolveAliasType(ty, ctx), ctx)) {
+        .checked_u8, .checked_i8 => 8,
+        .checked_u16, .checked_i16 => 16,
+        .checked_u32, .checked_i32, .f32 => 32,
+        .checked_u64, .checked_i64, .f64 => 64,
+        .checked_usize,
+        .checked_isize,
+        .pointer,
+        .raw_many_pointer,
+        .c_void_pointer,
+        .nullable_pointer,
+        .nullable_c_void_pointer,
+        .paddr,
+        .vaddr,
+        .dma_addr,
+        .user_ptr,
+        .mmio_ptr,
+        .phys_ptr,
+        => target_layout.pointer_width_bits,
+        .checked_u128, .checked_i128 => 128,
+        else => null,
+    };
 }
 
 fn checkAddressClassConversion(self: *Checker, span: diagnostics.Span, target: TypeClass, source: TypeClass) bool {

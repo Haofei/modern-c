@@ -417,6 +417,7 @@ pub const TargetTypeKind = enum {
     assert_condition,
     direct_call_result,
     direct_call_argument,
+    typed_unary_operand,
     dyn_dispatch_result,
     dyn_dispatch_argument,
     bind,
