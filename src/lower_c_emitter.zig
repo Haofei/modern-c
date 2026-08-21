@@ -1615,7 +1615,14 @@ pub const CEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+        const place_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
+                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
+            else
+                null
+        else
+            null;
+        const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
             mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
         else
             null;
@@ -1627,7 +1634,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1648,6 +1655,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "if (!(");
             try self.emitSimpleMirCondition(assert_body.condition);
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        } else if (place_return_plan) |plan| {
+            try self.emitMirPlaceReturnPlan(plan);
         } else if (indirect_call_return_plan) |plan| {
             try self.emitMirIndirectCallReturnPlan(plan);
         } else if (logical_return_plan) |plan| {
@@ -3823,6 +3832,63 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
         }
         try self.out.appendSlice(self.allocator, ");\n");
+    }
+
+    fn emitMirPlaceReturnPlan(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan) !void {
+        if (plan.store) |store| {
+            const span = spanFromMirSourcePoint(store.location.source);
+            const target_ty = try self.mirPlaceType(store.target, span);
+            const access = try self.mirPlaceAccess(store.target);
+            try self.writeLineDirective(span);
+            try self.writeIndent();
+            const temp = try self.nextTempName();
+            try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), temp, try self.cIdent(store.value.name) });
+            try self.writeIndent();
+            try appendGlobalStorePrefix(self.allocator, self.out, .{ .name = access, .info = try self.globalInfoFromType(target_ty) });
+            try self.out.appendSlice(self.allocator, temp);
+            try appendGlobalStoreSuffix(self.allocator, self.out, .{ .name = access, .info = try self.globalInfoFromType(target_ty) });
+        }
+
+        const return_span = spanFromMirSourcePoint(plan.return_location.source);
+        const return_ty = try self.mirPlaceType(plan.returned, return_span);
+        const access = try self.mirPlaceAccess(plan.returned);
+        try self.writeLineDirective(return_span);
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        switch (plan.returned.root_kind) {
+            .parameter => try self.out.appendSlice(self.allocator, access),
+            .global => try appendGlobalLoadExpr(self.allocator, self.out, access, try self.globalInfoFromType(return_ty)),
+        }
+        try self.out.appendSlice(self.allocator, ";\n");
+    }
+
+    fn mirPlaceAccess(self: *CEmitter, place: mir_statement_plan.Place) ![]const u8 {
+        var access = try std.fmt.allocPrint(self.scratch.allocator(), "{s}", .{try self.cIdent(place.root_name)});
+        for (place.projections[0..place.projection_count]) |projection| {
+            access = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ access, try self.cIdent(projection.field_name) });
+        }
+        return access;
+    }
+
+    fn mirPlaceType(self: *CEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !ast_bridge.TypeExpr {
+        var ty = type_bridge.simpleNameType(place.root_ty.name(), span);
+        if (self.structs.get(place.root_ty.name()) == null) return error.UnsupportedCEmission;
+        if (place.root_kind == .global and self.globals.get(place.root_name) == null) return error.UnsupportedCEmission;
+        for (place.projections[0..place.projection_count]) |projection| {
+            const struct_name = self.structTypeNameFromType(ty) orelse return error.UnsupportedCEmission;
+            const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
+            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
+            const field = struct_decl.fields[projection.field_index];
+            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedCEmission;
+            ty = field.ty;
+        }
+        return ty;
+    }
+
+    fn mirPlacePlanSupported(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan, span: diagnostics.Span) bool {
+        _ = self.mirPlaceType(plan.returned, span) catch return false;
+        if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
+        return true;
     }
 
     fn emitMirLogicalReturnPlan(self: *CEmitter, plan: mir_statement_plan.LogicalReturnPlan) !void {

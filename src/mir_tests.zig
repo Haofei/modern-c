@@ -294,6 +294,74 @@ test "MIR verifier rejects instruction typed identity drift" {
     try std.testing.expect(std.mem.indexOf(u8, span_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
 }
 
+test "MIR owns member, assignment, and return operand identities" {
+    // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\struct Box { pair: Pair }
+        \\global box: Box = .{ .pair = .{ .left = 1, .right = 2 } };
+        \\fn update(value: u32) -> u32 {
+        \\    box.pair.left = value;
+        \\    return box.pair.left;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_place_identity.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "update").?;
+    var member_edges: usize = 0;
+    var saw_assignment_edges = false;
+    var saw_return_edge = false;
+    for (function.blocks[0].instructions) |instruction| {
+        if (instruction.typed_base_operand_span_id.isValid()) {
+            try std.testing.expect(instruction.member_field_index != null);
+            member_edges += 1;
+        }
+        if (instruction.kind == .assign) {
+            try std.testing.expect(instruction.typed_target_operand_span_id.isValid());
+            try std.testing.expect(instruction.typed_value_operand_span_id.isValid());
+            saw_assignment_edges = true;
+        }
+        if (instruction.kind == .return_value) {
+            try std.testing.expect(instruction.typed_value_operand_span_id.isValid());
+            saw_return_edge = true;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 4), member_edges);
+    try std.testing.expect(saw_assignment_edges);
+    try std.testing.expect(saw_return_edge);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, dump.items, "mir place_identity fn=update"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, dump.items, "mir statement_operand_identity fn=update"));
+
+    const mutable_function = functionByNameMut(&module_mir, "update").?;
+    var corrupted = false;
+    for (mutable_function.blocks[0].instructions) |*instruction| {
+        if (!instruction.typed_base_operand_span_id.isValid()) continue;
+        instruction.typed_base_operand_span_id = .invalid;
+        corrupted = true;
+        break;
+    }
+    try std.testing.expect(corrupted);
+    var invalid_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_place_identity_invalid.mc", source);
+    defer invalid_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &invalid_reporter);
+    try std.testing.expect(invalid_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, invalid_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
 test "MIR target-type owner identities mirror direct calls" {
     const source =
         \\fn callee(x: u32) -> u32 {

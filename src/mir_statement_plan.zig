@@ -10,6 +10,7 @@ const type_syntax = @import("type_syntax.zig");
 pub const max_statements = 8;
 pub const max_arguments = 8;
 pub const max_logical_nodes = 16;
+pub const max_place_projections = 4;
 
 pub const Location = struct {
     span_id: mir.SpanId,
@@ -89,6 +90,119 @@ pub const LogicalReturnPlan = struct {
     root: usize = 0,
     location: Location,
 };
+
+pub const PlaceRootKind = enum { parameter, global };
+
+pub const PlaceProjection = struct {
+    field_name: []const u8,
+    field_index: usize,
+    result_ty: mir.ValueType,
+    location: Location,
+};
+
+pub const Place = struct {
+    root_kind: PlaceRootKind = undefined,
+    root_name: []const u8 = "",
+    root_ty: mir.ValueType = .unknown,
+    root_location: Location = undefined,
+    projections: [max_place_projections]PlaceProjection = undefined,
+    projection_count: usize = 0,
+
+    pub fn resultType(self: Place) mir.ValueType {
+        if (self.projection_count == 0) return self.root_ty;
+        return self.projections[self.projection_count - 1].result_ty;
+    }
+};
+
+pub const PlaceParameterValue = struct {
+    name: []const u8,
+    value_id: mir.ValueId,
+    ty: mir.ValueType,
+    location: Location,
+};
+
+pub const PlaceStore = struct {
+    target: Place,
+    value: PlaceParameterValue,
+    location: Location,
+};
+
+pub const PlaceReturnPlan = struct {
+    store: ?PlaceStore = null,
+    returned: Place,
+    return_location: Location,
+};
+
+/// Admit a one-block field-place body from typed MIR edges. The initial slice
+/// covers a pure field read rooted in a parameter/global and an optional field
+/// store from a direct parameter before that read. Every member/base,
+/// assignment target/value, and return/value relationship is explicit in MIR;
+/// source text and relative columns are never consulted.
+pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
+    if (function.return_ty == .void or function.blocks.len != 1) return null;
+    if (function.trap_edges.len != 0 or function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const block = function.blocks[0];
+    if (block.terminator != .return_ or block.successors.len != 0) return null;
+
+    var assignment: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var expression_count: usize = 0;
+    for (block.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type => {},
+        .expr => expression_count += 1,
+        .assign => {
+            if (assignment != null or !instruction.typed_target_operand_span_id.isValid() or !instruction.typed_value_operand_span_id.isValid()) return null;
+            assignment = instruction;
+        },
+        .return_value => {
+            if (returned != null or !instruction.typed_value_operand_span_id.isValid()) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+
+    const return_instruction = returned orelse return null;
+    var result: PlaceReturnPlan = .{
+        .returned = buildPlace(function, block, return_instruction.typed_value_operand_span_id) orelse return null,
+        .return_location = locationFromInstruction(return_instruction),
+    };
+    if (result.returned.projection_count == 0 or !placeHasAggregateIntermediates(result.returned) or !sameRepresentationType(result.returned.resultType(), function.return_ty)) return null;
+
+    var consumed_expressions = result.returned.projection_count + 1;
+    if (assignment) |store_instruction| {
+        const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
+        if (target.root_kind != .global or target.projection_count == 0 or !placeHasAggregateIntermediates(target) or !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
+        const value_instruction = expressionAtSpan(block, store_instruction.typed_value_operand_span_id) orelse return null;
+        const value_id = value_instruction.typed_value_id orelse return null;
+        const value_name = valueIdentityName(function, value_id) orelse return null;
+        const value_ty = parameterType(function, value_name) orelse return null;
+        if (!sameRepresentationType(value_ty, value_instruction.result_ty) or !sameRepresentationType(value_ty, target.resultType())) return null;
+        result.store = .{
+            .target = target,
+            .value = .{
+                .name = value_name,
+                .value_id = value_id,
+                .ty = value_ty,
+                .location = locationFromInstruction(value_instruction),
+            },
+            .location = locationFromInstruction(store_instruction),
+        };
+        consumed_expressions += target.projection_count + 2;
+    }
+    if (consumed_expressions != expression_count) return null;
+    return result;
+}
+
+fn placeHasAggregateIntermediates(place: Place) bool {
+    if (place.projection_count <= 1) return true;
+    for (place.projections[0 .. place.projection_count - 1]) |projection| {
+        if (projection.result_ty != .struct_) return false;
+    }
+    return true;
+}
 
 /// Admit a pure boolean expression tree returned directly from one block.
 /// Operator edges and leaves are identified exclusively by typed MIR IDs. The
@@ -353,6 +467,68 @@ fn appendLogicalNode(function: mir.Function, block: mir.Block, span_id: mir.Span
     plan.nodes[index] = .{ .location = location, .operation = operation };
     plan.count += 1;
     return index;
+}
+
+fn buildPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?Place {
+    var place: Place = .{};
+    var root_set = false;
+    if (!appendPlace(function, block, span_id, &place, &root_set, 0) or !root_set) return null;
+    return place;
+}
+
+fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, place: *Place, root_set: *bool, depth: usize) bool {
+    if (!span_id.isValid() or depth > max_place_projections) return false;
+    const instruction = expressionAtSpan(block, span_id) orelse return false;
+    const fact = targetFactBySpan(function, .expression_result, span_id) orelse return false;
+    if (!sameRepresentationType(instruction.result_ty, fact.result_ty)) return false;
+
+    if (instruction.typed_base_operand_span_id.isValid()) {
+        if (instruction.member_field_index == null or place.projection_count >= max_place_projections) return false;
+        if (!appendPlace(function, block, instruction.typed_base_operand_span_id, place, root_set, depth + 1)) return false;
+        place.projections[place.projection_count] = .{
+            .field_name = instruction.detail,
+            .field_index = instruction.member_field_index.?,
+            .result_ty = instruction.result_ty,
+            .location = locationFromInstruction(instruction),
+        };
+        place.projection_count += 1;
+        return true;
+    }
+
+    if (instruction.member_field_index != null or root_set.*) return false;
+    const root_id = instruction.typed_value_id orelse return false;
+    const root_name = valueIdentityName(function, root_id) orelse return false;
+    if (!std.mem.eql(u8, root_name, instruction.detail)) return false;
+    if (localType(function, root_name) != null) return false;
+    if (parameterType(function, root_name)) |parameter_ty| {
+        if (!sameRepresentationType(parameter_ty, instruction.result_ty)) return false;
+        place.root_kind = .parameter;
+    } else {
+        place.root_kind = .global;
+    }
+    place.root_name = root_name;
+    place.root_ty = instruction.result_ty;
+    if (place.root_ty != .struct_) return false;
+    place.root_location = locationFromInstruction(instruction);
+    root_set.* = true;
+    return true;
+}
+
+fn expressionAtSpan(block: mir.Block, span_id: mir.SpanId) ?mir.Instruction {
+    var matched: ?mir.Instruction = null;
+    for (block.instructions) |instruction| {
+        if (instruction.kind != .expr or !instruction.typed_span_id.eql(span_id)) continue;
+        if (matched != null) return null;
+        matched = instruction;
+    }
+    return matched;
+}
+
+fn localType(function: mir.Function, name: []const u8) ?mir.ValueType {
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind == .local and std.mem.eql(u8, instruction.detail, name)) return instruction.result_ty;
+    };
+    return null;
 }
 
 fn isLogicalOperator(instruction: mir.Instruction) bool {

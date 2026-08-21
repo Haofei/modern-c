@@ -1468,6 +1468,22 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_left_operand_span_id.index(), right_id },
                     );
                 }
+                if (instruction.typed_base_operand_span_id.isValid()) {
+                    try out.print(
+                        allocator,
+                        "mir place_identity fn={s} block={} kind={s} detail={s} base_span_id={} field_index={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_base_operand_span_id.index(), instruction.member_field_index.? },
+                    );
+                }
+                if (instruction.typed_target_operand_span_id.isValid() or instruction.typed_value_operand_span_id.isValid()) {
+                    const target_id = if (instruction.typed_target_operand_span_id.isValid()) instruction.typed_target_operand_span_id.index() else std.math.maxInt(usize);
+                    const value_id_index = if (instruction.typed_value_operand_span_id.isValid()) instruction.typed_value_operand_span_id.index() else std.math.maxInt(usize);
+                    try out.print(
+                        allocator,
+                        "mir statement_operand_identity fn={s} block={} kind={s} target_span_id={} value_span_id={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), target_id, value_id_index },
+                    );
+                }
                 if (instruction.typed_callee_root_value_id.isValid()) {
                     const field_index = if (instruction.callee_field_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
                     defer if (instruction.callee_field_index != null) allocator.free(field_index);
@@ -2104,6 +2120,20 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         }
     } else if (instruction.typed_right_operand_span_id.isValid()) {
         return false;
+    }
+    if (instruction.typed_base_operand_span_id.isValid()) {
+        if (instruction.kind != .expr or instruction.member_field_index == null) return false;
+        if (instruction.typed_base_operand_span_id.index() >= function.span_identities.len) return false;
+    } else if (instruction.member_field_index != null) {
+        return false;
+    }
+    if (instruction.kind == .assign) {
+        if (!instruction.typed_target_operand_span_id.isValid() or !instruction.typed_value_operand_span_id.isValid()) return false;
+        if (instruction.typed_target_operand_span_id.index() >= function.span_identities.len) return false;
+    } else if (instruction.typed_target_operand_span_id.isValid()) return false;
+    if (instruction.typed_value_operand_span_id.isValid()) {
+        if (instruction.kind != .assign and instruction.kind != .return_value and instruction.kind != .local) return false;
+        if (instruction.typed_value_operand_span_id.index() >= function.span_identities.len) return false;
     }
     const is_indirect_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.indirect_call_argument));
     if (instruction.kind == .call or instruction.kind == .indirect_call or is_indirect_argument) {
@@ -6255,6 +6285,9 @@ const FunctionBuilder = struct {
                 const assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
+                const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                assignment_instruction.typed_target_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.target).span));
+                assignment_instruction.typed_value_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.value).span));
                 // Escape analysis: a reassignment updates the target local's
                 // address provenance (e.g. `out = p` drops a prior `&local`).
                 if (assignmentTargetIdentName(node.target)) |target_name| {
@@ -6355,6 +6388,10 @@ const FunctionBuilder = struct {
                     self.assignment_target_type_expr = previous_target_type_expr;
                 }
                 try self.addInstrWithValue(.return_value, if (maybe) |_| "value" else "void", self.return_ty, stmt.span, if (maybe) |expr| exprText(expr) else null);
+                if (maybe) |expr| {
+                    self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
+                        try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(expr).span));
+                }
                 self.setTerminator(.{ .return_ = self.return_ty });
                 return true;
             },
@@ -8172,6 +8209,11 @@ const FunctionBuilder = struct {
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
                 try self.addInstr(.expr, node.name.text, ty, expr.span);
+                if (self.memberFieldIndex(node)) |field_index| {
+                    const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                    instruction.typed_base_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.base.*).span));
+                    instruction.member_field_index = field_index;
+                }
                 try self.buildExpr(node.base.*);
             },
         }
@@ -12117,6 +12159,25 @@ const FunctionBuilder = struct {
             .pointer, .nullable_pointer => |shape| self.structFieldType(shape.child, node.name.text) orelse .value,
             else => .value,
         };
+    }
+
+    fn memberFieldIndex(self: *FunctionBuilder, node: anytype) ?usize {
+        const struct_name = switch (self.exprType(node.base.*)) {
+            .struct_ => |name| name,
+            .pointer, .nullable_pointer => |shape| shape.child,
+            else => return null,
+        };
+        if (self.structs.get(struct_name)) |info| {
+            for (info.fields, 0..) |field, index| {
+                if (std.mem.eql(u8, field.name.text, node.name.text)) return index;
+            }
+        }
+        if (self.packed_bits.get(struct_name)) |info| {
+            for (info.fields, 0..) |field, index| {
+                if (std.mem.eql(u8, field.name.text, node.name.text)) return index;
+            }
+        }
+        return null;
     }
 
     const ConstGetCallTarget = struct {

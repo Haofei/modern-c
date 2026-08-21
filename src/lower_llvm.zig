@@ -1669,7 +1669,14 @@ const LlvmEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+        const place_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
+                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
+            else
+                null
+        else
+            null;
+        const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
             mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
         else
             null;
@@ -1681,7 +1688,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1747,6 +1754,8 @@ const LlvmEmitter = struct {
                 try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
             }
             try self.emitReturnVoid(span);
+        } else if (place_return_plan) |plan| {
+            try self.emitMirPlaceReturnPlan(plan, ret_ty);
         } else if (indirect_call_return_plan) |plan| {
             try self.emitMirIndirectCallReturnPlan(plan);
         } else if (logical_return_plan) |plan| {
@@ -3805,6 +3814,83 @@ const LlvmEmitter = struct {
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         try self.emitReturnValue(signature.ret.*, result, span);
+    }
+
+    const MirPlacePointer = struct {
+        pointer: []const u8,
+        ty: ast_bridge.TypeExpr,
+    };
+
+    fn emitMirPlaceReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.PlaceReturnPlan, ret_ty: ast_bridge.TypeExpr) !void {
+        if (plan.store) |store| {
+            const target = try self.emitMirGlobalPlacePointer(store.target, spanFromMirSourcePoint(store.location.source));
+            try self.emitOrdinaryStore(target.ty, try self.llvmType(target.ty), try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{store.value.name}), target.pointer, true);
+        }
+
+        const span = spanFromMirSourcePoint(plan.return_location.source);
+        const value = switch (plan.returned.root_kind) {
+            .parameter => try self.emitMirParameterPlaceValue(plan.returned, span),
+            .global => blk: {
+                const place = try self.emitMirGlobalPlacePointer(plan.returned, span);
+                break :blk try self.emitOrdinaryLoad(place.ty, place.pointer, !(self.global_is_const.get(plan.returned.root_name) orelse false));
+            },
+        };
+        try self.emitReturnValue(ret_ty, value, span);
+    }
+
+    fn emitMirParameterPlaceValue(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) ![]const u8 {
+        var ty = type_bridge.simpleNameType(place.root_ty.name(), span);
+        var value: []const u8 = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{place.root_name});
+        for (place.projections[0..place.projection_count]) |projection| {
+            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+            const field = struct_decl.fields[projection.field_index];
+            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedLlvmEmission;
+            const next = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, projection.field_index, try self.debugCallSuffix() });
+            value = next;
+            ty = field.ty;
+        }
+        return value;
+    }
+
+    fn emitMirGlobalPlacePointer(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !MirPlacePointer {
+        if (place.root_kind != .global) return error.UnsupportedLlvmEmission;
+        var ty = self.global_types.get(place.root_name) orelse return error.UnsupportedLlvmEmission;
+        var pointer: []const u8 = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{place.root_name});
+        for (place.projections[0..place.projection_count]) |projection| {
+            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+            const field = struct_decl.fields[projection.field_index];
+            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedLlvmEmission;
+            const next = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}{s}\n", .{ next, try self.llvmType(ty), pointer, projection.field_index, try self.debugCallSuffix() });
+            pointer = next;
+            ty = field.ty;
+        }
+        _ = span;
+        return .{ .pointer = pointer, .ty = ty };
+    }
+
+    fn mirPlacePlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.PlaceReturnPlan, span: diagnostics.Span) bool {
+        _ = self.mirPlaceType(plan.returned, span) catch return false;
+        if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
+        return true;
+    }
+
+    fn mirPlaceType(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !ast_bridge.TypeExpr {
+        var ty = if (place.root_kind == .global)
+            self.global_types.get(place.root_name) orelse return error.UnsupportedLlvmEmission
+        else
+            type_bridge.simpleNameType(place.root_ty.name(), span);
+        for (place.projections[0..place.projection_count]) |projection| {
+            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+            const field = struct_decl.fields[projection.field_index];
+            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedLlvmEmission;
+            ty = field.ty;
+        }
+        return ty;
     }
 
     fn emitMirLogicalReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.LogicalReturnPlan, ret_ty: ast_bridge.TypeExpr) !void {

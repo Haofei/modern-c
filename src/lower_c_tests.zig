@@ -1316,6 +1316,31 @@ test "lower-c emits direct struct parameter field returns from MIR" {
     try expectNotContains(assigned_body, "x =");
 }
 
+test "lower-c emits nested parameter and global field places from MIR without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\struct Box { pair: Pair }
+        \\global box: Box = .{ .pair = .{ .left = 1, .right = 2 } };
+        \\fn update(value: u32) -> u32 {
+        \\    box.pair.left = value;
+        \\    return box.pair.left;
+        \\}
+        \\fn read(value: Box) -> u32 {
+        \\    return value.pair.right;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_place_return.mc", source, &output);
+
+    const update = try cFunctionBody(output.items, "static uint32_t update(uint32_t value)");
+    try expectContains(update, "mc_race_store_u32(&box.pair.left");
+    try expectContains(update, "mc_race_load_u32(&box.pair.left)");
+    const read = try cFunctionBody(output.items, "static uint32_t read(Box value)");
+    try expectContains(read, "return value.pair.right;");
+    try expectNotContains(read, "mc_tmp");
+}
+
 test "lower-c emits conditional struct parameter field returns from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }

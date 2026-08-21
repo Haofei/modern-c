@@ -169,6 +169,15 @@ pub const Instruction = struct {
     // operators use only the left operand; binary operators use both.
     typed_left_operand_span_id: SpanId = .invalid,
     typed_right_operand_span_id: SpanId = .invalid,
+    // Storage-shaped expressions and statements retain their semantic edges
+    // explicitly. A member names its base occurrence and resolved field index;
+    // assignments name target/value occurrences; return/local instructions may
+    // name the value occurrence they consume. Shared lowering plans can then
+    // reconstruct places without source-position arithmetic or an AST body.
+    typed_base_operand_span_id: SpanId = .invalid,
+    member_field_index: ?usize = null,
+    typed_target_operand_span_id: SpanId = .invalid,
+    typed_value_operand_span_id: SpanId = .invalid,
     // Calls retain their enclosing expression span above for diagnostics and
     // source maps, while this ID names the callee occurrence shared by
     // call-result/argument/callee-signature facts.

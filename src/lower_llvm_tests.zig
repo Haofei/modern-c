@@ -2058,6 +2058,35 @@ test "LLVM emits direct struct parameter field returns from MIR" {
     try expectNotContains(assigned_body, "store");
 }
 
+test "LLVM emits nested parameter and global field places from MIR without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\struct Box { pair: Pair }
+        \\global box: Box = .{ .pair = .{ .left = 1, .right = 2 } };
+        \\fn update(value: u32) -> u32 {
+        \\    box.pair.left = value;
+        \\    return box.pair.left;
+        \\}
+        \\fn read(value: Box) -> u32 {
+        \\    return value.pair.right;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_place_return.mc", source, &output);
+
+    const update = try llvmFunctionBody(output.items, "define internal i32 @update");
+    try expectContains(update, "getelementptr { { i32, i32 } }, ptr @box, i64 0, i32 0");
+    try expectContains(update, "getelementptr { i32, i32 }, ptr %t");
+    try expectContains(update, "store atomic i32 %value");
+    try expectContains(update, "load atomic i32");
+    const read = try llvmFunctionBody(output.items, "define internal i32 @read");
+    try expectContains(read, "extractvalue { { i32, i32 } } %value, 0");
+    try expectContains(read, "extractvalue { i32, i32 } %t");
+    try expectContains(read, ", 1");
+    try expectNotContains(read, "alloca");
+}
+
 test "LLVM emits conditional struct parameter field returns from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }
@@ -7712,7 +7741,7 @@ test "LLVM nested struct members require MIR expression facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_struct_member_expression_result_facts.mc", .{}, false, .riscv64, null);
-        try expectContains(output.items, "getelementptr");
+        try expectContains(output.items, "extractvalue { { i32 } }");
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
