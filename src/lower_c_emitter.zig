@@ -1598,7 +1598,14 @@ pub const CEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
-        const simple_return = self.simpleMirReturn(function, fn_mir);
+        const place_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
+                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1615,13 +1622,6 @@ pub const CEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const place_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
-            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
-                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
-            else
-                null
-        else
-            null;
         const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
             mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
         else
@@ -3835,6 +3835,14 @@ pub const CEmitter = struct {
     }
 
     fn emitMirPlaceReturnPlan(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan) !void {
+        if (plan.local_init) |local| {
+            const span = spanFromMirSourcePoint(local.location.source);
+            const local_ty = type_bridge.simpleNameType(local.ty.name(), span);
+            const initializer = try self.mirPlaceAccess(local.value);
+            try self.writeLineDirective(span);
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(local_ty, .typedef_name), try self.cIdent(local.name), initializer });
+        }
         if (plan.store) |store| {
             const span = spanFromMirSourcePoint(store.location.source);
             const target_ty = try self.mirPlaceType(store.target, span);
@@ -3856,7 +3864,7 @@ pub const CEmitter = struct {
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "return ");
         switch (plan.returned.root_kind) {
-            .parameter => try self.out.appendSlice(self.allocator, access),
+            .parameter, .local => try self.out.appendSlice(self.allocator, access),
             .global => try appendGlobalLoadExpr(self.allocator, self.out, access, try self.globalInfoFromType(return_ty)),
         }
         try self.out.appendSlice(self.allocator, ";\n");
@@ -3887,6 +3895,7 @@ pub const CEmitter = struct {
 
     fn mirPlacePlanSupported(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan, span: diagnostics.Span) bool {
         _ = self.mirPlaceType(plan.returned, span) catch return false;
+        if (plan.local_init) |local| _ = self.mirPlaceType(local.value, span) catch return false;
         if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
         return true;
     }

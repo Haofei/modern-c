@@ -2070,6 +2070,14 @@ test "LLVM emits nested parameter and global field places from MIR without body 
         \\fn read(value: Box) -> u32 {
         \\    return value.pair.right;
         \\}
+        \\fn read_local_global() -> u32 {
+        \\    let copy: Box = box;
+        \\    return copy.pair.right;
+        \\}
+        \\fn read_local_parameter(value: Box) -> u32 {
+        \\    let copy: Box = value;
+        \\    return copy.pair.left;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -2085,6 +2093,16 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectContains(read, "extractvalue { i32, i32 } %t");
     try expectContains(read, ", 1");
     try expectNotContains(read, "alloca");
+    const read_global = try llvmFunctionBody(output.items, "define internal i32 @read_local_global");
+    try expectContains(read_global, "load { { i32, i32 } }, ptr @box");
+    try expectContains(read_global, "extractvalue { { i32, i32 } }");
+    try expectContains(read_global, ", 1");
+    try expectNotContains(read_global, "alloca");
+    const read_parameter = try llvmFunctionBody(output.items, "define internal i32 @read_local_parameter");
+    try expectContains(read_parameter, "extractvalue { { i32, i32 } } %value, 0");
+    try expectContains(read_parameter, "extractvalue { i32, i32 }");
+    try expectContains(read_parameter, ", 0");
+    try expectNotContains(read_parameter, "alloca");
 }
 
 test "LLVM emits conditional struct parameter field returns from MIR" {

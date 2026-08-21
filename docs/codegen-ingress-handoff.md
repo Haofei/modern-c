@@ -6,7 +6,7 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active, incremental, the only goal advanced.
-  The current strict ratchet corpus admits **75/160 C** and **76/160 LLVM**
+  The current strict ratchet corpus admits **76/160 C** and **77/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `typed-hir-checked-program`** — frozen. Double-write scaffold seeded in
@@ -99,10 +99,12 @@ callees. Closures and non-leaf arguments remain fail-closed.
 The same module now owns a typed field-place plan. MIR records each member's
 base `SpanId` and resolved field index, assignment target/value `SpanId`s, and
 the returned value `SpanId`. Both backends lower one-block global field
-stores/loads and nested by-value parameter field reads from that single plan,
-including `box.pair.left` and `value.pair.right`, without reading a function
-body. Pointer traversal and locals remain fail-closed until their storage/value
-semantics are represented by the shared plan.
+stores/loads, nested by-value parameter field reads, and local aggregate copies
+initialized from a parameter/global from that single plan, including
+`box.pair.left`, `value.pair.right`, and `let copy: Box = box`, without reading a
+function body. Pointer traversal and literal-initialized locals remain
+fail-closed until their storage/value semantics are represented by the shared
+plan.
 
 ### Six correctness defects were caught by the discipline (learn from these)
 
@@ -137,7 +139,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 75/160 and LLVM 76/160. The exact-root soundness gate
+current strict corpus is C 76/160 and LLVM 77/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

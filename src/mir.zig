@@ -6229,6 +6229,10 @@ const FunctionBuilder = struct {
                 }
                 for (local.names) |name| {
                     try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
+                    if (local.names.len == 1) if (local.init) |initializer| {
+                        self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
+                            try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(initializer).span));
+                    };
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
                     try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);

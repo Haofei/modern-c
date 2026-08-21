@@ -362,6 +362,36 @@ test "MIR owns member, assignment, and return operand identities" {
     try std.testing.expect(std.mem.indexOf(u8, invalid_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
 }
 
+test "MIR statement plan traces a local aggregate copy to its initializer" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\global default_pair: Pair = .{ .left = 1, .right = 2 };
+        \\fn read() -> u32 {
+        \\    let pair: Pair = default_pair;
+        \\    return pair.right;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_place_plan.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+
+    const plan = mir_statement_plan.buildSingleBlockPlaceReturn(functionByName(module_mir, "read").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir_statement_plan.PlaceRootKind.local, plan.returned.root_kind);
+    try std.testing.expectEqualStrings("pair", plan.returned.root_name);
+    try std.testing.expectEqual(@as(usize, 1), plan.returned.projection_count);
+    const local = plan.local_init orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("pair", local.name);
+    try std.testing.expectEqual(mir_statement_plan.PlaceRootKind.global, local.value.root_kind);
+    try std.testing.expectEqualStrings("default_pair", local.value.root_name);
+}
+
 test "MIR target-type owner identities mirror direct calls" {
     const source =
         \\fn callee(x: u32) -> u32 {

@@ -1653,7 +1653,14 @@ const LlvmEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
-        const simple_return = self.simpleMirReturn(function, fn_mir);
+        const place_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
+                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1669,13 +1676,6 @@ const LlvmEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const place_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
-            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
-                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
-            else
-                null
-        else
-            null;
         const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
             mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
         else
@@ -3830,6 +3830,11 @@ const LlvmEmitter = struct {
         const span = spanFromMirSourcePoint(plan.return_location.source);
         const value = switch (plan.returned.root_kind) {
             .parameter => try self.emitMirParameterPlaceValue(plan.returned, span),
+            .local => blk: {
+                const local = plan.local_init orelse return error.UnsupportedLlvmEmission;
+                const initialized = try self.emitMirNonLocalPlaceValue(local.value, span);
+                break :blk try self.emitMirProjectedValue(plan.returned, initialized, span);
+            },
             .global => blk: {
                 const place = try self.emitMirGlobalPlacePointer(plan.returned, span);
                 break :blk try self.emitOrdinaryLoad(place.ty, place.pointer, !(self.global_is_const.get(plan.returned.root_name) orelse false));
@@ -3839,8 +3844,24 @@ const LlvmEmitter = struct {
     }
 
     fn emitMirParameterPlaceValue(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) ![]const u8 {
+        const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{place.root_name});
+        return self.emitMirProjectedValue(place, value, span);
+    }
+
+    fn emitMirNonLocalPlaceValue(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) ![]const u8 {
+        return switch (place.root_kind) {
+            .parameter => self.emitMirParameterPlaceValue(place, span),
+            .global => blk: {
+                const pointer = try self.emitMirGlobalPlacePointer(place, span);
+                break :blk try self.emitOrdinaryLoad(pointer.ty, pointer.pointer, !(self.global_is_const.get(place.root_name) orelse false));
+            },
+            .local => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn emitMirProjectedValue(self: *LlvmEmitter, place: mir_statement_plan.Place, root_value: []const u8, span: diagnostics.Span) ![]const u8 {
         var ty = type_bridge.simpleNameType(place.root_ty.name(), span);
-        var value: []const u8 = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{place.root_name});
+        var value = root_value;
         for (place.projections[0..place.projection_count]) |projection| {
             const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
             if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
@@ -3874,6 +3895,7 @@ const LlvmEmitter = struct {
 
     fn mirPlacePlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.PlaceReturnPlan, span: diagnostics.Span) bool {
         _ = self.mirPlaceType(plan.returned, span) catch return false;
+        if (plan.local_init) |local| _ = self.mirPlaceType(local.value, span) catch return false;
         if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
         return true;
     }

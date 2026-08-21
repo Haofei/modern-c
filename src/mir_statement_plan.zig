@@ -91,7 +91,7 @@ pub const LogicalReturnPlan = struct {
     location: Location,
 };
 
-pub const PlaceRootKind = enum { parameter, global };
+pub const PlaceRootKind = enum { parameter, local, global };
 
 pub const PlaceProjection = struct {
     field_name: []const u8,
@@ -127,7 +127,15 @@ pub const PlaceStore = struct {
     location: Location,
 };
 
+pub const PlaceLocalInit = struct {
+    name: []const u8,
+    ty: mir.ValueType,
+    value: Place,
+    location: Location,
+};
+
 pub const PlaceReturnPlan = struct {
+    local_init: ?PlaceLocalInit = null,
     store: ?PlaceStore = null,
     returned: Place,
     return_location: Location,
@@ -150,8 +158,10 @@ pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
     var assignment: ?mir.Instruction = null;
     var returned: ?mir.Instruction = null;
     var expression_count: usize = 0;
+    var local_count: usize = 0;
     for (block.instructions) |instruction| switch (instruction.kind) {
         .param, .target_type => {},
+        .local => local_count += 1,
         .expr => expression_count += 1,
         .assign => {
             if (assignment != null or !instruction.typed_target_operand_span_id.isValid() or !instruction.typed_value_operand_span_id.isValid()) return null;
@@ -172,6 +182,20 @@ pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
     if (result.returned.projection_count == 0 or !placeHasAggregateIntermediates(result.returned) or !sameRepresentationType(result.returned.resultType(), function.return_ty)) return null;
 
     var consumed_expressions = result.returned.projection_count + 1;
+    if (result.returned.root_kind == .local) {
+        if (local_count != 1) return null;
+        const local_instruction = localInstruction(function, result.returned.root_name) orelse return null;
+        if (!local_instruction.typed_value_operand_span_id.isValid()) return null;
+        const initializer = buildPlace(function, block, local_instruction.typed_value_operand_span_id) orelse return null;
+        if (initializer.root_kind == .local or !sameRepresentationType(initializer.resultType(), result.returned.root_ty)) return null;
+        result.local_init = .{
+            .name = result.returned.root_name,
+            .ty = result.returned.root_ty,
+            .value = initializer,
+            .location = locationFromInstruction(local_instruction),
+        };
+        consumed_expressions += initializer.projection_count + 1;
+    } else if (local_count != 0) return null;
     if (assignment) |store_instruction| {
         const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
         if (target.root_kind != .global or target.projection_count == 0 or !placeHasAggregateIntermediates(target) or !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
@@ -499,8 +523,10 @@ fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, pl
     const root_id = instruction.typed_value_id orelse return false;
     const root_name = valueIdentityName(function, root_id) orelse return false;
     if (!std.mem.eql(u8, root_name, instruction.detail)) return false;
-    if (localType(function, root_name) != null) return false;
-    if (parameterType(function, root_name)) |parameter_ty| {
+    if (localType(function, root_name)) |local_ty| {
+        if (!sameRepresentationType(local_ty, instruction.result_ty)) return false;
+        place.root_kind = .local;
+    } else if (parameterType(function, root_name)) |parameter_ty| {
         if (!sameRepresentationType(parameter_ty, instruction.result_ty)) return false;
         place.root_kind = .parameter;
     } else {
@@ -512,6 +538,16 @@ fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, pl
     place.root_location = locationFromInstruction(instruction);
     root_set.* = true;
     return true;
+}
+
+fn localInstruction(function: mir.Function, name: []const u8) ?mir.Instruction {
+    var matched: ?mir.Instruction = null;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .local or !std.mem.eql(u8, instruction.detail, name)) continue;
+        if (matched != null) return null;
+        matched = instruction;
+    };
+    return matched;
 }
 
 fn expressionAtSpan(block: mir.Block, span_id: mir.SpanId) ?mir.Instruction {

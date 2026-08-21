@@ -1328,6 +1328,14 @@ test "lower-c emits nested parameter and global field places from MIR without bo
         \\fn read(value: Box) -> u32 {
         \\    return value.pair.right;
         \\}
+        \\fn read_local_global() -> u32 {
+        \\    let copy: Box = box;
+        \\    return copy.pair.right;
+        \\}
+        \\fn read_local_parameter(value: Box) -> u32 {
+        \\    let copy: Box = value;
+        \\    return copy.pair.left;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1339,6 +1347,12 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     const read = try cFunctionBody(output.items, "static uint32_t read(Box value)");
     try expectContains(read, "return value.pair.right;");
     try expectNotContains(read, "mc_tmp");
+    const read_global = try cFunctionBody(output.items, "static uint32_t read_local_global(void)");
+    try expectContains(read_global, "Box copy = box;");
+    try expectContains(read_global, "return copy.pair.right;");
+    const read_parameter = try cFunctionBody(output.items, "static uint32_t read_local_parameter(Box value)");
+    try expectContains(read_parameter, "Box copy = value;");
+    try expectContains(read_parameter, "return copy.pair.left;");
 }
 
 test "lower-c emits conditional struct parameter field returns from MIR" {
