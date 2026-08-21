@@ -1443,6 +1443,13 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, instruction.line, instruction.column },
                     );
                 }
+                if (instruction.typed_callee_span_id.isValid()) {
+                    try out.print(
+                        allocator,
+                        "mir call_identity fn={s} block={} kind={s} detail={s} callee_span_id={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_callee_span_id.index() },
+                    );
+                }
             }
         }
         for (function.trap_edges) |edge| {
@@ -2052,6 +2059,12 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         if (index >= function.span_identities.len) return false;
         const source = function.span_identities[index].source;
         if (source.line != instruction.line or source.column != instruction.column or source.offset != instruction.source_offset or source.len != instruction.source_len) return false;
+    }
+    if (instruction.kind == .call or instruction.kind == .indirect_call) {
+        if (!instruction.typed_callee_span_id.isValid()) return false;
+        if (instruction.typed_callee_span_id.index() >= function.span_identities.len) return false;
+    } else if (instruction.typed_callee_span_id.isValid()) {
+        return false;
     }
     if (instruction.typed_value_id) |value_id| {
         if (!value_id.isValid()) return false;
@@ -7596,6 +7609,15 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (indirect_call_target) |target| target.result_ty else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
+                if (instr_kind == .call or instr_kind == .indirect_call) {
+                    self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_callee_span_id =
+                        try self.internSpanId(.{
+                            .line = node.callee.*.span.line,
+                            .column = node.callee.*.span.column,
+                            .offset = node.callee.*.span.offset,
+                            .len = node.callee.*.span.len,
+                        });
+                }
                 if (direct_call) try self.addDropGlueCallOwnershipEvent(callee_name, node, expr.span);
                 if (direct_decl_summary) |summary| {
                     const result_ty = summary.return_type_expr orelse ast_query.simpleNameType("void", node.callee.*.span);

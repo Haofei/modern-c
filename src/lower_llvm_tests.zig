@@ -3614,6 +3614,66 @@ test "LLVM preserves MIR void calls before conditional returns" {
     try expectNotContains(checked_body, "switch");
 }
 
+test "LLVM discarded direct-call results lower from MIR without body fallback" {
+    const source =
+        \\extern fn combine(left: u32, right: u32) -> u32;
+        \\fn discard_value(left: u32, right: u32) -> void {
+        \\    combine(left, right);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_discarded_direct_call_result.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal void @discard_value");
+    const call_text = "call i32 @combine(i32 %left, i32 %right)";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, call_text));
+    const call = std.mem.indexOf(u8, body, call_text) orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "ret void") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call < ret);
+    try expectNotContains(body, "= call i32 @combine");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
+test "LLVM zero-argument function-pointer calls lower from MIR without body fallback" {
+    const source =
+        \\extern fn entry_of() -> fn() -> void;
+        \\fn call_entry_param(entry: fn() -> void) -> void {
+        \\    entry();
+        \\}
+        \\fn call_fn_pointer() -> void {
+        \\    let entry: fn() -> void = entry_of();
+        \\    entry();
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_zero_arg_function_pointer_calls.mc", source, &output);
+
+    const param_body = try llvmFunctionBody(output.items, "define internal void @call_entry_param");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, param_body, "call void %entry()"));
+    const param_call = std.mem.indexOf(u8, param_body, "call void %entry()") orelse return error.TestUnexpectedResult;
+    const param_ret = std.mem.indexOf(u8, param_body, "ret void") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(param_call < param_ret);
+    try expectNotContains(param_body, "alloca");
+    try expectNotContains(param_body, "store");
+    try expectNotContains(param_body, "load ptr");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal void @call_fn_pointer");
+    const producer_text = "call ptr @entry_of()";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, producer_text));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "call void %"));
+    const producer = std.mem.indexOf(u8, local_body, producer_text) orelse return error.TestUnexpectedResult;
+    const indirect = std.mem.indexOfPos(u8, local_body, producer + producer_text.len, "call void %") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOfPos(u8, local_body, indirect, "ret void") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(producer < indirect);
+    try std.testing.expect(indirect < local_ret);
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store ptr");
+    try expectNotContains(local_body, "load ptr");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

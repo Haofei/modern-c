@@ -163,6 +163,10 @@ pub const Instruction = struct {
     contract_region_id: ?usize = null,
     typed_value_id: ?ValueId = null,
     typed_span_id: SpanId = .invalid,
+    // Calls retain their enclosing expression span above for diagnostics and
+    // source maps, while this ID names the callee occurrence shared by
+    // call-result/argument/callee-signature facts.
+    typed_callee_span_id: SpanId = .invalid,
     line: usize,
     column: usize,
     source_offset: usize = 0,

@@ -11,6 +11,7 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
+const mir_statement_plan = @import("mir_statement_plan.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const fallback_census = @import("fallback_census.zig");
@@ -1668,7 +1669,11 @@ const LlvmEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null) return false;
+        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+            mir_statement_plan.buildSingleBlockVoid(fn_mir)
+        else
+            null;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and statement_plan == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1734,6 +1739,8 @@ const LlvmEmitter = struct {
                 try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
             }
             try self.emitReturnVoid(span);
+        } else if (statement_plan) |plan| {
+            try self.emitMirStatementPlan(function, fn_mir, plan);
         } else if (simple_return) |ret| {
             const return_span = self.simpleMirReturnSpan(fn_mir) orelse sig_facts.name.span;
             if (simple_return_prefix_calls) |calls| {
@@ -3720,6 +3727,54 @@ const LlvmEmitter = struct {
         for (calls.calls[0..calls.count]) |call| {
             try self.emitSimpleMirDirectCall(call, null, span);
         }
+    }
+
+    fn emitMirStatementPlan(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, plan: mir_statement_plan.Plan) !void {
+        const LocalBinding = struct {
+            id: mir.ValueId,
+            value: []const u8,
+        };
+        var locals: [mir_statement_plan.max_statements]LocalBinding = undefined;
+        var local_count: usize = 0;
+        var last_span = function.signature.name.span;
+
+        for (plan.statements[0..plan.count]) |statement| switch (statement) {
+            .discard_direct_call => |location| {
+                const span = spanFromMirSourcePoint(location.source);
+                const call = self.simpleMirDirectCallAtSource(function, fn_mir, location.source) orelse return error.UnsupportedLlvmEmission;
+                try self.emitSimpleMirDirectCall(call, null, span);
+                last_span = span;
+            },
+            .local_direct_call => |local| {
+                if (local_count >= locals.len) return error.UnsupportedLlvmEmission;
+                const span = spanFromMirSourcePoint(local.call_location.source);
+                const call = self.simpleMirDirectCallAtSource(function, fn_mir, local.call_location.source) orelse return error.UnsupportedLlvmEmission;
+                const result = try self.nextTemp();
+                try self.emitSimpleMirDirectCall(call, result, span);
+                locals[local_count] = .{ .id = local.local_id, .value = result };
+                local_count += 1;
+                last_span = span;
+            },
+            .indirect_void_call => |call| {
+                var local_value: ?[]const u8 = null;
+                for (locals[0..local_count]) |local| {
+                    if (local.id.eql(call.callee_id)) {
+                        local_value = local.value;
+                        break;
+                    }
+                }
+                const callee = local_value orelse try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{call.callee_name});
+                const span = spanFromMirSourcePoint(call.location.source);
+                try self.out.print(self.allocator, "  call void {s}()", .{callee});
+                if (try self.debugLocation(span)) |dbg| {
+                    try self.out.print(self.allocator, ", !dbg !{d}\n", .{dbg});
+                } else {
+                    try self.out.appendSlice(self.allocator, "\n");
+                }
+                last_span = span;
+            },
+        };
+        try self.emitReturnVoid(last_span);
     }
 
     fn emitSimpleMirVoidStatements(self: *LlvmEmitter, statements: SimpleMirVoidStatements, default_span: diagnostics.Span) !diagnostics.Span {

@@ -83,6 +83,16 @@ armed by `MC_FALLBACK_CENSUS=<path>`, hooks the real admission branch in each
 backend's `emitFunctionDefinitions`, dumps JSONL, ranks remaining fallbacks.
 Worklist: `docs/codegen-ingress-p0-worklist.md` (has the current census snapshot).
 
+The first backend-neutral statement slice now lives in
+`src/mir_statement_plan.zig`. It admits a one-block, no-trap, no-cleanup void
+body containing a discarded direct-call result or a zero-argument ordinary
+function-pointer call through a parameter/local. The local form keeps
+`entry_of()` and `entry()` as two ordered statements. Calls carry a separate
+`typed_callee_span_id`, so plan/fact association uses an opaque SpanId without
+changing the enclosing expression span used by diagnostics and source maps.
+Do not extend this slice to closure or argument-bearing indirect calls until
+MIR records explicit indexed indirect operands.
+
 ### Six correctness defects were caught by the discipline (learn from these)
 
 1. **optional-deref dropped the tag**: an early `return p.*` recognizer admitted
@@ -116,7 +126,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 62/160 and LLVM 63/160. The exact-root soundness gate
+current strict corpus is C 65/160 and LLVM 66/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

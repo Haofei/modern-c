@@ -327,7 +327,12 @@ test "MIR target-type owner identities mirror direct calls" {
     try std.testing.expect(result_fact.typed_span_id.eql(result_span.id));
 
     var saw_instruction = false;
+    var saw_call = false;
     for (caller.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, "callee")) {
+            try std.testing.expect(instruction.typed_callee_span_id.eql(result_span.id));
+            saw_call = true;
+        }
         if (instruction.kind != .target_type) continue;
         if (!std.mem.eql(u8, instruction.detail, @tagName(mir.TargetTypeKind.direct_call_result))) continue;
         try std.testing.expectEqualStrings("callee", instruction.target_owner.?);
@@ -337,12 +342,16 @@ test "MIR target-type owner identities mirror direct calls" {
         saw_instruction = true;
     };
     try std.testing.expect(saw_instruction);
+    try std.testing.expect(saw_call);
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_owner_identity fn=caller id=0 spelling=callee") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_type_fact fn=caller kind=direct_call_result target_type=u32 result_type=u32 aggregate_construction=none target_owner=callee target_index=none recorded=true") != null);
+    const expected_call_identity = try std.fmt.allocPrint(std.testing.allocator, "mir call_identity fn=caller block=0 kind=call detail=callee callee_span_id={}", .{result_span.id.index()});
+    defer std.testing.allocator.free(expected_call_identity);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_call_identity) != null);
     const expected_fact_result = try std.fmt.allocPrint(std.testing.allocator, "typed_result_ty_id={}", .{result_type.id.index()});
     defer std.testing.allocator.free(expected_fact_result);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_result) != null);
@@ -352,6 +361,25 @@ test "MIR target-type owner identities mirror direct calls" {
     const expected_fact_owner = try std.fmt.allocPrint(std.testing.allocator, "typed_target_owner_id={}", .{owner.id.index()});
     defer std.testing.allocator.free(expected_fact_owner);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_owner) != null);
+
+    const caller_mut = functionByNameMut(&module_mir, "caller").?;
+    var cleared_call_identity = false;
+    for (caller_mut.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .call) continue;
+            instruction.typed_callee_span_id = .invalid;
+            cleared_call_identity = true;
+            break;
+        }
+        if (cleared_call_identity) break;
+    }
+    try std.testing.expect(cleared_call_identity);
+
+    var identity_reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_call_identity.mc", source);
+    defer identity_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &identity_reporter);
+    try std.testing.expect(identity_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, identity_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
 }
 
 test "MIR facts view keeps typed lookup and module fallback separate" {
@@ -9478,7 +9506,10 @@ test "MIR representation checks emit invalid-representation trap edges" {
 
 test "MIR verifier rejects missing representation check" {
     var instructions = [_]Instruction{
-        .{ .kind = .call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "make_ptr", .line = 1, .column = 1 },
+        .{ .kind = .call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "make_ptr", .typed_callee_span_id = SpanId.fromIndex(0), .line = 1, .column = 1 },
+    };
+    var span_identities = [_]mir.SpanIdentity{
+        .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{
@@ -9497,6 +9528,7 @@ test "MIR verifier rejects missing representation check" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .span_identities = span_identities[0..],
             .pointer_provenance_facts = &.{},
             .representation_facts = &.{},
             .elided_bounds = &.{},
@@ -9514,7 +9546,10 @@ test "MIR verifier rejects missing representation check" {
 
 test "MIR verifier rejects missing representation check on indirect call" {
     var instructions = [_]Instruction{
-        .{ .kind = .indirect_call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "callee", .line = 1, .column = 1 },
+        .{ .kind = .indirect_call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "callee", .typed_callee_span_id = SpanId.fromIndex(0), .line = 1, .column = 1 },
+    };
+    var span_identities = [_]mir.SpanIdentity{
+        .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{
@@ -9533,6 +9568,7 @@ test "MIR verifier rejects missing representation check on indirect call" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .span_identities = span_identities[0..],
             .pointer_provenance_facts = &.{},
             .representation_facts = &.{},
             .elided_bounds = &.{},

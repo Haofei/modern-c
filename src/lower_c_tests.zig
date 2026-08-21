@@ -2701,6 +2701,44 @@ test "lower-c emits local-init call feeding return call from MIR without body fa
     try expectNotContains(nested_body, "mc_tmp");
 }
 
+test "lower-c emits discarded and indirect calls from MIR without body fallback" {
+    const source =
+        \\extern fn combine(left: u32, right: u32) -> u32;
+        \\extern fn entry_of() -> fn() -> void;
+        \\fn discard_value(left: u32, right: u32) -> void {
+        \\    combine(left, right);
+        \\}
+        \\fn call_entry_param(entry: fn() -> void) -> void {
+        \\    entry();
+        \\}
+        \\fn call_fn_pointer() -> void {
+        \\    let entry: fn() -> void = entry_of();
+        \\    entry();
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_call_statements.mc", source, &output);
+
+    const discard_body = try cFunctionBody(output.items, "static void discard_value(uint32_t left, uint32_t right)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, discard_body, "combine(left, right);"));
+    try expectNotContains(discard_body, "return combine");
+    try expectNotContains(discard_body, "mc_tmp");
+
+    const parameter_body = try cFunctionBody(output.items, "static void call_entry_param(mc_fnptr_4_void entry)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, parameter_body, "entry();"));
+    try expectNotContains(parameter_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static void call_fn_pointer(void)");
+    const init = std.mem.indexOf(u8, local_body, "mc_fnptr_4_void entry = entry_of();") orelse return error.TestUnexpectedResult;
+    const call = std.mem.indexOfPos(u8, local_body, init + 1, "entry();") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(init < call);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "entry_of();"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "entry();"));
+    try expectNotContains(local_body, "entry_of()();");
+    try expectNotContains(local_body, "mc_tmp");
+}
+
 test "lower-c emits enum literal direct-call arguments from MIR without body fallback" {
     const source =
         \\enum Mode: u8 { read = 1, write = 2 }

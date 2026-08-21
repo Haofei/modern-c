@@ -10,6 +10,7 @@ const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
+const mir_statement_plan = @import("mir_statement_plan.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_bridge = @import("type_bridge.zig");
@@ -1614,7 +1615,11 @@ pub const CEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null) return false;
+        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+            mir_statement_plan.buildSingleBlockVoid(fn_mir)
+        else
+            null;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1635,6 +1640,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "if (!(");
             try self.emitSimpleMirCondition(assert_body.condition);
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        } else if (statement_plan) |plan| {
+            try self.emitMirStatementPlan(function, fn_mir, plan);
         } else if (simple_return) |ret| {
             if (simple_return_prefix_calls) |calls| {
                 try self.emitSimpleMirDirectCallStatements(calls);
@@ -3763,6 +3770,34 @@ pub const CEmitter = struct {
             try self.emitSimpleMirDirectCall(call);
             try self.out.appendSlice(self.allocator, ";\n");
         }
+    }
+
+    fn emitMirStatementPlan(self: *CEmitter, function: anytype, fn_mir: mir.Function, plan: mir_statement_plan.Plan) !void {
+        for (plan.statements[0..plan.count]) |statement| switch (statement) {
+            .discard_direct_call => |location| {
+                const call = self.simpleMirDirectCallAtSource(function, fn_mir, location.source) orelse return error.UnsupportedCEmission;
+                try self.writeLineDirective(spanFromMirSourcePoint(location.source));
+                try self.writeIndent();
+                try self.emitSimpleMirDirectCall(call);
+                try self.out.appendSlice(self.allocator, ";\n");
+            },
+            .local_direct_call => |local| {
+                const call = self.simpleMirDirectCallAtSource(function, fn_mir, local.call_location.source) orelse return error.UnsupportedCEmission;
+                try self.writeLineDirective(spanFromMirSourcePoint(local.local_location.source));
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = ", .{
+                    try self.cTypeFor(local.result_fact.target_ty, .typedef_name),
+                    try self.cIdent(local.local_name),
+                });
+                try self.emitSimpleMirDirectCall(call);
+                try self.out.appendSlice(self.allocator, ";\n");
+            },
+            .indirect_void_call => |call| {
+                try self.writeLineDirective(spanFromMirSourcePoint(call.location.source));
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s}();\n", .{try self.cIdent(call.callee_name)});
+            },
+        };
     }
 
     fn emitSimpleMirVoidStatements(self: *CEmitter, statements: SimpleMirVoidStatements) !void {

@@ -68,8 +68,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 62 | 98 | 0 | 3875 |
-| LLVM | 160 | 63 | 97 | 0 | 3937 |
+| C | 160 | 65 | 95 | 0 | 4062 |
+| LLVM | 160 | 66 | 94 | 0 | 4125 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -100,6 +100,7 @@ typed-unary operand-descendant bugs before commit.
 | Nested local call initializer (C) | `let x = f(g(a), b); return h(x)` | (current batch) |
 | Leaf-operand typed unary call targets | numeric conversion, `phys`, `bitcast`, `enum.raw`; root keyed by `typed_unary_operand` SpanId/type fact | (current batch) |
 | Leaf-operand typed binary domain calls | `wrapping.add`, serial before/after/distance, counter delta; indexed roots keyed by owner-qualified `typed_call_operand` facts | (current batch) |
+| Shared straight-line statement plan | discarded non-void call; zero-argument function-pointer call through param/local | (current batch) |
 
 ### Remaining families, by tractability
 
@@ -111,10 +112,15 @@ typed-unary operand-descendant bugs before commit.
 | Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | C now also covers one nested call inside the initializer; LLVM and the remaining shapes need a general MIR statement/value sequence | **large** |
 | Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points, not `#line` matching |
 
-The remaining chunk is no longer mostly recognizer-shaped: it needs the fast
-path extended to **statement-level** emission (multi-statement returns,
-builtin/void bodies) and, for folded-`let`, a source-map-derived-from-MIR
-change. Plain function-call returns/voids are already admitted. Leaf-operand
+The remaining chunk is no longer mostly recognizer-shaped. The first shared
+statement-level plan now admits discarded non-void calls and zero-argument
+function-pointer calls through params or one direct-call-initialized local.
+It preserves MIR statement order and gives C/LLVM one admission authority;
+closures, indirect arguments, reassignment, traps, and cleanup still fail
+closed. The next expansion must add explicit MIR operands rather than another
+backend-local recognizer. Multi-statement returns, builtin/void bodies and,
+for folded-`let`, a source-map-derived-from-MIR change remain. Plain
+function-call returns/voids are already admitted. Leaf-operand
 typed unary call targets now share one descriptor; complex roots remain on the
 full path until the entire expression is representable. New kinds must supply
 complete MIR type facts and explicit rendering rather than add another return
