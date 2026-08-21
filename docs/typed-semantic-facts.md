@@ -869,6 +869,12 @@ not inline emission decisions. C inferred-local call-result typing routes MIR
 domain identities through `domainResultReturnTypeForCall` before consuming
 `.domain_result`, so wrap/Duration/Result result shapes are not reconstructed
 from the AST in that path.
+For leaf-only typed binary emission, MIR additionally records each operand as an
+indexed `typed_call_operand` row owned by the exact call-target kind. C and LLVM
+use these rows for `wrapping.add`, serial before/after/distance, and counter
+delta returns, require a unique matching call/result/type family, and require an
+exact operand-root instruction. Nested calls and other non-leaf operands remain
+outside this fast path so neither backend can duplicate or reorder evaluation.
 LLVM wrapping arithmetic classification now receives the already-confirmed
 wrapping call-target kind from value-emission and expression-typing callers.
 `wrappingCallInfo` no longer rescans the call span internally, and the old

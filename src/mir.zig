@@ -7671,6 +7671,8 @@ const FunctionBuilder = struct {
                 if (wrapping_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
                     try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
+                    try self.appendOwnedTargetTypeFact(.typed_call_operand, target.left_ty, target.left_value_ty, node.args[0].span, @tagName(target.kind), 0);
+                    try self.appendOwnedTargetTypeFact(.typed_call_operand, target.right_ty, target.right_value_ty, node.args[1].span, @tagName(target.kind), 1);
                     try self.appendTargetTypeFact(.wrapping_left, target.left_ty, target.left_value_ty, node.args[0].span);
                     try self.appendTargetTypeFact(.wrapping_right, target.right_ty, target.right_value_ty, node.args[1].span);
                     try self.appendTargetTypeFact(.wrapping_result, target.result_type_expr, target.result_ty, expr.span);
@@ -7693,6 +7695,15 @@ const FunctionBuilder = struct {
                 if (domain_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
                     try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
+                    if (node.args.len >= 2) {
+                        try self.appendOwnedTargetTypeFact(.typed_call_operand, target.domain_type_expr, target.domain_ty, node.args[0].span, @tagName(target.kind), 0);
+                        try self.appendOwnedTargetTypeFact(.typed_call_operand, target.domain_type_expr, target.domain_ty, node.args[1].span, @tagName(target.kind), 1);
+                    }
+                    if (node.args.len == 3) {
+                        if (target.interval_type_expr) |interval_ty| {
+                            try self.appendOwnedTargetTypeFact(.typed_call_operand, interval_ty, valueTypeFromTypeAlias(interval_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[2].span, @tagName(target.kind), 2);
+                        }
+                    }
                     try self.appendTargetTypeFact(.domain_type, target.domain_type_expr, target.domain_ty, expr.span);
                     try self.appendTargetTypeFact(.domain_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.domain_result, target.result_type_expr, target.result_ty, expr.span);

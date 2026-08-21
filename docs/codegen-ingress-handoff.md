@@ -1,14 +1,14 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-20 after the typed unary call-target slice.
+2026-08-20 after the typed binary arithmetic-domain slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active, incremental, the only goal advanced.
-  C fast-path admission is at **27.3%** (439/1611 functions); the other 72.7% still
-  ingest the transitional AST body. Multi-week to finish (it is re-implementing
-  full function-body emission on MIR).
+  The current strict ratchet corpus admits **62/160 C** and **63/160 LLVM**
+  functions. The last completed broad snapshot before this slice was C
+  439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `typed-hir-checked-program`** — frozen. Double-write scaffold seeded in
   `mir_model.zig`; legacy string-identity cutover not started.
 - **P1 `real-module-graph`** — frozen. `module_graph.zig` / `module_parser.zig`
@@ -55,7 +55,7 @@ Method per slice (never skip): a recognizer + a gate case + a render case in
 - soundness/parity probes for the specific shape.
 Then Docker `m0` regenerates emit-snapshots (host skips LLVM/qemu gates).
 
-Families closed (15, both backends): checked arithmetic; bare param past elided
+Families closed (16, both backends): checked arithmetic; bare param past elided
 nonnull; scalar deref `return p.*`; plain unsigned binary (add/sub/mul/and/or/xor,
 u32/u64); plain unary; pointer-field load; `phys` address constructor; bitwise;
 address-typed (PAddr/VAddr) field + deref; pointer comparison `return a==b`;
@@ -69,16 +69,21 @@ adding another backend-only union variant. Leaf-operand typed unary call targets
 now share a single descriptor in both backends; conversion, `phys`, alias-safe
 `bitcast`, and `enum.raw` returns consume verified call-target and type facts
 without an AST body fallback. MIR records the exact operand root as a
-`typed_unary_operand` SpanId/type fact; backends no longer infer it by scanning
+`typed_unary_operand` source/type fact; backends no longer infer it by scanning
 later instructions. Complex roots without a matching root instruction fail
-closed until their complete MIR expression is representable.
+closed until their complete MIR expression is representable. Leaf-only
+`wrapping.add`, `serial.before`, `serial.after`, `serial.distance`, and
+`counter.delta_mod` returns now use the same pattern through indexed,
+owner-qualified `typed_call_operand` facts. Both backends validate exact domain,
+payload, result, and operand types before rendering; call-bearing operands remain
+on the full path to preserve evaluation order.
 
 Tooling: `src/fallback_census.zig` + `tools/toolchain/fallback-census.{sh,py}` —
 armed by `MC_FALLBACK_CENSUS=<path>`, hooks the real admission branch in each
 backend's `emitFunctionDefinitions`, dumps JSONL, ranks remaining fallbacks.
 Worklist: `docs/codegen-ingress-p0-worklist.md` (has the current census snapshot).
 
-### FIVE real miscompiles were caught by the discipline (learn from these)
+### Six correctness defects were caught by the discipline (learn from these)
 
 1. **optional-deref dropped the tag**: an early `return p.*` recognizer admitted
    `?u32` derefs as a single load, dropping the optional tag. Fix: gate on
@@ -96,8 +101,12 @@ Worklist: `docs/codegen-ingress-p0-worklist.md` (has the current census snapshot
    lower `bitcast<f32>(x & y)` as `bitcast<f32>(x)`. Fix: MIR now records the
    exact operand root and admission requires a matching root instruction and
    complete semantic type.
+6. **mixed-width arithmetic domains were accepted**: sema compared only the
+   broad `serial` / `counter` class, so `serial<u32>` and `serial<u64>` could be
+   passed to the same operation. Fix: compare the exact resolved domain type;
+   backend admission repeats the exact-domain check.
 
-All five were caught by unit/regression tests (esp. the eval-order test below)
+All six were caught by unit/regression tests (especially the eval-order test below)
 BEFORE commit. **Never ship a codegen slice without these probes.**
 
 ## Next work
@@ -106,17 +115,19 @@ The first local-declaration statement primitive is complete for the strict
 single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
-the broad census is now C 439/1611 admitted (27.3%) and LLVM 414/1530 admitted
-(27.1%). The exact-root soundness gate deliberately returned three previously
-over-broad admissions per backend to fallback.
+the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
+current strict corpus is C 62/160 and LLVM 63/160. The exact-root soundness gate
+deliberately returned three previously over-broad admissions per backend to
+fallback.
 
 Remaining buckets are all large or medium-with-risk:
 
 - Builtin/void bodies (`store_release`, atomics): statement-level builtin
   lowering. Large. Direct-return bitcast and enum-raw no longer belong here.
-- Remaining typed unary call targets (wrapping/serial/counter/domain families):
-  extend the shared descriptor only when MIR contains complete source/result
-  facts and both backend renderings are explicit. Medium per semantic family.
+- Remaining arithmetic-domain calls (bounded/assumption/Result-producing and
+  three-operand forms): extend the shared descriptor only after MIR can model
+  their result/control effects and all operands explicitly. Medium per semantic
+  family; do not widen the leaf-only binary path.
 - Compare/binary with checked-arith or atomic-load operands (`(a%align)==0`,
   `load(p)!=x`): widen `SimpleMirCompareBinary` operands from `SimpleMirArg`
   (leaf) to carry sub-expressions. Medium, with eval-order + trap-counting risk.
@@ -160,6 +171,4 @@ host skips those. See memory `use-docker-for-dev` and `m0-parallel-runner`.
 - P0 worklist + census snapshot: `docs/codegen-ingress-p0-worklist.md`
 - Deep P0 notes, the fold-vs-emit crux, the three miscompiles, the corrected
   goal-dependency analysis: memory `p0-spanid-decoupling-blocked.md`
-- Overall production-readiness review + roadmap: memory
-  `compiler-production-readiness.md`
 - Backends share verified MIR + a Backend interface: memory `backend-abstraction`

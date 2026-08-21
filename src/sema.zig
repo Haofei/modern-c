@@ -4944,6 +4944,7 @@ pub const Checker = struct {
         // Two-operand domain operations (section 5.4, section 5.5).
         if (class == .serial or class == .counter) {
             const code = if (class == .serial) "E_SERIAL_OPERATION" else "E_COUNTER_OPERATION";
+            const domain_ty = sema_call.staticTypeBaseType(member.base.*, ctx) orelse return;
             const known = if (class == .serial) isSerialOperationName(op) else isCounterOperationName(op);
             if (!known) {
                 self.errorCode(member.name.span, code, if (class == .serial) "unknown serial number operation" else "unknown free-running counter operation");
@@ -4959,7 +4960,9 @@ pub const Checker = struct {
             for (args[0..@min(@as(usize, 2), args.len)]) |arg| {
                 const arg_ty = exprResultType(arg, ctx) orelse exprStorageType(arg, ctx) orelse continue;
                 const arg_class = classifyTypeCtx(arg_ty, ctx);
-                if (arg_class != .unknown and arg_class != class) {
+                if (arg_class != .unknown and
+                    (arg_class != class or !sameTypeSyntaxCtx(arg_ty, domain_ty, ctx)))
+                {
                     self.errorCode(arg.span, code, "domain operation operands must have the same arithmetic-domain type");
                 }
             }

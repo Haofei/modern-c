@@ -23,10 +23,10 @@ const resolveAliasType = sema_type.resolveAliasType;
 // (directly or through a type alias), for static operations like `TcpSeq.before(a, b)`
 // or `u8.try_from(x)`. Returns null when the base is a value binding or does not
 // name such a type.
-pub fn staticTypeBaseClass(base: ast.Expr, ctx: Context) ?TypeClass {
+pub fn staticTypeBaseType(base: ast.Expr, ctx: Context) ?ast.TypeExpr {
     const ident = switch (base.kind) {
         .ident => |id| id,
-        .grouped => |inner| return staticTypeBaseClass(inner.*, ctx),
+        .grouped => |inner| return staticTypeBaseType(inner.*, ctx),
         else => return null,
     };
     if (ctx.scope) |scope| {
@@ -34,8 +34,12 @@ pub fn staticTypeBaseClass(base: ast.Expr, ctx: Context) ?TypeClass {
     }
     const resolved = resolveAliasType(simpleNameType(ident.text, ident.span), ctx);
     const class = classifyType(resolved);
-    if (isCheckedInt(class) or isArithmeticDomain(class)) return class;
+    if (isCheckedInt(class) or isArithmeticDomain(class)) return resolved;
     return null;
+}
+
+pub fn staticTypeBaseClass(base: ast.Expr, ctx: Context) ?TypeClass {
+    return classifyType(staticTypeBaseType(base, ctx) orelse return null);
 }
 
 pub fn isTypeStaticMember(member: anytype, ctx: Context) bool {

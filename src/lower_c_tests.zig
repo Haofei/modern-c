@@ -1999,6 +1999,52 @@ test "lower-c typed unary fast path never substitutes an operand descendant" {
     try expectContains(masked_phys, "return ((uintptr_t)((x & y)));");
 }
 
+test "lower-c emits typed binary domain calls from MIR without body fallback" {
+    const source =
+        \\type S = serial<u32>;
+        \\type T = counter<u64>;
+        \\#[no_lang_trap]
+        \\fn wrap_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
+        \\    return wrapping.add(a, b);
+        \\}
+        \\fn seq_before(a: S, b: S) -> bool {
+        \\    return S.before(a, b);
+        \\}
+        \\fn seq_after(a: S, b: S) -> bool {
+        \\    return S.after(a, b);
+        \\}
+        \\fn seq_distance(a: S, b: S) -> wrap<u32> {
+        \\    return S.distance(a, b);
+        \\}
+        \\fn tick_delta(now: T, start: T) -> wrap<u64> {
+        \\    return T.delta_mod(now, start);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_binary_domain_calls.mc", source, &output);
+
+    try expectContains(try cFunctionBody(output.items, "static uint32_t wrap_add(uint32_t a, uint32_t b)"), "return (a + b);");
+    try expectContains(try cFunctionBody(output.items, "static bool seq_before(uint32_t a, uint32_t b)"), "((int32_t)((uint32_t)(a - b)) < 0)");
+    try expectContains(try cFunctionBody(output.items, "static bool seq_after(uint32_t a, uint32_t b)"), "((int32_t)((uint32_t)(a - b)) > 0)");
+    try expectContains(try cFunctionBody(output.items, "static uint32_t seq_distance(uint32_t a, uint32_t b)"), "return ((uint32_t)(a - b));");
+    try expectContains(try cFunctionBody(output.items, "static uint64_t tick_delta(uint64_t now, uint64_t start)"), "return ((uint64_t)(now - start));");
+}
+
+test "lower-c typed binary domain fast path rejects call operands" {
+    const source =
+        \\type S = serial<u32>;
+        \\fn identity(value: S) -> S { return value; }
+        \\fn nested(a: S, b: S) -> bool {
+        \\    return S.before(identity(a), b);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_typed_binary_domain_nested.mc", source, &output);
+    try expectContains(try cFunctionBody(output.items, "static bool nested(uint32_t a, uint32_t b)"), "identity(a)");
+}
+
 test "lower-c emits char literal return from MIR without body fallback" {
     const source =
         \\fn char_value() -> u16 {

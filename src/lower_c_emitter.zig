@@ -20,6 +20,7 @@ const lower_c_type = @import("lower_c_type.zig");
 const numeric = @import("numeric.zig");
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
+const signedCTypeForInner = lower_c_type.signedCTypeForInner;
 const intTypeRange = lower_c_type.intTypeRange;
 const isCReservedWord = lower_c_type.isCReservedWord;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
@@ -1583,8 +1584,9 @@ pub const CEmitter = struct {
     };
 
     const SimpleMirWrappingBinary = struct {
-        kind: enum { wrapping_add, unchecked },
+        kind: enum { wrapping_add, unchecked, serial_before, serial_after, serial_distance, counter_delta_mod },
         op: []const u8,
+        operation_fact: mir.TargetTypeFact,
         result_fact: mir.TargetTypeFact,
         range_fact: ?mir.RangeFact = null,
         left: SimpleMirCallArg,
@@ -1728,7 +1730,7 @@ pub const CEmitter = struct {
                 },
                 .wrapping_binary => |binary| {
                     switch (binary.kind) {
-                        .wrapping_add => {},
+                        .wrapping_add, .serial_before, .serial_after, .serial_distance, .counter_delta_mod => {},
                         .unchecked => {
                             const fact = binary.range_fact orelse return error.UnsupportedCEmission;
                             try self.out.print(self.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ fact.target, fact.op });
@@ -2119,6 +2121,7 @@ pub const CEmitter = struct {
             return if (simpleMirNoTrap(fn_mir)) .{ .null_literal = literal } else null;
         }
         if (self.simpleMirWrappingBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
+        if (self.simpleMirDomainBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
         if (self.simpleMirUncheckedBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
         if (self.simpleMirLocalInitCallReturn(function, fn_mir, block, value_id)) |local_return| return .{ .local_init_call_return = local_return };
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
@@ -2159,8 +2162,87 @@ pub const CEmitter = struct {
     fn simpleMirWrappingBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
         const return_ty = function.signature.transitionalReturnType() orelse return null;
-        const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
+        const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse
+            (self.cTypeFor(return_ty, .typedef_name) catch return null);
         return self.simpleMirWrappingBinaryAtSource(function, fn_mir, call_source, expected_type_name);
+    }
+
+    fn simpleMirDomainBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        const call_source = simpleMirReturnedCallSource(block, value_id) orelse return null;
+        var call_target: ?mir.CallTargetFact = null;
+        for (fn_mir.call_target_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, call_source)) continue;
+            switch (fact.kind) {
+                .serial_before, .serial_after, .serial_distance, .counter_delta_mod => {},
+                else => continue,
+            }
+            if (call_target != null) return null;
+            call_target = fact;
+        }
+        const call_target_fact = call_target orelse return null;
+        const domain_kind = call_target_fact.kind;
+        const info = mir.domainCallFactInfo(domain_kind) orelse return null;
+        var canonical_call_source: mir.SourcePoint = undefined;
+        var call_count: usize = 0;
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .call or !sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) continue;
+            if (!std.mem.eql(u8, instruction.detail, info.op)) return null;
+            canonical_call_source = instructionSourcePoint(instruction);
+            call_count += 1;
+        }
+        if (call_count != 1) return null;
+
+        const domain_fact = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .domain_type, canonical_call_source) orelse return null;
+        const payload_fact = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .domain_payload, canonical_call_source) orelse return null;
+        const result_fact = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .domain_result, canonical_call_source) orelse return null;
+        if (!sameSimpleMirValueType(call_target_fact.result_ty, result_fact.result_ty)) return null;
+        const domain = switch (self.resolveAliasType(domain_fact.target_ty).kind) {
+            .generic => |node| node,
+            else => return null,
+        };
+        const expected_domain_name: []const u8 = switch (domain_kind) {
+            .serial_before, .serial_after, .serial_distance => "serial",
+            .counter_delta_mod => "counter",
+            else => return null,
+        };
+        if (!std.mem.eql(u8, domain.base.text, expected_domain_name) or domain.args.len != 1) return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(domain.args[0]), self.resolveAliasType(payload_fact.target_ty))) return null;
+        const inner_name = self.underlyingIntTypeName(payload_fact.target_ty) orelse return null;
+        if (unsignedTypeSuffix(inner_name) == null or signedCTypeForInner(inner_name) == null) return null;
+        if (!std.mem.eql(u8, self.cTypeFor(domain_fact.target_ty, .typedef_name) catch return null, self.cTypeFor(payload_fact.target_ty, .typedef_name) catch return null)) return null;
+
+        switch (domain_kind) {
+            .serial_before, .serial_after => if (!type_bridge.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), type_bridge.simpleNameType("bool", result_fact.target_ty.span))) return null,
+            .serial_distance, .counter_delta_mod => {
+                const result = switch (self.resolveAliasType(result_fact.target_ty).kind) {
+                    .generic => |node| node,
+                    else => return null,
+                };
+                if (!std.mem.eql(u8, result.base.text, "wrap") or result.args.len != 1 or
+                    !type_bridge.sameTypeSyntax(self.resolveAliasType(result.args[0]), self.resolveAliasType(payload_fact.target_ty))) return null;
+            },
+            else => return null,
+        }
+        const declared_return = function.signature.transitionalReturnType() orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(result_fact.target_ty))) return null;
+
+        const left_fact = simpleMirUniqueTypedCallOperandFactAt(fn_mir, canonical_call_source, domain_kind, 0) orelse return null;
+        const right_fact = simpleMirUniqueTypedCallOperandFactAt(fn_mir, canonical_call_source, domain_kind, 1) orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(left_fact.target_ty), self.resolveAliasType(domain_fact.target_ty)) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(right_fact.target_ty), self.resolveAliasType(domain_fact.target_ty))) return null;
+        const left_instruction = simpleMirTypedLeafOperandInstruction(block, left_fact.source) orelse return null;
+        const right_instruction = simpleMirTypedLeafOperandInstruction(block, right_fact.source) orelse return null;
+        const left = self.simpleMirTypedLeafOperandAtInstruction(function, fn_mir, left_instruction) orelse return null;
+        const right = self.simpleMirTypedLeafOperandAtInstruction(function, fn_mir, right_instruction) orelse return null;
+        const render_kind: @TypeOf(@as(SimpleMirWrappingBinary, undefined).kind) = switch (domain_kind) {
+            .serial_before => .serial_before,
+            .serial_after => .serial_after,
+            .serial_distance => .serial_distance,
+            .counter_delta_mod => .counter_delta_mod,
+            else => return null,
+        };
+        return .{ .kind = render_kind, .op = "sub", .operation_fact = payload_fact, .result_fact = result_fact, .left = left, .right = right };
     }
 
     fn simpleMirPlainFloatBinaryAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirPlainFloatBinary {
@@ -2356,51 +2438,48 @@ pub const CEmitter = struct {
 
     fn simpleMirWrappingBinaryAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint, expected_type_name: []const u8) ?SimpleMirWrappingBinary {
         if (!simpleMirNoTrap(fn_mir)) return null;
-        var has_wrapping_call = false;
+        var call_target_count: usize = 0;
         for (fn_mir.call_target_facts) |fact| {
             if (fact.kind == .wrapping_add and sameMirSourceLocation(fact.source, call_source)) {
-                has_wrapping_call = true;
-                break;
+                call_target_count += 1;
             }
         }
-        if (!has_wrapping_call) return null;
-        var saw_call = false;
+        if (call_target_count != 1) return null;
+        var call_block: ?mir.Block = null;
+        var canonical_call_source: mir.SourcePoint = undefined;
+        var call_count: usize = 0;
         for (fn_mir.blocks) |block| {
             for (block.instructions) |instruction| {
                 if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
                     if (!std.mem.eql(u8, instruction.detail, "wrapping.add")) return null;
-                    saw_call = true;
-                    break;
+                    call_block = block;
+                    canonical_call_source = instructionSourcePoint(instruction);
+                    call_count += 1;
                 }
             }
         }
-        if (!saw_call) return null;
+        if (call_count != 1) return null;
+        const block = call_block orelse return null;
 
-        const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .wrapping_result, call_source) orelse return null;
-        const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse return null;
+        const result_fact = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .wrapping_result, canonical_call_source) orelse return null;
+        const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse
+            (self.cTypeFor(result_fact.target_ty, .typedef_name) catch return null);
         if (!std.mem.eql(u8, expected_type_name, result_name) and !std.mem.eql(u8, expected_type_name, self.cTypeFor(result_fact.target_ty, .typedef_name) catch return null)) return null;
-        if (unsignedTypeSuffix(result_name) == null) return null;
-        var left_fact: ?mir.TargetTypeFact = null;
-        var right_fact: ?mir.TargetTypeFact = null;
-        for (fn_mir.target_type_facts) |fact| {
-            switch (fact.kind) {
-                .wrapping_left => {
-                    if (left_fact != null) return null;
-                    left_fact = fact;
-                },
-                .wrapping_right => {
-                    if (right_fact != null) return null;
-                    right_fact = fact;
-                },
-                else => {},
-            }
-        }
-        const left_fact_value = left_fact orelse return null;
-        const right_fact_value = right_fact orelse return null;
-        const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
-        const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
-        if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
-        return .{ .kind = .wrapping_add, .op = "add", .result_fact = result_fact, .left = left, .right = right };
+        const inner_name = self.underlyingIntTypeName(result_fact.target_ty) orelse return null;
+        if (unsignedTypeSuffix(inner_name) == null) return null;
+        const left_operand_fact = simpleMirUniqueTypedCallOperandFactAt(fn_mir, canonical_call_source, .wrapping_add, 0) orelse return null;
+        const right_operand_fact = simpleMirUniqueTypedCallOperandFactAt(fn_mir, canonical_call_source, .wrapping_add, 1) orelse return null;
+        const left_type_fact = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .wrapping_left, left_operand_fact.source) orelse return null;
+        const right_type_fact = simpleMirUniqueTargetTypeFactKindAt(fn_mir, .wrapping_right, right_operand_fact.source) orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(left_operand_fact.target_ty), self.resolveAliasType(left_type_fact.target_ty)) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(right_operand_fact.target_ty), self.resolveAliasType(right_type_fact.target_ty)) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(left_type_fact.target_ty), self.resolveAliasType(result_fact.target_ty)) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(right_type_fact.target_ty), self.resolveAliasType(result_fact.target_ty))) return null;
+        const left_instruction = simpleMirTypedLeafOperandInstruction(block, left_operand_fact.source) orelse return null;
+        const right_instruction = simpleMirTypedLeafOperandInstruction(block, right_operand_fact.source) orelse return null;
+        const left = self.simpleMirTypedLeafOperandAtInstruction(function, fn_mir, left_instruction) orelse return null;
+        const right = self.simpleMirTypedLeafOperandAtInstruction(function, fn_mir, right_instruction) orelse return null;
+        return .{ .kind = .wrapping_add, .op = "add", .operation_fact = result_fact, .result_fact = result_fact, .left = left, .right = right };
     }
 
     fn simpleMirUncheckedBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
@@ -2466,7 +2545,7 @@ pub const CEmitter = struct {
         const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
         const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
         if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
-        return .{ .kind = .unchecked, .op = op, .result_fact = result_fact, .range_fact = range_fact, .left = left, .right = right };
+        return .{ .kind = .unchecked, .op = op, .operation_fact = result_fact, .result_fact = result_fact, .range_fact = range_fact, .left = left, .right = right };
     }
 
     fn simpleMirStructLiteralReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
@@ -3790,6 +3869,7 @@ pub const CEmitter = struct {
             .plain_float_binary => fn_mir.trap_edges.len == 0,
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
+            .wrapping_binary => fn_mir.trap_edges.len == 0,
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
             .array_literal => |literal| fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal),
             .aggregate_return_pointer_load => fn_mir.trap_edges.len == 1,
@@ -3970,7 +4050,7 @@ pub const CEmitter = struct {
     fn emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(self: *CEmitter, value: SimpleMirGlobalStoreValue) !void {
         switch (value) {
             .wrapping_binary => |binary| switch (binary.kind) {
-                .wrapping_add => {},
+                .wrapping_add, .serial_before, .serial_after, .serial_distance, .counter_delta_mod => {},
                 .unchecked => {
                     const fact = binary.range_fact orelse return error.UnsupportedCEmission;
                     try self.out.print(self.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ fact.target, fact.op });
@@ -4020,7 +4100,17 @@ pub const CEmitter = struct {
     }
 
     fn emitSimpleMirWrappingBinaryExpr(self: *CEmitter, binary: SimpleMirWrappingBinary) !void {
-        _ = binary.result_fact;
+        if (binary.kind == .serial_before or binary.kind == .serial_after) {
+            const inner_name = self.underlyingIntTypeName(binary.operation_fact.target_ty) orelse return error.UnsupportedCEmission;
+            const signed_c = signedCTypeForInner(inner_name) orelse return error.UnsupportedCEmission;
+            const unsigned_c = try self.cTypeFor(binary.operation_fact.target_ty, .typedef_name);
+            try self.out.print(self.allocator, "(({s})(({s})(", .{ signed_c, unsigned_c });
+            try self.emitSimpleMirCallArg(binary.left);
+            try self.out.appendSlice(self.allocator, " - ");
+            try self.emitSimpleMirCallArg(binary.right);
+            try self.out.print(self.allocator, ")) {s} 0)", .{if (binary.kind == .serial_before) "<" else ">"});
+            return;
+        }
         const op = if (std.mem.eql(u8, binary.op, "add"))
             "+"
         else if (std.mem.eql(u8, binary.op, "sub"))
@@ -4029,11 +4119,15 @@ pub const CEmitter = struct {
             "*"
         else
             return error.UnsupportedCEmission;
-        try self.out.appendSlice(self.allocator, "(");
+        if (binary.kind == .serial_distance or binary.kind == .counter_delta_mod) {
+            try self.out.print(self.allocator, "(({s})(", .{try self.cTypeFor(binary.operation_fact.target_ty, .typedef_name)});
+        } else {
+            try self.out.appendSlice(self.allocator, "(");
+        }
         try self.emitSimpleMirCallArg(binary.left);
         try self.out.print(self.allocator, " {s} ", .{op});
         try self.emitSimpleMirCallArg(binary.right);
-        try self.out.appendSlice(self.allocator, ")");
+        try self.out.appendSlice(self.allocator, if (binary.kind == .serial_distance or binary.kind == .counter_delta_mod) "))" else ")");
     }
 
     fn emitSimpleMirPlainFloatBinaryExpr(self: *CEmitter, binary: SimpleMirPlainFloatBinary) !void {
@@ -4763,8 +4857,8 @@ pub const CEmitter = struct {
             else => {},
         }
         const operand_fact = simpleMirUniqueTypedUnaryOperandFactAt(fn_mir, canonical_call_source) orelse return null;
-        const operand_instruction = simpleMirTypedUnaryOperandInstruction(block, operand_fact.source) orelse return null;
-        const operand = self.simpleMirTypedUnaryOperandAtInstruction(function, fn_mir, operand_instruction) orelse return null;
+        const operand_instruction = simpleMirTypedLeafOperandInstruction(block, operand_fact.source) orelse return null;
+        const operand = self.simpleMirTypedLeafOperandAtInstruction(function, fn_mir, operand_instruction) orelse return null;
         if (kind == .phys) {
             const source_size = self.comptimeSizeOf(operand_fact.target_ty, 0) orelse return null;
             const target_size = self.comptimeSizeOf(target_fact.target_ty, 0) orelse return null;
@@ -4775,7 +4869,7 @@ pub const CEmitter = struct {
         return .{ .kind = kind, .source_fact = source_fact, .target_fact = target_fact, .operand = operand };
     }
 
-    fn simpleMirTypedUnaryOperandAtInstruction(self: *CEmitter, function: anytype, fn_mir: mir.Function, instruction: mir.Instruction) ?SimpleMirCallArg {
+    fn simpleMirTypedLeafOperandAtInstruction(self: *CEmitter, function: anytype, fn_mir: mir.Function, instruction: mir.Instruction) ?SimpleMirCallArg {
         const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
         return switch (operand) {
             .param => |name| if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, name)) operand else null,
@@ -4794,7 +4888,19 @@ pub const CEmitter = struct {
         return result;
     }
 
-    fn simpleMirTypedUnaryOperandInstruction(block: mir.Block, source: mir.SourcePoint) ?mir.Instruction {
+    fn simpleMirUniqueTypedCallOperandFactAt(fn_mir: mir.Function, call_source: mir.SourcePoint, kind: mir.CallTargetKind, operand_index: usize) ?mir.TargetTypeFact {
+        var result: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind != .typed_call_operand or fact.target_index != operand_index or !mirSourceContains(call_source, fact.source)) continue;
+            const owner = fact.target_owner orelse continue;
+            if (!std.mem.eql(u8, owner, @tagName(kind))) continue;
+            if (result != null) return null;
+            result = fact;
+        }
+        return result;
+    }
+
+    fn simpleMirTypedLeafOperandInstruction(block: mir.Block, source: mir.SourcePoint) ?mir.Instruction {
         var expr: ?mir.Instruction = null;
         var integer: ?mir.Instruction = null;
         for (block.instructions) |instruction| {
@@ -5797,6 +5903,7 @@ pub const CEmitter = struct {
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
+                if (simpleMirDomainCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
@@ -6152,6 +6259,27 @@ pub const CEmitter = struct {
             }
         }
         return source;
+    }
+
+    fn simpleMirReturnedCallSource(block: mir.Block, value_id: []const u8) ?mir.SourcePoint {
+        var source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .call) continue;
+            if (!std.mem.eql(u8, instruction.value_id orelse continue, value_id)) continue;
+            if (source != null) return null;
+            source = instructionSourcePoint(instruction);
+        }
+        return source;
+    }
+
+    fn simpleMirDomainCallTargetKindAt(fn_mir: mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
+        var kind: ?mir.CallTargetKind = null;
+        for (fn_mir.call_target_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, source) or mir.domainCallFactInfo(fact.kind) == null) continue;
+            if (kind != null) return null;
+            kind = fact.kind;
+        }
+        return kind;
     }
 
     fn plainFunctionRenderAttrs(render: anytype) bool {

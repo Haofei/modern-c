@@ -1297,6 +1297,29 @@ test "bitcast rejects aggregate and storage-register layout mismatches" {
     try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_BITCAST_TYPE"));
 }
 
+test "serial and counter operations require the exact same domain type" {
+    const source =
+        \\type S32 = serial<u32>;
+        \\type S64 = serial<u64>;
+        \\type C32 = counter<u32>;
+        \\type C64 = counter<u64>;
+        \\fn bad_serial(a: S32, b: S64) -> bool {
+        \\    return S32.before(a, b);
+        \\}
+        \\fn bad_counter(a: C32, b: C64) -> wrap<u32> {
+        \\    return C32.delta_mod(a, b);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "domain_exact_type.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    // DIAGNOSTIC_UNIT: E_SERIAL_OPERATION
+    // DIAGNOSTIC_UNIT: E_COUNTER_OPERATION
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_SERIAL_OPERATION"));
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_COUNTER_OPERATION"));
+}
+
 test "thread spawn boundaries require unsafe checked resource handoff" {
     const source =
         \\move struct Ticket { id: u32 }

@@ -13,10 +13,12 @@ the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. On the test corpus ~20–28% of distinct
 functions are fast-path admitted; the rest still ingest the AST body.
 
-### Census snapshot (C, 2026-08-20, after typed unary call-target admission)
+### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
-1611 distinct functions, **439 admitted (27.3%)**, 1172 fallback. Remaining
-fallbacks ranked by family (term / ret / blocks / traps):
+1611 distinct functions, **439 admitted (27.3%)**, 1172 fallback. The current
+strict ratchet corpus below includes the typed binary slice and is the blocking
+measurement. Remaining broad-snapshot fallbacks ranked by family
+(term / ret / blocks / traps):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
@@ -66,8 +68,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 155 | 57 | 98 | 0 | 3677 |
-| LLVM | 155 | 58 | 97 | 0 | 3741 |
+| C | 160 | 62 | 98 | 0 | 3875 |
+| LLVM | 160 | 63 | 97 | 0 | 3937 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -97,12 +99,13 @@ typed-unary operand-descendant bugs before commit.
 | Local call chain | `let x = f(); return g(x)` | (current batch) |
 | Nested local call initializer (C) | `let x = f(g(a), b); return h(x)` | (current batch) |
 | Leaf-operand typed unary call targets | numeric conversion, `phys`, `bitcast`, `enum.raw`; root keyed by `typed_unary_operand` SpanId/type fact | (current batch) |
+| Leaf-operand typed binary domain calls | `wrapping.add`, serial before/after/distance, counter delta; indexed roots keyed by owner-qualified `typed_call_operand` facts | (current batch) |
 
 ### Remaining families, by tractability
 
 | Family | Example | Blocker | Effort |
 |---|---|---|---|
-| Remaining builtin / `call_target` returns | wrapping/serial/counter/domain constructors | each kind still needs an explicit typed semantic descriptor and backend rendering; bitcast and enum raw no longer fall back | **medium per semantic family** |
+| Remaining builtin / `call_target` returns | bounded/assumption/Result-producing and three-operand domain calls | each kind still needs an explicit typed semantic descriptor, control/result model, and backend rendering; leaf binary domain calls no longer fall back | **medium per semantic family** |
 | Builtin / `call_target` void bodies | `store_release`, atomics | same statement-level/builtin gap (plain void calls already admitted) | **large** |
 | Checked-operand comparison | `return (a+b) == b` | `SimpleMirCompareBinary` operands are `SimpleMirArg` (no `checked_binary` variant); needs a richer operand type | **medium** |
 | Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | C now also covers one nested call inside the initializer; LLVM and the remaining shapes need a general MIR statement/value sequence | **large** |

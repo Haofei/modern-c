@@ -2708,6 +2708,56 @@ test "LLVM typed unary fast path never substitutes an operand descendant" {
     try expectContains(masked_phys, "and i64 %x, %y");
 }
 
+test "LLVM emits typed binary domain calls from MIR without body fallback" {
+    const source =
+        \\type S = serial<u32>;
+        \\type T = counter<u64>;
+        \\#[no_lang_trap]
+        \\fn wrap_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
+        \\    return wrapping.add(a, b);
+        \\}
+        \\fn seq_before(a: S, b: S) -> bool {
+        \\    return S.before(a, b);
+        \\}
+        \\fn seq_after(a: S, b: S) -> bool {
+        \\    return S.after(a, b);
+        \\}
+        \\fn seq_distance(a: S, b: S) -> wrap<u32> {
+        \\    return S.distance(a, b);
+        \\}
+        \\fn tick_delta(now: T, start: T) -> wrap<u64> {
+        \\    return T.delta_mod(now, start);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_binary_domain_calls.mc", source, &output);
+
+    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @wrap_add(i32 %a, i32 %b)"), "add i32 %a, %b");
+    const before = try llvmFunctionBody(output.items, "define internal i1 @seq_before(i32 %a, i32 %b)");
+    try expectContains(before, "sub i32 %a, %b");
+    try expectContains(before, "icmp slt i32 %t");
+    const after = try llvmFunctionBody(output.items, "define internal i1 @seq_after(i32 %a, i32 %b)");
+    try expectContains(after, "sub i32 %a, %b");
+    try expectContains(after, "icmp sgt i32 %t");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @seq_distance(i32 %a, i32 %b)"), "sub i32 %a, %b");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i64 @tick_delta(i64 %now, i64 %start)"), "sub i64 %now, %start");
+}
+
+test "LLVM typed binary domain fast path rejects call operands" {
+    const source =
+        \\type S = serial<u32>;
+        \\fn identity(value: S) -> S { return value; }
+        \\fn nested(a: S, b: S) -> bool {
+        \\    return S.before(identity(a), b);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_typed_binary_domain_nested.mc", source, &output);
+    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @nested(i32 %a, i32 %b)"), "call i32 @identity(i32 %a)");
+}
+
 test "LLVM emits checked arithmetic returns from MIR without body fallback" {
     const source =
         \\fn add_u32(a: u32, b: u32) -> u32 {

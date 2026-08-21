@@ -17,6 +17,7 @@ tests/llvm/globals.mc
 tests/llvm/joins.mc
 tests/llvm/loops.mc
 tests/llvm/mir_unary_call_targets.mc
+tests/llvm/mir_typed_binary_calls.mc
 tests/llvm/nested_aggregates.mc
 tests/llvm/nullable_pointers.mc
 tests/llvm/pointers.mc
