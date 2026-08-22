@@ -208,7 +208,11 @@ pub const Instruction = struct {
     // Small aggregate literals own their immediate operand identities. Larger
     // literals remain valid MIR but are not admitted by the bounded shared
     // statement plan until a dynamic operand table replaces this inline form.
+    // Struct literals additionally carry the resolved declaration field index
+    // for each operand; array literals use the sentinel because their operand
+    // order already is their element index.
     typed_aggregate_operand_span_ids: [max_aggregate_operands]SpanId = [_]SpanId{.invalid} ** max_aggregate_operands,
+    typed_aggregate_field_indices: [max_aggregate_operands]usize = [_]usize{std.math.maxInt(usize)} ** max_aggregate_operands,
     typed_aggregate_operand_count: usize = 0,
     // A switch-arm marker may own a bounded, normalized set of scalar
     // patterns. Keeping signed magnitude here avoids source spelling and lets

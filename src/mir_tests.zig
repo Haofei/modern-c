@@ -539,6 +539,102 @@ test "MIR statement plan traces a local aggregate copy to its initializer" {
     try std.testing.expectEqualStrings("default_pair", local.value.root_name);
 }
 
+test "MIR shared local aggregate assignment plans retain literal identities" {
+    // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\fn array_value() -> [2]u32 {
+        \\    var values: [2]u32 = uninit;
+        \\    values = .{ 17, 29 };
+        \\    return values;
+        \\}
+        \\fn struct_value() -> Pair {
+        \\    var pair: Pair = uninit;
+        \\    pair = .{ .right = 29, .left = 17 };
+        \\    return pair;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_aggregate_assignment.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+
+    const array_function = functionByName(module_mir, "array_value") orelse return error.TestUnexpectedResult;
+    const array_plan = mir_statement_plan.buildLocalAggregateAssignmentReturn(array_function) orelse return error.TestUnexpectedResult;
+    const array_local = array_function.blocks[0].instructions[0];
+    try std.testing.expectEqualStrings("values", array_plan.local_name);
+    try std.testing.expect(array_plan.local_id.eql(array_local.typed_value_id orelse return error.TestUnexpectedResult));
+    switch (array_plan.value) {
+        .array_literal => |literal| {
+            try std.testing.expectEqual(@as(usize, 2), literal.element_count);
+            try std.testing.expectEqual(@as(usize, 17), literal.elements[0].value);
+            try std.testing.expectEqual(@as(usize, 29), literal.elements[1].value);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const struct_function = functionByName(module_mir, "struct_value") orelse return error.TestUnexpectedResult;
+    const struct_plan = mir_statement_plan.buildLocalAggregateAssignmentReturn(struct_function) orelse return error.TestUnexpectedResult;
+    const struct_local = struct_function.blocks[0].instructions[0];
+    try std.testing.expectEqualStrings("pair", struct_plan.local_name);
+    try std.testing.expect(struct_plan.local_id.eql(struct_local.typed_value_id orelse return error.TestUnexpectedResult));
+    switch (struct_plan.value) {
+        .struct_literal => |literal| {
+            try std.testing.expectEqual(@as(usize, 2), literal.field_count);
+            // The source literal is right then left, while the declaration is
+            // left then right. The plan retains source operand order plus
+            // declaration identities instead of relying on either alone.
+            try std.testing.expectEqual(@as(usize, 1), literal.fields[0].field_index);
+            try std.testing.expectEqual(@as(usize, 29), literal.fields[0].value.value);
+            try std.testing.expectEqual(@as(usize, 0), literal.fields[1].field_index);
+            try std.testing.expectEqual(@as(usize, 17), literal.fields[1].value.value);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const mutable_struct = functionByNameMut(&module_mir, "struct_value") orelse return error.TestUnexpectedResult;
+    var aggregate: ?*mir.Instruction = null;
+    for (mutable_struct.blocks) |*block| for (block.instructions) |*instruction| {
+        if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "struct_literal")) {
+            aggregate = instruction;
+            break;
+        }
+    };
+    const duplicate_field_index = aggregate orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), duplicate_field_index.typed_aggregate_operand_count);
+    duplicate_field_index.typed_aggregate_field_indices[1] = duplicate_field_index.typed_aggregate_field_indices[0];
+    var duplicate_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_aggregate_duplicate.mc", source);
+    defer duplicate_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &duplicate_reporter);
+    try std.testing.expect(duplicate_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, duplicate_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+
+    var sentinel_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer sentinel_mir.deinit();
+    const sentinel_struct = functionByNameMut(&sentinel_mir, "struct_value") orelse return error.TestUnexpectedResult;
+    var sentinel_aggregate: ?*mir.Instruction = null;
+    for (sentinel_struct.blocks) |*block| for (block.instructions) |*instruction| {
+        if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "struct_literal")) {
+            sentinel_aggregate = instruction;
+            break;
+        }
+    };
+    const sentinel_field_index = sentinel_aggregate orelse return error.TestUnexpectedResult;
+    sentinel_field_index.typed_aggregate_field_indices[0] = std.math.maxInt(usize);
+    var sentinel_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_aggregate_sentinel.mc", source);
+    defer sentinel_reporter.deinit();
+    try mir.verifyBuiltMir(sentinel_mir, &sentinel_reporter);
+    try std.testing.expect(sentinel_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, sentinel_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
 test "MIR target-type owner identities mirror direct calls" {
     const source =
         \\fn callee(x: u32) -> u32 {

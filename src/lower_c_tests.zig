@@ -1743,6 +1743,45 @@ test "lower-c emits simple array literal returns from MIR" {
     try expectNotContains(assigned_body, "out =");
 }
 
+test "lower-c preserves local aggregate assignment and return from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\fn array_assignment() -> [2]u32 {
+        \\    var values: [2]u32 = uninit;
+        \\    values = .{ 7, 9 };
+        \\    return values;
+        \\}
+        \\fn struct_assignment() -> Pair {
+        \\    var value: Pair = uninit;
+        \\    value = .{ .second = 11, .first = 22 };
+        \\    return value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_assignment_return.mc", source, &output);
+
+    const array_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_assignment(void)");
+    try expectContains(array_body, "mc_array_u32_2 values;");
+    try expectContains(array_body, "values = (mc_array_u32_2){ .elems = { 7, 9 } };");
+    try expectContains(array_body, "return values;");
+    const array_declaration = std.mem.indexOf(u8, array_body, "mc_array_u32_2 values;") orelse return error.TestUnexpectedResult;
+    const array_assignment = std.mem.indexOf(u8, array_body, "values = (mc_array_u32_2){ .elems = { 7, 9 } };") orelse return error.TestUnexpectedResult;
+    const array_return = std.mem.indexOf(u8, array_body, "return values;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(array_declaration < array_assignment);
+    try std.testing.expect(array_assignment < array_return);
+
+    const struct_body = try cFunctionBody(output.items, "static Pair struct_assignment(void)");
+    try expectContains(struct_body, "Pair value;");
+    try expectContains(struct_body, "value = (Pair){ .second = 11, .first = 22 };");
+    try expectContains(struct_body, "return value;");
+    const struct_declaration = std.mem.indexOf(u8, struct_body, "Pair value;") orelse return error.TestUnexpectedResult;
+    const struct_assignment = std.mem.indexOf(u8, struct_body, "value = (Pair){ .second = 11, .first = 22 };") orelse return error.TestUnexpectedResult;
+    const struct_return = std.mem.indexOf(u8, struct_body, "return value;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(struct_declaration < struct_assignment);
+    try std.testing.expect(struct_assignment < struct_return);
+}
+
 test "lower-c emits array control-flow returns from MIR" {
     const source =
         \\extern fn hit(value: u32) -> void;

@@ -170,12 +170,19 @@ pub const PlaceStoreValue = union(enum) {
         element_count: usize,
         location: Location,
     },
+    struct_literal: struct {
+        type_fact: mir.TargetTypeFact,
+        fields: [max_array_elements]StructLiteralField = undefined,
+        field_count: usize,
+        location: Location,
+    },
 
     pub fn resultType(self: PlaceStoreValue) mir.ValueType {
         return switch (self) {
             .parameter => |parameter| parameter.ty,
             .integer_literal => |literal| literal.type_fact.result_ty,
             .array_literal => |literal| literal.type_fact.result_ty,
+            .struct_literal => |literal| literal.type_fact.result_ty,
         };
     }
 
@@ -183,8 +190,14 @@ pub const PlaceStoreValue = union(enum) {
         return switch (self) {
             .parameter, .integer_literal => 1,
             .array_literal => |literal| 1 + literal.element_count,
+            .struct_literal => |literal| 1 + literal.field_count,
         };
     }
+};
+
+pub const StructLiteralField = struct {
+    field_index: usize,
+    value: IntegerLiteralValue,
 };
 
 pub const IntegerLiteralValue = struct {
@@ -334,6 +347,89 @@ pub const PlaceReturnPlan = struct {
     return_location: Location,
 };
 
+pub const LocalAggregateAssignmentReturnPlan = struct {
+    local_name: []const u8,
+    local_id: mir.ValueId,
+    local_type_fact: mir.TargetTypeFact,
+    declaration_location: Location,
+    assignment_location: Location,
+    value: PlaceStoreValue,
+    return_location: Location,
+};
+
+/// Admit the common storage-generation sequence `var x: T = uninit; x =
+/// aggregate; return x`. MIR owns the local identity, assignment edges,
+/// aggregate operand order/field indices, and literal values. Backends only
+/// materialize that verified value; they never reopen the function AST.
+pub fn buildLocalAggregateAssignmentReturn(function: mir.Function) ?LocalAggregateAssignmentReturnPlan {
+    if (function.return_ty == .void or function.blocks.len != 1 or function.trap_edges.len != 0) return null;
+    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const block = function.blocks[0];
+    if (block.terminator != .return_ or block.successors.len != 0) return null;
+    var local: ?mir.Instruction = null;
+    var assignment: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var expression_count: usize = 0;
+    for (block.instructions) |instruction| switch (instruction.kind) {
+        .target_type, .integer_literal_conversion => {},
+        .expr => expression_count += 1,
+        .local => {
+            if (local != null) return null;
+            local = instruction;
+        },
+        .assign => {
+            if (assignment != null) return null;
+            assignment = instruction;
+        },
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+
+    const local_instruction = local orelse return null;
+    const local_id = local_instruction.typed_value_id orelse return null;
+    if (!local_instruction.typed_value_operand_span_id.isValid()) return null;
+    const initializer = expressionAtSpan(block, local_instruction.typed_value_operand_span_id) orelse return null;
+    if (!std.mem.eql(u8, initializer.detail, "uninit")) return null;
+
+    const assignment_instruction = assignment orelse return null;
+    if (!assignment_instruction.typed_target_operand_span_id.isValid() or !assignment_instruction.typed_value_operand_span_id.isValid()) return null;
+    const target = buildPlace(function, block, assignment_instruction.typed_target_operand_span_id) orelse return null;
+    if (target.root_kind != .local or target.projection_count != 0 or !target.root_type_fact.typed_span_id.isValid()) return null;
+    const target_id = valueIdentityId(function, target.root_name) orelse return null;
+    if (!target_id.eql(local_id)) return null;
+
+    const value = buildPlaceStoreValue(function, block, assignment_instruction.typed_value_operand_span_id) orelse return null;
+    switch (value) {
+        .array_literal, .struct_literal => {},
+        else => return null,
+    }
+    if (!sameRepresentationType(value.resultType(), target.resultType())) return null;
+
+    const return_instruction = returned orelse return null;
+    if (!return_instruction.typed_value_operand_span_id.isValid()) return null;
+    const returned_place = buildPlace(function, block, return_instruction.typed_value_operand_span_id) orelse return null;
+    if (returned_place.root_kind != .local or returned_place.projection_count != 0) return null;
+    const returned_id = valueIdentityId(function, returned_place.root_name) orelse return null;
+    if (!returned_id.eql(local_id) or !sameRepresentationType(returned_place.resultType(), function.return_ty)) return null;
+    if (expression_count != 4 + value.expressionCount() - 1) return null;
+
+    return .{
+        .local_name = target.root_name,
+        .local_id = local_id,
+        .local_type_fact = target.root_type_fact,
+        .declaration_location = locationFromInstruction(local_instruction),
+        .assignment_location = locationFromInstruction(assignment_instruction),
+        .value = value,
+        .return_location = locationFromInstruction(return_instruction),
+    };
+}
+
 /// Admit a straight-line aggregate-place body from typed MIR edges. Fields and
 /// fixed-array constant indexes may be combined; checked indexes retain their
 /// explicit Bounds trap edges. Every base/index/member, assignment target/value,
@@ -437,6 +533,33 @@ fn buildPlaceStoreValue(function: mir.Function, block: mir.Block, span_id: mir.S
                 .value = operand_value,
                 .type_fact = operand_fact,
                 .location = locationFromInstruction(operand),
+            };
+        }
+        return result;
+    }
+    if (std.mem.eql(u8, instruction.detail, "struct_literal")) {
+        if (instruction.typed_aggregate_operand_count == 0) return null;
+        const type_fact = targetFactBySpan(function, .struct_literal, span_id) orelse return null;
+        if (type_fact.result_ty != .struct_) return null;
+        var result: PlaceStoreValue = .{ .struct_literal = .{
+            .type_fact = type_fact,
+            .field_count = instruction.typed_aggregate_operand_count,
+            .location = locationFromInstruction(instruction),
+        } };
+        for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |operand_span_id, index| {
+            const operand = expressionAtSpan(block, operand_span_id) orelse return null;
+            const operand_value = operand.constant_usize_value orelse return null;
+            const operand_fact = targetFactBySpan(function, .expression_result, operand_span_id) orelse return null;
+            if (operand_fact.result_ty != .integer) return null;
+            const field_index = instruction.typed_aggregate_field_indices[index];
+            if (field_index == std.math.maxInt(usize)) return null;
+            result.struct_literal.fields[index] = .{
+                .field_index = field_index,
+                .value = .{
+                    .value = operand_value,
+                    .type_fact = operand_fact,
+                    .location = locationFromInstruction(operand),
+                },
             };
         }
         return result;
@@ -1085,6 +1208,16 @@ fn valueIdentityName(function: mir.Function, id: mir.ValueId) ?[]const u8 {
     if (!id.isValid()) return null;
     for (function.value_identities) |identity| if (identity.id.eql(id)) return identity.spelling;
     return null;
+}
+
+fn valueIdentityId(function: mir.Function, name: []const u8) ?mir.ValueId {
+    var found: ?mir.ValueId = null;
+    for (function.value_identities) |identity| {
+        if (!std.mem.eql(u8, identity.spelling, name)) continue;
+        if (found != null) return null;
+        found = identity.id;
+    }
+    return found;
 }
 
 fn sameRepresentationType(left: mir.ValueType, right: mir.ValueType) bool {

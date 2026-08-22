@@ -1528,6 +1528,21 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         }
                     }
                 }
+                if (instruction.typed_aggregate_operand_count != 0) {
+                    for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |operand_span_id, operand_index| {
+                        try out.print(
+                            allocator,
+                            "mir aggregate_operand fn={s} block={} index={} span_id={} field_index={}\n",
+                            .{
+                                function.name,
+                                block.id,
+                                operand_index,
+                                operand_span_id.index(),
+                                instruction.typed_aggregate_field_indices[operand_index],
+                            },
+                        );
+                    }
+                }
                 if (instruction.typed_base_operand_span_id.isValid() and instruction.member_field_index != null) {
                     try out.print(
                         allocator,
@@ -2215,15 +2230,29 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     if (instruction.constant_usize_value != null and (instruction.kind != .expr or instruction.result_ty != .integer)) return false;
     if (instruction.typed_aggregate_operand_count > Instruction.max_aggregate_operands) return false;
     if (instruction.typed_aggregate_operand_count != 0) {
-        if (instruction.kind != .expr or !std.mem.eql(u8, instruction.detail, "array_literal")) return false;
+        const is_array = std.mem.eql(u8, instruction.detail, "array_literal");
+        const is_struct = std.mem.eql(u8, instruction.detail, "struct_literal");
+        if (instruction.kind != .expr or (!is_array and !is_struct)) return false;
         for (instruction.typed_aggregate_operand_span_ids, 0..) |operand_span_id, index| {
             if (index < instruction.typed_aggregate_operand_count) {
                 if (!operand_span_id.isValid() or operand_span_id.index() >= function.span_identities.len) return false;
-            } else if (operand_span_id.isValid()) return false;
+                if (is_array and instruction.typed_aggregate_field_indices[index] != std.math.maxInt(usize)) return false;
+                if (is_struct) {
+                    const field_index = instruction.typed_aggregate_field_indices[index];
+                    if (field_index == std.math.maxInt(usize)) return false;
+                    for (instruction.typed_aggregate_field_indices[0..index]) |previous| {
+                        if (previous == field_index) return false;
+                    }
+                }
+            } else {
+                if (operand_span_id.isValid()) return false;
+                if (instruction.typed_aggregate_field_indices[index] != std.math.maxInt(usize)) return false;
+            }
         }
     } else {
-        for (instruction.typed_aggregate_operand_span_ids) |operand_span_id| {
+        for (instruction.typed_aggregate_operand_span_ids, instruction.typed_aggregate_field_indices) |operand_span_id, field_index| {
             if (operand_span_id.isValid()) return false;
+            if (field_index != std.math.maxInt(usize)) return false;
         }
     }
     if (instruction.typed_switch_pattern_count > Instruction.max_switch_patterns) return false;
@@ -7617,6 +7646,24 @@ const FunctionBuilder = struct {
             .struct_literal => |fields| {
                 try self.addInstr(.expr, "struct_literal", .value, expr.span);
                 const struct_name = if (self.aggregateLiteralTargetTypeExpr()) |target_ty| structTypeNameAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
+                if (fields.len <= Instruction.max_aggregate_operands) if (struct_name) |name| {
+                    var field_indices: [Instruction.max_aggregate_operands]usize = undefined;
+                    var complete = true;
+                    for (fields, 0..) |field, index| {
+                        field_indices[index] = self.structFieldIndex(name, field.name.text) orelse {
+                            complete = false;
+                            break;
+                        };
+                    }
+                    if (complete) {
+                        const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                        instruction.typed_aggregate_operand_count = fields.len;
+                        for (fields, 0..) |field, index| {
+                            instruction.typed_aggregate_operand_span_ids[index] = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(field.value).span));
+                            instruction.typed_aggregate_field_indices[index] = field_indices[index];
+                        }
+                    }
+                };
                 for (fields) |field| {
                     const field_ty = if (struct_name) |name| self.structFieldTypeExpr(name, field.name.text) else null;
                     const previous_target_ty = self.assignment_target_ty;
@@ -12589,6 +12636,20 @@ const FunctionBuilder = struct {
         if (self.packed_bits.get(struct_name)) |info| {
             for (info.fields) |field| {
                 if (std.mem.eql(u8, field.name.text, field_name)) return field.ty;
+            }
+        }
+        return null;
+    }
+
+    fn structFieldIndex(self: *FunctionBuilder, struct_name: []const u8, field_name: []const u8) ?usize {
+        if (self.structs.get(struct_name)) |info| {
+            for (info.fields, 0..) |field, index| {
+                if (std.mem.eql(u8, field.name.text, field_name)) return index;
+            }
+        }
+        if (self.packed_bits.get(struct_name)) |info| {
+            for (info.fields, 0..) |field, index| {
+                if (std.mem.eql(u8, field.name.text, field_name)) return index;
             }
         }
         return null;

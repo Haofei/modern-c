@@ -11,7 +11,7 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits 55.0% of C functions and 55.6% of LLVM functions; the rest still ingest
+admits 56.2% of C functions and 56.9% of LLVM functions; the rest still ingest
 the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 88 | 72 | 0 | 5500 |
-| LLVM | 160 | 89 | 71 | 0 | 5562 |
+| C | 160 | 90 | 70 | 0 | 5625 |
+| LLVM | 160 | 91 | 69 | 0 | 5687 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -108,6 +108,7 @@ typed-unary operand-descendant bugs before commit.
 | Shared fixed-array place plan | constant-index reads, global stores, and non-local-initialized local array copies; MIR owns base/index identities, canonical literal value, static bound, and Bounds trap edges | (current batch) |
 | Nested fixed-array stores | nested array/field projections plus scalar and bounded one-level integer-array literal stores; MIR owns aggregate operand identities and both backends validate declared element count/type | (current batch) |
 | Scalar switch returns | exhaustive integer/character cases with literal returns; MIR owns normalized signed-magnitude patterns and both backends consume one shared CFG plan | (current batch) |
+| Local aggregate assignment generation | `var x: T = uninit; x = aggregate; return x`; MIR owns the local generation, assignment edges, aggregate operands, and resolved struct field indices | (current batch) |
 
 ### Remaining families, by tractability
 

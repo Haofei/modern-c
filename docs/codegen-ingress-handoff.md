@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-21 after the scalar-switch MIR slice.
+2026-08-22 after the local aggregate assignment MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **88/160 C** and **89/160 LLVM**
+  The current strict ratchet corpus admits **90/160 C** and **91/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -60,7 +60,7 @@ Method per slice (never skip): a recognizer + a gate case + a render case in
 - soundness/parity probes for the specific shape.
 Then Docker `m0` regenerates emit-snapshots (host skips LLVM/qemu gates).
 
-Families closed (16, both backends): checked arithmetic; bare param past elided
+Families closed (both backends): checked arithmetic; bare param past elided
 nonnull; scalar deref `return p.*`; plain unsigned binary (add/sub/mul/and/or/xor,
 u32/u64); plain unary; pointer-field load; `phys` address constructor; bitwise;
 address-typed (PAddr/VAddr) field + deref; pointer comparison `return a==b`;
@@ -110,6 +110,15 @@ initialized from a parameter/global from that single plan, including
 function body. Pointer traversal and literal-initialized locals remain
 fail-closed until their storage/value semantics are represented by the shared
 plan.
+
+A bounded local-generation plan now covers `var x: T = uninit; x = aggregate;
+return x` for fixed arrays and homogeneous integer structs. MIR owns the local
+`ValueId`, statement operand edges, literal operand `SpanId`s, and resolved
+struct field indices, so source field order is preserved without backend AST
+inspection. The verifier rejects duplicate or sentinel field identities.
+Heterogeneous struct literals remain fail-closed because the current MIR
+builder still records their literal child target type too broadly; the
+backends do not guess around that missing fact.
 
 That plan now also covers fixed-array constant-index projections. MIR records
 the base and index operand `SpanId`s, a canonical non-negative literal value,
@@ -169,7 +178,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 88/160 and LLVM 89/160. The exact-root soundness gate
+current strict corpus is C 90/160 and LLVM 91/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

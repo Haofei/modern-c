@@ -129,6 +129,38 @@ test "LLVM array literal call elements lower from MIR without body fallback" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM local uninit aggregate assignment returns lower from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\fn assigned_struct() -> Pair {
+        \\    var out: Pair = uninit;
+        \\    out = .{ .second = 22, .first = 11 };
+        \\    return out;
+        \\}
+        \\fn assigned_array() -> [2]u32 {
+        \\    var out: [2]u32 = uninit;
+        \\    out = .{ 7, 9 };
+        \\    return out;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_uninit_aggregate_assignment.mc", source, &output);
+
+    const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_struct");
+    try expectContains(struct_body, "insertvalue { i32, i32 } zeroinitializer, i32 22, 1");
+    try expectContains(struct_body, "insertvalue { i32, i32 } %t");
+    try expectContains(struct_body, "i32 11, 0");
+    try expectContains(struct_body, "ret { i32, i32 } %t");
+    try expectNotContains(struct_body, "alloca");
+    try expectNotContains(struct_body, "store");
+
+    const array_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @assigned_array");
+    try expectContains(array_body, "ret [2 x i32] [i32 7, i32 9]");
+    try expectNotContains(array_body, "alloca");
+    try expectNotContains(array_body, "store");
+}
+
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
         \\struct Flags { first: bool, second: bool }
