@@ -55,6 +55,13 @@ pub const IndirectArgument = struct {
 pub const IndirectCallee = union(enum) {
     parameter: []const u8,
     global: []const u8,
+    local_function: struct {
+        local_name: []const u8,
+        local_id: mir.ValueId,
+        function_name: []const u8,
+        function_id: mir.ValueId,
+        local_location: Location,
+    },
     global_field: struct {
         root_name: []const u8,
         field_name: []const u8,
@@ -1985,7 +1992,7 @@ pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallR
     var call_instruction: ?mir.Instruction = null;
     var return_instruction: ?mir.Instruction = null;
     for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type, .expr => {},
+        .param, .local, .target_type, .expr => {},
         .indirect_call => {
             if (call_instruction != null) return null;
             call_instruction = instruction;
@@ -2443,6 +2450,21 @@ fn indirectCalleePlan(function: mir.Function, call: mir.Instruction) ?IndirectCa
         } };
     }
     if (root_is_parameter) return .{ .parameter = root_name };
+    if (localInstruction(function, root_name)) |local| {
+        const local_id = local.typed_value_id orelse return null;
+        if (!local_id.eql(call.typed_callee_root_value_id) or !local.typed_value_operand_span_id.isValid()) return null;
+        const initializer = expressionAtSpan(function.blocks[0], local.typed_value_operand_span_id) orelse return null;
+        const function_id = initializer.typed_value_id orelse return null;
+        const function_name = valueIdentityName(function, function_id) orelse return null;
+        if (!std.mem.eql(u8, initializer.detail, function_name)) return null;
+        return .{ .local_function = .{
+            .local_name = root_name,
+            .local_id = local_id,
+            .function_name = function_name,
+            .function_id = function_id,
+            .local_location = locationFromInstruction(local),
+        } };
+    }
     return .{ .global = root_name };
 }
 

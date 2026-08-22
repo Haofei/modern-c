@@ -1734,7 +1734,10 @@ const LlvmEmitter = struct {
         const simple_enum_switch_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
         const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
-            mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
+            if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
+                if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
+            else
+                null
         else
             null;
         const logical_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
@@ -3889,6 +3892,26 @@ const LlvmEmitter = struct {
         try self.emitReturnValue(signature.ret.*, result, span);
     }
 
+    fn mirIndirectCallReturnPlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) bool {
+        return switch (plan.callee) {
+            .local_function => |local| blk: {
+                if (!local.local_id.isValid() or !local.function_id.isValid()) break :blk false;
+                const target = self.fn_sigs.get(local.function_name) orelse break :blk false;
+                const signature = switch (plan.callee_fact.target_ty.kind) {
+                    .fn_pointer => |signature| signature,
+                    else => break :blk false,
+                };
+                if (target.is_variadic or target.params.len != signature.params.len or
+                    !type_bridge.sameTypeSyntax(self.resolveAliasType(target.ret), self.resolveAliasType(signature.ret.*))) break :blk false;
+                for (target.params, signature.params) |actual, expected| {
+                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(actual.ty), self.resolveAliasType(expected))) break :blk false;
+                }
+                break :blk true;
+            },
+            else => true,
+        };
+    }
+
     fn mirScalarSwitchPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.ScalarSwitchReturnPlan) bool {
         const return_ty = function.signature.transitionalReturnType() orelse return false;
         var matched_subject = false;
@@ -4916,6 +4939,16 @@ const LlvmEmitter = struct {
         return switch (callee) {
             .parameter => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .global => |name| try self.emitSimpleMirGlobalLoad(name, callee_ty),
+            .local_function => |local| blk: {
+                const address = try self.nextTemp();
+                const value = try self.nextTemp();
+                const span = spanFromMirSourcePoint(local.local_location.source);
+                try self.out.print(self.allocator, "  {s} = alloca ptr\n", .{address});
+                try self.out.print(self.allocator, "  store ptr @{s}, ptr {s}\n", .{ local.function_name, address });
+                try self.emitDebugDeclare(local.local_name, callee_ty, address, span, null);
+                try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ value, address });
+                break :blk value;
+            },
             .global_field => |field| blk: {
                 const global_ty = self.global_types.get(field.root_name) orelse return error.UnsupportedLlvmEmission;
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(global_ty), self.resolveAliasType(field.root_type_fact.target_ty))) return error.UnsupportedLlvmEmission;

@@ -4058,12 +4058,17 @@ test "LLVM zero-argument function-pointer calls lower from MIR without body fall
 test "LLVM typed indirect call returns lower from MIR without body fallback" {
     const source =
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
         \\global default_op: fn(u32, u32) -> u32 = add;
         \\struct BinOp { combine: fn(u32, u32) -> u32 }
         \\global default_box: BinOp = .{ .combine = add };
         \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
         \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
         \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+        \\fn local_fn_pointer_call(x: u32, y: u32) -> u32 {
+        \\    let op: fn(u32, u32) -> u32 = mul;
+        \\    return op(x, y);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -4086,6 +4091,13 @@ test "LLVM typed indirect call returns lower from MIR without body fallback" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field_body, "call i32 %"));
     try expectContains(field_body, "ret i32");
     try expectNotContains(field_body, "alloca");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_fn_pointer_call");
+    try expectContains(local_body, "alloca ptr");
+    try expectContains(local_body, "store ptr @mul, ptr %");
+    try expectContains(local_body, "load ptr, ptr %");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "call i32 %"));
+    try expectContains(local_body, "ret i32");
 }
 
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {

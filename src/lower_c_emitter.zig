@@ -1679,7 +1679,10 @@ pub const CEmitter = struct {
         const simple_enum_switch_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
         const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
-            mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
+            if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
+                if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
+            else
+                null
         else
             null;
         const logical_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
@@ -3896,6 +3899,18 @@ pub const CEmitter = struct {
     }
 
     fn emitMirIndirectCallReturnPlan(self: *CEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) !void {
+        switch (plan.callee) {
+            .local_function => |local| {
+                try self.writeLineDirective(spanFromMirSourcePoint(local.local_location.source));
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = {s};\n", .{
+                    try self.cTypeFor(plan.callee_fact.target_ty, .typedef_name),
+                    try self.cIdent(local.local_name),
+                    try self.cIdent(local.function_name),
+                });
+            },
+            else => {},
+        }
         try self.writeLineDirective(spanFromMirSourcePoint(plan.location.source));
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "return ");
@@ -3906,6 +3921,27 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
         }
         try self.out.appendSlice(self.allocator, ");\n");
+    }
+
+    fn mirIndirectCallReturnPlanSupported(self: *CEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) bool {
+        return switch (plan.callee) {
+            .local_function => |local| blk: {
+                if (!local.local_id.isValid() or !local.function_id.isValid()) break :blk false;
+                const target = self.functions.get(local.function_name) orelse break :blk false;
+                const signature = switch (plan.callee_fact.target_ty.kind) {
+                    .fn_pointer => |signature| signature,
+                    else => break :blk false,
+                };
+                const return_ty = target.return_type orelse break :blk false;
+                if (target.is_variadic or target.params.len != signature.params.len or
+                    !type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(signature.ret.*))) break :blk false;
+                for (target.params, signature.params) |actual, expected| {
+                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(actual.ty), self.resolveAliasType(expected))) break :blk false;
+                }
+                break :blk true;
+            },
+            else => true,
+        };
     }
 
     fn mirScalarSwitchPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.ScalarSwitchReturnPlan) bool {
@@ -4816,6 +4852,7 @@ pub const CEmitter = struct {
         switch (callee) {
             .parameter => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .global => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
+            .local_function => |local| try self.out.appendSlice(self.allocator, try self.cIdent(local.local_name)),
             .global_field => |field| {
                 const struct_name = self.structTypeNameFromType(field.root_type_fact.target_ty) orelse return error.UnsupportedCEmission;
                 const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;

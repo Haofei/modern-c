@@ -3984,12 +3984,17 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
 test "MIR plans typed indirect call arguments and canonical callee roots" {
     const source =
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
         \\global default_op: fn(u32, u32) -> u32 = add;
         \\struct BinOp { combine: fn(u32, u32) -> u32 }
         \\global default_box: BinOp = .{ .combine = add };
         \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
         \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
         \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+        \\fn local_fn_pointer_call(x: u32, y: u32) -> u32 {
+        \\    let op: fn(u32, u32) -> u32 = mul;
+        \\    return op(x, y);
+        \\}
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_indirect_call_plan.mc", source);
     defer reporter.deinit();
@@ -4002,7 +4007,7 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
 
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
-    for ([_][]const u8{ "apply", "global_op_call", "global_box_call" }) |name| {
+    for ([_][]const u8{ "apply", "global_op_call", "global_box_call", "local_fn_pointer_call" }) |name| {
         const function = functionByName(typed_mir, name).?;
         try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .indirect_call_argument));
         const plan = mir_statement_plan.buildSingleBlockIndirectCallReturn(function) orelse return error.TestUnexpectedResult;
@@ -4011,6 +4016,15 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
         try std.testing.expectEqual(@as(usize, 1), plan.arguments[1].index);
         try std.testing.expectEqualStrings("x", plan.arguments[0].name);
         try std.testing.expectEqualStrings("y", plan.arguments[1].name);
+        if (std.mem.eql(u8, name, "local_fn_pointer_call")) switch (plan.callee) {
+            .local_function => |local| {
+                try std.testing.expectEqualStrings("op", local.local_name);
+                try std.testing.expectEqualStrings("mul", local.function_name);
+                try std.testing.expect(local.local_id.isValid());
+                try std.testing.expect(local.function_id.isValid());
+            },
+            else => return error.TestUnexpectedResult,
+        };
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
