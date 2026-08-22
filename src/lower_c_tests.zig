@@ -1358,6 +1358,7 @@ test "lower-c emits nested parameter and global field places from MIR without bo
 test "lower-c emits fixed-array constant-index places from MIR without body fallback" {
     const source =
         \\global values: [2]u32 = .{ 10, 20 };
+        \\global matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
         \\fn take_row(row: [2]u32) -> u32 {
         \\    return row[1];
         \\}
@@ -1371,6 +1372,14 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
         \\fn local_array_copy(row: [2]u32) -> u32 {
         \\    let copy: [2]u32 = row;
         \\    return copy[0];
+        \\}
+        \\fn nested_global() -> u32 {
+        \\    matrix[1][0] = 11;
+        \\    return matrix[1][0];
+        \\}
+        \\fn replace_row() -> u32 {
+        \\    matrix[1] = .{ 31, 32 };
+        \\    return matrix[1][1];
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -1387,6 +1396,13 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     const local = try cFunctionBody(output.items, "static uint32_t local_array_copy(mc_array_u32_2 row)");
     try expectContains(local, "mc_array_u32_2 copy = row;");
     try expectContains(local, "return copy.elems[mc_check_index_usize(0, 2)];");
+    const nested = try cFunctionBody(output.items, "static uint32_t nested_global(void)");
+    try expectContains(nested, "mc_race_store_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(0, 2)], (uint32_t)mc_tmp");
+    try expectContains(nested, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(0, 2)])");
+    const replace = try cFunctionBody(output.items, "static uint32_t replace_row(void)");
+    try expectContains(replace, "(mc_array_u32_2){ .elems = { 31, 32 } }");
+    try expectContains(replace, "matrix.elems[mc_check_index_usize(1, 2)]");
+    try expectContains(replace, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(1, 2)])");
 }
 
 test "lower-c emits conditional struct parameter field returns from MIR" {

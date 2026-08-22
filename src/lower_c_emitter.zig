@@ -3850,7 +3850,30 @@ pub const CEmitter = struct {
             try self.writeLineDirective(span);
             try self.writeIndent();
             const temp = try self.nextTempName();
-            try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), temp, try self.cIdent(store.value.name) });
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp });
+            switch (store.value) {
+                .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
+                .integer_literal => |literal| try self.out.print(self.allocator, "{d}", .{literal.value}),
+                .array_literal => |literal| {
+                    const array = switch (self.resolveAliasType(target_ty).kind) {
+                        .array => |array| array,
+                        else => return error.UnsupportedCEmission,
+                    };
+                    const declared_bound = self.arrayLenTextForExpr(array.len) catch return error.UnsupportedCEmission;
+                    const element_count = std.fmt.parseUnsigned(usize, declared_bound, 10) catch return error.UnsupportedCEmission;
+                    if (element_count != literal.element_count) return error.UnsupportedCEmission;
+                    for (literal.elements[0..literal.element_count]) |element| {
+                        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) return error.UnsupportedCEmission;
+                    }
+                    try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(target_ty, .typedef_name)});
+                    for (literal.elements[0..literal.element_count], 0..) |element, index| {
+                        if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+                        try self.out.print(self.allocator, "{d}", .{element.value});
+                    }
+                    try self.out.appendSlice(self.allocator, " } }");
+                },
+            }
+            try self.out.appendSlice(self.allocator, ";\n");
             try self.writeIndent();
             try appendGlobalStorePrefix(self.allocator, self.out, .{ .name = access, .info = try self.globalInfoFromType(target_ty) });
             try self.out.appendSlice(self.allocator, temp);

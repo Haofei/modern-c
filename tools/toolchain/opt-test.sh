@@ -14,11 +14,23 @@ HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "
 SRC="$HERE/tests/toolchain/opt_bounds.mc"
 NEG="$HERE/tests/toolchain/opt_bounds_neg.mc"
 
+# `lower-mir` exposes the verified MIR boundary, so it correctly refuses the
+# deliberately-invalid #[no_lang_trap] fixtures before printing a dump. Keep
+# those originals for the contract admission assertions, and inspect otherwise
+# identical stdin probes with only the contract attribute removed. Capture each
+# dump once both to avoid repeated compiler startup and to avoid pipefail/SIGPIPE
+# false negatives from piping a large dump through `grep -q`.
+SRC_PROBE="$(sed '/^#\[no_lang_trap\]$/d' "$SRC")"
+NEG_PROBE="$(sed '/^#\[no_lang_trap\]$/d' "$NEG")"
+MIR_UNOPT="$("$MCC" lower-mir - 2>/dev/null <<<"$SRC_PROBE")"
+MIR_OPT="$("$MCC" lower-mir - --optimize 2>/dev/null <<<"$SRC_PROBE")"
+MIR_NEG_OPT="$("$MCC" lower-mir - --optimize 2>/dev/null <<<"$NEG_PROBE")"
+
 # 1. Without --optimize the contract is rejected and the Bounds trap edge is present.
 if "$MCC" verify "$SRC" >/dev/null 2>&1; then
     echo "FAIL: opt-test — const-index #[no_lang_trap] was accepted without --optimize"; exit 1
 fi
-if ! "$MCC" lower-mir "$SRC" 2>/dev/null | grep -q 'kind=Bounds'; then
+if ! grep -q 'kind=Bounds' <<<"$MIR_UNOPT"; then
     echo "FAIL: opt-test — expected a Bounds trap edge in the unoptimized MIR"; exit 1
 fi
 
@@ -28,29 +40,29 @@ if ! "$MCC" verify "$SRC" --optimize >/dev/null 2>&1; then
     "$MCC" verify "$SRC" --optimize 2>&1 | head
     exit 1
 fi
-if "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -q 'kind=Bounds'; then
+if grep -q 'kind=Bounds' <<<"$MIR_OPT"; then
     echo "FAIL: opt-test — a Bounds trap edge survived const-index elision under --optimize"; exit 1
 fi
-if ! "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -q 'detail=const_in_bounds'; then
+if ! grep -q 'detail=const_in_bounds' <<<"$MIR_OPT"; then
     echo "FAIL: opt-test — elided index not marked const_in_bounds under --optimize"; exit 1
 fi
 
 # 2c. Const-slice elision: the `const_slice` range provably can't trap, so under --optimize the
 #     slice is marked range_slice_const_in_bounds (unoptimized it is a plain range_slice and the
 #     Bounds edge above covers its trap edge).
-if ! "$MCC" lower-mir "$SRC" 2>/dev/null | grep -q 'detail=range_slice '; then
+if ! grep -q 'detail=range_slice ' <<<"$MIR_UNOPT"; then
     echo "FAIL: opt-test — expected a plain range_slice in the unoptimized MIR"; exit 1
 fi
-if ! "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -q 'detail=range_slice_const_in_bounds'; then
+if ! grep -q 'detail=range_slice_const_in_bounds' <<<"$MIR_OPT"; then
     echo "FAIL: opt-test — const-slice not marked range_slice_const_in_bounds under --optimize"; exit 1
 fi
 
 # 2b. Divide-by-constant elision: the DivideByZero (and the signed INT_MIN/-1 overflow) edge
 #     is present unoptimized and gone under --optimize.
-if ! "$MCC" lower-mir "$SRC" 2>/dev/null | grep -q 'kind=DivideByZero'; then
+if ! grep -q 'kind=DivideByZero' <<<"$MIR_UNOPT"; then
     echo "FAIL: opt-test — expected a DivideByZero trap edge in the unoptimized MIR"; exit 1
 fi
-if "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -qE 'kind=(DivideByZero|IntegerOverflow)'; then
+if grep -qE 'kind=(DivideByZero|IntegerOverflow)' <<<"$MIR_OPT"; then
     echo "FAIL: opt-test — a DivideByZero/IntegerOverflow trap edge survived div-by-constant elision under --optimize"; exit 1
 fi
 
@@ -59,12 +71,12 @@ fi
 if "$MCC" verify "$NEG" --optimize >/dev/null 2>&1; then
     echo "FAIL: opt-test — a non-provable #[no_lang_trap] op (variable index/divisor or signed / -1) was accepted under --optimize"; exit 1
 fi
-if ! "$MCC" lower-mir "$NEG" --optimize 2>/dev/null | grep -q 'kind=IntegerOverflow'; then
+if ! grep -q 'kind=IntegerOverflow' <<<"$MIR_NEG_OPT"; then
     echo "FAIL: opt-test — signed / -1 lost its IntegerOverflow trap edge under --optimize"; exit 1
 fi
 # The out-of-range constant slice (`gbuf[1..9]`, end 9 > len 8) must keep its Bounds edge — the
 # const-slice elision must never prove an out-of-bounds range safe.
-if ! "$MCC" lower-mir "$NEG" --optimize 2>/dev/null | grep -q 'kind=Bounds'; then
+if ! grep -q 'kind=Bounds' <<<"$MIR_NEG_OPT"; then
     echo "FAIL: opt-test — an out-of-range const slice lost its Bounds trap edge under --optimize"; exit 1
 fi
 

@@ -3824,7 +3824,28 @@ const LlvmEmitter = struct {
     fn emitMirPlaceReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.PlaceReturnPlan, ret_ty: ast_bridge.TypeExpr) !void {
         if (plan.store) |store| {
             const target = try self.emitMirGlobalPlacePointer(store.target, spanFromMirSourcePoint(store.location.source));
-            try self.emitOrdinaryStore(target.ty, try self.llvmType(target.ty), try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{store.value.name}), target.pointer, true);
+            const value = switch (store.value) {
+                .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
+                .integer_literal => |literal| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{literal.value}),
+                .array_literal => |literal| blk: {
+                    const array = switch (self.resolveAliasType(target.ty).kind) {
+                        .array => |array| array,
+                        else => return error.UnsupportedLlvmEmission,
+                    };
+                    const declared_bound = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                    if (declared_bound != literal.element_count) return error.UnsupportedLlvmEmission;
+                    var rendered: std.ArrayList(u8) = .empty;
+                    try rendered.append(self.scratch.allocator(), '[');
+                    for (literal.elements[0..literal.element_count], 0..) |element, index| {
+                        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) return error.UnsupportedLlvmEmission;
+                        if (index != 0) try rendered.appendSlice(self.scratch.allocator(), ", ");
+                        try rendered.print(self.scratch.allocator(), "{s} {d}", .{ try self.llvmType(array.child.*), element.value });
+                    }
+                    try rendered.append(self.scratch.allocator(), ']');
+                    break :blk try rendered.toOwnedSlice(self.scratch.allocator());
+                },
+            };
+            try self.emitOrdinaryStore(target.ty, try self.llvmType(target.ty), value, target.pointer, true);
         }
 
         const span = spanFromMirSourcePoint(plan.return_location.source);

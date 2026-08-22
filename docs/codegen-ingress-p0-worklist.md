@@ -11,7 +11,7 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits 50.6% of C functions and 51.2% of LLVM functions; the rest still ingest
+admits 53.1% of C functions and 53.8% of LLVM functions; the rest still ingest
 the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 81 | 79 | 0 | 5062 |
-| LLVM | 160 | 82 | 78 | 0 | 5125 |
+| C | 160 | 85 | 75 | 0 | 5312 |
+| LLVM | 160 | 86 | 74 | 0 | 5375 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -106,6 +106,7 @@ typed-unary operand-descendant bugs before commit.
 | Pure logical return tree | `return a && b`, `return !a || (b && c)`; MIR owns typed operand edges | (current batch) |
 | Shared field-place read/store plan | global, by-value parameter, and non-local-initialized local fields, including `box.pair.left`; MIR owns local initializer, member-base, field-index, assignment, and return edges | (current batch) |
 | Shared fixed-array place plan | constant-index reads, global stores, and non-local-initialized local array copies; MIR owns base/index identities, canonical literal value, static bound, and Bounds trap edges | (current batch) |
+| Nested fixed-array stores | nested array/field projections plus scalar and bounded one-level integer-array literal stores; MIR owns aggregate operand identities and both backends validate declared element count/type | (current batch) |
 
 ### Remaining families, by tractability
 

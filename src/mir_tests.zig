@@ -120,8 +120,17 @@ test "CheckedProgram is a syntax-free callable and body table" {
 
 test "MIR statement plan owns fixed-array constant index and bounds trap" {
     const source =
+        \\global matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
         \\fn take_row(row: [2]u32) -> u32 {
         \\    return row[1];
+        \\}
+        \\fn nested_global() -> u32 {
+        \\    matrix[1][0] = 11;
+        \\    return matrix[1][0];
+        \\}
+        \\fn replace_row() -> u32 {
+        \\    matrix[1] = .{ 31, 32 };
+        \\    return matrix[1][1];
         \\}
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
@@ -146,6 +155,47 @@ test "MIR statement plan owns fixed-array constant index and bounds trap" {
         },
         else => return error.TestUnexpectedResult,
     }
+
+    const nested = functionByName(module_mir, "nested_global") orelse return error.TestUnexpectedResult;
+    const nested_plan = mir_statement_plan.buildSingleBlockPlaceReturn(nested) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), nested_plan.returned.projection_count);
+    const store = nested_plan.store orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), store.target.projection_count);
+    switch (store.value) {
+        .integer_literal => |literal| try std.testing.expectEqual(@as(usize, 11), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(@as(usize, 4), nested.trap_edges.len);
+
+    const replace = functionByName(module_mir, "replace_row") orelse return error.TestUnexpectedResult;
+    const replace_plan = mir_statement_plan.buildSingleBlockPlaceReturn(replace) orelse return error.TestUnexpectedResult;
+    const replace_store = replace_plan.store orelse return error.TestUnexpectedResult;
+    switch (replace_store.value) {
+        .array_literal => |literal| {
+            try std.testing.expectEqual(@as(usize, 2), literal.element_count);
+            try std.testing.expectEqual(@as(usize, 31), literal.elements[0].value);
+            try std.testing.expectEqual(@as(usize, 32), literal.elements[1].value);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const mutable_replace = functionByNameMut(&module_mir, "replace_row") orelse return error.TestUnexpectedResult;
+    var aggregate_instruction: ?*mir.Instruction = null;
+    for (mutable_replace.blocks) |*block| for (block.instructions) |*instruction| {
+        if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "array_literal")) {
+            aggregate_instruction = instruction;
+            break;
+        }
+    };
+    const aggregate = aggregate_instruction orelse return error.TestUnexpectedResult;
+    const saved_operand = aggregate.typed_aggregate_operand_span_ids[0];
+    aggregate.typed_aggregate_operand_span_ids[0] = .invalid;
+    var aggregate_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
+    defer aggregate_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &aggregate_reporter);
+    try std.testing.expect(aggregate_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, aggregate_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+    aggregate.typed_aggregate_operand_span_ids[0] = saved_operand;
 
     const mutable_function = functionByNameMut(&module_mir, "take_row") orelse return error.TestUnexpectedResult;
     var mutated = false;

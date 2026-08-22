@@ -2108,6 +2108,7 @@ test "LLVM emits nested parameter and global field places from MIR without body 
 test "LLVM emits fixed-array constant-index places from MIR without body fallback" {
     const source =
         \\global values: [2]u32 = .{ 10, 20 };
+        \\global matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
         \\fn take_row(row: [2]u32) -> u32 {
         \\    return row[1];
         \\}
@@ -2121,6 +2122,14 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
         \\fn local_array_copy(row: [2]u32) -> u32 {
         \\    let copy: [2]u32 = row;
         \\    return copy[0];
+        \\}
+        \\fn nested_global() -> u32 {
+        \\    matrix[1][0] = 11;
+        \\    return matrix[1][0];
+        \\}
+        \\fn replace_row() -> u32 {
+        \\    matrix[1] = .{ 31, 32 };
+        \\    return matrix[1][1];
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -2140,6 +2149,16 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     const local = try llvmFunctionBody(output.items, "define internal i32 @local_array_copy");
     try expectContains(local, "extractvalue [2 x i32] %row, 0");
     try expectNotContains(local, "alloca");
+    const nested = try llvmFunctionBody(output.items, "define internal i32 @nested_global");
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, nested, "icmp ult i64"));
+    try expectContains(nested, "getelementptr [2 x [2 x i32]], ptr @matrix, i64 0, i64 1");
+    try expectContains(nested, "getelementptr [2 x i32], ptr %t");
+    try expectContains(nested, "store atomic i32 11");
+    try expectContains(nested, "load atomic i32");
+    const replace = try llvmFunctionBody(output.items, "define internal i32 @replace_row");
+    try expectContains(replace, "extractvalue [2 x i32] [i32 31, i32 32], 0");
+    try expectContains(replace, "extractvalue [2 x i32] [i32 31, i32 32], 1");
+    try expectContains(replace, "load atomic i32");
 }
 
 test "LLVM emits conditional struct parameter field returns from MIR" {
@@ -7720,7 +7739,7 @@ test "LLVM nested array member and index results require MIR expression facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_array_member_expression_result_facts.mc", .{}, false, .riscv64, null);
-        try expectContains(output.items, "getelementptr");
+        try expectContains(output.items, "extractvalue");
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});

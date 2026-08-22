@@ -6,7 +6,7 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **81/160 C** and **82/160 LLVM**
+  The current strict ratchet corpus admits **85/160 C** and **86/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -118,7 +118,16 @@ index metadata that disagrees with the canonical literal operand; both backends
 independently match the carried bound to the declared array type before
 emission. Parameter reads, race-tolerant global reads/stores, and local array
 copies initialized from a parameter/global now use the shared plan. Dynamic
-indices and field-to-array traversal remain fail-closed.
+indices remain fail-closed.
+
+Nested fixed-array and field/array projections now retain each successive
+static bound in MIR. Store values cover parameters, typed non-negative integer
+literals, and bounded one-level integer-array literals. Small array literals
+carry their immediate operand `SpanId`s; malformed operand identity is rejected
+by the verifier, while both backends independently validate the declared array
+length and element types. This closes scalar nested writes and row replacement
+for global arrays, struct-field arrays, and array-to-struct-to-array places.
+Nested aggregate literals and local literal-owned storage remain fallback.
 
 ### Six correctness defects were caught by the discipline (learn from these)
 
@@ -153,7 +162,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 81/160 and LLVM 82/160. The exact-root soundness gate
+current strict corpus is C 85/160 and LLVM 86/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

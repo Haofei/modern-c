@@ -2196,6 +2196,19 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         }
     } else if (instruction.constant_index_value != null or instruction.static_index_bound != null) return false;
     if (instruction.constant_usize_value != null and (instruction.kind != .expr or instruction.result_ty != .integer)) return false;
+    if (instruction.typed_aggregate_operand_count > Instruction.max_aggregate_operands) return false;
+    if (instruction.typed_aggregate_operand_count != 0) {
+        if (instruction.kind != .expr or !std.mem.eql(u8, instruction.detail, "array_literal")) return false;
+        for (instruction.typed_aggregate_operand_span_ids, 0..) |operand_span_id, index| {
+            if (index < instruction.typed_aggregate_operand_count) {
+                if (!operand_span_id.isValid() or operand_span_id.index() >= function.span_identities.len) return false;
+            } else if (operand_span_id.isValid()) return false;
+        }
+    } else {
+        for (instruction.typed_aggregate_operand_span_ids) |operand_span_id| {
+            if (operand_span_id.isValid()) return false;
+        }
+    }
     if (instruction.kind == .assign) {
         if (!instruction.typed_target_operand_span_id.isValid() or !instruction.typed_value_operand_span_id.isValid()) return false;
         if (instruction.typed_target_operand_span_id.index() >= function.span_identities.len) return false;
@@ -7539,6 +7552,13 @@ const FunctionBuilder = struct {
             },
             .array_literal => |items| {
                 try self.addInstr(.expr, "array_literal", .{ .array = "array" }, expr.span);
+                if (items.len <= Instruction.max_aggregate_operands) {
+                    const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                    instruction.typed_aggregate_operand_count = items.len;
+                    for (items, 0..) |item, index| {
+                        instruction.typed_aggregate_operand_span_ids[index] = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(item).span));
+                    }
+                }
                 const child_ty = if (self.aggregateLiteralTargetTypeExpr()) |target_ty| arrayElementTypeAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
                 for (items) |item| {
                     const previous_target_ty = self.assignment_target_ty;
@@ -11529,6 +11549,17 @@ const FunctionBuilder = struct {
                 const base_ty = self.baseTypeExpr(m.base.*) orelse return null;
                 const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse return null;
                 return self.structFieldTypeExpr(struct_name, m.name.text);
+            },
+            // Preserve the declared child type through a fixed-array index so
+            // a following index owns its static bound in MIR as well. This is
+            // type recovery in the builder, not a backend proof: unsupported
+            // or non-array bases remain unknown and retain their runtime check.
+            .index => |node| {
+                const base_ty = self.baseTypeExpr(node.base.*) orelse return null;
+                return switch (aggregateTargetTypeAlias(base_ty, self.aliases).kind) {
+                    .array => |array| array.child.*,
+                    else => null,
+                };
             },
             else => null,
         };

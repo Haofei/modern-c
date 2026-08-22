@@ -154,6 +154,8 @@ pub const ValueType = union(enum) {
 };
 
 pub const Instruction = struct {
+    pub const max_aggregate_operands: usize = 8;
+
     kind: Kind,
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
@@ -193,6 +195,11 @@ pub const Instruction = struct {
     // the verifier can prove that an index instruction's constant metadata
     // agrees with its operand instead of trusting a duplicated producer field.
     constant_usize_value: ?usize = null,
+    // Small aggregate literals own their immediate operand identities. Larger
+    // literals remain valid MIR but are not admitted by the bounded shared
+    // statement plan until a dynamic operand table replaces this inline form.
+    typed_aggregate_operand_span_ids: [max_aggregate_operands]SpanId = [_]SpanId{.invalid} ** max_aggregate_operands,
+    typed_aggregate_operand_count: usize = 0,
     typed_target_operand_span_id: SpanId = .invalid,
     typed_value_operand_span_id: SpanId = .invalid,
     // Calls retain their enclosing expression span above for diagnostics and

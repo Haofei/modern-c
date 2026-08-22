@@ -131,16 +131,52 @@ pub const Place = struct {
     }
 };
 
-pub const PlaceParameterValue = struct {
-    name: []const u8,
-    value_id: mir.ValueId,
-    ty: mir.ValueType,
+pub const PlaceStoreValue = union(enum) {
+    pub const max_array_elements: usize = mir.Instruction.max_aggregate_operands;
+
+    parameter: struct {
+        name: []const u8,
+        value_id: mir.ValueId,
+        ty: mir.ValueType,
+        location: Location,
+    },
+    integer_literal: struct {
+        value: usize,
+        type_fact: mir.TargetTypeFact,
+        location: Location,
+    },
+    array_literal: struct {
+        type_fact: mir.TargetTypeFact,
+        elements: [max_array_elements]IntegerLiteralValue = undefined,
+        element_count: usize,
+        location: Location,
+    },
+
+    pub fn resultType(self: PlaceStoreValue) mir.ValueType {
+        return switch (self) {
+            .parameter => |parameter| parameter.ty,
+            .integer_literal => |literal| literal.type_fact.result_ty,
+            .array_literal => |literal| literal.type_fact.result_ty,
+        };
+    }
+
+    pub fn expressionCount(self: PlaceStoreValue) usize {
+        return switch (self) {
+            .parameter, .integer_literal => 1,
+            .array_literal => |literal| 1 + literal.element_count,
+        };
+    }
+};
+
+pub const IntegerLiteralValue = struct {
+    value: usize,
+    type_fact: mir.TargetTypeFact,
     location: Location,
 };
 
 pub const PlaceStore = struct {
     target: Place,
-    value: PlaceParameterValue,
+    value: PlaceStoreValue,
     location: Location,
 };
 
@@ -216,26 +252,63 @@ pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
     if (assignment) |store_instruction| {
         const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
         if (target.root_kind != .global or target.projection_count == 0 or !placeHasAggregateIntermediates(target) or !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
-        const value_instruction = expressionAtSpan(block, store_instruction.typed_value_operand_span_id) orelse return null;
-        const value_id = value_instruction.typed_value_id orelse return null;
-        const value_name = valueIdentityName(function, value_id) orelse return null;
-        const value_ty = parameterType(function, value_name) orelse return null;
-        if (!sameRepresentationType(value_ty, value_instruction.result_ty) or !sameRepresentationType(value_ty, target.resultType())) return null;
+        const value = buildPlaceStoreValue(function, block, store_instruction.typed_value_operand_span_id) orelse return null;
+        if (!sameRepresentationType(value.resultType(), target.resultType())) return null;
         result.store = .{
             .target = target,
-            .value = .{
-                .name = value_name,
-                .value_id = value_id,
-                .ty = value_ty,
-                .location = locationFromInstruction(value_instruction),
-            },
+            .value = value,
             .location = locationFromInstruction(store_instruction),
         };
-        consumed_expressions += target.projection_count + 2;
+        consumed_expressions += target.projection_count + 1 + value.expressionCount();
     }
     if (consumed_expressions != expression_count) return null;
     if (!placeBoundsTrapsMatch(function, result)) return null;
     return result;
+}
+
+fn buildPlaceStoreValue(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?PlaceStoreValue {
+    const instruction = expressionAtSpan(block, span_id) orelse return null;
+    if (instruction.typed_value_id) |value_id| {
+        const name = valueIdentityName(function, value_id) orelse return null;
+        const ty = parameterType(function, name) orelse return null;
+        if (!sameRepresentationType(ty, instruction.result_ty)) return null;
+        return .{ .parameter = .{
+            .name = name,
+            .value_id = value_id,
+            .ty = ty,
+            .location = locationFromInstruction(instruction),
+        } };
+    }
+    if (std.mem.eql(u8, instruction.detail, "array_literal")) {
+        if (instruction.typed_aggregate_operand_count == 0) return null;
+        const type_fact = targetFactBySpan(function, .array_literal, span_id) orelse return null;
+        if (type_fact.result_ty != .array) return null;
+        var result: PlaceStoreValue = .{ .array_literal = .{
+            .type_fact = type_fact,
+            .element_count = instruction.typed_aggregate_operand_count,
+            .location = locationFromInstruction(instruction),
+        } };
+        for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |operand_span_id, index| {
+            const operand = expressionAtSpan(block, operand_span_id) orelse return null;
+            const operand_value = operand.constant_usize_value orelse return null;
+            const operand_fact = targetFactBySpan(function, .expression_result, operand_span_id) orelse return null;
+            if (operand_fact.result_ty != .integer) return null;
+            result.array_literal.elements[index] = .{
+                .value = operand_value,
+                .type_fact = operand_fact,
+                .location = locationFromInstruction(operand),
+            };
+        }
+        return result;
+    }
+    const value = instruction.constant_usize_value orelse return null;
+    const type_fact = targetFactBySpan(function, .expression_result, span_id) orelse return null;
+    if (type_fact.result_ty != .integer) return null;
+    return .{ .integer_literal = .{
+        .value = value,
+        .type_fact = type_fact,
+        .location = locationFromInstruction(instruction),
+    } };
 }
 
 fn placeHasAggregateIntermediates(place: Place) bool {
