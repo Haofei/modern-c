@@ -11,8 +11,8 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits **73.1% of C functions (117/160)** and **73.8% of LLVM functions
-(118/160)**; the rest still ingest the AST body.
+admits **76.2% of C functions (122/160)** and **76.9% of LLVM functions
+(123/160)**; the rest still ingest the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 117 | 43 | 0 | 7312 |
-| LLVM | 160 | 118 | 42 | 0 | 7375 |
+| C | 160 | 122 | 38 | 0 | 7625 |
+| LLVM | 160 | 123 | 37 | 0 | 7687 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -117,6 +117,7 @@ typed-unary operand-descendant bugs before commit.
 | Function-symbol identity return | `fn entry_of() -> fn() -> void { return tick; }`; one shared MIR plan joins the resolved `ValueId`, operand `SpanId`, representation type, and known function registry before either backend emits the symbol address | (current batch) |
 | Local function-pointer call | `let op: fn(A,B)->R = target; return op(a,b)`; the indirect-call plan now proves the local generation, initializer function identity, callee root, signature, and indexed arguments, while both backends preserve a materialized local and indirect call | (current batch) |
 | Nullable pointer promotion | `let maybe: ?*T = p; return maybe`, null-init + reassignment, and `consume_nullable(p)`; one shared MIR plan joins `ValueId`, call `SpanId`, exact nullable/non-null type facts and the statically satisfied representation edge, while both backends preserve local storage/order and omit the impossible trap | (current batch) |
+| Nullable pointer try | `return maybe?`, `return make_nullable()?`, direct/void one-argument consumers, and a zero-argument source call; one shared MIR plan joins the `try_operand`, unwrapped value, call argument, representation-use facts, and exact InvalidRepresentation/Unwrap edge pair while both backends evaluate the source exactly once | (current batch) |
 
 ### Remaining families, by tractability
 

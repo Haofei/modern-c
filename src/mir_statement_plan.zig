@@ -114,6 +114,48 @@ pub const NullablePointerVoidCallPlan = struct {
     argument_location: Location,
 };
 
+/// One nullable-pointer `?` operation and its immediate consumer.  The source
+/// is evaluated exactly once, the nullable representation is checked once,
+/// and the unwrapped non-null pointer is either returned or passed as the sole
+/// argument of one direct call.  This is deliberately an execution plan rather
+/// than a syntax recognizer: call/argument/value identity and both trap edges
+/// are joined through typed MIR IDs.
+pub const NullableTryPlan = struct {
+    pub const Source = union(enum) {
+        parameter: struct {
+            name: []const u8,
+            value_id: mir.ValueId,
+            location: Location,
+        },
+        zero_arg_call: struct {
+            callee_name: []const u8,
+            callee_id: mir.ValueId,
+            result_fact: mir.TargetTypeFact,
+            location: Location,
+        },
+    };
+
+    pub const Consumer = union(enum) {
+        return_unwrapped,
+        direct_call: struct {
+            callee_name: []const u8,
+            callee_id: mir.ValueId,
+            result_fact: mir.TargetTypeFact,
+            argument_fact: mir.TargetTypeFact,
+            location: Location,
+            returns_value: bool,
+        },
+    };
+
+    source: Source,
+    consumer: Consumer,
+    nullable_fact: mir.TargetTypeFact,
+    unwrapped_fact: mir.TargetTypeFact,
+    try_value_id: mir.ValueId,
+    try_location: Location,
+    return_location: ?Location,
+};
+
 pub const LogicalNode = struct {
     location: Location,
     operation: Operation,
@@ -788,6 +830,239 @@ pub fn buildNullablePointerVoidCall(function: mir.Function) ?NullablePointerVoid
         .source_type_fact = source_fact,
         .call_location = locationFromInstruction(call),
         .argument_location = locationFromInstruction(argument_expr),
+    };
+}
+
+/// Admit one nullable-pointer unwrap whose value is immediately returned or
+/// supplied to a single-argument direct call.  The two MIR trap edges are
+/// required to be the exact InvalidRepresentation/Unwrap pair for the same
+/// typed expression.  Backends therefore encode an ordinary null test and the
+/// language NullUnwrap trap without inspecting the source expression.
+pub fn buildNullableTry(function: mir.Function) ?NullableTryPlan {
+    if (function.blocks.len != 3 or function.trap_edges.len != 2 or
+        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    if (entry.terminator != .return_ and entry.terminator != .fallthrough) return null;
+    if (entry.successors.len != 2) return null;
+    for (function.blocks[1..]) |trap_block| {
+        if (trap_block.instructions.len != 0 or trap_block.successors.len != 0) return null;
+        switch (trap_block.terminator) {
+            .trap_ => |kind| if (kind != .InvalidRepresentation and kind != .Unwrap) return null,
+            else => return null,
+        }
+    }
+
+    var result_check: ?mir.Instruction = null;
+    var representation_check: ?mir.Instruction = null;
+    var try_use: ?mir.Instruction = null;
+    var call_argument_use: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var calls: [2]mir.Instruction = undefined;
+    var call_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .expr => {},
+        .result_check => {
+            if (result_check != null or !std.mem.eql(u8, instruction.detail, "try_handled")) return null;
+            result_check = instruction;
+        },
+        .representation_check => {
+            if (representation_check != null or !std.mem.eql(u8, instruction.detail, "nonnull_pointer")) return null;
+            representation_check = instruction;
+        },
+        .representation_use => {
+            if (std.mem.eql(u8, instruction.detail, "try_unwrap")) {
+                if (try_use != null) return null;
+                try_use = instruction;
+            } else if (std.mem.eql(u8, instruction.detail, "call_arg")) {
+                if (call_argument_use != null) return null;
+                call_argument_use = instruction;
+            } else return null;
+        },
+        .call => {
+            if (call_count == calls.len) return null;
+            calls[call_count] = instruction;
+            call_count += 1;
+        },
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+
+    const checked = result_check orelse return null;
+    const representation = representation_check orelse return null;
+    const unwrapped_use = try_use orelse return null;
+    if (!checked.typed_span_id.isValid() or !representation.typed_span_id.eql(checked.typed_span_id) or
+        !unwrapped_use.typed_span_id.eql(checked.typed_span_id)) return null;
+    const try_value_id = representation.typed_value_id orelse return null;
+    const use_value_id = unwrapped_use.typed_value_id orelse return null;
+    if (!try_value_id.isValid() or !use_value_id.eql(try_value_id)) return null;
+    switch (representation.result_ty) {
+        .pointer => {},
+        else => return null,
+    }
+    if (!sameRepresentationType(representation.result_ty, unwrapped_use.result_ty)) return null;
+
+    const nullable_fact = blk: {
+        var found: ?mir.TargetTypeFact = null;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind != .try_operand) continue;
+            if (found != null) return null;
+            found = fact;
+        }
+        break :blk found orelse return null;
+    };
+    const nullable_child = switch (nullable_fact.target_ty.kind) {
+        .nullable => |child| child.*,
+        else => return null,
+    };
+    if (std.meta.activeTag(nullable_child.kind) != .pointer or !nullable_fact.typed_span_id.isValid()) return null;
+    const unwrapped_fact = targetFactBySpan(function, .expression_result, checked.typed_span_id) orelse return null;
+    if (std.meta.activeTag(unwrapped_fact.target_ty.kind) != .pointer or
+        !type_syntax.sameTypeSyntax(unwrapped_fact.target_ty, nullable_child) or
+        !sameRepresentationType(unwrapped_fact.result_ty, representation.result_ty)) return null;
+
+    var saw_invalid_representation = false;
+    var saw_unwrap = false;
+    for (function.trap_edges) |edge| {
+        if (edge.from_block != entry.id or !edge.typed_span_id.eql(checked.typed_span_id) or
+            edge.trap_block >= function.blocks.len) return null;
+        switch (edge.kind) {
+            .InvalidRepresentation => {
+                if (saw_invalid_representation or edge.source != .representation_check) return null;
+                saw_invalid_representation = true;
+            },
+            .Unwrap => {
+                if (saw_unwrap or edge.source != .unwrap) return null;
+                saw_unwrap = true;
+            },
+            else => return null,
+        }
+    }
+    if (!saw_invalid_representation or !saw_unwrap) return null;
+
+    const expected_representation_facts: usize = if (call_argument_use == null) 2 else 3;
+    if (function.representation_facts.len != expected_representation_facts) return null;
+    var saw_representation_check = false;
+    var saw_try_use = false;
+    var saw_call_use = false;
+    for (function.representation_facts) |fact| {
+        if (!fact.typed_span_id.eql(checked.typed_span_id) or !fact.typed_value_id.eql(try_value_id) or
+            !sameRepresentationType(fact.result_ty, representation.result_ty)) return null;
+        if (fact.kind == .representation_check and std.mem.eql(u8, fact.detail, "nonnull_pointer")) {
+            if (saw_representation_check) return null;
+            saw_representation_check = true;
+        } else if (fact.kind == .representation_use and std.mem.eql(u8, fact.detail, "try_unwrap")) {
+            if (saw_try_use) return null;
+            saw_try_use = true;
+        } else if (fact.kind == .representation_use and std.mem.eql(u8, fact.detail, "call_arg")) {
+            if (saw_call_use) return null;
+            saw_call_use = true;
+        } else return null;
+    }
+    if (!saw_representation_check or !saw_try_use or saw_call_use != (call_argument_use != null)) return null;
+
+    const source: NullableTryPlan.Source = blk: {
+        if (expressionAtSpan(entry, nullable_fact.typed_span_id)) |operand| {
+            const operand_id = operand.typed_value_id orelse return null;
+            const name = valueIdentityName(function, operand_id) orelse return null;
+            if (parameterType(function, name) == null or !std.mem.eql(u8, operand.detail, name)) return null;
+            break :blk .{ .parameter = .{
+                .name = name,
+                .value_id = operand_id,
+                .location = locationFromInstruction(operand),
+            } };
+        }
+        var source_call: ?mir.Instruction = null;
+        for (calls[0..call_count]) |call| {
+            if (!call.typed_span_id.eql(nullable_fact.typed_span_id)) continue;
+            if (source_call != null) return null;
+            source_call = call;
+        }
+        const call = source_call orelse return null;
+        const callee_id = call.typed_value_id orelse return null;
+        const callee_name = valueIdentityName(function, callee_id) orelse return null;
+        if (!std.mem.eql(u8, call.detail, callee_name) or !call.typed_callee_span_id.isValid()) return null;
+        const result_fact = targetFactBySpan(function, .direct_call_result, call.typed_callee_span_id) orelse return null;
+        if (!type_syntax.sameTypeSyntax(result_fact.target_ty, nullable_fact.target_ty) or
+            !std.mem.eql(u8, result_fact.target_owner orelse "", callee_name)) return null;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind == .direct_call_argument and fact.typed_callee_span_id.eql(call.typed_callee_span_id)) return null;
+        }
+        break :blk .{ .zero_arg_call = .{
+            .callee_name = callee_name,
+            .callee_id = callee_id,
+            .result_fact = result_fact,
+            .location = locationFromInstruction(call),
+        } };
+    };
+
+    var return_location: ?Location = null;
+    const consumer: NullableTryPlan.Consumer = if (call_argument_use == null) blk: {
+        const expected_source_calls: usize = switch (source) {
+            .parameter => 0,
+            .zero_arg_call => 1,
+        };
+        if (call_count != expected_source_calls) return null;
+        const ret = returned orelse return null;
+        const returned_id = ret.typed_value_id orelse return null;
+        if (!returned_id.eql(try_value_id) or !sameRepresentationType(ret.result_ty, function.return_ty) or
+            function.return_ty == .void or entry.terminator != .return_) return null;
+        return_location = locationFromInstruction(ret);
+        break :blk .return_unwrapped;
+    } else blk: {
+        const call_use = call_argument_use.?;
+        if (!call_use.typed_span_id.eql(checked.typed_span_id)) return null;
+        var argument_fact: ?mir.TargetTypeFact = null;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind != .direct_call_argument or !fact.typed_span_id.eql(checked.typed_span_id)) continue;
+            if (argument_fact != null or fact.target_index != 0) return null;
+            argument_fact = fact;
+        }
+        const argument = argument_fact orelse return null;
+        if ((argument.typed_operand_value_id.isValid() and !argument.typed_operand_value_id.eql(try_value_id)) or
+            !type_syntax.sameTypeSyntax(argument.target_ty, unwrapped_fact.target_ty)) return null;
+        var consumer_call: ?mir.Instruction = null;
+        for (calls[0..call_count]) |call| {
+            if (!call.typed_callee_span_id.eql(argument.typed_callee_span_id)) continue;
+            if (consumer_call != null) return null;
+            consumer_call = call;
+        }
+        const call = consumer_call orelse return null;
+        const callee_id = call.typed_value_id orelse return null;
+        const callee_name = valueIdentityName(function, callee_id) orelse return null;
+        if (!std.mem.eql(u8, call.detail, callee_name)) return null;
+        const result_fact = targetFactBySpan(function, .direct_call_result, call.typed_callee_span_id) orelse return null;
+        const returns_value = result_fact.result_ty != .void;
+        if (returns_value) {
+            const ret = returned orelse return null;
+            const returned_id = ret.typed_value_id orelse return null;
+            if (!returned_id.eql(callee_id) or entry.terminator != .return_ or
+                !sameRepresentationType(result_fact.result_ty, function.return_ty)) return null;
+            return_location = locationFromInstruction(ret);
+        } else if (returned != null or entry.terminator != .fallthrough or function.return_ty != .void) return null;
+        break :blk .{ .direct_call = .{
+            .callee_name = callee_name,
+            .callee_id = callee_id,
+            .result_fact = result_fact,
+            .argument_fact = argument,
+            .location = locationFromInstruction(call),
+            .returns_value = returns_value,
+        } };
+    };
+
+    return .{
+        .source = source,
+        .consumer = consumer,
+        .nullable_fact = nullable_fact,
+        .unwrapped_fact = unwrapped_fact,
+        .try_value_id = try_value_id,
+        .try_location = locationFromInstruction(checked),
+        .return_location = return_location,
     };
 }
 

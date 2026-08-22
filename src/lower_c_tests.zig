@@ -2565,6 +2565,54 @@ test "lower-c preserves nullable pointer promotion locals from MIR without body 
     try expectNotContains(call_body, "mc_trap_InvalidRepresentation");
 }
 
+test "lower-c emits nullable pointer try from MIR without body fallback" {
+    const source =
+        \\extern fn maybe_ptr() -> ?*mut u8;
+        \\extern fn ptr_value(p: *mut u8) -> u32;
+        \\extern fn consume_ptr(p: *mut u8) -> void;
+        \\fn unwrap_param(maybe: ?*mut u8) -> *mut u8 {
+        \\    return maybe?;
+        \\}
+        \\fn unwrap_call() -> *mut u8 {
+        \\    return maybe_ptr()?;
+        \\}
+        \\fn arg_try(maybe: ?*mut u8) -> u32 {
+        \\    return ptr_value(maybe?);
+        \\}
+        \\fn direct_arg_try() -> u32 {
+        \\    return ptr_value(maybe_ptr()?);
+        \\}
+        \\fn expr_nullable_try() -> void {
+        \\    consume_ptr(maybe_ptr()?);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_pointer_try.mc", source, &output);
+
+    const unwrap_param_body = try cFunctionBody(output.items, "static uint8_t * unwrap_param(uint8_t * maybe)");
+    try expectContains(unwrap_param_body, "= maybe;");
+    try expectContains(unwrap_param_body, "== NULL) mc_trap_NullUnwrap();");
+    try expectContains(unwrap_param_body, "return mc_tmp");
+
+    const unwrap_call_body = try cFunctionBody(output.items, "static uint8_t * unwrap_call(void)");
+    try expectContains(unwrap_call_body, "= maybe_ptr();");
+    try expectContains(unwrap_call_body, "== NULL) mc_trap_NullUnwrap();");
+
+    const arg_try_body = try cFunctionBody(output.items, "static uint32_t arg_try(uint8_t * maybe)");
+    try expectContains(arg_try_body, "= maybe;");
+    try expectContains(arg_try_body, "return ptr_value(mc_tmp");
+
+    const direct_arg_body = try cFunctionBody(output.items, "static uint32_t direct_arg_try(void)");
+    try expectContains(direct_arg_body, "= maybe_ptr();");
+    try expectContains(direct_arg_body, "return ptr_value(mc_tmp");
+
+    const expr_body = try cFunctionBody(output.items, "static void expr_nullable_try(void)");
+    try expectContains(expr_body, "= maybe_ptr();");
+    try expectContains(expr_body, "consume_ptr(mc_tmp");
+    try expectNotContains(expr_body, "return consume_ptr");
+}
+
 test "lower-c emits nullable none returns from MIR without body fallback" {
     const source =
         \\fn direct_none() -> ?u32 {

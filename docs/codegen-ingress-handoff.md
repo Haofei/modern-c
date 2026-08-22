@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the nullable-pointer promotion MIR slice.
+2026-08-22 after the nullable-pointer try MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **117/160 C** and **118/160 LLVM**
+  The current strict ratchet corpus admits **122/160 C** and **123/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -231,7 +231,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 117/160 and LLVM 118/160. The exact-root soundness gate
+current strict corpus is C 122/160 and LLVM 123/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 
