@@ -183,6 +183,16 @@ pub const Instruction = struct {
     // reconstruct places without source-position arithmetic or an AST body.
     typed_base_operand_span_id: SpanId = .invalid,
     member_field_index: ?usize = null,
+    // Fixed-array index expressions name both operands and carry the checked
+    // constant/static-bound pair when it is known. This lets shared MIR plans
+    // preserve the bounds trap without reading the source expression.
+    typed_index_operand_span_id: SpanId = .invalid,
+    constant_index_value: ?usize = null,
+    static_index_bound: ?usize = null,
+    // Integer literal expressions expose their canonical non-negative value so
+    // the verifier can prove that an index instruction's constant metadata
+    // agrees with its operand instead of trusting a duplicated producer field.
+    constant_usize_value: ?usize = null,
     typed_target_operand_span_id: SpanId = .invalid,
     typed_value_operand_span_id: SpanId = .invalid,
     // Calls retain their enclosing expression span above for diagnostics and

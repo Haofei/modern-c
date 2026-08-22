@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-21 after the typed indirect-call return slice.
+2026-08-21 after the fixed-array place slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **76/160 C** and **77/160 LLVM**
+  The current strict ratchet corpus admits **81/160 C** and **82/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -101,7 +101,7 @@ plus the canonical callee root and optional field projection; both backends
 consume the shared admission result for parameter, global, and global-field
 callees. Closures and non-leaf arguments remain fail-closed.
 
-The same module now owns a typed field-place plan. MIR records each member's
+The same module now owns a typed aggregate-place plan. MIR records each member's
 base `SpanId` and resolved field index, assignment target/value `SpanId`s, and
 the returned value `SpanId`. Both backends lower one-block global field
 stores/loads, nested by-value parameter field reads, and local aggregate copies
@@ -110,6 +110,15 @@ initialized from a parameter/global from that single plan, including
 function body. Pointer traversal and literal-initialized locals remain
 fail-closed until their storage/value semantics are represented by the shared
 plan.
+
+That plan now also covers fixed-array constant-index projections. MIR records
+the base and index operand `SpanId`s, a canonical non-negative literal value,
+the static array bound, and the matching Bounds trap edge. The verifier rejects
+index metadata that disagrees with the canonical literal operand; both backends
+independently match the carried bound to the declared array type before
+emission. Parameter reads, race-tolerant global reads/stores, and local array
+copies initialized from a parameter/global now use the shared plan. Dynamic
+indices and field-to-array traversal remain fail-closed.
 
 ### Six correctness defects were caught by the discipline (learn from these)
 
@@ -144,7 +153,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 76/160 and LLVM 77/160. The exact-root soundness gate
+current strict corpus is C 81/160 and LLVM 82/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

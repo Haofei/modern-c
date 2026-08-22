@@ -3860,18 +3860,33 @@ const LlvmEmitter = struct {
     }
 
     fn emitMirProjectedValue(self: *LlvmEmitter, place: mir_statement_plan.Place, root_value: []const u8, span: diagnostics.Span) ![]const u8 {
-        var ty = type_bridge.simpleNameType(place.root_ty.name(), span);
+        var ty = place.root_type_fact.target_ty;
         var value = root_value;
-        for (place.projections[0..place.projection_count]) |projection| {
-            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-            const field = struct_decl.fields[projection.field_index];
-            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedLlvmEmission;
-            const next = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, projection.field_index, try self.debugCallSuffix() });
-            value = next;
-            ty = field.ty;
-        }
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .field => |field_projection| {
+                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+                const field = struct_decl.fields[field_projection.field_index];
+                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedLlvmEmission;
+                const next = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, field_projection.field_index, try self.debugCallSuffix() });
+                value = next;
+                ty = field.ty;
+            },
+            .constant_index => |index| {
+                const array = switch (self.resolveAliasType(ty).kind) {
+                    .array => |array| array,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                if (index.index >= index.bound) return error.UnsupportedLlvmEmission;
+                if (index.checked) try self.emitBoundsCheck(try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{index.index}), index.bound);
+                const next = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, index.index, try self.debugCallSuffix() });
+                value = next;
+                ty = array.child.*;
+            },
+        };
+        _ = span;
         return value;
     }
 
@@ -3879,16 +3894,30 @@ const LlvmEmitter = struct {
         if (place.root_kind != .global) return error.UnsupportedLlvmEmission;
         var ty = self.global_types.get(place.root_name) orelse return error.UnsupportedLlvmEmission;
         var pointer: []const u8 = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{place.root_name});
-        for (place.projections[0..place.projection_count]) |projection| {
-            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-            const field = struct_decl.fields[projection.field_index];
-            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedLlvmEmission;
-            const next = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}{s}\n", .{ next, try self.llvmType(ty), pointer, projection.field_index, try self.debugCallSuffix() });
-            pointer = next;
-            ty = field.ty;
-        }
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .field => |field_projection| {
+                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+                const field = struct_decl.fields[field_projection.field_index];
+                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedLlvmEmission;
+                const next = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}{s}\n", .{ next, try self.llvmType(ty), pointer, field_projection.field_index, try self.debugCallSuffix() });
+                pointer = next;
+                ty = field.ty;
+            },
+            .constant_index => |index| {
+                const array = switch (self.resolveAliasType(ty).kind) {
+                    .array => |array| array,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                if (index.index >= index.bound) return error.UnsupportedLlvmEmission;
+                if (index.checked) try self.emitBoundsCheck(try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{index.index}), index.bound);
+                const next = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}{s}\n", .{ next, try self.llvmType(ty), pointer, index.index, try self.debugCallSuffix() });
+                pointer = next;
+                ty = array.child.*;
+            },
+        };
         _ = span;
         return .{ .pointer = pointer, .ty = ty };
     }
@@ -3904,14 +3933,26 @@ const LlvmEmitter = struct {
         var ty = if (place.root_kind == .global)
             self.global_types.get(place.root_name) orelse return error.UnsupportedLlvmEmission
         else
-            type_bridge.simpleNameType(place.root_ty.name(), span);
-        for (place.projections[0..place.projection_count]) |projection| {
-            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-            const field = struct_decl.fields[projection.field_index];
-            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedLlvmEmission;
-            ty = field.ty;
-        }
+            place.root_type_fact.target_ty;
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .field => |field_projection| {
+                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+                const field = struct_decl.fields[field_projection.field_index];
+                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedLlvmEmission;
+                ty = field.ty;
+            },
+            .constant_index => |index| {
+                const array = switch (self.resolveAliasType(ty).kind) {
+                    .array => |array| array,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                const declared_bound = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                if (declared_bound != index.bound or index.index >= index.bound) return error.UnsupportedLlvmEmission;
+                ty = array.child.*;
+            },
+        };
+        _ = span;
         return ty;
     }
 

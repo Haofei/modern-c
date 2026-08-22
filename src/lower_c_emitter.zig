@@ -3837,7 +3837,7 @@ pub const CEmitter = struct {
     fn emitMirPlaceReturnPlan(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan) !void {
         if (plan.local_init) |local| {
             const span = spanFromMirSourcePoint(local.location.source);
-            const local_ty = type_bridge.simpleNameType(local.ty.name(), span);
+            const local_ty = try self.mirPlaceType(local.value, span);
             const initializer = try self.mirPlaceAccess(local.value);
             try self.writeLineDirective(span);
             try self.writeIndent();
@@ -3872,24 +3872,42 @@ pub const CEmitter = struct {
 
     fn mirPlaceAccess(self: *CEmitter, place: mir_statement_plan.Place) ![]const u8 {
         var access = try std.fmt.allocPrint(self.scratch.allocator(), "{s}", .{try self.cIdent(place.root_name)});
-        for (place.projections[0..place.projection_count]) |projection| {
-            access = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ access, try self.cIdent(projection.field_name) });
-        }
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .field => |field| access = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ access, try self.cIdent(field.field_name) }),
+            .constant_index => |index| access = if (index.checked)
+                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.elems[mc_check_index_usize({d}, {d})]", .{ access, index.index, index.bound })
+            else
+                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.elems[{d}]", .{ access, index.index }),
+        };
         return access;
     }
 
     fn mirPlaceType(self: *CEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !ast_bridge.TypeExpr {
-        var ty = type_bridge.simpleNameType(place.root_ty.name(), span);
-        if (self.structs.get(place.root_ty.name()) == null) return error.UnsupportedCEmission;
-        if (place.root_kind == .global and self.globals.get(place.root_name) == null) return error.UnsupportedCEmission;
-        for (place.projections[0..place.projection_count]) |projection| {
-            const struct_name = self.structTypeNameFromType(ty) orelse return error.UnsupportedCEmission;
-            const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
-            if (projection.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
-            const field = struct_decl.fields[projection.field_index];
-            if (!std.mem.eql(u8, field.name.text, projection.field_name)) return error.UnsupportedCEmission;
-            ty = field.ty;
-        }
+        var ty = if (place.root_kind == .global)
+            (self.globals.get(place.root_name) orelse return error.UnsupportedCEmission).source_ty orelse return error.UnsupportedCEmission
+        else
+            place.root_type_fact.target_ty;
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .field => |field_projection| {
+                const struct_name = self.structTypeNameFromType(ty) orelse return error.UnsupportedCEmission;
+                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
+                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
+                const field = struct_decl.fields[field_projection.field_index];
+                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedCEmission;
+                ty = field.ty;
+            },
+            .constant_index => |index| {
+                const array = switch (self.resolveAliasType(ty).kind) {
+                    .array => |array| array,
+                    else => return error.UnsupportedCEmission,
+                };
+                const declared_bound = self.arrayLenTextForExpr(array.len) catch return error.UnsupportedCEmission;
+                const parsed_bound = std.fmt.parseUnsigned(usize, declared_bound, 10) catch return error.UnsupportedCEmission;
+                if (parsed_bound != index.bound or index.index >= index.bound) return error.UnsupportedCEmission;
+                ty = array.child.*;
+            },
+        };
+        _ = span;
         return ty;
     }
 

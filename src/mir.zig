@@ -1511,11 +1511,25 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_left_operand_span_id.index(), right_id },
                     );
                 }
-                if (instruction.typed_base_operand_span_id.isValid()) {
+                if (instruction.typed_base_operand_span_id.isValid() and instruction.member_field_index != null) {
                     try out.print(
                         allocator,
                         "mir place_identity fn={s} block={} kind={s} detail={s} base_span_id={} field_index={}\n",
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_base_operand_span_id.index(), instruction.member_field_index.? },
+                    );
+                }
+                if (instruction.typed_index_operand_span_id.isValid()) {
+                    try out.print(
+                        allocator,
+                        "mir index_identity fn={s} block={} base_span_id={} index_span_id={} constant_index={} static_bound={}\n",
+                        .{
+                            function.name,
+                            block.id,
+                            instruction.typed_base_operand_span_id.index(),
+                            instruction.typed_index_operand_span_id.index(),
+                            instruction.constant_index_value orelse std.math.maxInt(usize),
+                            instruction.static_index_bound orelse std.math.maxInt(usize),
+                        },
                     );
                 }
                 if (instruction.typed_target_operand_span_id.isValid() or instruction.typed_value_operand_span_id.isValid()) {
@@ -2165,11 +2179,23 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         return false;
     }
     if (instruction.typed_base_operand_span_id.isValid()) {
-        if (instruction.kind != .expr or instruction.member_field_index == null) return false;
         if (instruction.typed_base_operand_span_id.index() >= function.span_identities.len) return false;
-    } else if (instruction.member_field_index != null) {
+        if (instruction.kind == .expr) {
+            if (instruction.member_field_index == null or instruction.typed_index_operand_span_id.isValid()) return false;
+        } else if (instruction.kind == .index) {
+            if (instruction.member_field_index != null or !instruction.typed_index_operand_span_id.isValid()) return false;
+        } else return false;
+    } else if (instruction.member_field_index != null or instruction.typed_index_operand_span_id.isValid()) {
         return false;
     }
+    if (instruction.typed_index_operand_span_id.isValid()) {
+        if (instruction.typed_index_operand_span_id.index() >= function.span_identities.len) return false;
+        if (instruction.constant_index_value) |constant_index| {
+            const operand = instructionAtSpan(function, instruction.typed_index_operand_span_id) orelse return false;
+            if (operand.constant_usize_value != constant_index) return false;
+        }
+    } else if (instruction.constant_index_value != null or instruction.static_index_bound != null) return false;
+    if (instruction.constant_usize_value != null and (instruction.kind != .expr or instruction.result_ty != .integer)) return false;
     if (instruction.kind == .assign) {
         if (!instruction.typed_target_operand_span_id.isValid() or !instruction.typed_value_operand_span_id.isValid()) return false;
         if (instruction.typed_target_operand_span_id.index() >= function.span_identities.len) return false;
@@ -2216,6 +2242,17 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         return false;
     }
     return true;
+}
+
+fn instructionAtSpan(function: Function, span_id: SpanId) ?Instruction {
+    var matched: ?Instruction = null;
+    for (function.blocks) |block| for (block.instructions) |candidate| {
+        if (!candidate.typed_span_id.eql(span_id)) continue;
+        if (candidate.kind != .expr) continue;
+        if (matched != null) return null;
+        matched = candidate;
+    };
+    return matched;
 }
 
 /// Backends consume the owned representation fact table as an admission gate.
@@ -7484,6 +7521,8 @@ const FunctionBuilder = struct {
                     try self.addIntegerLiteralFact(self.assignment_target_ty, expr, expr.span);
                 }
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+                const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                instruction.constant_usize_value = self.constUsizeValue(expr);
             },
             .bool_literal => |value| {
                 try self.addBoolLiteralFact(value, expr.span);
@@ -8207,6 +8246,14 @@ const FunctionBuilder = struct {
                 }
                 const ty = self.exprType(expr);
                 try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
+                const index_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                index_instruction.typed_base_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.base.*).span));
+                index_instruction.typed_index_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.index.*).span));
+                index_instruction.constant_index_value = switch (node.index.kind) {
+                    .int_literal => self.constUsizeValue(node.index.*),
+                    else => null,
+                };
+                index_instruction.static_index_bound = self.baseArrayLen(node.base.*);
                 if (representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));

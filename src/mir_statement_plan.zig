@@ -93,24 +93,41 @@ pub const LogicalReturnPlan = struct {
 
 pub const PlaceRootKind = enum { parameter, local, global };
 
-pub const PlaceProjection = struct {
-    field_name: []const u8,
-    field_index: usize,
-    result_ty: mir.ValueType,
-    location: Location,
+pub const PlaceProjection = union(enum) {
+    field: struct {
+        field_name: []const u8,
+        field_index: usize,
+        result_ty: mir.ValueType,
+        location: Location,
+    },
+    constant_index: struct {
+        index: usize,
+        bound: usize,
+        result_ty: mir.ValueType,
+        checked: bool,
+        location: Location,
+    },
+
+    pub fn resultType(self: PlaceProjection) mir.ValueType {
+        return switch (self) {
+            .field => |field| field.result_ty,
+            .constant_index => |index| index.result_ty,
+        };
+    }
 };
 
 pub const Place = struct {
     root_kind: PlaceRootKind = undefined,
     root_name: []const u8 = "",
     root_ty: mir.ValueType = .unknown,
+    root_type_fact: mir.TargetTypeFact = undefined,
     root_location: Location = undefined,
     projections: [max_place_projections]PlaceProjection = undefined,
     projection_count: usize = 0,
 
     pub fn resultType(self: Place) mir.ValueType {
         if (self.projection_count == 0) return self.root_ty;
-        return self.projections[self.projection_count - 1].result_ty;
+        return self.projections[self.projection_count - 1].resultType();
     }
 };
 
@@ -141,26 +158,26 @@ pub const PlaceReturnPlan = struct {
     return_location: Location,
 };
 
-/// Admit a one-block field-place body from typed MIR edges. The initial slice
-/// covers a pure field read rooted in a parameter/global and an optional field
-/// store from a direct parameter before that read. Every member/base,
-/// assignment target/value, and return/value relationship is explicit in MIR;
-/// source text and relative columns are never consulted.
+/// Admit a straight-line aggregate-place body from typed MIR edges. Fields and
+/// fixed-array constant indexes may be combined; checked indexes retain their
+/// explicit Bounds trap edges. Every base/index/member, assignment target/value,
+/// and return/value relationship is explicit in MIR; source text and relative
+/// columns are never consulted.
 pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
-    if (function.return_ty == .void or function.blocks.len != 1) return null;
-    if (function.trap_edges.len != 0 or function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.return_ty == .void or function.blocks.len == 0) return null;
+    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
     if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
     for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
 
     const block = function.blocks[0];
-    if (block.terminator != .return_ or block.successors.len != 0) return null;
+    if (block.terminator != .return_) return null;
 
     var assignment: ?mir.Instruction = null;
     var returned: ?mir.Instruction = null;
     var expression_count: usize = 0;
     var local_count: usize = 0;
     for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type => {},
+        .param, .target_type, .cmp_bounds, .index, .integer_literal_conversion => {},
         .local => local_count += 1,
         .expr => expression_count += 1,
         .assign => {
@@ -217,15 +234,62 @@ pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
         consumed_expressions += target.projection_count + 2;
     }
     if (consumed_expressions != expression_count) return null;
+    if (!placeBoundsTrapsMatch(function, result)) return null;
     return result;
 }
 
 fn placeHasAggregateIntermediates(place: Place) bool {
     if (place.projection_count <= 1) return true;
     for (place.projections[0 .. place.projection_count - 1]) |projection| {
-        if (projection.result_ty != .struct_) return false;
+        const ty = projection.resultType();
+        if (ty != .struct_ and ty != .array) return false;
     }
     return true;
+}
+
+fn placeBoundsTrapsMatch(function: mir.Function, plan: PlaceReturnPlan) bool {
+    var locations: [max_place_projections * 3]Location = undefined;
+    var location_count: usize = 0;
+    appendCheckedIndexLocations(plan.returned, &locations, &location_count) orelse return false;
+    if (plan.local_init) |local| appendCheckedIndexLocations(local.value, &locations, &location_count) orelse return false;
+    if (plan.store) |store| appendCheckedIndexLocations(store.target, &locations, &location_count) orelse return false;
+
+    if (function.trap_edges.len != location_count or function.bounds_facts.len != location_count) return false;
+    if (function.blocks.len != location_count + 1 or function.blocks[0].successors.len != location_count) return false;
+    for (function.blocks[1..]) |trap_block| switch (trap_block.terminator) {
+        .trap_ => |kind| if (kind != .Bounds) return false,
+        else => return false,
+    };
+
+    var matched = [_]bool{false} ** (max_place_projections * 3);
+    for (function.trap_edges) |edge| {
+        if (edge.from_block != function.blocks[0].id or edge.kind != .Bounds or edge.source != .bounds_check) return false;
+        if (edge.trap_block >= function.blocks.len or function.blocks[edge.trap_block].terminator != .trap_) return false;
+        var found: ?usize = null;
+        for (locations[0..location_count], 0..) |location, index| {
+            if (matched[index]) continue;
+            if (edge.line == location.source.line and edge.column == location.source.column) {
+                found = index;
+                break;
+            }
+        }
+        const index = found orelse return false;
+        matched[index] = true;
+    }
+    for (matched[0..location_count]) |present| if (!present) return false;
+    return true;
+}
+
+fn appendCheckedIndexLocations(place: Place, locations: []Location, count: *usize) ?void {
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .field => {},
+        .constant_index => |index| if (index.checked) {
+            if (count.* >= locations.len) return null;
+            locations[count.*] = index.location;
+            count.* += 1;
+        },
+    };
+    return {};
 }
 
 /// Admit a pure boolean expression tree returned directly from one block.
@@ -502,19 +566,39 @@ fn buildPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?Pl
 
 fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, place: *Place, root_set: *bool, depth: usize) bool {
     if (!span_id.isValid() or depth > max_place_projections) return false;
-    const instruction = expressionAtSpan(block, span_id) orelse return false;
+    const instruction = placeInstructionAtSpan(block, span_id) orelse return false;
     const fact = targetFactBySpan(function, .expression_result, span_id) orelse return false;
     if (!sameRepresentationType(instruction.result_ty, fact.result_ty)) return false;
+
+    if (instruction.kind == .index) {
+        if (!instruction.typed_base_operand_span_id.isValid() or !instruction.typed_index_operand_span_id.isValid()) return false;
+        const index = instruction.constant_index_value orelse return false;
+        const bound = instruction.static_index_bound orelse return false;
+        if (index >= bound or place.projection_count >= max_place_projections) return false;
+        if (!appendPlace(function, block, instruction.typed_base_operand_span_id, place, root_set, depth + 1)) return false;
+        const index_operand = expressionAtSpan(block, instruction.typed_index_operand_span_id) orelse return false;
+        if (index_operand.result_ty != .integer and index_operand.result_ty != .value) return false;
+        place.projections[place.projection_count] = .{ .constant_index = .{
+            .index = index,
+            .bound = bound,
+            .result_ty = instruction.result_ty,
+            .checked = std.mem.eql(u8, instruction.detail, "bounds_checked"),
+            .location = locationFromInstruction(instruction),
+        } };
+        if (!std.mem.eql(u8, instruction.detail, "bounds_checked") and !std.mem.eql(u8, instruction.detail, "const_in_bounds")) return false;
+        place.projection_count += 1;
+        return true;
+    }
 
     if (instruction.typed_base_operand_span_id.isValid()) {
         if (instruction.member_field_index == null or place.projection_count >= max_place_projections) return false;
         if (!appendPlace(function, block, instruction.typed_base_operand_span_id, place, root_set, depth + 1)) return false;
-        place.projections[place.projection_count] = .{
+        place.projections[place.projection_count] = .{ .field = .{
             .field_name = instruction.detail,
             .field_index = instruction.member_field_index.?,
             .result_ty = instruction.result_ty,
             .location = locationFromInstruction(instruction),
-        };
+        } };
         place.projection_count += 1;
         return true;
     }
@@ -534,10 +618,21 @@ fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, pl
     }
     place.root_name = root_name;
     place.root_ty = instruction.result_ty;
-    if (place.root_ty != .struct_) return false;
+    place.root_type_fact = fact;
+    if (place.root_ty != .struct_ and place.root_ty != .array) return false;
     place.root_location = locationFromInstruction(instruction);
     root_set.* = true;
     return true;
+}
+
+fn placeInstructionAtSpan(block: mir.Block, span_id: mir.SpanId) ?mir.Instruction {
+    var matched: ?mir.Instruction = null;
+    for (block.instructions) |instruction| {
+        if ((instruction.kind != .expr and instruction.kind != .index) or !instruction.typed_span_id.eql(span_id)) continue;
+        if (matched != null) return null;
+        matched = instruction;
+    }
+    return matched;
 }
 
 fn localInstruction(function: mir.Function, name: []const u8) ?mir.Instruction {

@@ -118,6 +118,51 @@ test "CheckedProgram is a syntax-free callable and body table" {
     try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(&module_mir));
 }
 
+test "MIR statement plan owns fixed-array constant index and bounds trap" {
+    const source =
+        \\fn take_row(row: [2]u32) -> u32 {
+        \\    return row[1];
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "take_row") orelse return error.TestUnexpectedResult;
+    const plan = mir_statement_plan.buildSingleBlockPlaceReturn(function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), plan.returned.projection_count);
+    switch (plan.returned.projections[0]) {
+        .constant_index => |index| {
+            try std.testing.expectEqual(@as(usize, 1), index.index);
+            try std.testing.expectEqual(@as(usize, 2), index.bound);
+            try std.testing.expect(index.checked);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const mutable_function = functionByNameMut(&module_mir, "take_row") orelse return error.TestUnexpectedResult;
+    var mutated = false;
+    for (mutable_function.blocks) |*block| for (block.instructions) |*instruction| {
+        if (instruction.kind != .index) continue;
+        instruction.constant_index_value = 0;
+        mutated = true;
+        break;
+    };
+    try std.testing.expect(mutated);
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
 test "MIR verifier rejects per-file source identity drift" {
     // DIAGNOSTIC_UNIT: E_MIR_SOURCE_ID
     const source = "fn main() -> u32 { return 1; }\n";

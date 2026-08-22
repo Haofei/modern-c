@@ -1355,6 +1355,40 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     try expectContains(read_parameter, "return copy.pair.left;");
 }
 
+test "lower-c emits fixed-array constant-index places from MIR without body fallback" {
+    const source =
+        \\global values: [2]u32 = .{ 10, 20 };
+        \\fn take_row(row: [2]u32) -> u32 {
+        \\    return row[1];
+        \\}
+        \\fn read_global_array() -> u32 {
+        \\    return values[1];
+        \\}
+        \\fn write_global_array(value: u32) -> u32 {
+        \\    values[0] = value;
+        \\    return values[0];
+        \\}
+        \\fn local_array_copy(row: [2]u32) -> u32 {
+        \\    let copy: [2]u32 = row;
+        \\    return copy[0];
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_place_return.mc", source, &output);
+
+    const take = try cFunctionBody(output.items, "static uint32_t take_row(mc_array_u32_2 row)");
+    try expectContains(take, "return row.elems[mc_check_index_usize(1, 2)];");
+    const read = try cFunctionBody(output.items, "static uint32_t read_global_array(void)");
+    try expectContains(read, "mc_race_load_u32(&values.elems[mc_check_index_usize(1, 2)])");
+    const write = try cFunctionBody(output.items, "static uint32_t write_global_array(uint32_t value)");
+    try expectContains(write, "mc_race_store_u32(&values.elems[mc_check_index_usize(0, 2)], (uint32_t)mc_tmp0);");
+    try expectContains(write, "mc_race_load_u32(&values.elems[mc_check_index_usize(0, 2)])");
+    const local = try cFunctionBody(output.items, "static uint32_t local_array_copy(mc_array_u32_2 row)");
+    try expectContains(local, "mc_array_u32_2 copy = row;");
+    try expectContains(local, "return copy.elems[mc_check_index_usize(0, 2)];");
+}
+
 test "lower-c emits conditional struct parameter field returns from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }

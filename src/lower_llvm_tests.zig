@@ -2105,6 +2105,43 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectNotContains(read_parameter, "alloca");
 }
 
+test "LLVM emits fixed-array constant-index places from MIR without body fallback" {
+    const source =
+        \\global values: [2]u32 = .{ 10, 20 };
+        \\fn take_row(row: [2]u32) -> u32 {
+        \\    return row[1];
+        \\}
+        \\fn read_global_array() -> u32 {
+        \\    return values[1];
+        \\}
+        \\fn write_global_array(value: u32) -> u32 {
+        \\    values[0] = value;
+        \\    return values[0];
+        \\}
+        \\fn local_array_copy(row: [2]u32) -> u32 {
+        \\    let copy: [2]u32 = row;
+        \\    return copy[0];
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_place_return.mc", source, &output);
+
+    const take = try llvmFunctionBody(output.items, "define internal i32 @take_row");
+    try expectContains(take, "icmp ult i64 1, 2");
+    try expectContains(take, "extractvalue [2 x i32] %row, 1");
+    const read = try llvmFunctionBody(output.items, "define internal i32 @read_global_array");
+    try expectContains(read, "icmp ult i64 1, 2");
+    try expectContains(read, "getelementptr [2 x i32], ptr @values, i64 0, i64 1");
+    try expectContains(read, "load atomic i32");
+    const write = try llvmFunctionBody(output.items, "define internal i32 @write_global_array");
+    try expectContains(write, "getelementptr [2 x i32], ptr @values, i64 0, i64 0");
+    try expectContains(write, "store atomic i32 %value");
+    const local = try llvmFunctionBody(output.items, "define internal i32 @local_array_copy");
+    try expectContains(local, "extractvalue [2 x i32] %row, 0");
+    try expectNotContains(local, "alloca");
+}
+
 test "LLVM emits conditional struct parameter field returns from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }
