@@ -11,8 +11,12 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
   admitted by `VerifiedProgram`; it owns callable identity, signature shape,
-  ABI and closed effect flags. This is deliberately not a full Typed HIR:
-  executable function bodies remain canonical MIR.
+  ABI and closed effect flags. The redundant `CheckedSyntaxModule` wrapper has
+  been deleted; sema now returns the existing parsed syntax owner rather than
+  naming an AST slice "checked". The remaining directionality issue is that
+  `CheckedProgram.init` still validates facts already produced with MIR instead
+  of being the pre-MIR semantic input. This is deliberately not a full Typed
+  HIR: executable function bodies remain canonical MIR.
 - **P1 `real-module-graph`** — frozen. `module_graph.zig` / `module_parser.zig`
   exist and `ir_inspection.zig` consumes a `ResolvedSourceDatabase`, but the main
   sema→MIR→codegen pipeline still uses the combined-source text. Cutover undone.

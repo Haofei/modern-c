@@ -52,13 +52,8 @@
       ],
       "current_evidence": [
         {
-          "file": "src/compiler_session.zig",
-          "needle": "pub const CheckedSyntaxModule = struct",
-          "expected_count_while_incomplete": 1
-        },
-        {
-          "file": "src/compiler_session.zig",
-          "needle": "pub const CheckedSyntaxModule = struct {\n    decls_slice: []ast.Decl",
+          "file": "src/checked_program.zig",
+          "needle": "pub fn init(module: *const mir.Module) !CheckedProgram",
           "expected_count_while_incomplete": 1
         }
       ]
@@ -81,7 +76,7 @@
         },
         {
           "file": "src/compiler_session.zig",
-          "needle": "decls_slice: []ast.Decl",
+          "needle": "pub const ParsedModule = struct",
           "expected_min_count_while_incomplete": 1
         }
       ]
