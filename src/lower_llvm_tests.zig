@@ -13594,6 +13594,21 @@ test "LLVM pointer-member scalar access lowers race-tolerantly" {
     try expectNotContains(local_body, " atomic ");
 }
 
+test "LLVM checked pointer-root field store does not use function body fallback" {
+    const source =
+        \\struct Env { value: u32 }
+        \\fn store_value(env: *mut Env, value: u32) -> void {
+        \\    env.value = value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_root_store.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal void @store_value");
+    try expectContains(body, "getelementptr { i32 }, ptr %env, i64 0, i32 0");
+    try expectContains(body, "store atomic i32 %value, ptr %");
+}
+
 test "LLVM pointer-member aggregate value copies lower recursively" {
     const source =
         \\struct Inner {

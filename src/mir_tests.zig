@@ -4099,6 +4099,30 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
+test "MIR plans a checked pointer-root field store" {
+    const source =
+        \\struct Env { value: u32 }
+        \\fn store_value(env: *mut Env, value: u32) -> void {
+        \\    env.value = value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_pointer_root_store.mc", source);
+    defer parsed.deinit();
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "store_value") orelse return error.TestUnexpectedResult;
+    const plan = mir_statement_plan.buildSingleBlockPlaceStore(function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir_statement_plan.PlaceRootKind.parameter, plan.target.root_kind);
+    try std.testing.expect(plan.target.root_indirect);
+    try std.testing.expectEqualStrings("env", plan.target.root_name);
+    try std.testing.expectEqual(@as(usize, 1), plan.target.projection_count);
+    switch (plan.value) {
+        .parameter => |parameter| try std.testing.expectEqualStrings("value", parameter.name),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "MIR plans pure logical returns from typed operand identities" {
     // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
     const source =

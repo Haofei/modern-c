@@ -224,6 +224,11 @@ pub const PlaceProjection = union(enum) {
 
 pub const Place = struct {
     root_kind: PlaceRootKind = undefined,
+    /// The source place begins at the pointee of a checked single pointer
+    /// parameter (`p.field`).  MIR records the implicit dereference through a
+    /// typed-load/representation edge at the root SpanId; backends must use the
+    /// pointee type and pointer-style access for the first projection.
+    root_indirect: bool = false,
     root_id: mir.ValueId = .invalid,
     root_name: []const u8 = "",
     root_ty: mir.ValueType = .unknown,
@@ -1917,6 +1922,49 @@ pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
     return result;
 }
 
+/// Admit one void store through a checked pointer-root field place.  The
+/// pointer dereference and field index are MIR identities, and the sole
+/// InvalidRepresentation edge belongs to the pointer root.  This is the
+/// statement counterpart of the pointer-root indirect-call plan.
+pub fn buildSingleBlockPlaceStore(function: mir.Function) ?PlaceStore {
+    if (function.return_ty != .void or function.blocks.len != 2 or
+        function.pointer_provenance_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const block = function.blocks[0];
+    if (block.terminator != .fallthrough) return null;
+    var assignment: ?mir.Instruction = null;
+    var expression_count: usize = 0;
+    for (block.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .typed_load, .representation_check => {},
+        .expr => expression_count += 1,
+        .assign => {
+            if (assignment != null or !instruction.typed_target_operand_span_id.isValid() or
+                !instruction.typed_value_operand_span_id.isValid()) return null;
+            assignment = instruction;
+        },
+        else => return null,
+    };
+    const store_instruction = assignment orelse return null;
+    const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
+    if (!target.root_indirect or target.root_kind != .parameter or target.projection_count == 0 or
+        !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
+    const value = buildPlaceStoreValue(function, block, store_instruction.typed_value_operand_span_id) orelse return null;
+    switch (value) {
+        .parameter => {},
+        else => return null,
+    }
+    if (!sameRepresentationType(value.resultType(), target.resultType()) or
+        expression_count != target.projection_count + 1 + value.expressionCount() or
+        !placeRootRepresentationMatches(function, target)) return null;
+    return .{
+        .target = target,
+        .value = value,
+        .location = locationFromInstruction(store_instruction),
+    };
+}
+
 fn buildPlaceStoreValue(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?PlaceStoreValue {
     const instruction = expressionAtSpan(block, span_id) orelse return null;
     if (instruction.typed_value_id) |value_id| {
@@ -2047,6 +2095,41 @@ fn placeHasAggregateIntermediates(place: Place) bool {
         if (ty != .struct_ and ty != .array) return false;
     }
     return true;
+}
+
+fn placeRootRepresentationMatches(function: mir.Function, place: Place) bool {
+    if (!place.root_indirect) return function.representation_facts.len == 0;
+    if (!place.root_location.span_id.isValid() or !place.root_id.isValid() or
+        function.representation_facts.len != 2 or function.trap_edges.len != 1 or
+        function.bounds_facts.len != 0 or function.blocks.len != 2) return false;
+    const entry = function.blocks[0];
+    const trap = function.blocks[1];
+    if (entry.successors.len != 1 or entry.successors[0] != trap.id or trap.instructions.len != 0 or
+        trap.successors.len != 0) return false;
+    switch (trap.terminator) {
+        .trap_ => |kind| if (kind != .InvalidRepresentation) return false,
+        else => return false,
+    }
+    const edge = function.trap_edges[0];
+    if (edge.from_block != entry.id or edge.trap_block != trap.id or
+        edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+        !edge.typed_span_id.eql(place.root_location.span_id)) return false;
+
+    var saw_load = false;
+    var saw_check = false;
+    for (function.representation_facts) |fact| {
+        if (!fact.typed_span_id.eql(place.root_location.span_id) or
+            !fact.typed_value_id.eql(place.root_id) or
+            !sameRepresentationType(fact.result_ty, place.root_ty)) return false;
+        if (fact.kind == .typed_load and std.mem.eql(u8, fact.detail, place.root_name)) {
+            if (saw_load) return false;
+            saw_load = true;
+        } else if (fact.kind == .representation_check and std.mem.eql(u8, fact.detail, "nonnull_pointer")) {
+            if (saw_check) return false;
+            saw_check = true;
+        } else return false;
+    }
+    return saw_load and saw_check;
 }
 
 fn placeBoundsTrapsMatch(function: mir.Function, plan: PlaceReturnPlan) bool {
@@ -2570,7 +2653,7 @@ pub fn buildSingleBlockLogicalReturn(function: mir.Function) ?LogicalReturnPlan 
 /// a global function-pointer object, or one field of a global struct object.
 pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallReturnPlan {
     if (function.return_ty == .void or function.blocks.len == 0) return null;
-    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.pointer_provenance_facts.len != 0) return null;
     if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
     for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
 
@@ -2580,7 +2663,7 @@ pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallR
     var call_instruction: ?mir.Instruction = null;
     var return_instruction: ?mir.Instruction = null;
     for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .local, .target_type, .expr, .cmp_bounds, .index, .integer_literal_conversion => {},
+        .param, .local, .target_type, .expr, .cmp_bounds, .index, .integer_literal_conversion, .typed_load, .representation_check => {},
         .indirect_call => {
             if (call_instruction != null) return null;
             call_instruction = instruction;
@@ -2619,15 +2702,19 @@ pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallR
     plan.callee = indirectCalleePlan(function, call, callee_fact) orelse return null;
     switch (plan.callee) {
         .projected_place => |place| {
-            if (place.root_kind != .global or place.projection_count == 0 or
+            if ((place.root_kind != .global and !place.root_indirect) or place.projection_count == 0 or
                 place.resultType() != .value or !placeHasAggregateIntermediates(place)) return null;
             var indexes: [max_place_projections]CheckedIndexIdentity = undefined;
             var index_count: usize = 0;
             appendCheckedIndexLocations(place, &indexes, &index_count) orelse return null;
-            if (!boundsTrapLocationsMatch(function, indexes[0..index_count])) return null;
+            if (place.root_indirect) {
+                if (index_count != 0 or !placeRootRepresentationMatches(function, place)) return null;
+            } else if (!boundsTrapLocationsMatch(function, indexes[0..index_count]) or
+                !placeRootRepresentationMatches(function, place)) return null;
         },
         else => if (function.blocks.len != 1 or block.successors.len != 0 or
-            function.trap_edges.len != 0 or function.bounds_facts.len != 0) return null,
+            function.trap_edges.len != 0 or function.bounds_facts.len != 0 or
+            function.representation_facts.len != 0) return null,
     }
     return plan;
 }
@@ -2835,7 +2922,15 @@ fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, pl
     place.root_id = root_id;
     place.root_ty = instruction.result_ty;
     place.root_type_fact = fact;
-    if (place.root_ty != .struct_ and place.root_ty != .array) return false;
+    if (place.root_ty != .struct_ and place.root_ty != .array) {
+        const pointer_shape = switch (place.root_ty) {
+            .pointer => |shape| shape,
+            else => return false,
+        };
+        if (place.root_kind != .parameter or pointer_shape.kind != .single or
+            std.meta.activeTag(fact.target_ty.kind) != .pointer) return false;
+        place.root_indirect = true;
+    }
     place.root_location = locationFromInstruction(instruction);
     root_set.* = true;
     return true;

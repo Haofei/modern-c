@@ -12491,6 +12491,20 @@ test "lower-c pointer member scalar access lowers race-tolerantly" {
     try expectContains(call_load_body, "return ((uint32_t)mc_race_load_u32(&(external_pair()->value)));");
 }
 
+test "lower-c checked pointer-root field store does not use function body fallback" {
+    const source =
+        \\struct Env { value: u32 }
+        \\fn store_value(env: *mut Env, value: u32) -> void {
+        \\    env.value = value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_root_store.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static void store_value(Env * env, uint32_t value)");
+    try expectContains(body, "mc_race_store_u32(&(env->value), (uint32_t)mc_tmp");
+}
+
 test "lower-c nested pointer member scalar access lowers race-tolerantly" {
     const source =
         \\struct Inner {
