@@ -277,6 +277,7 @@ pub const Instruction = struct {
         assert_condition,
         asm_effect,
         defer_cleanup,
+        control_transfer,
         return_value,
     };
 };

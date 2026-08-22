@@ -287,6 +287,18 @@ pub const SequenceForEachReturnPlan = struct {
     }
 };
 
+pub const WhileControlPlan = struct {
+    pub const Control = enum { break_, continue_ };
+
+    condition_name: []const u8,
+    condition_id: mir.ValueId,
+    condition_fact: mir.TargetTypeFact,
+    loop_location: Location,
+    condition_location: Location,
+    control: Control,
+    control_location: Location,
+};
+
 pub const AggregateValueNode = struct {
     type_fact: mir.TargetTypeFact,
     location: Location,
@@ -383,6 +395,72 @@ pub const IntegerLiteralValue = struct {
     type_fact: mir.TargetTypeFact,
     location: Location,
 };
+
+/// Admit the complete CFG for a parameter-controlled `while` whose body is a
+/// single `break` or `continue`. MIR owns the condition identity, both branch
+/// edges, and the source-bearing control transfer; backends only encode it.
+pub fn buildWhileControl(function: mir.Function) ?WhileControlPlan {
+    if (function.return_ty != .void or function.blocks.len != 3 or
+        function.trap_edges.len != 0 or function.bounds_facts.len != 0 or
+        function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    if (entry.terminator != .branch or entry.successors.len != 2) return null;
+    const branch = entry.terminator.branch;
+    if (branch.true_block >= function.blocks.len or branch.false_block >= function.blocks.len or
+        entry.successors[0] != branch.true_block or entry.successors[1] != branch.false_block) return null;
+    const body = function.blocks[branch.true_block];
+    const after = function.blocks[branch.false_block];
+    if (!std.mem.eql(u8, body.kind, "loop_body") or body.terminator != .jump or body.successors.len != 1 or
+        !std.mem.eql(u8, after.kind, "loop_after") or after.terminator != .fallthrough or
+        after.successors.len != 0 or after.instructions.len != 0) return null;
+
+    var loop_marker: ?mir.Instruction = null;
+    var condition_expression: ?mir.Instruction = null;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type => {},
+        .binary => {
+            if (loop_marker != null or !std.mem.eql(u8, instruction.detail, "while")) return null;
+            loop_marker = instruction;
+        },
+        .expr => {
+            if (condition_expression != null or instruction.result_ty != .bool) return null;
+            condition_expression = instruction;
+        },
+        else => return null,
+    };
+    const marker = loop_marker orelse return null;
+    const condition = condition_expression orelse return null;
+    const condition_id = condition.typed_value_id orelse return null;
+    const condition_name = valueIdentityName(function, condition_id) orelse return null;
+    const condition_parameter_ty = parameterType(function, condition_name) orelse return null;
+    if (condition_parameter_ty != .bool) return null;
+    if (!condition.typed_span_id.isValid()) return null;
+    const condition_fact = targetFactBySpan(function, .loop_condition, condition.typed_span_id) orelse return null;
+    if (condition_fact.result_ty != .bool or !std.mem.eql(u8, type_syntax.typeName(condition_fact.target_ty) orelse return null, "bool")) return null;
+
+    if (body.instructions.len != 1 or body.instructions[0].kind != .control_transfer) return null;
+    const control_instruction = body.instructions[0];
+    const control: WhileControlPlan.Control = if (std.mem.eql(u8, control_instruction.detail, "break")) blk: {
+        if (body.terminator.jump != branch.false_block or body.successors[0] != branch.false_block) return null;
+        break :blk .break_;
+    } else if (std.mem.eql(u8, control_instruction.detail, "continue")) blk: {
+        if (body.terminator.jump != entry.id or body.successors[0] != entry.id) return null;
+        break :blk .continue_;
+    } else return null;
+
+    return .{
+        .condition_name = condition_name,
+        .condition_id = condition_id,
+        .condition_fact = condition_fact,
+        .loop_location = locationFromInstruction(marker),
+        .condition_location = locationFromInstruction(condition),
+        .control = control,
+        .control_location = locationFromInstruction(control_instruction),
+    };
+}
 
 /// Admit an exhaustive scalar switch whose subject is one parameter and whose
 /// arms return non-negative integer literals. The arm patterns are normalized

@@ -325,6 +325,25 @@ test "LLVM returns first fixed-array element from MIR CFG without body fallback"
     try expectContains(slice_call, "getelementptr i32");
 }
 
+test "LLVM emits break and continue while CFG from MIR without body fallback" {
+    const source =
+        \\fn stop(flag: bool) -> void { while flag { break; } }
+        \\fn repeat(flag: bool) -> void { while flag { continue; } }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_while_control.mc", source, &output);
+
+    const stop = try llvmFunctionBody(output.items, "define internal void @stop");
+    try expectContains(stop, "br i1 %flag");
+    try expectContains(stop, "while_body");
+    try expectContains(stop, "while_after");
+    const repeat = try llvmFunctionBody(output.items, "define internal void @repeat");
+    try expectContains(repeat, "br i1 %flag");
+    try expectContains(repeat, "while_cond");
+    try expectContains(repeat, "while_after");
+}
+
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
         \\struct Flags { first: bool, second: bool }

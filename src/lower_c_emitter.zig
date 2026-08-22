@@ -1598,7 +1598,14 @@ pub const CEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
-        const sequence_foreach_return_plan = if (simple_trap == null and simple_assert == null)
+        const while_control_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
+                if (self.mirWhileControlPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const sequence_foreach_return_plan = if (while_control_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildSequenceForEachReturn(fn_mir)) |plan|
                 if (self.mirSequenceForEachReturnPlanSupported(function, plan)) plan else null
             else
@@ -1669,7 +1676,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and while_control_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1690,6 +1697,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "if (!(");
             try self.emitSimpleMirCondition(assert_body.condition);
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        } else if (while_control_plan) |plan| {
+            try self.emitMirWhileControlPlan(plan);
         } else if (sequence_foreach_return_plan) |plan| {
             try self.emitMirSequenceForEachReturnPlan(plan);
         } else if (direct_call_projected_return_plan) |plan| {
@@ -4024,6 +4033,30 @@ pub const CEmitter = struct {
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(plan.fallback.type_fact.target_ty), self.resolveAliasType(child_ty))) return false;
         const declared_return = function.signature.transitionalReturnType() orelse return false;
         return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(child_ty));
+    }
+
+    fn mirWhileControlPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.WhileControlPlan) bool {
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, plan.condition_name)) continue;
+            return type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.condition_fact.target_ty));
+        }
+        return false;
+    }
+
+    fn emitMirWhileControlPlan(self: *CEmitter, plan: mir_statement_plan.WhileControlPlan) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.loop_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "while ({s}) {{\n", .{try self.cIdent(plan.condition_name)});
+        self.indent += 1;
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.control_location.source));
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, switch (plan.control) {
+            .break_ => "break;\n",
+            .continue_ => "continue;\n",
+        });
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
     }
 
     fn emitMirSequenceForEachReturnPlan(self: *CEmitter, plan: mir_statement_plan.SequenceForEachReturnPlan) !void {

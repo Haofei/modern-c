@@ -1075,6 +1075,37 @@ test "MIR sequence foreach return owns iterable evaluation binding representatio
     try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(field_function.*) == null);
 }
 
+test "MIR while control plan owns break and continue CFG edges" {
+    const source =
+        \\fn stop(flag: bool) -> void {
+        \\    while flag { break; }
+        \\}
+        \\fn repeat(flag: bool) -> void {
+        \\    while flag { continue; }
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_while_control.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const stop = mir_statement_plan.buildWhileControl(functionByName(module_mir, "stop").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.break_, stop.control);
+    try std.testing.expectEqualStrings("flag", stop.condition_name);
+    try std.testing.expect(stop.condition_id.isValid());
+    try std.testing.expect(stop.control_location.span_id.isValid());
+
+    const repeat = mir_statement_plan.buildWhileControl(functionByName(module_mir, "repeat").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.continue_, repeat.control);
+    try std.testing.expect(repeat.control_location.span_id.isValid());
+
+    var corrupted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer corrupted.deinit();
+    const corrupted_stop = functionByNameMut(&corrupted, "stop") orelse return error.TestUnexpectedResult;
+    corrupted_stop.blocks[1].instructions[0].detail = "continue";
+    try std.testing.expect(mir_statement_plan.buildWhileControl(corrupted_stop.*) == null);
+}
+
 test "MIR target-type owner identities mirror direct calls" {
     const source =
         \\fn callee(x: u32) -> u32 {

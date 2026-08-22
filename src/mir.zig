@@ -3207,6 +3207,7 @@ fn instructionRequiresKnownLoweringType(instruction: Instruction) bool {
         .arithmetic_domain_check,
         .operator_check,
         .unsafe_check,
+        .control_transfer,
         => false,
     };
 }
@@ -6581,6 +6582,7 @@ const FunctionBuilder = struct {
                 return true;
             },
             .@"break" => {
+                try self.addInstr(.control_transfer, "break", .void, stmt.span);
                 if (self.break_targets.items.len > 0) {
                     const target = self.break_targets.items[self.break_targets.items.len - 1];
                     try self.addSuccessor(self.current, target);
@@ -6591,6 +6593,7 @@ const FunctionBuilder = struct {
                 return true;
             },
             .@"continue" => {
+                try self.addInstr(.control_transfer, "continue", .void, stmt.span);
                 if (self.continue_targets.items.len > 0) {
                     const target = self.continue_targets.items[self.continue_targets.items.len - 1];
                     try self.addSuccessor(self.current, target);

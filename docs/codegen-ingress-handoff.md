@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the generalized array/slice foreach MIR slice.
+2026-08-22 after the source-bearing while break/continue MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **106/161 C** and **107/161 LLVM**
+  The current strict ratchet corpus admits **108/160 C** and **109/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is

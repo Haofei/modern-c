@@ -6550,6 +6550,23 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
     try expectContains(slice_call, ".ptr[0]");
 }
 
+test "lower-c emits break and continue while CFG from MIR without body fallback" {
+    const source =
+        \\fn stop(flag: bool) -> void { while flag { break; } }
+        \\fn repeat(flag: bool) -> void { while flag { continue; } }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_while_control.mc", source, &output);
+
+    const stop = try cFunctionBody(output.items, "static void stop(bool flag)");
+    try expectContains(stop, "while (flag)");
+    try expectContains(stop, "break;");
+    const repeat = try cFunctionBody(output.items, "static void repeat(bool flag)");
+    try expectContains(repeat, "while (flag)");
+    try expectContains(repeat, "continue;");
+}
+
 test "lower-c nested array member and index results require MIR expression facts" {
     const source =
         \\struct MatrixHolder { rows: [2][2]u32 }
