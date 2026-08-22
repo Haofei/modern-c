@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the projected global function-pointer-table MIR slice.
+2026-08-22 after the nullable-pointer promotion MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **114/160 C** and **115/160 LLVM**
+  The current strict ratchet corpus admits **117/160 C** and **118/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -118,6 +118,15 @@ function body. Pointer traversal and literal-initialized locals remain
 fail-closed until their storage/value semantics are represented by the shared
 plan.
 
+Nullable-pointer promotion is now another shared, identity-driven slice.
+`let maybe: ?*T = p; return maybe`, a null-initialized local reassigned from
+`p`, and a void direct call accepting `?*T` all validate the exact local/callee
+`ValueId`, operand/callee `SpanId`, nullable and non-null type facts, plus the
+single `InvalidRepresentation` edge. Since a typed non-null pointer always
+satisfies the nullable representation, neither backend emits that trap. The
+local forms deliberately retain storage and reassignment instead of folding to
+`return p`, preserving source/debug shape without reopening the AST body.
+
 A bounded local-generation plan now covers `var x: T = uninit; x = aggregate;
 return x` for fixed arrays and homogeneous integer structs. MIR owns the local
 `ValueId`, statement operand edges, literal operand `SpanId`s, and resolved
@@ -222,7 +231,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 114/160 and LLVM 115/160. The exact-root soundness gate
+current strict corpus is C 117/160 and LLVM 118/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

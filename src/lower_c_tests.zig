@@ -2522,6 +2522,49 @@ test "lower-c emits local and assigned scalar returns from MIR without body fall
     try expectNotContains(assigned_bool_body, "mc_tmp");
 }
 
+test "lower-c preserves nullable pointer promotion locals from MIR without body fallback" {
+    const source =
+        \\extern fn consume_nullable(p: ?*mut u8) -> void;
+        \\fn pointer_none() -> ?*mut u8 {
+        \\    return null;
+        \\}
+        \\fn local_promotion(p: *mut u8) -> ?*mut u8 {
+        \\    let maybe: ?*mut u8 = p;
+        \\    return maybe;
+        \\}
+        \\fn call_promotion(p: *mut u8) -> void {
+        \\    consume_nullable(p);
+        \\}
+        \\fn assigned_promotion(p: *mut u8) -> ?*mut u8 {
+        \\    var maybe: ?*mut u8 = null;
+        \\    maybe = p;
+        \\    return maybe;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_pointer_promotions.mc", source, &output);
+
+    const none_body = try cFunctionBody(output.items, "static uint8_t * pointer_none(void)");
+    try expectContains(none_body, "return NULL;");
+    try expectNotContains(none_body, ".present");
+
+    const local_body = try cFunctionBody(output.items, "static uint8_t * local_promotion(uint8_t * p)");
+    try expectContains(local_body, "uint8_t * maybe = p;");
+    try expectContains(local_body, "return maybe;");
+    try expectNotContains(local_body, "mc_trap_InvalidRepresentation");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint8_t * assigned_promotion(uint8_t * p)");
+    try expectContains(assigned_body, "uint8_t * maybe = NULL;");
+    try expectContains(assigned_body, "maybe = p;");
+    try expectContains(assigned_body, "return maybe;");
+    try expectNotContains(assigned_body, "mc_trap_InvalidRepresentation");
+
+    const call_body = try cFunctionBody(output.items, "static void call_promotion(uint8_t * p)");
+    try expectContains(call_body, "consume_nullable(p);");
+    try expectNotContains(call_body, "mc_trap_InvalidRepresentation");
+}
+
 test "lower-c emits nullable none returns from MIR without body fallback" {
     const source =
         \\fn direct_none() -> ?u32 {

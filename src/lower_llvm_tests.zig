@@ -3443,6 +3443,47 @@ test "LLVM emits local and assigned scalar returns from MIR without body fallbac
     try expectNotContains(assigned_bool_body, "store");
 }
 
+test "LLVM preserves nullable pointer promotion locals from MIR without body fallback" {
+    const source =
+        \\extern fn consume_nullable(p: ?*mut u8) -> void;
+        \\fn local_promotion(p: *mut u8) -> ?*mut u8 {
+        \\    let maybe: ?*mut u8 = p;
+        \\    return maybe;
+        \\}
+        \\fn call_promotion(p: *mut u8) -> void {
+        \\    consume_nullable(p);
+        \\}
+        \\fn assigned_promotion(p: *mut u8) -> ?*mut u8 {
+        \\    var maybe: ?*mut u8 = null;
+        \\    maybe = p;
+        \\    return maybe;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_pointer_promotions.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal ptr @local_promotion");
+    try expectContains(local_body, "alloca ptr");
+    try expectContains(local_body, "store ptr %p, ptr");
+    try expectContains(local_body, "load ptr, ptr");
+    try expectContains(local_body, "ret ptr");
+    try expectNotContains(local_body, "mc_trap_InvalidRepresentation");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal ptr @assigned_promotion");
+    try expectContains(assigned_body, "alloca ptr");
+    try expectContains(assigned_body, "store ptr null, ptr");
+    try expectContains(assigned_body, "store ptr %p, ptr");
+    try expectContains(assigned_body, "load ptr, ptr");
+    try expectContains(assigned_body, "ret ptr");
+    try expectNotContains(assigned_body, "mc_trap_InvalidRepresentation");
+
+    const call_body = try llvmFunctionBody(output.items, "define internal void @call_promotion");
+    try expectContains(call_body, "call void @consume_nullable(ptr %p)");
+    try expectContains(call_body, "ret void");
+    try expectNotContains(call_body, "mc_trap_InvalidRepresentation");
+}
+
 test "LLVM emits nullable none returns from MIR without body fallback" {
     const source =
         \\fn direct_none() -> ?u32 {

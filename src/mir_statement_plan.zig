@@ -79,6 +79,41 @@ pub const IndirectCallReturnPlan = struct {
     argument_count: usize = 0,
 };
 
+/// Preserve the observable local-storage shape of a nullable-pointer
+/// promotion.  MIR represents `*T` and `?*T` with the same machine value type,
+/// so this plan also owns the checked target-type edge that distinguishes the
+/// nullable destination from the non-null source.  The representation trap is
+/// intentionally not emitted: a typed non-null pointer already satisfies the
+/// nullable pointer representation.
+pub const NullablePointerLocalReturnPlan = struct {
+    local_name: []const u8,
+    local_id: mir.ValueId,
+    nullable_type_fact: mir.TargetTypeFact,
+    declaration_location: Location,
+    initializer_location: Location,
+    source_name: []const u8,
+    source_id: mir.ValueId,
+    source_type_fact: mir.TargetTypeFact,
+    assignment_location: ?Location = null,
+    return_location: Location,
+
+    pub fn initializesWithNull(self: NullablePointerLocalReturnPlan) bool {
+        return self.assignment_location != null;
+    }
+};
+
+pub const NullablePointerVoidCallPlan = struct {
+    callee_name: []const u8,
+    callee_id: mir.ValueId,
+    call_result_fact: mir.TargetTypeFact,
+    argument_name: []const u8,
+    argument_id: mir.ValueId,
+    argument_fact: mir.TargetTypeFact,
+    source_type_fact: mir.TargetTypeFact,
+    call_location: Location,
+    argument_location: Location,
+};
+
 pub const LogicalNode = struct {
     location: Location,
     operation: Operation,
@@ -530,6 +565,229 @@ pub fn buildIdentityReturn(function: mir.Function) ?IdentityReturnPlan {
         .value_id = value_id,
         .value_location = locationFromInstruction(value),
         .return_location = locationFromInstruction(returned),
+    };
+}
+
+/// Admit the two straight-line nullable-pointer local forms whose semantics
+/// are fully present in checked MIR:
+///
+///     let maybe: ?*T = p; return maybe;
+///     var maybe: ?*T = null; maybe = p; return maybe;
+///
+/// This deliberately keeps the local declaration/reassignment instead of
+/// folding the return to `p`, so debug/source-map shape remains backend
+/// independent.  All identity comparisons use ValueId/SpanId; source
+/// line/column arithmetic is not part of admission.
+pub fn buildNullablePointerLocalReturn(function: mir.Function) ?NullablePointerLocalReturnPlan {
+    const return_pointer_shape = switch (function.return_ty) {
+        .nullable_pointer => |shape| shape,
+        else => return null,
+    };
+    if (function.blocks.len != 2 or function.trap_edges.len != 1 or
+        function.bounds_facts.len != 0 or function.representation_facts.len != 2) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    const trap = function.blocks[1];
+    if (entry.terminator != .return_ or entry.successors.len != 1 or entry.successors[0] != trap.id or trap.instructions.len != 0) return null;
+    switch (trap.terminator) {
+        .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
+        else => return null,
+    }
+
+    var local: ?mir.Instruction = null;
+    var assignment: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .typed_load, .representation_check, .expr => {},
+        .local => {
+            if (local != null) return null;
+            local = instruction;
+        },
+        .assign => {
+            if (assignment != null) return null;
+            assignment = instruction;
+        },
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+
+    const local_instruction = local orelse return null;
+    const local_id = local_instruction.typed_value_id orelse return null;
+    if (!local_id.isValid() or !local_instruction.typed_value_operand_span_id.isValid() or
+        !sameRepresentationType(local_instruction.result_ty, function.return_ty)) return null;
+    const local_name = valueIdentityName(function, local_id) orelse return null;
+    if (!std.mem.eql(u8, local_name, local_instruction.detail)) return null;
+
+    const return_instruction = returned orelse return null;
+    if (!return_instruction.typed_value_operand_span_id.isValid() or
+        !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
+    const returned_expr = expressionAtSpan(entry, return_instruction.typed_value_operand_span_id) orelse return null;
+    const returned_id = returned_expr.typed_value_id orelse return null;
+    if (!returned_id.eql(local_id) or !std.mem.eql(u8, returned_expr.detail, local_name)) return null;
+    const nullable_fact = targetFactBySpan(function, .expression_result, returned_expr.typed_span_id) orelse return null;
+    const nullable_child = switch (nullable_fact.target_ty.kind) {
+        .nullable => |child| child.*,
+        else => return null,
+    };
+    if (std.meta.activeTag(nullable_child.kind) != .pointer or
+        !sameRepresentationType(nullable_fact.result_ty, function.return_ty)) return null;
+
+    var source_span_id: mir.SpanId = .invalid;
+    var assignment_location: ?Location = null;
+    if (assignment) |store| {
+        if (!store.typed_target_operand_span_id.isValid() or !store.typed_value_operand_span_id.isValid()) return null;
+        const target = expressionAtSpan(entry, store.typed_target_operand_span_id) orelse return null;
+        const target_id = target.typed_value_id orelse return null;
+        if (!target_id.eql(local_id) or !std.mem.eql(u8, target.detail, local_name)) return null;
+        const target_fact = targetFactBySpan(function, .expression_result, target.typed_span_id) orelse return null;
+        if (!type_syntax.sameTypeSyntax(target_fact.target_ty, nullable_fact.target_ty)) return null;
+
+        const initializer = expressionAtSpan(entry, local_instruction.typed_value_operand_span_id) orelse return null;
+        if (!std.mem.eql(u8, initializer.detail, "null") or initializer.typed_value_id != null) return null;
+        const null_fact = targetFactBySpan(function, .null_literal, initializer.typed_span_id) orelse return null;
+        if (!type_syntax.sameTypeSyntax(null_fact.target_ty, nullable_fact.target_ty)) return null;
+
+        if (function.pointer_provenance_facts.len != 1) return null;
+        const provenance = function.pointer_provenance_facts[0];
+        if (!std.mem.eql(u8, provenance.subject, local_name) or provenance.field_path != null or
+            provenance.element_index != null or provenance.storage != null or provenance.provenance != .unknown or
+            provenance.invalidation_reason != .reassignment or
+            provenance.invalidation_policy != .invalidate_on_mutation_escape_or_call) return null;
+
+        source_span_id = store.typed_value_operand_span_id;
+        assignment_location = locationFromInstruction(store);
+    } else {
+        if (function.pointer_provenance_facts.len != 0) return null;
+        source_span_id = local_instruction.typed_value_operand_span_id;
+    }
+
+    const source_expr = expressionAtSpan(entry, source_span_id) orelse return null;
+    const source_id = source_expr.typed_value_id orelse return null;
+    const source_name = valueIdentityName(function, source_id) orelse return null;
+    const source_parameter_ty = parameterType(function, source_name) orelse return null;
+    const source_parameter_shape = switch (source_parameter_ty) {
+        .pointer => |shape| shape,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, source_expr.detail, source_name) or !samePointerShape(source_parameter_shape, return_pointer_shape)) return null;
+    const source_fact = targetFactBySpan(function, .expression_result, source_span_id) orelse return null;
+    const source_fact_shape = switch (source_fact.result_ty) {
+        .pointer => |shape| shape,
+        else => return null,
+    };
+    if (std.meta.activeTag(source_fact.target_ty.kind) != .pointer or !samePointerShape(source_fact_shape, return_pointer_shape) or
+        !type_syntax.sameTypeSyntax(source_fact.target_ty, nullable_child) or
+        !sameRepresentationType(source_fact.result_ty, source_parameter_ty)) return null;
+    if (!validateNonnullRepresentationPromotion(function, entry, source_span_id, source_id, source_fact.result_ty)) return null;
+
+    const expected_target_facts: usize = if (assignment != null) 4 else 2;
+    if (function.target_type_facts.len != expected_target_facts) return null;
+
+    return .{
+        .local_name = local_name,
+        .local_id = local_id,
+        .nullable_type_fact = nullable_fact,
+        .declaration_location = locationFromInstruction(local_instruction),
+        .initializer_location = locationFromInstruction(expressionAtSpan(entry, local_instruction.typed_value_operand_span_id) orelse return null),
+        .source_name = source_name,
+        .source_id = source_id,
+        .source_type_fact = source_fact,
+        .assignment_location = assignment_location,
+        .return_location = locationFromInstruction(return_instruction),
+    };
+}
+
+/// Admit one void direct call whose nullable-pointer parameter is supplied by
+/// a non-null pointer parameter. The only trap edge is the statically satisfied
+/// representation check; call and argument identity are joined by the exact
+/// callee SpanId recorded in MIR.
+pub fn buildNullablePointerVoidCall(function: mir.Function) ?NullablePointerVoidCallPlan {
+    if (function.return_ty != .void or function.blocks.len != 2 or function.trap_edges.len != 1 or
+        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
+        function.representation_facts.len != 2 or function.target_type_facts.len != 4) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    const trap = function.blocks[1];
+    if (entry.terminator != .fallthrough or entry.successors.len != 1 or entry.successors[0] != trap.id or trap.instructions.len != 0) return null;
+    switch (trap.terminator) {
+        .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
+        else => return null,
+    }
+
+    var call_instruction: ?mir.Instruction = null;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .typed_load, .representation_check, .expr => {},
+        .call => {
+            if (call_instruction != null) return null;
+            call_instruction = instruction;
+        },
+        else => return null,
+    };
+    const call = call_instruction orelse return null;
+    const callee_id = call.typed_value_id orelse return null;
+    if (!callee_id.isValid() or !call.typed_callee_span_id.isValid() or call.result_ty != .void) return null;
+    const callee_name = valueIdentityName(function, callee_id) orelse return null;
+    if (!std.mem.eql(u8, call.detail, callee_name)) return null;
+    const call_result_fact = targetFactBySpan(function, .direct_call_result, call.typed_callee_span_id) orelse return null;
+    if (call_result_fact.result_ty != .void or !typeNameIsVoid(call_result_fact.target_ty) or
+        !std.mem.eql(u8, call_result_fact.target_owner orelse "", callee_name) or
+        !call_result_fact.typed_target_owner_id.isValid()) return null;
+
+    var argument_fact: ?mir.TargetTypeFact = null;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .direct_call_argument or !fact.typed_callee_span_id.eql(call.typed_callee_span_id)) continue;
+        if (argument_fact != null or fact.target_index != 0 or
+            !std.mem.eql(u8, fact.target_owner orelse "", callee_name) or
+            !fact.typed_target_owner_id.eql(call_result_fact.typed_target_owner_id)) return null;
+        argument_fact = fact;
+    }
+    const argument = argument_fact orelse return null;
+    const nullable_child = switch (argument.target_ty.kind) {
+        .nullable => |child| child.*,
+        else => return null,
+    };
+    if (std.meta.activeTag(nullable_child.kind) != .pointer or !argument.typed_span_id.isValid() or
+        !argument.typed_operand_value_id.isValid()) return null;
+    const argument_expr = expressionAtSpan(entry, argument.typed_span_id) orelse return null;
+    const argument_id = argument_expr.typed_value_id orelse return null;
+    if (!argument_id.eql(argument.typed_operand_value_id)) return null;
+    const argument_name = valueIdentityName(function, argument_id) orelse return null;
+    const parameter_ty = parameterType(function, argument_name) orelse return null;
+    const parameter_shape = switch (parameter_ty) {
+        .pointer => |shape| shape,
+        else => return null,
+    };
+    const argument_shape = switch (argument.result_ty) {
+        .nullable_pointer => |shape| shape,
+        else => return null,
+    };
+    if (!samePointerShape(parameter_shape, argument_shape) or !std.mem.eql(u8, argument_expr.detail, argument_name)) return null;
+    const source_fact = targetFactBySpan(function, .expression_result, argument.typed_span_id) orelse return null;
+    const source_shape = switch (source_fact.result_ty) {
+        .pointer => |shape| shape,
+        else => return null,
+    };
+    if (!type_syntax.sameTypeSyntax(source_fact.target_ty, nullable_child) or
+        !samePointerShape(source_shape, argument_shape) or !sameRepresentationType(source_fact.result_ty, parameter_ty)) return null;
+    if (!validateNonnullRepresentationPromotion(function, entry, argument.typed_span_id, argument_id, source_fact.result_ty)) return null;
+
+    return .{
+        .callee_name = callee_name,
+        .callee_id = callee_id,
+        .call_result_fact = call_result_fact,
+        .argument_name = argument_name,
+        .argument_id = argument_id,
+        .argument_fact = argument,
+        .source_type_fact = source_fact,
+        .call_location = locationFromInstruction(call),
+        .argument_location = locationFromInstruction(argument_expr),
     };
 }
 
@@ -1678,6 +1936,60 @@ fn findForEachRepresentationCheck(
     return true;
 }
 
+fn validateNonnullRepresentationPromotion(
+    function: mir.Function,
+    entry: mir.Block,
+    span_id: mir.SpanId,
+    value_id: mir.ValueId,
+    result_ty: mir.ValueType,
+) bool {
+    var typed_load_count: usize = 0;
+    var check_count: usize = 0;
+    for (entry.instructions) |instruction| {
+        if (!instruction.typed_span_id.eql(span_id)) continue;
+        switch (instruction.kind) {
+            .typed_load => {
+                const instruction_value_id = instruction.typed_value_id orelse return false;
+                if (!instruction_value_id.eql(value_id) or
+                    !sameRepresentationType(instruction.result_ty, result_ty)) return false;
+                typed_load_count += 1;
+            },
+            .representation_check => {
+                const instruction_value_id = instruction.typed_value_id orelse return false;
+                if (!instruction_value_id.eql(value_id) or !std.mem.eql(u8, instruction.detail, "nonnull_pointer") or
+                    !sameRepresentationType(instruction.result_ty, result_ty)) return false;
+                check_count += 1;
+            },
+            else => {},
+        }
+    }
+    if (typed_load_count != 1 or check_count != 1) return false;
+
+    var typed_load_fact_count: usize = 0;
+    var check_fact_count: usize = 0;
+    for (function.representation_facts) |fact| {
+        if (!fact.typed_span_id.eql(span_id) or !fact.typed_value_id.eql(value_id) or
+            !sameRepresentationType(fact.result_ty, result_ty)) return false;
+        switch (fact.kind) {
+            .typed_load => typed_load_fact_count += 1,
+            .representation_check => {
+                if (!std.mem.eql(u8, fact.detail, "nonnull_pointer")) return false;
+                check_fact_count += 1;
+            },
+            else => return false,
+        }
+    }
+    if (typed_load_fact_count != 1 or check_fact_count != 1) return false;
+
+    const edge = function.trap_edges[0];
+    if (edge.from_block != entry.id or edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+        !edge.typed_span_id.eql(span_id) or edge.trap_block >= function.blocks.len) return false;
+    switch (function.blocks[edge.trap_block].terminator) {
+        .trap_ => |kind| return kind == .InvalidRepresentation,
+        else => return false,
+    }
+}
+
 fn appendDirectCallProjection(function: mir.Function, block: mir.Block, call: mir.Instruction, span_id: mir.SpanId, plan: anytype, depth: usize) bool {
     if (!span_id.isValid() or depth > max_place_projections) return false;
 
@@ -2535,6 +2847,11 @@ fn valueIdentityId(function: mir.Function, name: []const u8) ?mir.ValueId {
 fn sameRepresentationType(left: mir.ValueType, right: mir.ValueType) bool {
     return std.meta.activeTag(left) == std.meta.activeTag(right) and
         std.mem.eql(u8, left.name(), right.name());
+}
+
+fn samePointerShape(left: mir.PointerShape, right: mir.PointerShape) bool {
+    return left.kind == right.kind and left.mutability == right.mutability and
+        std.mem.eql(u8, left.child, right.child);
 }
 
 fn typeNameIsVoid(ty: anytype) bool {

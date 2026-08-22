@@ -3981,6 +3981,50 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR plans nullable pointer local promotions with typed identities" {
+    const source =
+        \\extern fn consume_nullable(p: ?*mut u8) -> void;
+        \\fn local_promotion(p: *mut u8) -> ?*mut u8 {
+        \\    let maybe: ?*mut u8 = p;
+        \\    return maybe;
+        \\}
+        \\fn call_promotion(p: *mut u8) -> void {
+        \\    consume_nullable(p);
+        \\}
+        \\fn assigned_promotion(p: *mut u8) -> ?*mut u8 {
+        \\    var maybe: ?*mut u8 = null;
+        \\    maybe = p;
+        \\    return maybe;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_nullable_pointer_promotions.mc", source);
+    defer parsed.deinit();
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer typed_mir.deinit();
+
+    const local_plan = mir_statement_plan.buildNullablePointerLocalReturn(functionByName(typed_mir, "local_promotion").?) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("maybe", local_plan.local_name);
+    try std.testing.expectEqualStrings("p", local_plan.source_name);
+    try std.testing.expect(local_plan.local_id.isValid());
+    try std.testing.expect(local_plan.source_id.isValid());
+    try std.testing.expect(!local_plan.initializesWithNull());
+
+    const assigned_plan = mir_statement_plan.buildNullablePointerLocalReturn(functionByName(typed_mir, "assigned_promotion").?) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("maybe", assigned_plan.local_name);
+    try std.testing.expectEqualStrings("p", assigned_plan.source_name);
+    try std.testing.expect(assigned_plan.initializesWithNull());
+    try std.testing.expect(assigned_plan.assignment_location != null);
+
+    const call_plan = mir_statement_plan.buildNullablePointerVoidCall(functionByName(typed_mir, "call_promotion").?) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("consume_nullable", call_plan.callee_name);
+    try std.testing.expectEqualStrings("p", call_plan.argument_name);
+    try std.testing.expect(call_plan.callee_id.isValid());
+    try std.testing.expect(call_plan.argument_id.isValid());
+}
+
 test "MIR plans typed indirect call arguments and canonical callee roots" {
     const source =
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
