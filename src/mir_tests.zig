@@ -4124,6 +4124,25 @@ test "MIR plans a checked pointer-root field store" {
     }
 }
 
+test "MIR plans a checked pointer-to-integer cast" {
+    const source =
+        \\fn pointer_to_usize(p: *mut u32) -> usize {
+        \\    return p as usize;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_pointer_to_integer.mc", source);
+    defer parsed.deinit();
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "pointer_to_usize") orelse return error.TestUnexpectedResult;
+    const plan = mir_statement_plan.buildPointerToIntegerCast(function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("p", plan.source_name);
+    try std.testing.expect(plan.source_id.isValid());
+    try std.testing.expectEqual(.pointer, std.meta.activeTag(plan.source_fact.result_ty));
+    try std.testing.expectEqual(.integer, std.meta.activeTag(plan.target_fact.result_ty));
+}
+
 test "MIR plans pure logical returns from typed operand identities" {
     // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
     const source =

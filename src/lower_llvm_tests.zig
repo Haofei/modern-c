@@ -13609,6 +13609,19 @@ test "LLVM checked pointer-root field store does not use function body fallback"
     try expectContains(body, "store atomic i32 %value, ptr %");
 }
 
+test "LLVM checked pointer-to-integer cast does not use function body fallback" {
+    const source =
+        \\fn pointer_to_usize(p: *mut u32) -> usize {
+        \\    return p as usize;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_to_integer.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @pointer_to_usize");
+    try expectContains(body, "ptrtoint ptr %p to i64");
+}
+
 test "LLVM pointer-member aggregate value copies lower recursively" {
     const source =
         \\struct Inner {

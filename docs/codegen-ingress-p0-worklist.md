@@ -11,8 +11,8 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits **77.5% of C functions (124/160)** and **78.1% of LLVM functions
-(125/160)**; the rest still ingest the AST body.
+admits **78.1% of C functions (125/160)** and **78.8% of LLVM functions
+(126/160)**; the rest still ingest the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 124 | 36 | 0 | 7750 |
-| LLVM | 160 | 125 | 35 | 0 | 7812 |
+| C | 160 | 125 | 35 | 0 | 7812 |
+| LLVM | 160 | 126 | 34 | 0 | 7875 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -119,6 +119,7 @@ typed-unary operand-descendant bugs before commit.
 | Nullable pointer promotion | `let maybe: ?*T = p; return maybe`, null-init + reassignment, and `consume_nullable(p)`; one shared MIR plan joins `ValueId`, call `SpanId`, exact nullable/non-null type facts and the statically satisfied representation edge, while both backends preserve local storage/order and omit the impossible trap | (current batch) |
 | Nullable pointer try | `return maybe?`, `return make_nullable()?`, direct/void one-argument consumers, and a zero-argument source call; one shared MIR plan joins the `try_operand`, unwrapped value, call argument, representation-use facts, and exact InvalidRepresentation/Unwrap edge pair while both backends evaluate the source exactly once | (current batch) |
 | Checked pointer-root places | indirect calls such as `return op.combine(x,y)` and scalar stores such as `env.value=value`; MIR owns the canonical pointer root, projection, representation check/trap, argument/value identities, and both backends preserve atomic access semantics | (current batch) |
+| Checked pointer-to-integer cast | `return p as usize`; MIR owns source/target type facts, pointer `ValueId`, exact representation edge, and the return edge while C/LLVM only spell the target cast | (current batch) |
 
 ### Remaining families, by tractability
 

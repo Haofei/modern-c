@@ -12505,6 +12505,18 @@ test "lower-c checked pointer-root field store does not use function body fallba
     try expectContains(body, "mc_race_store_u32(&(env->value), (uint32_t)mc_tmp");
 }
 
+test "lower-c checked pointer-to-integer cast does not use function body fallback" {
+    const source =
+        \\fn pointer_to_usize(p: *mut u32) -> usize {
+        \\    return p as usize;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_to_integer.mc", source, &output);
+    try expectContains(output.items, "return ((uintptr_t)p);");
+}
+
 test "lower-c nested pointer member scalar access lowers race-tolerantly" {
     const source =
         \\struct Inner {
