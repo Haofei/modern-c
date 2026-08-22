@@ -1405,6 +1405,45 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     try expectContains(replace, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(1, 2)])");
 }
 
+test "lower-c emits local aggregate projection updates from MIR without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\struct Box { pair: Pair }
+        \\fn assign_field(value: u32) -> u32 {
+        \\    var pair: Pair = .{ .left = 1, .right = 2 };
+        \\    pair.left = value;
+        \\    return pair.left;
+        \\}
+        \\fn assign_nested_array(value: u32) -> u32 {
+        \\    var xs: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
+        \\    xs[0][1] = value;
+        \\    return xs[0][1];
+        \\}
+        \\fn local_nested_struct(value: u32) -> u32 {
+        \\    var box: Box = .{ .pair = .{ .left = 5, .right = 6 } };
+        \\    box.pair.right = value;
+        \\    return box.pair.right;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_projection_updates.mc", source, &output);
+
+    const field_body = try cFunctionBody(output.items, "static uint32_t assign_field(uint32_t value)");
+    try expectContains(field_body, "Pair pair = (Pair){ .left = 1, .right = 2 };");
+    try expectContains(field_body, "pair.left = value;");
+    try expectContains(field_body, "return pair.left;");
+
+    const array_body = try cFunctionBody(output.items, "static uint32_t assign_nested_array(uint32_t value)");
+    try expectContains(array_body, "xs.elems[mc_check_index_usize(0, 2)].elems[mc_check_index_usize(1, 2)] = value;");
+    try expectContains(array_body, "return xs.elems[mc_check_index_usize(0, 2)].elems[mc_check_index_usize(1, 2)];");
+
+    const struct_body = try cFunctionBody(output.items, "static uint32_t local_nested_struct(uint32_t value)");
+    try expectContains(struct_body, "Box box = (Box){ .pair = (Pair){ .left = 5, .right = 6 } };");
+    try expectContains(struct_body, "box.pair.right = value;");
+    try expectContains(struct_body, "return box.pair.right;");
+}
+
 test "lower-c emits conditional struct parameter field returns from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }

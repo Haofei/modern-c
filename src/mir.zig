@@ -1587,8 +1587,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         for (function.trap_edges) |edge| {
             try out.print(
                 allocator,
-                "mir trap_edge fn={s} from={} trap_block={} kind={s} source={s} explicit=true line={} column={}\n",
-                .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), edge.line, edge.column },
+                "mir trap_edge fn={s} from={} trap_block={} kind={s} source={s} explicit=true line={} column={} typed_span_id={}\n",
+                .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), edge.line, edge.column, if (edge.typed_span_id.isValid()) edge.typed_span_id.index() else std.math.maxInt(usize) },
             );
         }
         for (function.representation_facts) |fact| {
@@ -1619,8 +1619,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         for (function.bounds_facts) |fact| {
             try out.print(
                 allocator,
-                "mir bounds_fact fn={s} kind={s} recorded=true line={} column={}\n",
-                .{ function.name, @tagName(fact.kind), fact.source.line, fact.source.column },
+                "mir bounds_fact fn={s} kind={s} recorded=true line={} column={} typed_span_id={}\n",
+                .{ function.name, @tagName(fact.kind), fact.source.line, fact.source.column, if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize) },
             );
         }
         for (function.integer_facts) |fact| {
@@ -8351,7 +8351,11 @@ const FunctionBuilder = struct {
                 } else {
                     try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
-                    try self.bounds_facts.append(self.allocator, .{ .kind = .index, .source = .{ .line = node.index.span.line, .column = node.index.span.column } });
+                    try self.bounds_facts.append(self.allocator, .{
+                        .kind = .index,
+                        .source = sourcePointFromSpan(canonicalOperatorOperand(node.index.*).span),
+                        .typed_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.index.*).span)),
+                    });
                 }
                 const ty = self.exprType(expr);
                 try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
@@ -8395,7 +8399,11 @@ const FunctionBuilder = struct {
                 } else {
                     try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
-                    try self.bounds_facts.append(self.allocator, .{ .kind = .slice, .source = .{ .line = expr.span.line, .column = expr.span.column } });
+                    try self.bounds_facts.append(self.allocator, .{
+                        .kind = .slice,
+                        .source = sourcePointFromSpan(expr.span),
+                        .typed_span_id = try self.internSpanId(sourcePointFromSpan(expr.span)),
+                    });
                 }
                 try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
                 try self.buildExpr(node.base.*);
@@ -8912,6 +8920,9 @@ const FunctionBuilder = struct {
             .source = source,
             .line = span.line,
             .column = span.column,
+            .source_offset = span.offset,
+            .source_len = span.len,
+            .typed_span_id = try self.internSpanId(sourcePointFromSpan(span)),
         });
     }
 

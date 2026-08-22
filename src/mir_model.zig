@@ -312,6 +312,7 @@ pub const TrapEdge = struct {
     column: usize,
     source_offset: usize = 0,
     source_len: usize = 0,
+    typed_span_id: SpanId = .invalid,
 };
 
 pub const ContractRegion = struct {
@@ -337,6 +338,7 @@ pub const BoundsFactKind = enum { index, slice };
 pub const BoundsFact = struct {
     kind: BoundsFactKind,
     source: SourcePoint,
+    typed_span_id: SpanId = .invalid,
 };
 
 pub const IntegerFact = struct {

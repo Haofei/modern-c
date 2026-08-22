@@ -171,6 +171,15 @@ or partially populated pattern payloads before either backend runs.
 All six were caught by unit/regression tests (especially the eval-order test below)
 BEFORE commit. **Never ship a codegen slice without these probes.**
 
+Local aggregate generations now have one shared recursive value/place plan for
+pure nested struct/array initialization, one optional local field/constant-index
+update, and a projected return. Aggregate children retain MIR operand order and
+resolved field indices; every local root joins by `ValueId`. Checked indexes no
+longer join their trap evidence through line/column arithmetic: the full index
+expression `SpanId` identifies the trap edge and the index-operand `SpanId`
+identifies its bounds fact. Calls, dynamic indexes, multiple stores, cleanup,
+and effectful leaves remain fail-closed until the plan carries their sequencing.
+
 ## Next work
 
 The first local-declaration statement primitive is complete for the strict
@@ -178,7 +187,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 90/160 and LLVM 91/160. The exact-root soundness gate
+current strict corpus is C 97/160 and LLVM 98/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

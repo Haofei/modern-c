@@ -161,6 +161,67 @@ test "LLVM local uninit aggregate assignment returns lower from MIR without body
     try expectNotContains(array_body, "store");
 }
 
+test "LLVM local aggregate place updates return from MIR without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\struct Box { pair: Pair }
+        \\fn assign_field(value: u32) -> u32 {
+        \\    var pair: Pair = .{ .left = 1, .right = 2 };
+        \\    pair.left = value;
+        \\    return pair.left;
+        \\}
+        \\fn assign_nested_array(value: u32) -> u32 {
+        \\    var xs: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
+        \\    xs[0][1] = value;
+        \\    return xs[0][1];
+        \\}
+        \\fn local_nested_struct(value: u32) -> u32 {
+        \\    var b: Box = .{ .pair = .{ .left = 1, .right = 2 } };
+        \\    b.pair.right = value;
+        \\    return b.pair.right;
+        \\}
+        \\fn assign_array_element(value: u32) -> u32 {
+        \\    var xs: [2]u32 = .{ 1, 2 };
+        \\    xs[0] = value;
+        \\    return xs[0];
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_aggregate_place_update.mc", source, &output);
+
+    const field_body = try llvmFunctionBody(output.items, "define internal i32 @assign_field");
+    try expectContains(field_body, "insertvalue { i32, i32 } zeroinitializer, i32 1, 0");
+    try expectContains(field_body, "insertvalue { i32, i32 } %t");
+    try expectContains(field_body, "i32 %value, 0");
+    try expectContains(field_body, "extractvalue { i32, i32 } %t");
+    try expectNotContains(field_body, "alloca");
+    try expectNotContains(field_body, "store");
+
+    const nested_array_body = try llvmFunctionBody(output.items, "define internal i32 @assign_nested_array");
+    try expectContains(nested_array_body, "insertvalue [2 x [2 x i32]] %t");
+    try expectContains(nested_array_body, "i32 %value, 0, 1");
+    try expectContains(nested_array_body, "extractvalue [2 x [2 x i32]] %t");
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, nested_array_body, "call void @mc_trap_Bounds()"));
+    try expectNotContains(nested_array_body, "alloca");
+    try expectNotContains(nested_array_body, "store");
+
+    const nested_struct_body = try llvmFunctionBody(output.items, "define internal i32 @local_nested_struct");
+    try expectContains(nested_struct_body, "insertvalue { { i32, i32 } } %t");
+    try expectContains(nested_struct_body, "i32 %value, 0, 1");
+    try expectContains(nested_struct_body, "extractvalue { { i32, i32 } } %t");
+    try expectNotContains(nested_struct_body, "alloca");
+    try expectNotContains(nested_struct_body, "store");
+
+    const array_body = try llvmFunctionBody(output.items, "define internal i32 @assign_array_element");
+    try expectContains(array_body, "insertvalue [2 x i32] %t");
+    try expectContains(array_body, "i32 %value, 0");
+    try expectContains(array_body, "extractvalue [2 x i32] %t");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, array_body, "call void @mc_trap_Bounds()"));
+    try expectNotContains(array_body, "alloca");
+    try expectNotContains(array_body, "store");
+}
+
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
         \\struct Flags { first: bool, second: bool }

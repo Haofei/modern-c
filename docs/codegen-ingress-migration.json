@@ -135,11 +135,11 @@
   },
   "mir_body_fast_path_ratchet": {
     "src/lower_c_tests.zig": {
-      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 116,
+      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 117,
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
     },
     "src/lower_llvm_tests.zig": {
-      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 118,
+      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 119,
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
     }
   },

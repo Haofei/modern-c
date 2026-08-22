@@ -12,6 +12,7 @@ pub const max_arguments = 8;
 pub const max_logical_nodes = 16;
 pub const max_place_projections = 4;
 pub const max_switch_arms = 8;
+pub const max_aggregate_value_nodes = 32;
 
 pub const Location = struct {
     span_id: mir.SpanId,
@@ -125,6 +126,7 @@ pub const PlaceProjection = union(enum) {
         result_ty: mir.ValueType,
         checked: bool,
         location: Location,
+        index_operand_span_id: mir.SpanId,
     },
 
     pub fn resultType(self: PlaceProjection) mir.ValueType {
@@ -137,6 +139,7 @@ pub const PlaceProjection = union(enum) {
 
 pub const Place = struct {
     root_kind: PlaceRootKind = undefined,
+    root_id: mir.ValueId = .invalid,
     root_name: []const u8 = "",
     root_ty: mir.ValueType = .unknown,
     root_type_fact: mir.TargetTypeFact = undefined,
@@ -147,6 +150,47 @@ pub const Place = struct {
     pub fn resultType(self: Place) mir.ValueType {
         if (self.projection_count == 0) return self.root_ty;
         return self.projections[self.projection_count - 1].resultType();
+    }
+};
+
+pub const AggregateValueNode = struct {
+    type_fact: mir.TargetTypeFact,
+    location: Location,
+    operation: Operation,
+
+    pub const Child = struct {
+        node: usize,
+        field_index: usize = std.math.maxInt(usize),
+    };
+
+    pub const Aggregate = struct {
+        children: [mir.Instruction.max_aggregate_operands]Child = undefined,
+        child_count: usize,
+    };
+
+    pub const Operation = union(enum) {
+        parameter: struct {
+            name: []const u8,
+            value_id: mir.ValueId,
+        },
+        integer_literal: usize,
+        array_literal: Aggregate,
+        struct_literal: Aggregate,
+    };
+};
+
+/// A bounded, backend-neutral aggregate value graph. Children are referenced
+/// by node index so nested arrays/structs do not require recursive Zig types.
+/// Admission currently accepts only parameter and integer leaves; calls,
+/// loads, conversions with effects, and dynamic indexing remain fail-closed.
+pub const AggregateValuePlan = struct {
+    nodes: [max_aggregate_value_nodes]AggregateValueNode = undefined,
+    count: usize = 0,
+    root: usize = 0,
+
+    pub fn resultType(self: AggregateValuePlan) mir.ValueType {
+        if (self.count == 0 or self.root >= self.count) return .unknown;
+        return self.nodes[self.root].type_fact.result_ty;
     }
 };
 
@@ -356,6 +400,93 @@ pub const LocalAggregateAssignmentReturnPlan = struct {
     value: PlaceStoreValue,
     return_location: Location,
 };
+
+pub const LocalAggregatePlaceUpdateReturnPlan = struct {
+    local_name: []const u8,
+    local_id: mir.ValueId,
+    local_type_fact: mir.TargetTypeFact,
+    declaration_location: Location,
+    initializer: AggregateValuePlan,
+    update: ?PlaceStore = null,
+    returned: Place,
+    return_location: Location,
+};
+
+/// Admit a straight-line local aggregate generation: initialize one local from
+/// a pure (possibly nested) aggregate value, optionally update one projected
+/// field/index, and return a projection from the same local generation. The
+/// local, update target, and returned place are joined by ValueId, never by
+/// source spelling alone.
+pub fn buildLocalAggregatePlaceUpdateReturn(function: mir.Function) ?LocalAggregatePlaceUpdateReturnPlan {
+    if (function.return_ty == .void or function.blocks.len == 0) return null;
+    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const block = function.blocks[0];
+    if (block.terminator != .return_) return null;
+    var local: ?mir.Instruction = null;
+    var assignment: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var expression_count: usize = 0;
+    for (block.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .cmp_bounds, .index, .integer_literal_conversion => {},
+        .expr => expression_count += 1,
+        .local => {
+            if (local != null) return null;
+            local = instruction;
+        },
+        .assign => {
+            if (assignment != null) return null;
+            assignment = instruction;
+        },
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+
+    const local_instruction = local orelse return null;
+    const local_id = local_instruction.typed_value_id orelse return null;
+    if (!local_id.isValid() or !local_instruction.typed_value_operand_span_id.isValid()) return null;
+    var initializer: AggregateValuePlan = .{};
+    initializer.root = appendAggregateValueNode(function, block, local_instruction.typed_value_operand_span_id, &initializer, 0) orelse return null;
+    if (initializer.count == 0 or !sameRepresentationType(initializer.resultType(), local_instruction.result_ty)) return null;
+
+    const return_instruction = returned orelse return null;
+    if (!return_instruction.typed_value_operand_span_id.isValid()) return null;
+    const returned_place = buildPlace(function, block, return_instruction.typed_value_operand_span_id) orelse return null;
+    if (returned_place.root_kind != .local or !returned_place.root_id.eql(local_id) or returned_place.projection_count == 0) return null;
+    if (!placeHasAggregateIntermediates(returned_place) or !sameRepresentationType(returned_place.resultType(), function.return_ty)) return null;
+
+    var plan: LocalAggregatePlaceUpdateReturnPlan = .{
+        .local_name = local_instruction.detail,
+        .local_id = local_id,
+        .local_type_fact = initializer.nodes[initializer.root].type_fact,
+        .declaration_location = locationFromInstruction(local_instruction),
+        .initializer = initializer,
+        .returned = returned_place,
+        .return_location = locationFromInstruction(return_instruction),
+    };
+    var consumed_expressions = initializer.count + returned_place.projection_count + 1;
+    if (assignment) |store_instruction| {
+        if (!store_instruction.typed_target_operand_span_id.isValid() or !store_instruction.typed_value_operand_span_id.isValid()) return null;
+        const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
+        if (target.root_kind != .local or !target.root_id.eql(local_id) or target.projection_count == 0) return null;
+        if (!placeHasAggregateIntermediates(target) or !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
+        const value = buildPlaceStoreValue(function, block, store_instruction.typed_value_operand_span_id) orelse return null;
+        switch (value) {
+            .parameter, .integer_literal => {},
+            else => return null,
+        }
+        if (!sameRepresentationType(value.resultType(), target.resultType())) return null;
+        plan.update = .{ .target = target, .value = value, .location = locationFromInstruction(store_instruction) };
+        consumed_expressions += target.projection_count + 1 + value.expressionCount();
+    }
+    if (consumed_expressions != expression_count or !localAggregateBoundsTrapsMatch(function, plan)) return null;
+    return plan;
+}
 
 /// Admit the common storage-generation sequence `var x: T = uninit; x =
 /// aggregate; return x`. MIR owns the local identity, assignment edges,
@@ -574,6 +705,57 @@ fn buildPlaceStoreValue(function: mir.Function, block: mir.Block, span_id: mir.S
     } };
 }
 
+fn appendAggregateValueNode(function: mir.Function, block: mir.Block, span_id: mir.SpanId, plan: *AggregateValuePlan, depth: usize) ?usize {
+    if (!span_id.isValid() or depth >= max_aggregate_value_nodes or plan.count >= max_aggregate_value_nodes) return null;
+    const instruction = expressionAtSpan(block, span_id) orelse return null;
+    const type_fact_kind: mir.TargetTypeKind = if (std.mem.eql(u8, instruction.detail, "array_literal"))
+        .array_literal
+    else if (std.mem.eql(u8, instruction.detail, "struct_literal"))
+        .struct_literal
+    else
+        .expression_result;
+    const type_fact = targetFactBySpan(function, type_fact_kind, span_id) orelse return null;
+    const converted_integer_literal = type_fact_kind == .expression_result and
+        type_fact.result_ty == .integer and instruction.constant_usize_value != null;
+    if (!sameRepresentationType(instruction.result_ty, type_fact.result_ty) and
+        !(type_fact_kind == .struct_literal and instruction.result_ty == .value and type_fact.result_ty == .struct_) and
+        !converted_integer_literal) return null;
+
+    const operation: AggregateValueNode.Operation = if (std.mem.eql(u8, instruction.detail, "array_literal")) blk: {
+        if (type_fact.result_ty != .array or instruction.typed_aggregate_operand_count == 0) return null;
+        var aggregate: AggregateValueNode.Aggregate = .{ .child_count = instruction.typed_aggregate_operand_count };
+        for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |child_span, index| {
+            aggregate.children[index] = .{ .node = appendAggregateValueNode(function, block, child_span, plan, depth + 1) orelse return null };
+        }
+        break :blk .{ .array_literal = aggregate };
+    } else if (std.mem.eql(u8, instruction.detail, "struct_literal")) blk: {
+        if (type_fact.result_ty != .struct_ or instruction.typed_aggregate_operand_count == 0) return null;
+        var aggregate: AggregateValueNode.Aggregate = .{ .child_count = instruction.typed_aggregate_operand_count };
+        for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |child_span, index| {
+            const field_index = instruction.typed_aggregate_field_indices[index];
+            if (field_index == std.math.maxInt(usize)) return null;
+            aggregate.children[index] = .{
+                .node = appendAggregateValueNode(function, block, child_span, plan, depth + 1) orelse return null,
+                .field_index = field_index,
+            };
+        }
+        break :blk .{ .struct_literal = aggregate };
+    } else if (instruction.typed_value_id) |value_id| blk: {
+        const name = valueIdentityName(function, value_id) orelse return null;
+        const parameter_ty = parameterType(function, name) orelse return null;
+        if (!sameRepresentationType(parameter_ty, type_fact.result_ty)) return null;
+        break :blk .{ .parameter = .{ .name = name, .value_id = value_id } };
+    } else blk: {
+        if (type_fact.result_ty != .integer) return null;
+        break :blk .{ .integer_literal = instruction.constant_usize_value orelse return null };
+    };
+
+    const index = plan.count;
+    plan.nodes[index] = .{ .type_fact = type_fact, .location = locationFromInstruction(instruction), .operation = operation };
+    plan.count += 1;
+    return index;
+}
+
 fn placeHasAggregateIntermediates(place: Place) bool {
     if (place.projection_count <= 1) return true;
     for (place.projections[0 .. place.projection_count - 1]) |projection| {
@@ -584,27 +766,45 @@ fn placeHasAggregateIntermediates(place: Place) bool {
 }
 
 fn placeBoundsTrapsMatch(function: mir.Function, plan: PlaceReturnPlan) bool {
-    var locations: [max_place_projections * 3]Location = undefined;
-    var location_count: usize = 0;
-    appendCheckedIndexLocations(plan.returned, &locations, &location_count) orelse return false;
-    if (plan.local_init) |local| appendCheckedIndexLocations(local.value, &locations, &location_count) orelse return false;
-    if (plan.store) |store| appendCheckedIndexLocations(store.target, &locations, &location_count) orelse return false;
+    var indexes: [max_place_projections * 3]CheckedIndexIdentity = undefined;
+    var index_count: usize = 0;
+    appendCheckedIndexLocations(plan.returned, &indexes, &index_count) orelse return false;
+    if (plan.local_init) |local| appendCheckedIndexLocations(local.value, &indexes, &index_count) orelse return false;
+    if (plan.store) |store| appendCheckedIndexLocations(store.target, &indexes, &index_count) orelse return false;
+    return boundsTrapLocationsMatch(function, indexes[0..index_count]);
+}
 
-    if (function.trap_edges.len != location_count or function.bounds_facts.len != location_count) return false;
-    if (function.blocks.len != location_count + 1 or function.blocks[0].successors.len != location_count) return false;
+fn localAggregateBoundsTrapsMatch(function: mir.Function, plan: LocalAggregatePlaceUpdateReturnPlan) bool {
+    var indexes: [max_place_projections * 2]CheckedIndexIdentity = undefined;
+    var index_count: usize = 0;
+    appendCheckedIndexLocations(plan.returned, &indexes, &index_count) orelse return false;
+    if (plan.update) |update| appendCheckedIndexLocations(update.target, &indexes, &index_count) orelse return false;
+    return boundsTrapLocationsMatch(function, indexes[0..index_count]);
+}
+
+const CheckedIndexIdentity = struct {
+    expression_span_id: mir.SpanId,
+    operand_span_id: mir.SpanId,
+};
+
+fn boundsTrapLocationsMatch(function: mir.Function, indexes: []const CheckedIndexIdentity) bool {
+    if (function.trap_edges.len != indexes.len or function.bounds_facts.len != indexes.len) return false;
+    if (function.blocks.len != indexes.len + 1 or function.blocks[0].successors.len != indexes.len) return false;
     for (function.blocks[1..]) |trap_block| switch (trap_block.terminator) {
         .trap_ => |kind| if (kind != .Bounds) return false,
         else => return false,
     };
 
     var matched = [_]bool{false} ** (max_place_projections * 3);
+    if (indexes.len > matched.len) return false;
     for (function.trap_edges) |edge| {
         if (edge.from_block != function.blocks[0].id or edge.kind != .Bounds or edge.source != .bounds_check) return false;
+        if (!edge.typed_span_id.isValid()) return false;
         if (edge.trap_block >= function.blocks.len or function.blocks[edge.trap_block].terminator != .trap_) return false;
         var found: ?usize = null;
-        for (locations[0..location_count], 0..) |location, index| {
+        for (indexes, 0..) |identity, index| {
             if (matched[index]) continue;
-            if (edge.line == location.source.line and edge.column == location.source.column) {
+            if (edge.typed_span_id.eql(identity.expression_span_id)) {
                 found = index;
                 break;
             }
@@ -612,16 +812,35 @@ fn placeBoundsTrapsMatch(function: mir.Function, plan: PlaceReturnPlan) bool {
         const index = found orelse return false;
         matched[index] = true;
     }
-    for (matched[0..location_count]) |present| if (!present) return false;
+    for (matched[0..indexes.len]) |present| if (!present) return false;
+
+    @memset(matched[0..indexes.len], false);
+    for (function.bounds_facts) |fact| {
+        if (fact.kind != .index or !fact.typed_span_id.isValid()) return false;
+        var found: ?usize = null;
+        for (indexes, 0..) |identity, index| {
+            if (matched[index]) continue;
+            if (fact.typed_span_id.eql(identity.operand_span_id)) {
+                found = index;
+                break;
+            }
+        }
+        const index = found orelse return false;
+        matched[index] = true;
+    }
+    for (matched[0..indexes.len]) |present| if (!present) return false;
     return true;
 }
 
-fn appendCheckedIndexLocations(place: Place, locations: []Location, count: *usize) ?void {
+fn appendCheckedIndexLocations(place: Place, indexes: []CheckedIndexIdentity, count: *usize) ?void {
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
         .field => {},
         .constant_index => |index| if (index.checked) {
-            if (count.* >= locations.len) return null;
-            locations[count.*] = index.location;
+            if (count.* >= indexes.len or !index.location.span_id.isValid() or !index.index_operand_span_id.isValid()) return null;
+            indexes[count.*] = .{
+                .expression_span_id = index.location.span_id,
+                .operand_span_id = index.index_operand_span_id,
+            };
             count.* += 1;
         },
     };
@@ -920,6 +1139,7 @@ fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, pl
             .result_ty = instruction.result_ty,
             .checked = std.mem.eql(u8, instruction.detail, "bounds_checked"),
             .location = locationFromInstruction(instruction),
+            .index_operand_span_id = instruction.typed_index_operand_span_id,
         } };
         if (!std.mem.eql(u8, instruction.detail, "bounds_checked") and !std.mem.eql(u8, instruction.detail, "const_in_bounds")) return false;
         place.projection_count += 1;
@@ -953,6 +1173,7 @@ fn appendPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId, pl
         place.root_kind = .global;
     }
     place.root_name = root_name;
+    place.root_id = root_id;
     place.root_ty = instruction.result_ty;
     place.root_type_fact = fact;
     if (place.root_ty != .struct_ and place.root_ty != .array) return false;
