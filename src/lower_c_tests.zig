@@ -74,6 +74,19 @@ test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     try expectContains(output.items, "grouped_i128_minimum");
 }
 
+test "lower-c function symbol returns lower from MIR without body fallback" {
+    const source =
+        \\fn tick() -> void {}
+        \\fn entry_of() -> fn() -> void { return tick; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_identity_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static mc_fnptr_4_void entry_of(void)");
+    try expectContains(body, "return tick;");
+}
+
 test "lower-c nullable narrowing with long identifiers never falls back to constants" {
     var long_name: std.ArrayList(u8) = .empty;
     defer long_name.deinit(std.testing.allocator);

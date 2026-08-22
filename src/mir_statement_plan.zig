@@ -299,6 +299,13 @@ pub const WhileControlPlan = struct {
     control_location: Location,
 };
 
+pub const IdentityReturnPlan = struct {
+    name: []const u8,
+    value_id: mir.ValueId,
+    value_location: Location,
+    return_location: Location,
+};
+
 pub const SequenceForEachUpdatePlan = struct {
     pub const Update = union(enum) {
         replace_with_element,
@@ -489,6 +496,35 @@ pub fn buildWhileControl(function: mir.Function) ?WhileControlPlan {
     };
 }
 
+/// Admit a single-block return of one resolved value identity when no runtime
+/// type/effect facts are involved. Backend admission narrows this to a known
+/// function symbol, so an ordinary global load cannot be confused with a
+/// function-pointer value.
+pub fn buildIdentityReturn(function: mir.Function) ?IdentityReturnPlan {
+    if (function.return_ty == .void or function.blocks.len != 1 or function.trap_edges.len != 0 or
+        function.target_type_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
+        function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+    const block = function.blocks[0];
+    if (block.terminator != .return_ or block.successors.len != 0 or block.instructions.len != 2) return null;
+    const value = block.instructions[0];
+    const returned = block.instructions[1];
+    if (value.kind != .expr or returned.kind != .return_value or !value.typed_span_id.isValid() or
+        !returned.typed_value_operand_span_id.eql(value.typed_span_id) or
+        !sameRepresentationType(value.result_ty, function.return_ty) or
+        !sameRepresentationType(returned.result_ty, function.return_ty)) return null;
+    const value_id = value.typed_value_id orelse return null;
+    const name = valueIdentityName(function, value_id) orelse return null;
+    if (!std.mem.eql(u8, value.detail, name)) return null;
+    return .{
+        .name = name,
+        .value_id = value_id,
+        .value_location = locationFromInstruction(value),
+        .return_location = locationFromInstruction(returned),
+    };
+}
+
 /// Admit a slice `for` that maintains one scalar local, performs one assignment
 /// from the element (or checked-adds it), then immediately breaks/continues and
 /// finally returns that local. This is one bounded CFG family, not backend AST
@@ -652,7 +688,10 @@ pub fn buildSequenceForEachUpdate(function: mir.Function) ?SequenceForEachUpdate
     const returned_id = returned_expr.typed_value_id orelse return null;
     if (!returned_id.eql(local_id) or !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
 
-    const expected_traps: usize = switch (update) { .replace_with_element => 1, .checked_add_element => 2 };
+    const expected_traps: usize = switch (update) {
+        .replace_with_element => 1,
+        .checked_add_element => 2,
+    };
     if (function.trap_edges.len != expected_traps) return null;
     switch (update) {
         .replace_with_element => {},

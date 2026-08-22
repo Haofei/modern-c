@@ -344,6 +344,19 @@ test "LLVM emits break and continue while CFG from MIR without body fallback" {
     try expectContains(repeat, "while_after");
 }
 
+test "LLVM function symbol returns lower from MIR without body fallback" {
+    const source =
+        \\fn tick() -> void {}
+        \\fn entry_of() -> fn() -> void { return tick; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_identity_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal ptr @entry_of");
+    try expectContains(body, "ret ptr @tick");
+}
+
 test "LLVM emits slice foreach local updates from MIR without body fallback" {
     const source =
         \\fn sum(values: []const u32) -> u32 {

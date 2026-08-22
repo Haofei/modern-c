@@ -1654,7 +1654,14 @@ const LlvmEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
-        const while_control_plan = if (simple_trap == null and simple_assert == null)
+        const identity_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildIdentityReturn(fn_mir)) |plan|
+                if (self.mirIdentityReturnPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const while_control_plan = if (identity_return_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
                 if (self.mirWhileControlPlanSupported(function, plan)) plan else null
             else
@@ -1738,7 +1745,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1804,6 +1811,8 @@ const LlvmEmitter = struct {
                 try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
             }
             try self.emitReturnVoid(span);
+        } else if (identity_return_plan) |plan| {
+            try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{plan.name}), spanFromMirSourcePoint(plan.return_location.source));
         } else if (while_control_plan) |plan| {
             try self.emitMirWhileControlPlan(plan);
         } else if (sequence_foreach_update_plan) |plan| {
@@ -4019,6 +4028,12 @@ const LlvmEmitter = struct {
             return type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.condition_fact.target_ty));
         }
         return false;
+    }
+
+    fn mirIdentityReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.IdentityReturnPlan) bool {
+        const return_ty = function.signature.transitionalReturnType() orelse return false;
+        if (std.meta.activeTag(self.resolveAliasType(return_ty).kind) != .fn_pointer) return false;
+        return self.fn_sigs.contains(plan.name);
     }
 
     fn emitMirWhileControlPlan(self: *LlvmEmitter, plan: mir_statement_plan.WhileControlPlan) !void {

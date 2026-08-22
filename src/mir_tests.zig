@@ -1106,6 +1106,29 @@ test "MIR while control plan owns break and continue CFG edges" {
     try std.testing.expect(mir_statement_plan.buildWhileControl(corrupted_stop.*) == null);
 }
 
+test "MIR identity return plan owns resolved function symbol return" {
+    const source =
+        \\fn tick() -> void {}
+        \\fn entry_of() -> fn() -> void { return tick; }
+    ;
+    var parsed = try test_support.parseModule("mir_identity_return.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const plan = mir_statement_plan.buildIdentityReturn(functionByName(module_mir, "entry_of").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("tick", plan.name);
+    try std.testing.expect(plan.value_id.isValid());
+    try std.testing.expect(plan.value_location.span_id.isValid());
+    try std.testing.expect(plan.return_location.span_id.isValid());
+
+    var corrupted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer corrupted.deinit();
+    const function = functionByNameMut(&corrupted, "entry_of") orelse return error.TestUnexpectedResult;
+    function.blocks[0].instructions[0].detail = "not_tick";
+    try std.testing.expect(mir_statement_plan.buildIdentityReturn(function.*) == null);
+}
+
 test "MIR sequence foreach update plan owns local generation update traps and control" {
     const source =
         \\fn sum(values: []const u32) -> u32 {
