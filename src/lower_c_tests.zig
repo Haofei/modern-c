@@ -12517,6 +12517,21 @@ test "lower-c checked pointer-to-integer cast does not use function body fallbac
     try expectContains(output.items, "return ((uintptr_t)p);");
 }
 
+test "lower-c checked scalar local return does not use function body fallback" {
+    const source =
+        \\fn local_copy(n: u32) -> u32 {
+        \\    let x: u32 = n + 1;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_local_checked_return.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t local_copy(uint32_t n)");
+    try expectContains(body, "uint32_t x = mc_checked_add_u32(n, 1);");
+    try expectContains(body, "return x;");
+}
+
 test "lower-c nested pointer member scalar access lowers race-tolerantly" {
     const source =
         \\struct Inner {

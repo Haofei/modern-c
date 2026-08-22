@@ -13622,6 +13622,24 @@ test "LLVM checked pointer-to-integer cast does not use function body fallback" 
     try expectContains(body, "ptrtoint ptr %p to i64");
 }
 
+test "LLVM checked scalar local return does not use function body fallback" {
+    const source =
+        \\fn local_copy(n: u32) -> u32 {
+        \\    let x: u32 = n + 1;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_local_checked_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @local_copy");
+    try expectContains(body, "@llvm.uadd.with.overflow.i32(i32 %n, i32 1)");
+    try expectContains(body, "call void @mc_trap_IntegerOverflow()");
+    try expectContains(body, "alloca i32");
+    try expectContains(body, "load i32, ptr %");
+    try expectContains(body, "ret i32 %");
+}
+
 test "LLVM pointer-member aggregate value copies lower recursively" {
     const source =
         \\struct Inner {

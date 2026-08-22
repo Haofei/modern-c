@@ -126,6 +126,39 @@ pub const PointerToIntegerCastPlan = struct {
     return_location: Location,
 };
 
+pub const ScalarCheckedBinaryOperand = union(enum) {
+    parameter: struct {
+        name: []const u8,
+        value_id: mir.ValueId,
+        type_fact: mir.TargetTypeFact,
+        location: Location,
+    },
+    integer_literal: IntegerLiteralValue,
+};
+
+/// Preserve a scalar local whose first generation is initialized by one
+/// checked integer operation and then returned unchanged:
+///
+///     let x: T = parameter + literal;
+///     return x;
+///
+/// This is intentionally a shared MIR execution plan rather than the older
+/// backend-local "fold the local into the return" recognizer.  The local
+/// generation, operand identities, overflow edge and both source locations
+/// are admitted once, so C and LLVM retain the same observable storage/debug
+/// shape while no longer reading the AST body.
+pub const ScalarLocalCheckedBinaryReturnPlan = struct {
+    local_name: []const u8,
+    local_id: mir.ValueId,
+    local_fact: mir.TargetTypeFact,
+    declaration_location: Location,
+    operation: []const u8,
+    operation_location: Location,
+    left: ScalarCheckedBinaryOperand,
+    right: ScalarCheckedBinaryOperand,
+    return_location: Location,
+};
+
 /// One nullable-pointer `?` operation and its immediate consumer.  The source
 /// is evaluated exactly once, the nullable representation is checked once,
 /// and the unwrapped non-null pointer is either returned or passed as the sole
@@ -911,6 +944,141 @@ pub fn buildPointerToIntegerCast(function: mir.Function) ?PointerToIntegerCastPl
         .cast_location = locationFromInstruction(cast),
         .return_location = locationFromInstruction(ret),
     };
+}
+
+pub fn buildScalarLocalCheckedBinaryReturn(function: mir.Function) ?ScalarLocalCheckedBinaryReturnPlan {
+    if (function.blocks.len != 2 or function.trap_edges.len != 1 or
+        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
+        function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    const trap = function.blocks[1];
+    if (entry.terminator != .return_ or entry.successors.len != 1 or entry.successors[0] != trap.id or
+        trap.instructions.len != 0) return null;
+    switch (trap.terminator) {
+        .trap_ => |kind| if (kind != .IntegerOverflow) return null,
+        else => return null,
+    }
+
+    var local: ?mir.Instruction = null;
+    var binary: ?mir.Instruction = null;
+    var overflow: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var expression_count: usize = 0;
+    var literal_conversion_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type => {},
+        .integer_literal_conversion => literal_conversion_count += 1,
+        .expr => expression_count += 1,
+        .local => {
+            if (local != null) return null;
+            local = instruction;
+        },
+        .binary => {
+            if (binary != null) return null;
+            binary = instruction;
+        },
+        .add_overflow => {
+            if (overflow != null) return null;
+            overflow = instruction;
+        },
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+    if (expression_count != 3 or literal_conversion_count != 1) return null;
+
+    const local_instruction = local orelse return null;
+    const binary_instruction = binary orelse return null;
+    const overflow_instruction = overflow orelse return null;
+    const return_instruction = returned orelse return null;
+    if (!std.mem.eql(u8, binary_instruction.detail, "add") or
+        !overflow_instruction.typed_span_id.eql(binary_instruction.typed_span_id) or
+        !local_instruction.typed_value_operand_span_id.eql(binary_instruction.typed_span_id) or
+        !binary_instruction.typed_left_operand_span_id.isValid() or
+        !binary_instruction.typed_right_operand_span_id.isValid() or
+        !return_instruction.typed_value_operand_span_id.isValid()) return null;
+
+    const local_id = local_instruction.typed_value_id orelse return null;
+    const local_name = valueIdentityName(function, local_id) orelse return null;
+    if (!std.mem.eql(u8, local_instruction.detail, local_name) or
+        !sameRepresentationType(local_instruction.result_ty, function.return_ty) or
+        !sameRepresentationType(return_instruction.result_ty, function.return_ty) or
+        !localInitAt(function, local_id, locationFromInstruction(binary_instruction).source)) return null;
+
+    const returned_expr = expressionAtSpan(entry, return_instruction.typed_value_operand_span_id) orelse return null;
+    const returned_id = returned_expr.typed_value_id orelse return null;
+    if (!returned_id.eql(local_id) or !std.mem.eql(u8, returned_expr.detail, local_name)) return null;
+
+    const operation_fact = targetFactBySpan(function, .expression_result, binary_instruction.typed_span_id) orelse return null;
+    const return_fact = targetFactBySpan(function, .expression_result, returned_expr.typed_span_id) orelse return null;
+    if (!sameRepresentationType(operation_fact.result_ty, function.return_ty) or
+        !sameRepresentationType(return_fact.result_ty, function.return_ty) or
+        !type_syntax.sameTypeSyntax(operation_fact.target_ty, return_fact.target_ty)) return null;
+
+    const left = buildScalarCheckedBinaryOperand(function, entry, binary_instruction.typed_left_operand_span_id, operation_fact) orelse return null;
+    const right = buildScalarCheckedBinaryOperand(function, entry, binary_instruction.typed_right_operand_span_id, operation_fact) orelse return null;
+    if (std.meta.activeTag(left) == std.meta.activeTag(right)) return null;
+
+    const edge = function.trap_edges[0];
+    if (edge.from_block != entry.id or edge.trap_block != trap.id or edge.kind != .IntegerOverflow or
+        edge.source != .checked_arithmetic or
+        (edge.typed_span_id.isValid() and !edge.typed_span_id.eql(binary_instruction.typed_span_id))) return null;
+
+    return .{
+        .local_name = local_name,
+        .local_id = local_id,
+        .local_fact = operation_fact,
+        .declaration_location = locationFromInstruction(local_instruction),
+        .operation = binary_instruction.detail,
+        .operation_location = locationFromInstruction(binary_instruction),
+        .left = left,
+        .right = right,
+        .return_location = locationFromInstruction(return_instruction),
+    };
+}
+
+fn buildScalarCheckedBinaryOperand(
+    function: mir.Function,
+    block: mir.Block,
+    span_id: mir.SpanId,
+    operation_fact: mir.TargetTypeFact,
+) ?ScalarCheckedBinaryOperand {
+    const instruction = expressionAtSpan(block, span_id) orelse return null;
+    const fact = targetFactBySpan(function, .expression_result, span_id) orelse return null;
+    if (!sameRepresentationType(fact.result_ty, operation_fact.result_ty) or
+        !type_syntax.sameTypeSyntax(fact.target_ty, operation_fact.target_ty)) return null;
+    if (instruction.typed_value_id) |value_id| {
+        const name = valueIdentityName(function, value_id) orelse return null;
+        const parameter_ty = parameterType(function, name) orelse return null;
+        if (!std.mem.eql(u8, instruction.detail, name) or
+            !sameRepresentationType(parameter_ty, fact.result_ty)) return null;
+        return .{ .parameter = .{
+            .name = name,
+            .value_id = value_id,
+            .type_fact = fact,
+            .location = locationFromInstruction(instruction),
+        } };
+    }
+    if (!std.mem.eql(u8, instruction.detail, "int")) return null;
+    const value = instruction.constant_usize_value orelse return null;
+    var integer_fact_count: usize = 0;
+    for (function.integer_facts) |integer_fact| {
+        const source = locationFromInstruction(instruction).source;
+        if (integer_fact.source.line != source.line or integer_fact.source.column != source.column) continue;
+        if (!sameRepresentationType(integer_fact.target_ty, fact.result_ty)) return null;
+        integer_fact_count += 1;
+    }
+    if (integer_fact_count != 1) return null;
+    return .{ .integer_literal = .{
+        .value = value,
+        .type_fact = fact,
+        .location = locationFromInstruction(instruction),
+    } };
 }
 
 /// Admit one nullable-pointer unwrap whose value is immediately returned or

@@ -11,8 +11,8 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits **78.1% of C functions (125/160)** and **78.8% of LLVM functions
-(126/160)**; the rest still ingest the AST body.
+admits **78.8% of C functions (126/160)** and **79.4% of LLVM functions
+(127/160)**; the rest still ingest the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 125 | 35 | 0 | 7812 |
-| LLVM | 160 | 126 | 34 | 0 | 7875 |
+| C | 160 | 126 | 34 | 0 | 7875 |
+| LLVM | 160 | 127 | 33 | 0 | 7937 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -120,6 +120,7 @@ typed-unary operand-descendant bugs before commit.
 | Nullable pointer try | `return maybe?`, `return make_nullable()?`, direct/void one-argument consumers, and a zero-argument source call; one shared MIR plan joins the `try_operand`, unwrapped value, call argument, representation-use facts, and exact InvalidRepresentation/Unwrap edge pair while both backends evaluate the source exactly once | (current batch) |
 | Checked pointer-root places | indirect calls such as `return op.combine(x,y)` and scalar stores such as `env.value=value`; MIR owns the canonical pointer root, projection, representation check/trap, argument/value identities, and both backends preserve atomic access semantics | (current batch) |
 | Checked pointer-to-integer cast | `return p as usize`; MIR owns source/target type facts, pointer `ValueId`, exact representation edge, and the return edge while C/LLVM only spell the target cast | (current batch) |
+| Checked scalar local generation | `let x: u32 = n + 1; return x`; a shared plan owns the local generation, typed operands, overflow edge, source locations and return identity while both backends preserve a materialized local instead of folding it | (current batch) |
 
 ### Remaining families, by tractability
 
@@ -129,7 +130,7 @@ typed-unary operand-descendant bugs before commit.
 | Builtin / `call_target` void bodies | `store_release`, atomics | same statement-level/builtin gap (plain void calls already admitted) | **large** |
 | Checked-operand comparison | `return (a+b) == b` | `SimpleMirCompareBinary` operands are `SimpleMirArg` (no `checked_binary` variant); needs a richer operand type | **medium** |
 | Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | C now also covers one nested call inside the initializer; LLVM and the remaining shapes need a general MIR statement/value sequence | **large** |
-| Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points, not `#line` matching |
+| Remaining folded-`let` families | nested casts/calls/loads and multiple locals | the first checked scalar generation now preserves local/source shape; the remaining expression graphs need bounded MIR value plans | **large** |
 
 The remaining chunk is no longer mostly recognizer-shaped. Pure boolean
 parameter trees now use explicit operator operand `SpanId` edges and one shared

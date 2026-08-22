@@ -4143,6 +4143,35 @@ test "MIR plans a checked pointer-to-integer cast" {
     try std.testing.expectEqual(.integer, std.meta.activeTag(plan.target_fact.result_ty));
 }
 
+test "MIR plans a checked scalar local generation and return" {
+    const source =
+        \\fn local_copy(n: u32) -> u32 {
+        \\    let x: u32 = n + 1;
+        \\    return x;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_scalar_local_checked_binary_return.mc", source);
+    defer parsed.deinit();
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "local_copy") orelse return error.TestUnexpectedResult;
+    const plan = mir_statement_plan.buildScalarLocalCheckedBinaryReturn(function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("x", plan.local_name);
+    try std.testing.expect(plan.local_id.isValid());
+    try std.testing.expectEqualStrings("add", plan.operation);
+    switch (plan.left) {
+        .parameter => |parameter| try std.testing.expectEqualStrings("n", parameter.name),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (plan.right) {
+        .integer_literal => |literal| try std.testing.expectEqual(@as(usize, 1), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(@as(usize, 2), plan.declaration_location.source.line);
+    try std.testing.expectEqual(@as(usize, 3), plan.return_location.source.line);
+}
+
 test "MIR plans pure logical returns from typed operand identities" {
     // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
     const source =

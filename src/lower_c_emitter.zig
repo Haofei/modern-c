@@ -1679,7 +1679,14 @@ pub const CEmitter = struct {
             mir_statement_plan.buildPointerToIntegerCast(fn_mir)
         else
             null;
-        const simple_return = if (sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const scalar_local_checked_binary_return_plan = if (simple_trap == null and simple_assert == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null)
+            if (mir_statement_plan.buildScalarLocalCheckedBinaryReturn(fn_mir)) |plan|
+                if (self.mirScalarLocalCheckedBinaryReturnPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1725,7 +1732,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and place_store_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1772,6 +1779,8 @@ pub const CEmitter = struct {
             try self.emitMirNullableTryPlan(plan);
         } else if (pointer_to_integer_cast_plan) |plan| {
             try self.emitMirPointerToIntegerCastPlan(plan);
+        } else if (scalar_local_checked_binary_return_plan) |plan| {
+            try self.emitMirScalarLocalCheckedBinaryReturnPlan(plan);
         } else if (nullable_pointer_void_call_plan) |plan| {
             try self.emitMirNullablePointerVoidCallPlan(plan);
         } else if (place_store_plan) |plan| {
@@ -4267,6 +4276,64 @@ pub const CEmitter = struct {
             try self.cTypeFor(plan.target_fact.target_ty, .typedef_name),
             try self.cIdent(plan.source_name),
         });
+    }
+
+    fn mirScalarLocalCheckedBinaryReturnPlanSupported(
+        self: *CEmitter,
+        function: anytype,
+        plan: mir_statement_plan.ScalarLocalCheckedBinaryReturnPlan,
+    ) bool {
+        if (!std.mem.eql(u8, plan.operation, "add") or typeName(plan.local_fact.target_ty) == null) return false;
+        const declared_return = function.signature.transitionalReturnType() orelse return false;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(plan.local_fact.target_ty))) return false;
+        for ([_]mir_statement_plan.ScalarCheckedBinaryOperand{ plan.left, plan.right }) |operand| switch (operand) {
+            .integer_literal => |literal| {
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(literal.type_fact.target_ty), self.resolveAliasType(plan.local_fact.target_ty))) return false;
+            },
+            .parameter => |parameter| {
+                var matched = false;
+                for (function.signature.params) |declared| {
+                    if (!std.mem.eql(u8, declared.name.text, parameter.name)) continue;
+                    if (matched or !type_bridge.sameTypeSyntax(self.resolveAliasType(declared.ty), self.resolveAliasType(parameter.type_fact.target_ty))) return false;
+                    matched = true;
+                }
+                if (!matched) return false;
+            },
+        };
+        return true;
+    }
+
+    fn emitMirScalarLocalCheckedBinaryOperand(
+        self: *CEmitter,
+        operand: mir_statement_plan.ScalarCheckedBinaryOperand,
+    ) !void {
+        switch (operand) {
+            .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
+            .integer_literal => |literal| try self.out.print(self.allocator, "{d}", .{literal.value}),
+        }
+    }
+
+    fn emitMirScalarLocalCheckedBinaryReturnPlan(
+        self: *CEmitter,
+        plan: mir_statement_plan.ScalarLocalCheckedBinaryReturnPlan,
+    ) !void {
+        const type_name = typeName(plan.local_fact.target_ty) orelse return error.UnsupportedCEmission;
+        const helper = try self.checkedHelperName(plan.operation, type_name);
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.declaration_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s}(", .{
+            try self.cTypeFor(plan.local_fact.target_ty, .typedef_name),
+            try self.cIdent(plan.local_name),
+            helper,
+        });
+        try self.emitMirScalarLocalCheckedBinaryOperand(plan.left);
+        try self.out.appendSlice(self.allocator, ", ");
+        try self.emitMirScalarLocalCheckedBinaryOperand(plan.right);
+        try self.out.appendSlice(self.allocator, ");\n");
+
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.local_name)});
     }
 
     fn emitMirWhileControlPlan(self: *CEmitter, plan: mir_statement_plan.WhileControlPlan) !void {
