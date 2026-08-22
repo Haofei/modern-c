@@ -344,6 +344,34 @@ test "LLVM emits break and continue while CFG from MIR without body fallback" {
     try expectContains(repeat, "while_after");
 }
 
+test "LLVM emits slice foreach local updates from MIR without body fallback" {
+    const source =
+        \\fn sum(values: []const u32) -> u32 {
+        \\    var total: u32 = 0;
+        \\    for value in values { total = total + value; continue; }
+        \\    return total;
+        \\}
+        \\fn first(values: []const u32) -> u32 {
+        \\    var seen: u32 = 0;
+        \\    for value in values { seen = value; break; }
+        \\    return seen;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_sequence_foreach_update.mc", source, &output);
+
+    const sum = try llvmFunctionBody(output.items, "define internal i32 @sum");
+    try expectContains(sum, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(sum, "@llvm.uadd.with.overflow.i32");
+    try expectContains(sum, "for_step");
+    try expectContains(sum, "ret i32");
+    const first = try llvmFunctionBody(output.items, "define internal i32 @first");
+    try expectContains(first, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(first, "for_after");
+    try expectNotContains(first, "@llvm.uadd.with.overflow.i32");
+}
+
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
         \\struct Flags { first: bool, second: bool }

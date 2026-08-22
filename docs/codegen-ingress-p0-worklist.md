@@ -11,8 +11,8 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits **67.5% of C functions (108/160)** and **68.1% of LLVM functions
-(109/160)**; the rest still ingest the AST body.
+admits **68.8% of C functions (110/160)** and **69.4% of LLVM functions
+(111/160)**; the rest still ingest the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 108 | 52 | 0 | 6750 |
-| LLVM | 160 | 109 | 51 | 0 | 6812 |
+| C | 160 | 110 | 50 | 0 | 6875 |
+| LLVM | 160 | 111 | 49 | 0 | 6937 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -113,6 +113,7 @@ typed-unary operand-descendant bugs before commit.
 | Direct-call aggregate projection returns | `make_values(seed)[index]`, `make_bag(seed).values[index]`, and `make_bag(seed).tail[index]`; MIR owns the callee, indexed arguments, projection chain, dynamic bounds edge, and exact representation fact while both backends evaluate the call once | (current batch) |
 | Sequence foreach return | parameter arrays/slices, direct calls returning either representation, field-projected arrays, and a staged zero-argument nested call; `.for_element` carries the binding `ValueId`, slice representation checking stays explicit, and one shared CFG plan owns iterable evaluation, first-element, and empty-sequence exits | (current batch) |
 | Parameter while with immediate break/continue | MIR emits a source-bearing `control_transfer` instruction and one shared three-block CFG plan validates condition identity plus exact loop/exit edge before either backend renders it | (current batch) |
+| Slice foreach scalar update + break/continue | one bounded shared CFG plan owns slice representation, local generation, element binding, replacement or checked-add operand edges, overflow trap, source-bearing control transfer, and final return; `tests/llvm/for_loops.mc` is now 100% MIR-admitted in both backends | (current batch) |
 
 ### Remaining families, by tractability
 

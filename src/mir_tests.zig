@@ -1106,6 +1106,45 @@ test "MIR while control plan owns break and continue CFG edges" {
     try std.testing.expect(mir_statement_plan.buildWhileControl(corrupted_stop.*) == null);
 }
 
+test "MIR sequence foreach update plan owns local generation update traps and control" {
+    const source =
+        \\fn sum(values: []const u32) -> u32 {
+        \\    var total: u32 = 0;
+        \\    for value in values { total = total + value; continue; }
+        \\    return total;
+        \\}
+        \\fn first(values: []const u32) -> u32 {
+        \\    var seen: u32 = 0;
+        \\    for value in values { seen = value; break; }
+        \\    return seen;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_sequence_foreach_update.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const sum = mir_statement_plan.buildSequenceForEachUpdate(functionByName(module_mir, "sum").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("total", sum.local_name);
+    try std.testing.expectEqualStrings("value", sum.binding_name);
+    try std.testing.expectEqual(.continue_, sum.control);
+    switch (sum.update) {
+        .checked_add_element => |update| try std.testing.expectEqual(.integer, std.meta.activeTag(update.operation_fact.result_ty)),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(sum.representation_check.value_id.isValid());
+
+    const first = mir_statement_plan.buildSequenceForEachUpdate(functionByName(module_mir, "first").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.break_, first.control);
+    try std.testing.expectEqual(.replace_with_element, first.update);
+
+    var corrupted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer corrupted.deinit();
+    const corrupted_first = functionByNameMut(&corrupted, "first") orelse return error.TestUnexpectedResult;
+    corrupted_first.blocks[2].instructions[corrupted_first.blocks[2].instructions.len - 1].detail = "continue";
+    try std.testing.expect(mir_statement_plan.buildSequenceForEachUpdate(corrupted_first.*) == null);
+}
+
 test "MIR target-type owner identities mirror direct calls" {
     const source =
         \\fn callee(x: u32) -> u32 {

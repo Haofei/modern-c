@@ -1605,7 +1605,14 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const sequence_foreach_return_plan = if (while_control_plan == null and simple_trap == null and simple_assert == null)
+        const sequence_foreach_update_plan = if (while_control_plan == null and simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
+                if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null and while_control_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildSequenceForEachReturn(fn_mir)) |plan|
                 if (self.mirSequenceForEachReturnPlanSupported(function, plan)) plan else null
             else
@@ -1676,7 +1683,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and while_control_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1699,6 +1706,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
         } else if (while_control_plan) |plan| {
             try self.emitMirWhileControlPlan(plan);
+        } else if (sequence_foreach_update_plan) |plan| {
+            try self.emitMirSequenceForEachUpdatePlan(plan);
         } else if (sequence_foreach_return_plan) |plan| {
             try self.emitMirSequenceForEachReturnPlan(plan);
         } else if (direct_call_projected_return_plan) |plan| {
@@ -4057,6 +4066,80 @@ pub const CEmitter = struct {
         self.indent -= 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
+    }
+
+    fn mirSequenceForEachUpdatePlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.SequenceForEachUpdatePlan) bool {
+        const parameter = switch (plan.iterable) {
+            .parameter => |parameter| parameter,
+            else => return false,
+        };
+        const declared_iterable = blk: {
+            for (function.signature.params) |param| {
+                if (std.mem.eql(u8, param.name.text, parameter.name)) break :blk param.ty;
+            }
+            return false;
+        };
+        const child_ty = switch (self.resolveAliasType(declared_iterable).kind) {
+            .slice => |slice| slice.child.*,
+            else => return false,
+        };
+        const declared_return = function.signature.transitionalReturnType() orelse return false;
+        return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_iterable), self.resolveAliasType(plan.iterable_fact.target_ty)) and
+            type_bridge.sameTypeSyntax(self.resolveAliasType(child_ty), self.resolveAliasType(plan.element_fact.target_ty)) and
+            type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(plan.local_fact.target_ty)) and
+            typeName(plan.local_fact.target_ty) != null;
+    }
+
+    fn emitMirSequenceForEachUpdatePlan(self: *CEmitter, plan: mir_statement_plan.SequenceForEachUpdatePlan) !void {
+        const parameter = switch (plan.iterable) {
+            .parameter => |parameter| parameter,
+            else => return error.UnsupportedCEmission,
+        };
+        const iterable_name = try self.cIdent(parameter.name);
+        const local_name = try self.cIdent(plan.local_name);
+        const binding_name = try self.cIdent(plan.binding_name);
+        const slice = switch (self.resolveAliasType(plan.iterable_fact.target_ty).kind) {
+            .slice => |slice| slice,
+            else => return error.UnsupportedCEmission,
+        };
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.declaration_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {d};\n", .{ try self.cTypeFor(plan.local_fact.target_ty, .typedef_name), local_name, plan.initializer.value });
+        try self.emitMirDirectCallRepresentationCheck(.{
+            .projection_index = 0,
+            .type_fact = plan.representation_check.type_fact,
+            .location = plan.representation_check.location,
+            .value_id = plan.representation_check.value_id,
+            .result_ty = plan.representation_check.type_fact.result_ty,
+        }, iterable_name, plan.iterable_fact.target_ty);
+        const index_name = try self.nextTempName();
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.element_fact.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "for (uintptr_t {s} = 0; {s} < {s}.len; {s} += 1) {{\n", .{ index_name, index_name, iterable_name, index_name });
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s}.ptr[{s}];\n", .{ try self.cTypeFor(slice.child.*, .typedef_name), binding_name, iterable_name, index_name });
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.assignment_location.source));
+        try self.writeIndent();
+        switch (plan.update) {
+            .replace_with_element => try self.out.print(self.allocator, "{s} = {s};\n", .{ local_name, binding_name }),
+            .checked_add_element => {
+                const type_name = typeName(plan.local_fact.target_ty) orelse return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "{s} = mc_checked_add_{s}({s}, {s});\n", .{ local_name, type_name, local_name, binding_name });
+            },
+        }
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.control_location.source));
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, switch (plan.control) {
+            .break_ => "break;\n",
+            .continue_ => "continue;\n",
+        });
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{local_name});
     }
 
     fn emitMirSequenceForEachReturnPlan(self: *CEmitter, plan: mir_statement_plan.SequenceForEachReturnPlan) !void {

@@ -6567,6 +6567,34 @@ test "lower-c emits break and continue while CFG from MIR without body fallback"
     try expectContains(repeat, "continue;");
 }
 
+test "lower-c emits slice foreach local updates from MIR without body fallback" {
+    const source =
+        \\fn sum(values: []const u32) -> u32 {
+        \\    var total: u32 = 0;
+        \\    for value in values { total = total + value; continue; }
+        \\    return total;
+        \\}
+        \\fn first(values: []const u32) -> u32 {
+        \\    var seen: u32 = 0;
+        \\    for value in values { seen = value; break; }
+        \\    return seen;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_sequence_foreach_update.mc", source, &output);
+
+    const sum = try cFunctionBody(output.items, "static uint32_t sum(");
+    try expectContains(sum, "values.ptr == NULL && values.len != 0");
+    try expectContains(sum, "mc_checked_add_u32(total, value)");
+    try expectContains(sum, "continue;");
+    try expectContains(sum, "return total;");
+    const first = try cFunctionBody(output.items, "static uint32_t first(");
+    try expectContains(first, "seen = value;");
+    try expectContains(first, "break;");
+    try expectContains(first, "return seen;");
+}
+
 test "lower-c nested array member and index results require MIR expression facts" {
     const source =
         \\struct MatrixHolder { rows: [2][2]u32 }

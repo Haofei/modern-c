@@ -299,6 +299,33 @@ pub const WhileControlPlan = struct {
     control_location: Location,
 };
 
+pub const SequenceForEachUpdatePlan = struct {
+    pub const Update = union(enum) {
+        replace_with_element,
+        checked_add_element: struct {
+            operation_fact: mir.TargetTypeFact,
+            location: Location,
+        },
+    };
+
+    iterable: ForEachIterable,
+    iterable_fact: mir.TargetTypeFact,
+    element_fact: mir.TargetTypeFact,
+    representation_check: ForEachRepresentationCheck,
+    binding_name: []const u8,
+    binding_id: mir.ValueId,
+    local_name: []const u8,
+    local_id: mir.ValueId,
+    local_fact: mir.TargetTypeFact,
+    initializer: IntegerLiteralValue,
+    declaration_location: Location,
+    assignment_location: Location,
+    update: Update,
+    control: WhileControlPlan.Control,
+    control_location: Location,
+    return_location: Location,
+};
+
 pub const AggregateValueNode = struct {
     type_fact: mir.TargetTypeFact,
     location: Location,
@@ -459,6 +486,206 @@ pub fn buildWhileControl(function: mir.Function) ?WhileControlPlan {
         .condition_location = locationFromInstruction(condition),
         .control = control,
         .control_location = locationFromInstruction(control_instruction),
+    };
+}
+
+/// Admit a slice `for` that maintains one scalar local, performs one assignment
+/// from the element (or checked-adds it), then immediately breaks/continues and
+/// finally returns that local. This is one bounded CFG family, not backend AST
+/// reconstruction: local/binding generations, operand edges, traps and control
+/// transfer all come from verified MIR identities.
+pub fn buildSequenceForEachUpdate(function: mir.Function) ?SequenceForEachUpdatePlan {
+    if (function.return_ty != .integer or (function.blocks.len != 4 and function.blocks.len != 5) or
+        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    if (entry.terminator != .jump or entry.successors.len != 2) return null;
+    var body_index: ?usize = null;
+    var after_index: ?usize = null;
+    for (function.blocks, 0..) |block, index| {
+        if (std.mem.eql(u8, block.kind, "loop_body")) {
+            if (body_index != null) return null;
+            body_index = index;
+        } else if (std.mem.eql(u8, block.kind, "loop_after")) {
+            if (after_index != null) return null;
+            after_index = index;
+        }
+    }
+    const body = function.blocks[body_index orelse return null];
+    const after = function.blocks[after_index orelse return null];
+    if (body.terminator != .jump or !std.mem.eql(u8, after.kind, "loop_after") or
+        after.terminator != .return_ or after.successors.len != 0) return null;
+
+    var local_instruction: ?mir.Instruction = null;
+    var loop_marker_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .integer_literal_conversion, .target_type, .typed_load, .representation_check, .expr => {},
+        .local => {
+            if (local_instruction != null) return null;
+            local_instruction = instruction;
+        },
+        .binary => {
+            if (!std.mem.eql(u8, instruction.detail, "for")) return null;
+            loop_marker_count += 1;
+        },
+        else => return null,
+    };
+    if (loop_marker_count != 1) return null;
+    const local = local_instruction orelse return null;
+    const local_id = local.typed_value_id orelse return null;
+    if (!local.typed_value_operand_span_id.isValid()) return null;
+    const initializer_expr = expressionAtSpan(entry, local.typed_value_operand_span_id) orelse return null;
+    const initializer_value = initializer_expr.constant_usize_value orelse return null;
+    const local_fact = targetFactBySpan(function, .expression_result, local.typed_value_operand_span_id) orelse return null;
+    if (local_fact.result_ty != .integer or !sameRepresentationType(local.result_ty, function.return_ty)) return null;
+
+    var iterable_fact: ?mir.TargetTypeFact = null;
+    var element_fact: ?mir.TargetTypeFact = null;
+    for (function.target_type_facts) |fact| switch (fact.kind) {
+        .for_iterable => {
+            if (iterable_fact != null) return null;
+            iterable_fact = fact;
+        },
+        .for_element => {
+            if (element_fact != null) return null;
+            element_fact = fact;
+        },
+        else => {},
+    };
+    const iterable = iterable_fact orelse return null;
+    const element = element_fact orelse return null;
+    if (std.meta.activeTag(iterable.target_ty.kind) != .slice or !iterable.typed_span_id.eql(element.typed_span_id) or
+        !element.typed_operand_value_id.isValid() or !sameRepresentationType(element.result_ty, function.return_ty)) return null;
+    const iterable_expr = expressionAtSpan(entry, iterable.typed_span_id) orelse return null;
+    const iterable_id = iterable_expr.typed_value_id orelse return null;
+    const iterable_name = valueIdentityName(function, iterable_id) orelse return null;
+    const iterable_parameter_ty = parameterType(function, iterable_name) orelse return null;
+    if (!sameRepresentationType(iterable_parameter_ty, iterable.result_ty)) return null;
+    const iterable_root_fact = targetFactBySpan(function, .expression_result, iterable.typed_span_id) orelse return null;
+    const iterable_plan: ForEachIterable = .{ .parameter = .{
+        .name = iterable_name,
+        .value_id = iterable_id,
+        .type_fact = iterable_root_fact,
+        .location = locationFromInstruction(iterable_expr),
+    } };
+    var representation_check: ?ForEachRepresentationCheck = null;
+    if (!findForEachRepresentationCheck(function, entry, iterable_plan, iterable, &representation_check) or representation_check == null) return null;
+
+    const binding_id = element.typed_operand_value_id;
+    const binding_name = valueIdentityName(function, binding_id) orelse return null;
+    var assignment: ?mir.Instruction = null;
+    var control_instruction: ?mir.Instruction = null;
+    var add_instruction: ?mir.Instruction = null;
+    for (body.instructions) |instruction| switch (instruction.kind) {
+        .target_type, .expr, .add_overflow => {},
+        .binary => {
+            if (add_instruction != null or !std.mem.eql(u8, instruction.detail, "add")) return null;
+            add_instruction = instruction;
+        },
+        .assign => {
+            if (assignment != null) return null;
+            assignment = instruction;
+        },
+        .control_transfer => {
+            if (control_instruction != null) return null;
+            control_instruction = instruction;
+        },
+        else => return null,
+    };
+    const store = assignment orelse return null;
+    if (!store.typed_target_operand_span_id.isValid() or !store.typed_value_operand_span_id.isValid()) return null;
+    const target_expr = expressionAtSpan(body, store.typed_target_operand_span_id) orelse return null;
+    const target_id = target_expr.typed_value_id orelse return null;
+    if (!target_id.eql(local_id) or !std.mem.eql(u8, target_expr.detail, local.detail)) return null;
+
+    const control_inst = control_instruction orelse return null;
+    const after_block_index = after.id;
+    const control: WhileControlPlan.Control = if (std.mem.eql(u8, control_inst.detail, "break")) blk: {
+        if (body.successors.len != 1 or body.terminator.jump != after_block_index or body.successors[0] != after_block_index) return null;
+        break :blk .break_;
+    } else if (std.mem.eql(u8, control_inst.detail, "continue")) blk: {
+        if (body.successors.len != 2 or body.terminator.jump != entry.id) return null;
+        var returns_to_entry = false;
+        for (body.successors) |successor| {
+            if (successor == entry.id) returns_to_entry = true;
+        }
+        if (!returns_to_entry) return null;
+        break :blk .continue_;
+    } else return null;
+
+    const update: SequenceForEachUpdatePlan.Update = if (add_instruction) |add| blk: {
+        if (control != .continue_ or !add.typed_span_id.eql(store.typed_value_operand_span_id) or
+            !add.typed_left_operand_span_id.isValid() or !add.typed_right_operand_span_id.isValid()) return null;
+        const left = expressionAtSpan(body, add.typed_left_operand_span_id) orelse return null;
+        const right = expressionAtSpan(body, add.typed_right_operand_span_id) orelse return null;
+        const left_id = left.typed_value_id orelse return null;
+        const right_id = right.typed_value_id orelse return null;
+        if (!left_id.eql(local_id) or !right_id.eql(binding_id)) return null;
+        const operation_fact = targetFactBySpan(function, .expression_result, add.typed_span_id) orelse return null;
+        if (!sameRepresentationType(operation_fact.result_ty, function.return_ty)) return null;
+        break :blk .{ .checked_add_element = .{
+            .operation_fact = operation_fact,
+            .location = locationFromInstruction(add),
+        } };
+    } else blk: {
+        if (control != .break_) return null;
+        const value_expr = expressionAtSpan(body, store.typed_value_operand_span_id) orelse return null;
+        const value_id = value_expr.typed_value_id orelse return null;
+        if (!value_id.eql(binding_id)) return null;
+        break :blk .replace_with_element;
+    };
+
+    var returned: ?mir.Instruction = null;
+    for (after.instructions) |instruction| switch (instruction.kind) {
+        .target_type, .expr => {},
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+    const return_instruction = returned orelse return null;
+    if (!return_instruction.typed_value_operand_span_id.isValid()) return null;
+    const returned_expr = expressionAtSpan(after, return_instruction.typed_value_operand_span_id) orelse return null;
+    const returned_id = returned_expr.typed_value_id orelse return null;
+    if (!returned_id.eql(local_id) or !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
+
+    const expected_traps: usize = switch (update) { .replace_with_element => 1, .checked_add_element => 2 };
+    if (function.trap_edges.len != expected_traps) return null;
+    switch (update) {
+        .replace_with_element => {},
+        .checked_add_element => {
+            var overflow_count: usize = 0;
+            for (function.trap_edges) |edge| {
+                if (edge.from_block == body.id and edge.kind == .IntegerOverflow and edge.source == .checked_arithmetic) overflow_count += 1;
+            }
+            if (overflow_count != 1) return null;
+        },
+    }
+
+    return .{
+        .iterable = iterable_plan,
+        .iterable_fact = iterable,
+        .element_fact = element,
+        .representation_check = representation_check.?,
+        .binding_name = binding_name,
+        .binding_id = binding_id,
+        .local_name = local.detail,
+        .local_id = local_id,
+        .local_fact = local_fact,
+        .initializer = .{
+            .value = initializer_value,
+            .type_fact = local_fact,
+            .location = locationFromInstruction(initializer_expr),
+        },
+        .declaration_location = locationFromInstruction(local),
+        .assignment_location = locationFromInstruction(store),
+        .update = update,
+        .control = control,
+        .control_location = locationFromInstruction(control_inst),
+        .return_location = locationFromInstruction(return_instruction),
     };
 }
 
@@ -1324,9 +1551,22 @@ fn attachForEachRepresentation(function: mir.Function, entry: mir.Block, plan: *
             function.trap_edges.len == 0 and function.representation_facts.len == 0;
     }
     if (iterable_kind != .slice or function.blocks.len != 4 or entry.successors.len != 2 or
-        function.trap_edges.len != 1 or function.representation_facts.len < 1 or function.representation_facts.len > 2) return false;
+        function.trap_edges.len != 1) return false;
 
-    const root_value_id = switch (plan.iterable) {
+    return findForEachRepresentationCheck(function, entry, plan.iterable, plan.iterable_fact, &plan.representation_check);
+}
+
+fn findForEachRepresentationCheck(
+    function: mir.Function,
+    entry: mir.Block,
+    iterable: ForEachIterable,
+    iterable_fact: mir.TargetTypeFact,
+    out: *?ForEachRepresentationCheck,
+) bool {
+    if (std.meta.activeTag(iterable_fact.target_ty.kind) != .slice or
+        function.representation_facts.len < 1 or function.representation_facts.len > 2) return false;
+
+    const root_value_id = switch (iterable) {
         .parameter => |parameter| parameter.value_id,
         .direct_call => |call| call.callee_value_id,
     };
@@ -1336,17 +1576,17 @@ fn attachForEachRepresentation(function: mir.Function, entry: mir.Block, plan: *
     var load_instruction_count: usize = 0;
     for (entry.instructions) |instruction| switch (instruction.kind) {
         .representation_check => {
-            if (check_instruction != null or !instruction.typed_span_id.eql(plan.iterable_fact.typed_span_id) or
+            if (check_instruction != null or !instruction.typed_span_id.eql(iterable_fact.typed_span_id) or
                 !std.mem.eql(u8, instruction.detail, "nonnull_pointer") or
-                !sameRepresentationType(instruction.result_ty, plan.iterable_fact.result_ty)) return false;
+                !sameRepresentationType(instruction.result_ty, iterable_fact.result_ty)) return false;
             const value_id = instruction.typed_value_id orelse return false;
             if (!value_id.eql(root_value_id)) return false;
             check_instruction = instruction;
         },
         .typed_load => {
-            if (!instruction.typed_span_id.eql(plan.iterable_fact.typed_span_id)) return false;
+            if (!instruction.typed_span_id.eql(iterable_fact.typed_span_id)) return false;
             const value_id = instruction.typed_value_id orelse return false;
-            if (!value_id.eql(root_value_id) or !sameRepresentationType(instruction.result_ty, plan.iterable_fact.result_ty)) return false;
+            if (!value_id.eql(root_value_id) or !sameRepresentationType(instruction.result_ty, iterable_fact.result_ty)) return false;
             load_instruction_count += 1;
         },
         else => {},
@@ -1357,9 +1597,9 @@ fn attachForEachRepresentation(function: mir.Function, entry: mir.Block, plan: *
     var check_fact_count: usize = 0;
     var load_fact_count: usize = 0;
     for (function.representation_facts) |fact| {
-        if (!fact.typed_span_id.eql(plan.iterable_fact.typed_span_id) or
+        if (!fact.typed_span_id.eql(iterable_fact.typed_span_id) or
             !fact.typed_value_id.eql(root_value_id) or
-            !sameRepresentationType(fact.result_ty, plan.iterable_fact.result_ty)) return false;
+            !sameRepresentationType(fact.result_ty, iterable_fact.result_ty)) return false;
         switch (fact.kind) {
             .representation_check => {
                 if (!std.mem.eql(u8, fact.detail, "nonnull_pointer")) return false;
@@ -1371,15 +1611,20 @@ fn attachForEachRepresentation(function: mir.Function, entry: mir.Block, plan: *
     }
     if (check_fact_count != 1 or load_fact_count != load_instruction_count) return false;
 
-    const edge = function.trap_edges[0];
-    if (edge.from_block != entry.id or edge.kind != .InvalidRepresentation or edge.source != .representation_check or
-        !edge.typed_span_id.eql(plan.iterable_fact.typed_span_id) or edge.trap_block >= function.blocks.len) return false;
+    var matching_edge: ?mir.TrapEdge = null;
+    for (function.trap_edges) |edge| {
+        if (edge.from_block != entry.id or edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+            !edge.typed_span_id.eql(iterable_fact.typed_span_id)) continue;
+        if (matching_edge != null or edge.trap_block >= function.blocks.len) return false;
+        matching_edge = edge;
+    }
+    const edge = matching_edge orelse return false;
     switch (function.blocks[edge.trap_block].terminator) {
         .trap_ => |kind| if (kind != .InvalidRepresentation) return false,
         else => return false,
     }
-    plan.representation_check = .{
-        .type_fact = plan.iterable_fact,
+    out.* = .{
+        .type_fact = iterable_fact,
         .location = locationFromInstruction(check),
         .value_id = root_value_id,
     };
