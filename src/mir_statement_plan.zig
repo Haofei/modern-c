@@ -11,6 +11,7 @@ pub const max_statements = 8;
 pub const max_arguments = 8;
 pub const max_logical_nodes = 16;
 pub const max_place_projections = 4;
+pub const max_switch_arms = 8;
 
 pub const Location = struct {
     span_id: mir.SpanId,
@@ -89,6 +90,24 @@ pub const LogicalReturnPlan = struct {
     count: usize = 0,
     root: usize = 0,
     location: Location,
+};
+
+pub const ScalarSwitchArm = struct {
+    block_id: mir.BlockId,
+    patterns: [mir.Instruction.max_switch_patterns]mir.Instruction.SwitchPattern = [_]mir.Instruction.SwitchPattern{.unused} ** mir.Instruction.max_switch_patterns,
+    pattern_count: usize,
+    result: IntegerLiteralValue,
+    location: Location,
+};
+
+pub const ScalarSwitchReturnPlan = struct {
+    subject_name: []const u8,
+    subject_id: mir.ValueId,
+    subject_fact: mir.TargetTypeFact,
+    subject_location: Location,
+    arms: [max_switch_arms]ScalarSwitchArm = undefined,
+    arm_count: usize = 0,
+    default_arm_index: usize = std.math.maxInt(usize),
 };
 
 pub const PlaceRootKind = enum { parameter, local, global };
@@ -173,6 +192,127 @@ pub const IntegerLiteralValue = struct {
     type_fact: mir.TargetTypeFact,
     location: Location,
 };
+
+/// Admit an exhaustive scalar switch whose subject is one parameter and whose
+/// arms return non-negative integer literals. The arm patterns are normalized
+/// MIR payloads, so neither backend consults switch syntax or source spelling.
+pub fn buildScalarSwitchReturn(function: mir.Function) ?ScalarSwitchReturnPlan {
+    if (function.return_ty == .void or function.blocks.len < 4) return null;
+    if (function.trap_edges.len != 0 or function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    if (entry.terminator != .switch_ or entry.successors.len < 2 or entry.successors.len > max_switch_arms) return null;
+
+    var switch_marker_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .expr => {},
+        .binary => {
+            if (!std.mem.eql(u8, instruction.detail, "switch_subject")) return null;
+            switch_marker_count += 1;
+        },
+        else => return null,
+    };
+    if (switch_marker_count != 1) return null;
+
+    var subject_fact: ?mir.TargetTypeFact = null;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .switch_subject) continue;
+        if (subject_fact != null or !fact.typed_span_id.isValid() or fact.result_ty != .integer) return null;
+        subject_fact = fact;
+    }
+    const fact = subject_fact orelse return null;
+    const subject_instruction = expressionAtSpan(entry, fact.typed_span_id) orelse return null;
+    const subject_id = subject_instruction.typed_value_id orelse return null;
+    const subject_name = valueIdentityName(function, subject_id) orelse return null;
+    const subject_ty = parameterType(function, subject_name) orelse return null;
+    if (subject_ty != .integer or subject_instruction.result_ty != .integer) return null;
+
+    var plan: ScalarSwitchReturnPlan = .{
+        .subject_name = subject_name,
+        .subject_id = subject_id,
+        .subject_fact = fact,
+        .subject_location = locationFromInstruction(subject_instruction),
+    };
+    var seen_blocks = [_]bool{false} ** (max_switch_arms + 2);
+    if (function.blocks.len > seen_blocks.len) return null;
+    seen_blocks[0] = true;
+
+    var after_count: usize = 0;
+    for (function.blocks[1..]) |block| {
+        if (!std.mem.eql(u8, block.kind, "switch_after")) continue;
+        if (block.terminator != .fallthrough or block.successors.len != 0 or block.instructions.len != 0) return null;
+        if (block.id >= seen_blocks.len) return null;
+        seen_blocks[block.id] = true;
+        after_count += 1;
+    }
+    if (after_count != 1) return null;
+
+    for (entry.successors) |successor| {
+        if (successor >= function.blocks.len or successor >= seen_blocks.len or seen_blocks[successor]) return null;
+        const arm_block = function.blocks[successor];
+        if (!std.mem.eql(u8, arm_block.kind, "switch_arm") or arm_block.terminator != .return_ or arm_block.successors.len != 0) return null;
+        if (plan.arm_count >= plan.arms.len) return null;
+
+        var marker: ?mir.Instruction = null;
+        var returned: ?mir.Instruction = null;
+        for (arm_block.instructions) |instruction| switch (instruction.kind) {
+            .target_type, .integer_literal_conversion => {},
+            .expr => if (instruction.result_ty == .branch) {
+                if (marker != null) return null;
+                marker = instruction;
+            },
+            .return_value => {
+                if (returned != null or !instruction.typed_value_operand_span_id.isValid()) return null;
+                returned = instruction;
+            },
+            else => return null,
+        };
+        const arm_marker = marker orelse return null;
+        if (arm_marker.typed_switch_pattern_count == 0) return null;
+        const return_instruction = returned orelse return null;
+        const result_instruction = expressionAtSpan(arm_block, return_instruction.typed_value_operand_span_id) orelse return null;
+        const result_value = result_instruction.constant_usize_value orelse return null;
+        const result_fact = targetFactBySpan(function, .expression_result, return_instruction.typed_value_operand_span_id) orelse return null;
+        if (!sameRepresentationType(result_fact.result_ty, function.return_ty) or !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
+
+        const arm_index = plan.arm_count;
+        plan.arms[arm_index] = .{
+            .block_id = arm_block.typed_id,
+            .patterns = arm_marker.typed_switch_patterns,
+            .pattern_count = arm_marker.typed_switch_pattern_count,
+            .result = .{
+                .value = result_value,
+                .type_fact = result_fact,
+                .location = locationFromInstruction(result_instruction),
+            },
+            .location = locationFromInstruction(return_instruction),
+        };
+
+        var wildcard_count: usize = 0;
+        for (plan.arms[arm_index].patterns[0..plan.arms[arm_index].pattern_count]) |pattern| switch (pattern) {
+            .unused => return null,
+            .wildcard => wildcard_count += 1,
+            .scalar => |scalar| {
+                for (plan.arms[0..arm_index]) |previous| for (previous.patterns[0..previous.pattern_count]) |other| switch (other) {
+                    .scalar => |old| if (old.negative == scalar.negative and old.magnitude == scalar.magnitude) return null,
+                    else => {},
+                };
+            },
+        };
+        if (wildcard_count != 0) {
+            if (wildcard_count != 1 or plan.arms[arm_index].pattern_count != 1 or plan.default_arm_index != std.math.maxInt(usize)) return null;
+            plan.default_arm_index = arm_index;
+        }
+        seen_blocks[successor] = true;
+        plan.arm_count += 1;
+    }
+
+    if (plan.arm_count != entry.successors.len or plan.default_arm_index == std.math.maxInt(usize)) return null;
+    for (seen_blocks[0..function.blocks.len]) |seen| if (!seen) return null;
+    return plan;
+}
 
 pub const PlaceStore = struct {
     target: Place,

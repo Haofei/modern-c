@@ -1605,7 +1605,14 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const scalar_switch_return_plan = if (place_return_plan == null and simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildScalarSwitchReturn(fn_mir)) |plan|
+                if (self.mirScalarSwitchPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (place_return_plan == null and scalar_switch_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1634,7 +1641,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1657,6 +1664,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
         } else if (place_return_plan) |plan| {
             try self.emitMirPlaceReturnPlan(plan);
+        } else if (scalar_switch_return_plan) |plan| {
+            try self.emitMirScalarSwitchReturnPlan(plan);
         } else if (indirect_call_return_plan) |plan| {
             try self.emitMirIndirectCallReturnPlan(plan);
         } else if (logical_return_plan) |plan| {
@@ -3832,6 +3841,65 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
         }
         try self.out.appendSlice(self.allocator, ");\n");
+    }
+
+    fn mirScalarSwitchPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.ScalarSwitchReturnPlan) bool {
+        const return_ty = function.signature.transitionalReturnType() orelse return false;
+        var matched_subject = false;
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, plan.subject_name)) continue;
+            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.subject_fact.target_ty))) return false;
+            matched_subject = true;
+        }
+        if (!matched_subject) return false;
+        for (plan.arms[0..plan.arm_count]) |arm| {
+            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(arm.result.type_fact.target_ty))) return false;
+        }
+        return true;
+    }
+
+    fn emitMirScalarSwitchReturnPlan(self: *CEmitter, plan: mir_statement_plan.ScalarSwitchReturnPlan) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.subject_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "switch ({s}) {{\n", .{try self.cIdent(plan.subject_name)});
+        self.indent += 1;
+        defer self.indent -= 1;
+        for (plan.arms[0..plan.arm_count]) |arm| {
+            const is_default = for (arm.patterns[0..arm.pattern_count]) |pattern| {
+                switch (pattern) {
+                    .wildcard => break true,
+                    else => {},
+                }
+            } else false;
+            if (is_default) {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "default:\n");
+            } else {
+                for (arm.patterns[0..arm.pattern_count]) |pattern| {
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "case ");
+                    try self.emitMirScalarSwitchPattern(pattern);
+                    try self.out.appendSlice(self.allocator, ":\n");
+                }
+            }
+            self.indent += 1;
+            try self.writeLineDirective(spanFromMirSourcePoint(arm.location.source));
+            try self.writeIndent();
+            try self.out.print(self.allocator, "return {d};\n", .{arm.result.value});
+            self.indent -= 1;
+        }
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+    }
+
+    fn emitMirScalarSwitchPattern(self: *CEmitter, pattern: mir.Instruction.SwitchPattern) !void {
+        switch (pattern) {
+            .unused, .wildcard => return error.UnsupportedCEmission,
+            .scalar => |scalar| {
+                if (scalar.negative) try self.out.append(self.allocator, '-');
+                try self.out.print(self.allocator, "{d}", .{scalar.magnitude});
+            },
+        }
     }
 
     fn emitMirPlaceReturnPlan(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan) !void {

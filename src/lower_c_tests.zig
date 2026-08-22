@@ -2879,6 +2879,29 @@ test "lower-c emits enum literal explicit casts from MIR without body fallback" 
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c scalar switch returns lower from MIR without body fallback" {
+    const source =
+        \\fn classify(n: i32) -> u32 {
+        \\    switch n {
+        \\        -1 => { return 1; },
+        \\        0, 2 => { return 2; },
+        \\        _ => { return 3; },
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_switch.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t classify(int32_t n)");
+    try expectContains(body, "switch (n)");
+    try expectContains(body, "case -1:");
+    try expectContains(body, "case 0:");
+    try expectContains(body, "case 2:");
+    try expectContains(body, "default:");
+    try expectContains(body, "return 3;");
+}
+
 test "lower-c emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;

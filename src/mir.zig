@@ -1511,6 +1511,23 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_left_operand_span_id.index(), right_id },
                     );
                 }
+                if (instruction.typed_switch_pattern_count != 0) {
+                    for (instruction.typed_switch_patterns[0..instruction.typed_switch_pattern_count], 0..) |pattern, pattern_index| {
+                        switch (pattern) {
+                            .unused => unreachable,
+                            .wildcard => try out.print(
+                                allocator,
+                                "mir switch_pattern fn={s} block={} index={} kind=wildcard\n",
+                                .{ function.name, block.id, pattern_index },
+                            ),
+                            .scalar => |scalar| try out.print(
+                                allocator,
+                                "mir switch_pattern fn={s} block={} index={} kind=scalar negative={} magnitude={}\n",
+                                .{ function.name, block.id, pattern_index, scalar.negative, scalar.magnitude },
+                            ),
+                        }
+                    }
+                }
                 if (instruction.typed_base_operand_span_id.isValid() and instruction.member_field_index != null) {
                     try out.print(
                         allocator,
@@ -2207,6 +2224,26 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     } else {
         for (instruction.typed_aggregate_operand_span_ids) |operand_span_id| {
             if (operand_span_id.isValid()) return false;
+        }
+    }
+    if (instruction.typed_switch_pattern_count > Instruction.max_switch_patterns) return false;
+    if (instruction.typed_switch_pattern_count != 0) {
+        if (instruction.kind != .expr or instruction.result_ty != .branch) return false;
+        for (instruction.typed_switch_patterns, 0..) |pattern, index| {
+            const unused = switch (pattern) {
+                .unused => true,
+                else => false,
+            };
+            if (index < instruction.typed_switch_pattern_count) {
+                if (unused) return false;
+            } else if (!unused) return false;
+        }
+    } else {
+        for (instruction.typed_switch_patterns) |pattern| {
+            switch (pattern) {
+                .unused => {},
+                else => return false,
+            }
         }
     }
     if (instruction.kind == .assign) {
@@ -6782,6 +6819,11 @@ const FunctionBuilder = struct {
                 try self.recordTrueCondFacts(node.subject);
             }
             try self.addInstr(.expr, if (arm.patterns.len == 0) "_" else patternText(arm.patterns[0]), .branch, span);
+            if (self.normalizedScalarSwitchPatterns(arm.patterns)) |patterns| {
+                const marker = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                marker.typed_switch_patterns = patterns.values;
+                marker.typed_switch_pattern_count = patterns.count;
+            }
             const narrowed_binding = if (arm.patterns.len > 0) self.switchNarrowedBinding(node.subject, arm.patterns[0]) else null;
             var had_previous_type = false;
             var previous_type: ValueType = .unknown;
@@ -11376,6 +11418,37 @@ const FunctionBuilder = struct {
             },
             else => false,
         };
+    }
+
+    const NormalizedSwitchPatterns = struct {
+        values: [Instruction.max_switch_patterns]Instruction.SwitchPattern = [_]Instruction.SwitchPattern{.unused} ** Instruction.max_switch_patterns,
+        count: usize = 0,
+    };
+
+    fn normalizedScalarSwitchPatterns(self: *FunctionBuilder, patterns: []const ast.Pattern) ?NormalizedSwitchPatterns {
+        _ = self;
+        var result: NormalizedSwitchPatterns = .{};
+        if (patterns.len == 0) {
+            result.values[0] = .wildcard;
+            result.count = 1;
+            return result;
+        }
+        if (patterns.len > Instruction.max_switch_patterns) return null;
+        for (patterns, 0..) |pattern, index| {
+            result.values[index] = switch (pattern.kind) {
+                .wildcard => .wildcard,
+                .literal => |literal| blk: {
+                    const value = integerLiteralValue(literal) orelse return null;
+                    break :blk .{ .scalar = .{
+                        .negative = value.negative,
+                        .magnitude = value.magnitude,
+                    } };
+                },
+                else => return null,
+            };
+        }
+        result.count = patterns.len;
+        return result;
     }
 
     // Structural equality of two simple place expressions (identifiers and `base.field` chains),

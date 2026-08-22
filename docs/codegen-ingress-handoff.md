@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-21 after the fixed-array place slice.
+2026-08-21 after the scalar-switch MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **85/160 C** and **86/160 LLVM**
+  The current strict ratchet corpus admits **88/160 C** and **89/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -129,6 +129,13 @@ length and element types. This closes scalar nested writes and row replacement
 for global arrays, struct-field arrays, and array-to-struct-to-array places.
 Nested aggregate literals and local literal-owned storage remain fallback.
 
+Exhaustive scalar switches with a parameter subject and integer-literal return
+arms now use one backend-neutral CFG plan. Each switch-arm marker owns a bounded
+set of normalized signed-magnitude or wildcard patterns, so character cases,
+negative integer cases, multi-pattern arms, and the default edge no longer have
+to be recovered from the AST body. The MIR identity verifier rejects malformed
+or partially populated pattern payloads before either backend runs.
+
 ### Six correctness defects were caught by the discipline (learn from these)
 
 1. **optional-deref dropped the tag**: an early `return p.*` recognizer admitted
@@ -162,7 +169,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 85/160 and LLVM 86/160. The exact-root soundness gate
+current strict corpus is C 88/160 and LLVM 89/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

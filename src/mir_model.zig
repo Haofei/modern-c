@@ -155,6 +155,16 @@ pub const ValueType = union(enum) {
 
 pub const Instruction = struct {
     pub const max_aggregate_operands: usize = 8;
+    pub const max_switch_patterns: usize = 8;
+
+    pub const SwitchPattern = union(enum) {
+        unused,
+        wildcard,
+        scalar: struct {
+            negative: bool,
+            magnitude: u128,
+        },
+    };
 
     kind: Kind,
     result_ty: ValueType,
@@ -200,6 +210,12 @@ pub const Instruction = struct {
     // statement plan until a dynamic operand table replaces this inline form.
     typed_aggregate_operand_span_ids: [max_aggregate_operands]SpanId = [_]SpanId{.invalid} ** max_aggregate_operands,
     typed_aggregate_operand_count: usize = 0,
+    // A switch-arm marker may own a bounded, normalized set of scalar
+    // patterns. Keeping signed magnitude here avoids source spelling and lets
+    // shared lowering distinguish `-1`, character literals, and wildcard arms
+    // without reopening the AST body.
+    typed_switch_patterns: [max_switch_patterns]SwitchPattern = [_]SwitchPattern{.unused} ** max_switch_patterns,
+    typed_switch_pattern_count: usize = 0,
     typed_target_operand_span_id: SpanId = .invalid,
     typed_value_operand_span_id: SpanId = .invalid,
     // Calls retain their enclosing expression span above for diagnostics and

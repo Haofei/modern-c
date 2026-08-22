@@ -11911,3 +11911,60 @@ test "MIR verifier reports Result try payload return mismatches" {
     try std.testing.expectEqual(@as(usize, 1), pointer_conversion_count);
     try std.testing.expectEqual(@as(usize, 3), c_void_conversion_count);
 }
+
+test "MIR scalar switch plan owns normalized arm patterns" {
+    const source =
+        \\fn classify(n: i32) -> u32 {
+        \\    switch n {
+        \\        -1 => { return 1; },
+        \\        0, 'A' => { return 2; },
+        \\        _ => { return 3; },
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_scalar_switch_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = module_mir.functions[0];
+    const plan = mir_statement_plan.buildScalarSwitchReturn(function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("n", plan.subject_name);
+    try std.testing.expectEqual(@as(usize, 3), plan.arm_count);
+    try std.testing.expectEqual(@as(usize, 2), plan.default_arm_index);
+    switch (plan.arms[0].patterns[0]) {
+        .scalar => |value| {
+            try std.testing.expect(value.negative);
+            try std.testing.expectEqual(@as(u128, 1), value.magnitude);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (plan.arms[1].patterns[1]) {
+        .scalar => |value| {
+            try std.testing.expect(!value.negative);
+            try std.testing.expectEqual(@as(u128, 'A'), value.magnitude);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (plan.arms[2].patterns[0]) {
+        .wildcard => {},
+        else => return error.TestUnexpectedResult,
+    }
+
+    var corrupted = false;
+    for (module_mir.functions[0].blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.typed_switch_pattern_count == 0) continue;
+            instruction.typed_switch_patterns[0] = .unused;
+            corrupted = true;
+            break;
+        }
+        if (corrupted) break;
+    }
+    try std.testing.expect(corrupted);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_scalar_switch_plan.mc", source);
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}

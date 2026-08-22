@@ -1660,7 +1660,14 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const scalar_switch_return_plan = if (place_return_plan == null and simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildScalarSwitchReturn(fn_mir)) |plan|
+                if (self.mirScalarSwitchPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (place_return_plan == null and scalar_switch_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1688,7 +1695,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1756,6 +1763,8 @@ const LlvmEmitter = struct {
             try self.emitReturnVoid(span);
         } else if (place_return_plan) |plan| {
             try self.emitMirPlaceReturnPlan(plan, ret_ty);
+        } else if (scalar_switch_return_plan) |plan| {
+            try self.emitMirScalarSwitchReturnPlan(plan, ret_ty);
         } else if (indirect_call_return_plan) |plan| {
             try self.emitMirIndirectCallReturnPlan(plan);
         } else if (logical_return_plan) |plan| {
@@ -3814,6 +3823,60 @@ const LlvmEmitter = struct {
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         try self.emitReturnValue(signature.ret.*, result, span);
+    }
+
+    fn mirScalarSwitchPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.ScalarSwitchReturnPlan) bool {
+        const return_ty = function.signature.transitionalReturnType() orelse return false;
+        var matched_subject = false;
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, plan.subject_name)) continue;
+            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.subject_fact.target_ty))) return false;
+            matched_subject = true;
+        }
+        if (!matched_subject) return false;
+        for (plan.arms[0..plan.arm_count]) |arm| {
+            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(arm.result.type_fact.target_ty))) return false;
+        }
+        return true;
+    }
+
+    fn emitMirScalarSwitchReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.ScalarSwitchReturnPlan, ret_ty: anytype) !void {
+        if (plan.default_arm_index >= plan.arm_count) return error.UnsupportedLlvmEmission;
+        const subject_ty = try self.llvmType(plan.subject_fact.target_ty);
+        var labels: [mir_statement_plan.max_switch_arms][]const u8 = undefined;
+        for (plan.arms[0..plan.arm_count], 0..) |_, index| labels[index] = try self.nextLabel("scalar_switch_arm");
+
+        try self.out.print(self.allocator, "  switch {s} %{s}, label %{s} [\n", .{
+            subject_ty,
+            plan.subject_name,
+            labels[plan.default_arm_index],
+        });
+        for (plan.arms[0..plan.arm_count], 0..) |arm, arm_index| {
+            if (arm_index == plan.default_arm_index) continue;
+            for (arm.patterns[0..arm.pattern_count]) |pattern| {
+                try self.out.print(self.allocator, "    {s} {s}, label %{s}\n", .{
+                    subject_ty,
+                    try self.mirScalarSwitchPattern(pattern),
+                    labels[arm_index],
+                });
+            }
+        }
+        try self.out.print(self.allocator, "  ]{s}\n", .{try self.debugCallSuffix()});
+        for (plan.arms[0..plan.arm_count], 0..) |arm, arm_index| {
+            try self.out.print(self.allocator, "{s}:\n", .{labels[arm_index]});
+            const value = try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{arm.result.value});
+            try self.emitReturnValue(ret_ty, value, spanFromMirSourcePoint(arm.location.source));
+        }
+    }
+
+    fn mirScalarSwitchPattern(self: *LlvmEmitter, pattern: mir.Instruction.SwitchPattern) ![]const u8 {
+        return switch (pattern) {
+            .unused, .wildcard => error.UnsupportedLlvmEmission,
+            .scalar => |scalar| if (scalar.negative)
+                try std.fmt.allocPrint(self.scratch.allocator(), "-{d}", .{scalar.magnitude})
+            else
+                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{scalar.magnitude}),
+        };
     }
 
     const MirPlacePointer = struct {

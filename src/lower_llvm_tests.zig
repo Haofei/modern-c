@@ -3590,6 +3590,28 @@ test "LLVM emits enum literal explicit casts from MIR without body fallback" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM scalar switch returns lower from MIR without body fallback" {
+    const source =
+        \\fn classify(n: i32) -> u32 {
+        \\    switch n {
+        \\        -1 => { return 1; },
+        \\        0, 2 => { return 2; },
+        \\        _ => { return 3; },
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_switch.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @classify");
+    try expectContains(body, "switch i32 %n");
+    try expectContains(body, "i32 -1, label %bb_scalar_switch_arm");
+    try expectContains(body, "i32 0, label %bb_scalar_switch_arm");
+    try expectContains(body, "i32 2, label %bb_scalar_switch_arm");
+    try expectContains(body, "ret i32 3");
+}
+
 test "LLVM emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;
