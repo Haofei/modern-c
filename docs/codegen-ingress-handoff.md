@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the direct-call fixed-array foreach MIR slice.
+2026-08-22 after the generalized fixed-array foreach MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **102/160 C** and **103/160 LLVM**
+  The current strict ratchet corpus admits **104/160 C** and **105/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -193,15 +193,20 @@ callee `SpanId`; field projections carry resolved indices; checked indexes carry
 their exact Bounds edge; and slice projections carry their exact representation
 fact. Both backends now admit `make_values(seed)[index]`,
 `make_bag(seed).values[index]`, and `make_bag(seed).tail[index]` without reading
-the function body. Nested or effectful call arguments remain fail-closed.
+the function body. A zero-argument nested call is represented as an explicit
+argument operation and staged before the outer call; other nested/effectful
+argument shapes remain fail-closed.
 
 The same boundary now covers the three-block fixed-array `for` shape whose body
 immediately returns the bound element and whose after block returns an integer
-literal. The `.for_element` fact owns the binding `ValueId`; the iterable call,
-field projections, element type, body exit, and empty-array exit are validated
-once in `mir_statement_plan.zig`. This removes the AST body fallback for
-`first_from_array_call` and `first_from_array_field_call`. Nested call arguments,
-slices, side-effecting bodies, and general loops remain fail-closed.
+literal. The `.for_element` fact owns the binding `ValueId`; a tagged iterable
+root owns either a parameter array or a direct call, while field projections,
+element type, body exit, and empty-array exit are validated once in
+`mir_statement_plan.zig`. Direct-call arguments also carry either a parameter
+identity or an explicitly staged zero-argument call. This removes the AST body
+fallback for `first_from_array`, `first_from_array_call`,
+`first_from_array_field_call`, and `first_from_seeded_array_call`. Slices,
+side-effecting bodies, and general loops remain fail-closed.
 
 ## Next work
 
@@ -210,7 +215,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 102/160 and LLVM 103/160. The exact-root soundness gate
+current strict corpus is C 104/160 and LLVM 105/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

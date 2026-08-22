@@ -254,17 +254,26 @@ test "LLVM direct-call aggregate projections return from MIR without body fallba
     try expectContains(slice_field, "call void @mc_trap_Bounds()");
 }
 
-test "LLVM returns first direct-call array element from MIR CFG without body fallback" {
+test "LLVM returns first fixed-array element from MIR CFG without body fallback" {
     const source =
         \\struct Bag { values: [4]u32 }
         \\extern fn make_values(seed: u32) -> [4]u32;
         \\extern fn make_bag(seed: u32) -> Bag;
+        \\extern fn next_seed() -> u32;
         \\fn first_value(seed: u32) -> u32 {
         \\    for value in make_values(seed) { return value; }
         \\    return 0;
         \\}
         \\fn first_field(seed: u32) -> u32 {
         \\    for value in make_bag(seed).values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_parameter(values: [4]u32) -> u32 {
+        \\    for value in values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_nested_call() -> u32 {
+        \\    for value in make_values(next_seed()) { return value; }
         \\    return 0;
         \\}
     ;
@@ -283,6 +292,18 @@ test "LLVM returns first direct-call array element from MIR CFG without body fal
     try expectContains(field, "extractvalue { [4 x i32] }");
     try expectContains(field, "icmp ult i64 0, 4");
     try expectContains(field, "ret i32 0");
+
+    const parameter = try llvmFunctionBody(output.items, "define internal i32 @first_parameter");
+    try expectContains(parameter, "extractvalue [4 x i32] %values, 0");
+    try expectContains(parameter, "getelementptr [4 x i32]");
+    try expectNotContains(parameter, "@make_values");
+
+    const nested = try llvmFunctionBody(output.items, "define internal i32 @first_nested_call");
+    const nested_call = std.mem.indexOf(u8, nested, "call i32 @next_seed()") orelse return error.TestUnexpectedResult;
+    const outer_call = std.mem.indexOf(u8, nested, "call [4 x i32] @make_values(i32 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nested_call < outer_call);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "call i32 @next_seed()"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "call [4 x i32] @make_values("));
 }
 
 test "LLVM literal unary components lower from MIR without body fallback" {

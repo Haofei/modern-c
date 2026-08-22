@@ -824,8 +824,13 @@ test "MIR direct-call aggregate projected returns own identities and checks" {
     try std.testing.expect(values_plan.call_location.span_id.isValid());
     try std.testing.expectEqual(@as(usize, 1), values_plan.argument_count);
     try std.testing.expectEqual(@as(usize, 0), values_plan.arguments[0].index);
-    try std.testing.expectEqualStrings("seed", values_plan.arguments[0].name);
-    try std.testing.expect(values_plan.arguments[0].value_id.isValid());
+    switch (values_plan.arguments[0].value) {
+        .parameter => |parameter| {
+            try std.testing.expectEqualStrings("seed", parameter.name);
+            try std.testing.expect(parameter.value_id.isValid());
+        },
+        else => return error.TestUnexpectedResult,
+    }
     try std.testing.expect(values_plan.arguments[0].type_fact.typed_callee_span_id.eql(values_plan.call_location.span_id));
     try std.testing.expectEqual(@as(usize, 1), values_plan.projection_count);
     switch (values_plan.projections[0]) {
@@ -945,11 +950,12 @@ test "MIR direct-call aggregate projected returns own identities and checks" {
     try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(representation_function.*) == null);
 }
 
-test "MIR direct-call fixed-array foreach return owns binding and CFG" {
+test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
     const source =
         \\struct Bag { values: [4]u32 }
         \\extern fn make_values(seed: u32) -> [4]u32;
         \\extern fn make_bag(seed: u32) -> Bag;
+        \\extern fn next_seed() -> u32;
         \\fn first_value(seed: u32) -> u32 {
         \\    for value in make_values(seed) { return value; }
         \\    return 0;
@@ -958,29 +964,64 @@ test "MIR direct-call fixed-array foreach return owns binding and CFG" {
         \\    for value in make_bag(seed).values { return value; }
         \\    return 0;
         \\}
+        \\fn first_parameter(values: [4]u32) -> u32 {
+        \\    for value in values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_nested_call() -> u32 {
+        \\    for value in make_values(next_seed()) { return value; }
+        \\    return 0;
+        \\}
     ;
     var parsed = try test_support.parseModule("mir_direct_call_foreach_return.mc", source);
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    const direct = mir_statement_plan.buildDirectCallForEachReturn(functionByName(module_mir, "first_value").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("make_values", direct.callee_name);
-    try std.testing.expectEqual(@as(usize, 1), direct.argument_count);
-    try std.testing.expectEqual(@as(usize, 0), direct.projection_count);
+    const direct = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_value").?) orelse return error.TestUnexpectedResult;
+    const direct_call = switch (direct.iterable) {
+        .direct_call => |call| call,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("make_values", direct_call.callee_name);
+    try std.testing.expectEqual(@as(usize, 1), direct_call.argument_count);
+    try std.testing.expectEqual(@as(usize, 0), direct_call.projection_count);
     try std.testing.expectEqualStrings("value", direct.binding_name);
     try std.testing.expect(direct.binding_id.isValid());
     try std.testing.expect(direct.element_fact.typed_operand_value_id.eql(direct.binding_id));
     try std.testing.expectEqual(@as(usize, 0), direct.fallback.value);
 
-    const field = mir_statement_plan.buildDirectCallForEachReturn(functionByName(module_mir, "first_field").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("make_bag", field.callee_name);
-    try std.testing.expectEqual(@as(usize, 1), field.projection_count);
-    switch (field.projections[0]) {
+    const field = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_field").?) orelse return error.TestUnexpectedResult;
+    const field_call = switch (field.iterable) {
+        .direct_call => |call| call,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("make_bag", field_call.callee_name);
+    try std.testing.expectEqual(@as(usize, 1), field_call.projection_count);
+    switch (field_call.projections[0]) {
         .field => |projection| {
             try std.testing.expectEqualStrings("values", projection.field_name);
             try std.testing.expectEqual(@as(usize, 0), projection.field_index);
         },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const parameter = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_parameter").?) orelse return error.TestUnexpectedResult;
+    switch (parameter.iterable) {
+        .parameter => |root| {
+            try std.testing.expectEqualStrings("values", root.name);
+            try std.testing.expect(root.value_id.isValid());
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const nested = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_nested_call").?) orelse return error.TestUnexpectedResult;
+    const nested_call = switch (nested.iterable) {
+        .direct_call => |call| call,
+        else => return error.TestUnexpectedResult,
+    };
+    switch (nested_call.arguments[0].value) {
+        .zero_arg_call => |call| try std.testing.expectEqualStrings("next_seed", call.callee_name),
         else => return error.TestUnexpectedResult,
     }
 
@@ -993,7 +1034,7 @@ test "MIR direct-call fixed-array foreach return owns binding and CFG" {
             break;
         }
     }
-    try std.testing.expect(mir_statement_plan.buildDirectCallForEachReturn(binding_function.*) == null);
+    try std.testing.expect(mir_statement_plan.buildFixedArrayForEachReturn(binding_function.*) == null);
 
     var field_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer field_mir.deinit();
@@ -1004,7 +1045,7 @@ test "MIR direct-call fixed-array foreach return owns binding and CFG" {
             break;
         }
     }
-    try std.testing.expect(mir_statement_plan.buildDirectCallForEachReturn(field_function.*) == null);
+    try std.testing.expect(mir_statement_plan.buildFixedArrayForEachReturn(field_function.*) == null);
 }
 
 test "MIR target-type owner identities mirror direct calls" {

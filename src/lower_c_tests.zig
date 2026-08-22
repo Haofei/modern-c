@@ -6478,17 +6478,26 @@ test "lower-c projects direct aggregate call results from MIR without body fallb
     try expectContains(slice_field_body, "return mc_tmp");
 }
 
-test "lower-c returns first direct-call array element from MIR CFG without body fallback" {
+test "lower-c returns first fixed-array element from MIR CFG without body fallback" {
     const source =
         \\struct Bag { values: [4]u32 }
         \\extern fn make_values(seed: u32) -> [4]u32;
         \\extern fn make_bag(seed: u32) -> Bag;
+        \\extern fn next_seed() -> u32;
         \\fn first_value(seed: u32) -> u32 {
         \\    for value in make_values(seed) { return value; }
         \\    return 0;
         \\}
         \\fn first_field(seed: u32) -> u32 {
         \\    for value in make_bag(seed).values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_parameter(values: [4]u32) -> u32 {
+        \\    for value in values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_nested_call() -> u32 {
+        \\    for value in make_values(next_seed()) { return value; }
         \\    return 0;
         \\}
     ;
@@ -6509,6 +6518,17 @@ test "lower-c returns first direct-call array element from MIR CFG without body 
     try expectContains(field, ".elems[0]");
     try expectContains(field, "return value;");
     try expectContains(field, "return 0;");
+
+    const parameter = try cFunctionBody(output.items, "first_parameter(");
+    try expectContains(parameter, "values.elems[0]");
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, parameter, "make_values"));
+
+    const nested = try cFunctionBody(output.items, "first_nested_call(");
+    const nested_call = std.mem.indexOf(u8, nested, "next_seed()") orelse return error.TestUnexpectedResult;
+    const outer_call = std.mem.indexOf(u8, nested, "make_values(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nested_call < outer_call);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "next_seed()"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "make_values("));
 }
 
 test "lower-c nested array member and index results require MIR expression facts" {
