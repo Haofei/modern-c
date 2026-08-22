@@ -34,7 +34,7 @@
     {
       "id": "minimal-checked-program",
       "priority": "P1",
-      "status": "incomplete",
+      "status": "complete",
       "requested_end_state": "A minimal syntax-free CheckedProgram owns callable/signature/effect identity and feeds typed MIR/VerifiedProgram; MC does not add a second expression IR or a full Typed HIR.",
       "implemented_evidence": [
         {
@@ -50,11 +50,28 @@
           "needle": "pub const CheckedCallableFact = struct"
         }
       ],
-      "current_evidence": [
+      "completion_evidence": [
         {
           "file": "src/checked_program.zig",
-          "needle": "pub fn init(module: *const mir.Module) !CheckedProgram",
-          "expected_count_while_incomplete": 1
+          "needle": "pub fn init(callables: []const mir.CheckedCallableFact) !CheckedProgram"
+        },
+        {
+          "file": "src/mir.zig",
+          "needle": "applyCheckedCallableFact(&function, checked)"
+        },
+        {
+          "file": "src/verified_program.zig",
+          "needle": "checked.matchesMir(typed_mir.*)"
+        }
+      ],
+      "retired_evidence": [
+        {
+          "file": "src/checked_program.zig",
+          "needle": "pub fn init(module: *const mir.Module) !CheckedProgram"
+        },
+        {
+          "file": "src/mir.zig",
+          "needle": "fn buildCheckedCallableFacts"
         }
       ]
     },

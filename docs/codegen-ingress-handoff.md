@@ -9,21 +9,18 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   The current strict ratchet corpus admits **124/160 C** and **125/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
-- **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
-  admitted by `VerifiedProgram`; it owns callable identity, signature shape,
-  ABI and closed effect flags. The redundant `CheckedSyntaxModule` wrapper has
-  been deleted; sema now returns the existing parsed syntax owner rather than
-  naming an AST slice "checked". The remaining directionality issue is that
-  `CheckedProgram.init` still validates facts already produced with MIR instead
-  of being the pre-MIR semantic input. This is deliberately not a full Typed
-  HIR: executable function bodies remain canonical MIR.
+- **P1 `minimal-checked-program`** — complete. Callable identity, signature
+  representation, ABI and closed effect flags are created from checked
+  declarations before body MIR lowering. MIR adopts that table, and
+  `VerifiedProgram` independently admits it against the completed MIR. The
+  table contains no AST or expression tree; executable bodies remain canonical
+  MIR, so this did not add a full Typed HIR.
 - **P1 `real-module-graph`** — frozen. `module_graph.zig` / `module_parser.zig`
   exist and `ir_inspection.zig` consumes a `ResolvedSourceDatabase`, but the main
   sema→MIR→codegen pipeline still uses the combined-source text. Cutover undone.
 
-None of the three is complete. P0 and the module-graph cutover remain multi-week
-units; the minimal CheckedProgram is a bounded table migration. Do not report a
-goal complete until its deletion anchors are gone.
+One of the three goals is complete. P0 and the module-graph cutover remain
+incomplete; do not report either complete until its deletion anchors are gone.
 
 ## The three goals, precisely
 

@@ -981,6 +981,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (functions.items) |function| freeFunction(allocator, function);
         functions.deinit(allocator);
     }
+    // Callable identity/signature/effect facts are created from checked
+    // declarations before each body is lowered. MIR then adopts these facts;
+    // it is no longer their source of truth.
+    var checked_callables: std.ArrayList(CheckedCallableFact) = .empty;
+    errdefer checked_callables.deinit(allocator);
 
     for (decl_items) |item| {
         const decl = declFromBuildItem(item);
@@ -989,6 +994,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
+                        const checked: CheckedCallableFact = .{
+                            .symbol_id = try internSymbolId(&symbol_ids, global.name.text),
+                            .source_id = typed_source_id,
+                            .body_id = BodyId.fromIndex(checked_callables.items.len),
+                            .kind = .global_initializer,
+                            .return_ty = .void,
+                            .param_count = 0,
+                            .c_abi = false,
+                            .no_lang_trap = false,
+                            .irq_context = false,
+                        };
                         var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
@@ -996,9 +1012,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         {
                             var function = try builder.finish();
                             errdefer freeFunction(allocator, function);
-                            function.callable_kind = .global_initializer;
-                            function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
-                            function.typed_source_id = typed_source_id;
+                            applyCheckedCallableFact(&function, checked);
+                            try checked_callables.append(allocator, checked);
                             try functions.append(allocator, function);
                         }
                     }
@@ -1006,6 +1021,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
+                    const checked: CheckedCallableFact = .{
+                        .symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text),
+                        .source_id = typed_source_id,
+                        .body_id = BodyId.fromIndex(checked_callables.items.len),
+                        .kind = .function,
+                        .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
+                        .param_count = fn_decl.params.len,
+                        .c_abi = fn_decl.abi != null,
+                        .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
+                        .irq_context = hasAttr(decl.attrs, "irq_context"),
+                    };
                     var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
@@ -1013,24 +1039,36 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     {
                         var function = try builder.finish();
                         errdefer freeFunction(allocator, function);
-                        function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
-                        function.typed_source_id = typed_source_id;
+                        applyCheckedCallableFact(&function, checked);
+                        try checked_callables.append(allocator, checked);
                         try functions.append(allocator, function);
                     }
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
                     const typed_symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text);
-                    try functions.append(allocator, .{
-                        .name = fn_decl.name.text,
-                        .typed_symbol_id = typed_symbol_id,
-                        .typed_source_id = typed_source_id,
-                        .callable_kind = .extern_function,
+                    const checked: CheckedCallableFact = .{
+                        .symbol_id = typed_symbol_id,
+                        .source_id = typed_source_id,
+                        .body_id = .invalid,
+                        .kind = .extern_function,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                         .param_count = fn_decl.params.len,
-                        .is_extern = true,
                         .c_abi = fn_decl.abi != null,
-                        .ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params),
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
+                    };
+                    try checked_callables.append(allocator, checked);
+                    try functions.append(allocator, .{
+                        .name = fn_decl.name.text,
+                        .typed_symbol_id = checked.symbol_id,
+                        .typed_source_id = checked.source_id,
+                        .callable_kind = checked.kind,
+                        .return_ty = checked.return_ty,
+                        .param_count = checked.param_count,
+                        .is_extern = true,
+                        .c_abi = checked.c_abi,
+                        .ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params),
+                        .no_lang_trap = checked.no_lang_trap,
+                        .irq_context = checked.irq_context,
                         .blocks = try allocator.alloc(Block, 0),
                         .trap_edges = try allocator.alloc(TrapEdge, 0),
                         .contract_regions = try allocator.alloc(ContractRegion, 0),
@@ -1064,14 +1102,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (functions_slice) |function| freeFunction(allocator, function);
         allocator.free(functions_slice);
     }
-    const checked_callables = try buildCheckedCallableFacts(allocator, functions_slice);
-    errdefer allocator.free(checked_callables);
+    const checked_callables_slice = try checked_callables.toOwnedSlice(allocator);
+    errdefer allocator.free(checked_callables_slice);
 
     var built_module: Module = .{
         .allocator = allocator,
         .symbol_identities = symbol_identities,
         .source_identities = source_identities,
-        .checked_callables = checked_callables,
+        .checked_callables = checked_callables_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
@@ -1082,22 +1120,15 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     return built_module;
 }
 
-fn buildCheckedCallableFacts(allocator: std.mem.Allocator, functions: []const Function) ![]CheckedCallableFact {
-    const facts = try allocator.alloc(CheckedCallableFact, functions.len);
-    for (functions, 0..) |function, index| {
-        facts[index] = .{
-            .symbol_id = function.typed_symbol_id,
-            .source_id = function.typed_source_id,
-            .body_id = if (function.is_extern) .invalid else BodyId.fromIndex(index),
-            .kind = function.callable_kind,
-            .return_ty = function.return_ty,
-            .param_count = function.param_count,
-            .c_abi = function.c_abi,
-            .no_lang_trap = function.no_lang_trap,
-            .irq_context = function.irq_context,
-        };
-    }
-    return facts;
+fn applyCheckedCallableFact(function: *Function, checked: CheckedCallableFact) void {
+    function.typed_symbol_id = checked.symbol_id;
+    function.typed_source_id = checked.source_id;
+    function.callable_kind = checked.kind;
+    function.return_ty = checked.return_ty;
+    function.param_count = checked.param_count;
+    function.c_abi = checked.c_abi;
+    function.no_lang_trap = checked.no_lang_trap;
+    function.irq_context = checked.irq_context;
 }
 
 fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {

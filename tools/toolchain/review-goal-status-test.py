@@ -2,9 +2,9 @@
 """Validate the active review goal status manifest.
 
 This gate is deliberately scoped to the current language/compiler review goals.
-It does not claim completion.  It prevents accidental drift where the manifest
-marks a goal complete while the old AST body fallback, AST-backed checked
-syntax owner, or textual module inclusion evidence is still present.
+It prevents accidental drift where an incomplete goal loses its ratcheted debt
+anchor, or a completed goal regains a retired path / loses its completion
+anchor.
 """
 
 from __future__ import annotations
@@ -37,8 +37,10 @@ def count_literal(rel: str, needle: str) -> int:
 
 def validate_evidence(goal: dict[str, Any], failures: list[str]) -> int:
     checked = 0
-    evidence = goal.get("current_evidence")
-    require(isinstance(evidence, list) and evidence, f"{goal.get('id')}: current_evidence must be a non-empty list")
+    status = goal.get("status")
+    evidence_key = "current_evidence" if status == "incomplete" else "completion_evidence"
+    evidence = goal.get(evidence_key)
+    require(isinstance(evidence, list) and evidence, f"{goal.get('id')}: {evidence_key} must be a non-empty list")
     for item in evidence:
         require(isinstance(item, dict), f"{goal.get('id')}: evidence item must be an object")
         rel = item.get("file")
@@ -57,8 +59,21 @@ def validate_evidence(goal: dict[str, Any], failures: list[str]) -> int:
             require(isinstance(expected, int) and expected >= 0, f"{goal.get('id')}: expected min count must be a non-negative int")
             if goal.get("status") == "incomplete" and actual < expected:
                 failures.append(f"{goal.get('id')}: {rel}: expected at least {expected} occurrences of {needle!r}, found {actual}")
-        if goal.get("status") == "complete" and actual != 0:
-            failures.append(f"{goal.get('id')}: status is complete but {rel} still has {actual} occurrences of {needle!r}")
+        if status == "complete" and actual == 0:
+            failures.append(f"{goal.get('id')}: completion anchor {needle!r} is missing from {rel}")
+    if status == "complete":
+        retired = goal.get("retired_evidence", [])
+        require(isinstance(retired, list), f"{goal.get('id')}: retired_evidence must be a list")
+        for item in retired:
+            require(isinstance(item, dict), f"{goal.get('id')}: retired evidence item must be an object")
+            rel = item.get("file")
+            needle = item.get("needle")
+            require(isinstance(rel, str) and rel, f"{goal.get('id')}: retired evidence file must be a string")
+            require(isinstance(needle, str) and needle, f"{goal.get('id')}: retired evidence needle must be a string")
+            actual = count_literal(rel, needle)
+            checked += 1
+            if actual != 0:
+                failures.append(f"{goal.get('id')}: retired path {needle!r} reappeared {actual} times in {rel}")
     return checked
 
 
