@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const checked_program = @import("checked_program.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
 
@@ -78,6 +79,7 @@ fn symbolIdentitiesMatchFunctionSpelling(typed_mir: mir.Module) bool {
 /// Construction runs the MIR verifier and exposes verified runtime hook facts.
 /// Legacy declaration mechanics stay outside this verified semantic boundary.
 pub const VerifiedProgram = struct {
+    checked: checked_program.CheckedProgram,
     runtime_hooks: RuntimeHookFacts,
     typed_mir: *const mir.Module,
 
@@ -89,7 +91,9 @@ pub const VerifiedProgram = struct {
         try mir.verifyBuiltMir(typed_mir.*, reporter);
         if (reporter.has_errors) return error.InvalidMir;
         if (!symbolIdentitiesMatchFunctionSpelling(typed_mir.*)) return error.InvalidMir;
+        const checked = try checked_program.CheckedProgram.init(typed_mir);
         return .{
+            .checked = checked,
             .runtime_hooks = RuntimeHookFacts.fromMir(typed_mir.*),
             .typed_mir = typed_mir,
         };
@@ -153,16 +157,45 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .representation_facts = &.{},
         .elided_bounds = &.{},
     };
+    const checked_callables = try std.testing.allocator.alloc(mir.CheckedCallableFact, 2);
+    checked_callables[0] = .{
+        .symbol_id = mir.SymbolId.fromIndex(0),
+        .source_id = .invalid,
+        .body_id = mir.BodyId.fromIndex(0),
+        .kind = .function,
+        .return_ty = .void,
+        .param_count = 0,
+        .c_abi = false,
+        .no_lang_trap = false,
+        .irq_context = false,
+    };
+    checked_callables[1] = .{
+        .symbol_id = mir.SymbolId.fromIndex(1),
+        .source_id = .invalid,
+        .body_id = mir.BodyId.fromIndex(1),
+        .kind = .function,
+        .return_ty = .void,
+        .param_count = 0,
+        .c_abi = false,
+        .no_lang_trap = false,
+        .irq_context = false,
+    };
     var module_mir = mir.Module{
         .allocator = std.testing.allocator,
         .symbol_identities = symbols,
+        .checked_callables = checked_callables,
         .functions = functions,
     };
     defer module_mir.deinit();
 
     const program = try VerifiedProgram.init(&module_mir, &reporter);
     try std.testing.expect(module_mir.functions.len != 0);
+    try std.testing.expectEqual(@as(usize, 2), program.checked.callables.len);
+    try std.testing.expectEqual(mir.SymbolId.fromIndex(0), program.checked.body(mir.BodyId.fromIndex(0)).?.symbol_id);
     try std.testing.expect(!program.runtime_hooks.definesTrapHook(0));
     try std.testing.expect(program.runtime_hooks.definesSanitizerHook(2));
     try std.testing.expect(!program.runtime_hooks.definesSanitizerHook(0));
+
+    module_mir.checked_callables[0].param_count = 1;
+    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
 }

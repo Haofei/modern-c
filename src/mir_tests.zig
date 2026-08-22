@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const checked_program = @import("checked_program.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
@@ -64,6 +65,57 @@ test "MIR carries resolved per-file source identity into verified functions" {
     try std.testing.expect(second.typed_source_id.eql(SourceId.fromIndex(1)));
     try mir.verifyBuiltMir(module_mir, &first_reporter);
     try std.testing.expect(!first_reporter.has_errors);
+}
+
+test "CheckedProgram is a syntax-free callable and body table" {
+    const source =
+        \\global seed: u32 = 1;
+        \\extern fn sink(value: u32) -> void;
+        \\#[no_lang_trap]
+        \\fn read(value: u32) -> u32 { return value; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "checked_program.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    const checked = try checked_program.CheckedProgram.init(&module_mir);
+    try std.testing.expectEqual(module_mir.functions.len, checked.callables.len);
+
+    var saw_initializer = false;
+    var saw_extern = false;
+    var saw_function = false;
+    for (checked.callables) |callable| switch (callable.kind) {
+        .global_initializer => {
+            saw_initializer = true;
+            try std.testing.expect(callable.body_id.isValid());
+            try std.testing.expectEqual(mir.ValueType.void, callable.return_ty);
+        },
+        .extern_function => {
+            saw_extern = true;
+            try std.testing.expect(!callable.body_id.isValid());
+        },
+        .function => {
+            saw_function = true;
+            try std.testing.expect(callable.body_id.isValid());
+            try std.testing.expect(callable.no_lang_trap);
+        },
+    };
+    try std.testing.expect(saw_initializer and saw_extern and saw_function);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expectEqual(module_mir.functions.len, std.mem.count(u8, dump.items, "checked callable "));
+
+    module_mir.checked_callables[0].param_count += 1;
+    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(&module_mir));
 }
 
 test "MIR verifier rejects per-file source identity drift" {

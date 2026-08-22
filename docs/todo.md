@@ -22,6 +22,7 @@ history; this file should describe only current compiler-core direction.
 |---|---|---|
 | P0 | Backend semantic authority | Remove backend-local semantic inference and keep C/LLVM lowering driven by typed MIR, verified facts, layout/ABI tables, and `VerifiedProgram`. |
 | P0 | `VerifiedProgram` narrowing | Remove AST-shaped semantic ingress from backend entrypoints; keep source spelling and spans mechanics-only. |
+| P1 | Minimal `CheckedProgram` | Move callable/signature/effect identity out of checked syntax into the syntax-free table already admitted by `VerifiedProgram`; do not add a full Typed HIR. |
 | P0 | Language surface freeze | Keep async, traits, closures, broad generics, `view struct`, `region struct`, `thread_move`, and borrowed-return contracts experimental until the backend authority boundary is closed. |
 | P0 | Test speed and sharding | Keep the cheap `m0`/`fast` loop focused; leave broad sweeps in `m0-full` and parallel runners. |
 | P1 | Module identity | Move away from text-inclusion identity toward per-file source, module, definition, type, and body IDs. |

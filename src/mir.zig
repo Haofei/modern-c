@@ -728,6 +728,9 @@ pub const CleanupCfg = mir_model.CleanupCfg;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
+pub const BodyId = mir_model.BodyId;
+pub const CallableKind = mir_model.CallableKind;
+pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
 pub const BuildOptions = mir_model.BuildOptions;
@@ -993,6 +996,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         {
                             var function = try builder.finish();
                             errdefer freeFunction(allocator, function);
+                            function.callable_kind = .global_initializer;
                             function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
                             function.typed_source_id = typed_source_id;
                             try functions.append(allocator, function);
@@ -1019,6 +1023,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .name = fn_decl.name.text,
                         .typed_symbol_id = typed_symbol_id,
                         .typed_source_id = typed_source_id,
+                        .callable_kind = .extern_function,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                         .param_count = fn_decl.params.len,
                         .is_extern = true,
@@ -1059,11 +1064,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (functions_slice) |function| freeFunction(allocator, function);
         allocator.free(functions_slice);
     }
+    const checked_callables = try buildCheckedCallableFacts(allocator, functions_slice);
+    errdefer allocator.free(checked_callables);
 
     var built_module: Module = .{
         .allocator = allocator,
         .symbol_identities = symbol_identities,
         .source_identities = source_identities,
+        .checked_callables = checked_callables,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
@@ -1072,6 +1080,24 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     };
     try attachFunctionCleanupCfgs(allocator, &built_module);
     return built_module;
+}
+
+fn buildCheckedCallableFacts(allocator: std.mem.Allocator, functions: []const Function) ![]CheckedCallableFact {
+    const facts = try allocator.alloc(CheckedCallableFact, functions.len);
+    for (functions, 0..) |function, index| {
+        facts[index] = .{
+            .symbol_id = function.typed_symbol_id,
+            .source_id = function.typed_source_id,
+            .body_id = if (function.is_extern) .invalid else BodyId.fromIndex(index),
+            .kind = function.callable_kind,
+            .return_ty = function.return_ty,
+            .param_count = function.param_count,
+            .c_abi = function.c_abi,
+            .no_lang_trap = function.no_lang_trap,
+            .irq_context = function.irq_context,
+        };
+    }
+    return facts;
 }
 
 fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
@@ -1321,6 +1347,23 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 fact.thread_move,
                 fact.source.line,
                 fact.source.column,
+            },
+        );
+    }
+    for (module_mir.checked_callables) |callable| {
+        try out.print(
+            allocator,
+            "checked callable symbol_id={} source_id={} body_id={} kind={s} return={s} params={} c_abi={} no_lang_trap={} irq_context={}\n",
+            .{
+                callable.symbol_id.index(),
+                if (callable.source_id.isValid()) callable.source_id.index() else std.math.maxInt(usize),
+                if (callable.body_id.isValid()) callable.body_id.index() else std.math.maxInt(usize),
+                @tagName(callable.kind),
+                callable.return_ty.name(),
+                callable.param_count,
+                callable.c_abi,
+                callable.no_lang_trap,
+                callable.irq_context,
             },
         );
     }

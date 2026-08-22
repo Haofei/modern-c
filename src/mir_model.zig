@@ -36,6 +36,13 @@ pub const TypeId = TypedIndex("TypeId");
 pub const ValueId = TypedIndex("ValueId");
 pub const BlockId = TypedIndex("BlockId");
 pub const SpanId = TypedIndex("SpanId");
+pub const BodyId = TypedIndex("BodyId");
+
+pub const CallableKind = enum {
+    function,
+    extern_function,
+    global_initializer,
+};
 
 pub const TrapKind = enum {
     IntegerOverflow,
@@ -875,6 +882,7 @@ pub const Function = struct {
     name: []const u8,
     typed_symbol_id: SymbolId = .invalid,
     typed_source_id: SourceId = .invalid,
+    callable_kind: CallableKind = .function,
     return_ty: ValueType,
     // Signature obligations are produced once as typed MIR facts. Consumers
     // must not reconstruct them by rescanning source declarations.
@@ -917,10 +925,27 @@ pub const Function = struct {
     elided_bounds: []SourcePoint,
 };
 
+/// Syntax-free semantic summary shared by checking, MIR admission, and future
+/// backend request narrowing. This deliberately does not duplicate expression
+/// trees: bodies remain canonical MIR, while this table owns callable identity,
+/// signature representation, ABI, and closed effect flags.
+pub const CheckedCallableFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    body_id: BodyId,
+    kind: CallableKind,
+    return_ty: ValueType,
+    param_count: usize,
+    c_abi: bool,
+    no_lang_trap: bool,
+    irq_context: bool,
+};
+
 pub const Module = struct {
     allocator: std.mem.Allocator,
     symbol_identities: []SymbolIdentity = &.{},
     source_identities: []SourceIdentity = &.{},
+    checked_callables: []CheckedCallableFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
     type_ownership_facts: []TypeOwnershipFact = &.{},
@@ -970,6 +995,7 @@ pub const Module = struct {
         }
         if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
         if (self.source_identities.len != 0) self.allocator.free(self.source_identities);
+        if (self.checked_callables.len != 0) self.allocator.free(self.checked_callables);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);

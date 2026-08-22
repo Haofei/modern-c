@@ -15,6 +15,8 @@ CompilationSession
         ↓
 resolved semantic facts
         ↓
+minimal syntax-free CheckedProgram
+        ↓
 typed MIR + MIR verifier
         ↓
 VerifiedProgram
@@ -30,10 +32,17 @@ only the CLI composition root.
 MIR already has typed seeds for block, function symbol, value, type, and span.
 Verifier/admission checks reject result/span/owner drift.
 
+`CheckedProgram` is deliberately a thin semantic table, not a second expression
+IR. It owns callable/body identity, signature representation, ABI, and closed
+effect flags; executable body semantics remain in typed MIR. The existing
+inspection HIR remains a dump tool and is not promoted into the pipeline.
+
 ## Non-goals
 
 - new language surface area;
 - new backends;
+- a full Typed HIR or second expression/control-flow representation;
+- incremental query databases, serialized semantic caches, or separate compilation;
 - editor integration or persistent service work;
 - deployable kernel, Agent, runtime, package, or hardware scope;
 - validation workloads defining compiler semantics.
@@ -43,7 +52,7 @@ Verifier/admission checks reject result/span/owner drift.
 | Phase | Theme | Exit signal |
 |---:|---|---|
 | 0 | Stop backend authority growth | `semantic-facts-inventory-test` does not grow, or each remaining exception is exact-count-gated. |
-| 1 | Typed MIR identity | backend-critical type, symbol, value, ABI/layout, representation, control, and ownership facts are typed or verifier-owned. |
+| 1 | CheckedProgram + typed MIR identity | syntax-free callable/body tables and backend-critical type, symbol, value, ABI/layout, representation, control, and ownership facts are typed or verifier-owned. |
 | 2 | `VerifiedProgram` narrowing | C/LLVM entrypoints no longer expose AST as semantic input. |
 
 `docs/codegen-ingress-migration.json` is the working migration ledger for Phase

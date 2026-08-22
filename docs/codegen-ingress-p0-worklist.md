@@ -142,6 +142,6 @@ statement-level and builtin lowering (large), plus a source-map-from-MIR change
 to admit folded-`let` shapes without losing fidelity (large). Completing P0
 (deleting the AST body ingress) is effectively re-implementing full body
 emission on MIR at fallback fidelity. Multi-week. Related: the two P1 goals
-(typed-HIR canonical identity, module-graph cutover) are separate large
+(minimal CheckedProgram identity, module-graph cutover) are separate bounded
 foundations; see [[p0-spanid-decoupling-blocked]] for the corrected dependency
 analysis (P0 is NOT coupled to module-graph's source basis).

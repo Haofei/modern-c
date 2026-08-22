@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/review-goal-status.json",
-  "purpose": "Machine-readable status for the active review goals: close codegen AST body fallback first, then Typed HIR/CheckedProgram and real module graph.",
+  "purpose": "Machine-readable status for the active review goals: close codegen AST body fallback, establish a minimal syntax-free CheckedProgram, then cut over to a bounded real module graph.",
   "policy": {
     "scope": "language/compiler architecture only",
     "not_scope": "production readiness, kernel productization, package registry, LSP product work",
@@ -32,19 +32,33 @@
       ]
     },
     {
-      "id": "typed-hir-checked-program",
+      "id": "minimal-checked-program",
       "priority": "P1",
       "status": "incomplete",
-      "requested_end_state": "A canonical Typed HIR / CheckedProgram exists as a real semantic representation, not only inspection HIR.",
+      "requested_end_state": "A minimal syntax-free CheckedProgram owns callable/signature/effect identity and feeds typed MIR/VerifiedProgram; MC does not add a second expression IR or a full Typed HIR.",
+      "implemented_evidence": [
+        {
+          "file": "src/checked_program.zig",
+          "needle": "pub const CheckedProgram = struct"
+        },
+        {
+          "file": "src/verified_program.zig",
+          "needle": "checked: checked_program.CheckedProgram"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "pub const CheckedCallableFact = struct"
+        }
+      ],
       "current_evidence": [
         {
-          "file": "src/hir_inspection.zig",
-          "needle": "inspection",
-          "expected_min_count_while_incomplete": 1
+          "file": "src/compiler_session.zig",
+          "needle": "pub const CheckedSyntaxModule = struct",
+          "expected_count_while_incomplete": 1
         },
         {
           "file": "src/compiler_session.zig",
-          "needle": "pub const CheckedModule = struct",
+          "needle": "pub const CheckedSyntaxModule = struct {\n    decls_slice: []ast.Decl",
           "expected_count_while_incomplete": 1
         }
       ]
@@ -53,7 +67,7 @@
       "id": "real-module-graph",
       "priority": "P1",
       "status": "incomplete",
-      "requested_end_state": "The loader no longer compiles through textual inclusion/combined source; semantic identity is per-file/per-module.",
+      "requested_end_state": "The loader no longer compiles through textual inclusion/combined source; semantic identity is per-file/per-module, without adding incremental databases, serialized caches, or separate compilation to this goal.",
       "current_evidence": [
         {
           "file": "src/loader.zig",

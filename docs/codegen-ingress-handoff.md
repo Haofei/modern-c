@@ -5,17 +5,21 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 ## TL;DR
 
-- **P0 `function-body-fallback`** — active, incremental, the only goal advanced.
+- **P0 `function-body-fallback`** — active and incremental.
   The current strict ratchet corpus admits **76/160 C** and **77/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
-- **P1 `typed-hir-checked-program`** — frozen. Double-write scaffold seeded in
-  `mir_model.zig`; legacy string-identity cutover not started.
+- **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
+  admitted by `VerifiedProgram`; it owns callable identity, signature shape,
+  ABI and closed effect flags. This is deliberately not a full Typed HIR:
+  executable function bodies remain canonical MIR.
 - **P1 `real-module-graph`** — frozen. `module_graph.zig` / `module_parser.zig`
   exist and `ir_inspection.zig` consumes a `ResolvedSourceDatabase`, but the main
   sema→MIR→codegen pipeline still uses the combined-source text. Cutover undone.
 
-None of the three is complete. Each is a multi-week unit. Do not report otherwise.
+None of the three is complete. P0 and the module-graph cutover remain multi-week
+units; the minimal CheckedProgram is a bounded table migration. Do not report a
+goal complete until its deletion anchors are gone.
 
 ## The three goals, precisely
 
@@ -25,9 +29,10 @@ None of the three is complete. Each is a multi-week unit. Do not report otherwis
    path" (`emitSimpleMirFunction` + the `simpleMir*` recognizers) admits a growing
    fraction; the rest fall back to `legacyFunctionBody` (the AST body). Goal =
    fast path covers everything, AST-body ingress deleted.
-2. **P1 typed-HIR**: a canonical Typed HIR / CheckedProgram with typed-id identity
-   (SourceId/NodeId/SymbolId/TypeId/ValueId/BlockId/SpanId in `mir_model.zig`),
-   replacing string-identity. Scaffold exists; cutover not done.
+2. **P1 minimal CheckedProgram**: a syntax-free table with typed callable/body
+   identity, signature representation, ABI and effect summaries. It must not
+   duplicate MIR expressions or control flow. The first callable/body table is
+   present; remaining syntax-shaped declaration artifacts still need cutover.
 3. **P1 module-graph**: loader stops textual inclusion / combined source; per-file
    / per-module identity through the whole pipeline. Consumers partly migrated;
    cutover not done.
@@ -38,10 +43,10 @@ See memory `p0-spanid-decoupling-blocked.md` for the full analysis. Key result:
 **P0 is NOT coupled to the module-graph source basis** — P0's `simpleMir*`
 recognizers correlate MIR entities within one function (= one file), and equality
 is invariant under module-graph's uniform per-file line/offset rebasing. The only
-real cross-goal dependency is soft: a canonical typed-HIR would collapse the
-~158 recognizers, making P0 cheap+finite — but P0 is completable without it, just
-more expensively. Prioritize by value + frozen-cutover risk, not by any invented
-P0↔module-graph rework urgency.
+real cross-goal dependency is soft: shared syntax-free signature, layout and
+operation plans can collapse recognizer families without creating a second
+expression IR. P0 is completable without the module-graph cutover. Prioritize by
+value and deletion of old ingress, not by an invented P0↔module-graph dependency.
 
 ## P0: what has been done (all on master, all validated)
 

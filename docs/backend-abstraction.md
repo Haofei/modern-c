@@ -112,7 +112,11 @@ first:
 
 It then exposes:
 
+- `checked`: the minimal syntax-free `CheckedProgram` callable/body table;
 - `runtime_hooks`: MIR-owned facts for default trap/sanitizer hook suppression.
+
+`CheckedProgram` is not a full Typed HIR. It contains no AST or expression tree;
+typed MIR remains the only executable body representation.
 
 Collected `EarlyDeclarationArtifacts` and
 `declaration_artifacts.SourceMapArtifact` values remain a temporary mechanics

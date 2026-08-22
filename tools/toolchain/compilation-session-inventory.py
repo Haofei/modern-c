@@ -188,7 +188,7 @@ def main() -> int:
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
     if main_text.count("checked.decls()") != 3:
-        fail("only explicit MIR dump/verify commands should still use CheckedModule.decls()")
+        fail("only explicit MIR dump/verify commands should still use CheckedSyntaxModule.decls()")
     if "buildVerifiedProgramFromDecls(module.decls" in main_text:
         fail("compile-like CLI commands must not pass naked ast.Module decls to VerifiedProgram construction")
     if main_text.count("session.checkModule(") != 0:

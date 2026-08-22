@@ -29,14 +29,16 @@ pub const StageFailure = error{
     EmitCStructFailed,
 };
 
-pub const CheckedModule = struct {
+/// Transitional syntax owner after semantic checking. This is not the
+/// syntax-free CheckedProgram consumed by VerifiedProgram/MIR admission.
+pub const CheckedSyntaxModule = struct {
     decls_slice: []ast.Decl,
 
-    pub fn decls(self: CheckedModule) []ast.Decl {
+    pub fn decls(self: CheckedSyntaxModule) []ast.Decl {
         return self.decls_slice;
     }
 
-    pub fn deinit(self: CheckedModule, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: CheckedSyntaxModule, allocator: std.mem.Allocator) void {
         allocator.free(self.decls_slice);
     }
 };
@@ -219,7 +221,7 @@ pub const CompilationSession = struct {
         optimize: bool,
         render_errors: bool,
         failure_error: StageFailure,
-    ) !CheckedModule {
+    ) !CheckedSyntaxModule {
         const parsed = try parseModuleOrReportMode(self, source, allocator, diag, render_errors);
         errdefer parsed.deinit(allocator);
         if (diag.has_errors) {
