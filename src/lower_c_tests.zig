@@ -6484,6 +6484,7 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
         \\extern fn make_values(seed: u32) -> [4]u32;
         \\extern fn make_bag(seed: u32) -> Bag;
         \\extern fn next_seed() -> u32;
+        \\extern fn make_slice() -> []const u32;
         \\fn first_value(seed: u32) -> u32 {
         \\    for value in make_values(seed) { return value; }
         \\    return 0;
@@ -6500,10 +6501,18 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
         \\    for value in make_values(next_seed()) { return value; }
         \\    return 0;
         \\}
+        \\fn first_slice(values: []const u32) -> u32 {
+        \\    for value in values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_slice_call() -> u32 {
+        \\    for value in make_slice() { return value; }
+        \\    return 0;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_direct_call_foreach_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_sequence_foreach_return.mc", source, &output);
 
     const direct = try cFunctionBody(output.items, "static uint32_t first_value(uint32_t seed)");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "make_values(seed)"));
@@ -6529,6 +6538,16 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
     try std.testing.expect(nested_call < outer_call);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "next_seed()"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "make_values("));
+
+    const slice = try cFunctionBody(output.items, "first_slice(");
+    try expectContains(slice, "values.ptr == NULL && values.len != 0");
+    try expectContains(slice, "if (values.len != 0)");
+    try expectContains(slice, "values.ptr[0]");
+
+    const slice_call = try cFunctionBody(output.items, "first_slice_call(");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, slice_call, "make_slice()"));
+    try expectContains(slice_call, ".ptr == NULL");
+    try expectContains(slice_call, ".ptr[0]");
 }
 
 test "lower-c nested array member and index results require MIR expression facts" {

@@ -950,12 +950,13 @@ test "MIR direct-call aggregate projected returns own identities and checks" {
     try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(representation_function.*) == null);
 }
 
-test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
+test "MIR sequence foreach return owns iterable evaluation binding representation and CFG" {
     const source =
         \\struct Bag { values: [4]u32 }
         \\extern fn make_values(seed: u32) -> [4]u32;
         \\extern fn make_bag(seed: u32) -> Bag;
         \\extern fn next_seed() -> u32;
+        \\extern fn make_slice() -> []const u32;
         \\fn first_value(seed: u32) -> u32 {
         \\    for value in make_values(seed) { return value; }
         \\    return 0;
@@ -972,13 +973,21 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
         \\    for value in make_values(next_seed()) { return value; }
         \\    return 0;
         \\}
+        \\fn first_slice(values: []const u32) -> u32 {
+        \\    for value in values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_slice_call() -> u32 {
+        \\    for value in make_slice() { return value; }
+        \\    return 0;
+        \\}
     ;
-    var parsed = try test_support.parseModule("mir_direct_call_foreach_return.mc", source);
+    var parsed = try test_support.parseModule("mir_sequence_foreach_return.mc", source);
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    const direct = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_value").?) orelse return error.TestUnexpectedResult;
+    const direct = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_value").?) orelse return error.TestUnexpectedResult;
     const direct_call = switch (direct.iterable) {
         .direct_call => |call| call,
         else => return error.TestUnexpectedResult,
@@ -991,7 +1000,7 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
     try std.testing.expect(direct.element_fact.typed_operand_value_id.eql(direct.binding_id));
     try std.testing.expectEqual(@as(usize, 0), direct.fallback.value);
 
-    const field = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_field").?) orelse return error.TestUnexpectedResult;
+    const field = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_field").?) orelse return error.TestUnexpectedResult;
     const field_call = switch (field.iterable) {
         .direct_call => |call| call,
         else => return error.TestUnexpectedResult,
@@ -1006,7 +1015,7 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
         else => return error.TestUnexpectedResult,
     }
 
-    const parameter = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_parameter").?) orelse return error.TestUnexpectedResult;
+    const parameter = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_parameter").?) orelse return error.TestUnexpectedResult;
     switch (parameter.iterable) {
         .parameter => |root| {
             try std.testing.expectEqualStrings("values", root.name);
@@ -1015,7 +1024,7 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
         else => return error.TestUnexpectedResult,
     }
 
-    const nested = mir_statement_plan.buildFixedArrayForEachReturn(functionByName(module_mir, "first_nested_call").?) orelse return error.TestUnexpectedResult;
+    const nested = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_nested_call").?) orelse return error.TestUnexpectedResult;
     const nested_call = switch (nested.iterable) {
         .direct_call => |call| call,
         else => return error.TestUnexpectedResult,
@@ -1024,6 +1033,24 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
         .zero_arg_call => |call| try std.testing.expectEqualStrings("next_seed", call.callee_name),
         else => return error.TestUnexpectedResult,
     }
+
+    const slice = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_slice").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.slice, std.meta.activeTag(slice.iterable_fact.target_ty.kind));
+    try std.testing.expect(slice.representation_check != null);
+    try std.testing.expect(slice.representation_check.?.value_id.isValid());
+
+    const slice_call = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_slice_call").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.slice, std.meta.activeTag(slice_call.iterable_fact.target_ty.kind));
+    try std.testing.expect(slice_call.representation_check != null);
+    switch (slice_call.iterable) {
+        .direct_call => |call| try std.testing.expectEqualStrings("make_slice", call.callee_name),
+        else => return error.TestUnexpectedResult,
+    }
+
+    var optimized_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer optimized_mir.deinit();
+    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(functionByName(optimized_mir, "first_slice").?) != null);
+    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(functionByName(optimized_mir, "first_slice_call").?) != null);
 
     var binding_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer binding_mir.deinit();
@@ -1034,7 +1061,7 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
             break;
         }
     }
-    try std.testing.expect(mir_statement_plan.buildFixedArrayForEachReturn(binding_function.*) == null);
+    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(binding_function.*) == null);
 
     var field_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer field_mir.deinit();
@@ -1045,7 +1072,7 @@ test "MIR fixed-array foreach return owns iterable evaluation binding and CFG" {
             break;
         }
     }
-    try std.testing.expect(mir_statement_plan.buildFixedArrayForEachReturn(field_function.*) == null);
+    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(field_function.*) == null);
 }
 
 test "MIR target-type owner identities mirror direct calls" {

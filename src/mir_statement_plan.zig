@@ -240,7 +240,7 @@ pub const DirectCallValuePlan = struct {
     projection_count: usize = 0,
 };
 
-pub const FixedArrayIterable = union(enum) {
+pub const ForEachIterable = union(enum) {
     parameter: struct {
         name: []const u8,
         value_id: mir.ValueId,
@@ -249,7 +249,7 @@ pub const FixedArrayIterable = union(enum) {
     },
     direct_call: DirectCallValuePlan,
 
-    pub fn resultType(self: FixedArrayIterable) mir.ValueType {
+    pub fn resultType(self: ForEachIterable) mir.ValueType {
         return switch (self) {
             .parameter => |parameter| parameter.type_fact.result_ty,
             .direct_call => |call| if (call.projection_count == 0)
@@ -260,22 +260,29 @@ pub const FixedArrayIterable = union(enum) {
     }
 };
 
-/// A fixed-array `for` whose iterable is either a parameter or one direct
+/// A fixed-array or slice `for` whose iterable is either a parameter or one direct
 /// call (optionally followed by resolved field projections), whose body
 /// returns the bound element, and whose after block returns one integer
 /// literal. The loop binding and iterable root are carried by typed MIR
 /// identities; backends never recover them from AST syntax or source spelling.
-pub const FixedArrayForEachReturnPlan = struct {
-    iterable: FixedArrayIterable,
+pub const ForEachRepresentationCheck = struct {
+    type_fact: mir.TargetTypeFact,
+    location: Location,
+    value_id: mir.ValueId,
+};
+
+pub const SequenceForEachReturnPlan = struct {
+    iterable: ForEachIterable,
     iterable_fact: mir.TargetTypeFact,
     element_fact: mir.TargetTypeFact,
+    representation_check: ?ForEachRepresentationCheck = null,
     binding_name: []const u8,
     binding_id: mir.ValueId,
     body_return_location: Location,
     fallback: IntegerLiteralValue,
     fallback_return_location: Location,
 
-    pub fn iterableType(self: FixedArrayForEachReturnPlan) mir.ValueType {
+    pub fn iterableType(self: SequenceForEachReturnPlan) mir.ValueType {
         return self.iterable.resultType();
     }
 };
@@ -607,27 +614,41 @@ pub fn buildDirectCallProjectedReturn(function: mir.Function) ?DirectCallProject
 ///   for value in make_array(args).field { return value; }
 ///   return <integer literal>;
 ///
-/// The iterable must be a fixed array. Direct-call arguments may be function
+/// The iterable must be a fixed array or slice. Direct-call arguments may be function
 /// parameters or zero-argument calls; the latter remain explicit in the plan
-/// so both backends preserve their evaluation before the outer call. Slices,
-/// loop-body side effects, cleanup, and additional control flow fail closed.
-pub fn buildFixedArrayForEachReturn(function: mir.Function) ?FixedArrayForEachReturnPlan {
-    if (function.return_ty == .void or function.blocks.len != 3) return null;
-    if (function.trap_edges.len != 0 or function.bounds_facts.len != 0 or
-        function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+/// so both backends preserve their evaluation before the outer call. Slice
+/// representation checks remain explicit in the plan. Loop-body side effects,
+/// cleanup, and additional control flow fail closed.
+pub fn buildSequenceForEachReturn(function: mir.Function) ?SequenceForEachReturnPlan {
+    if (function.return_ty == .void or (function.blocks.len != 3 and function.blocks.len != 4)) return null;
+    if (function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0) return null;
     if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
     for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
 
     const entry = function.blocks[0];
-    if (entry.terminator != .jump or entry.successors.len != 1) return null;
-    const body_index = entry.terminator.jump;
-    if (body_index >= function.blocks.len or entry.successors[0] != body_index) return null;
+    if (entry.terminator != .jump or (entry.successors.len != 1 and entry.successors.len != 2)) return null;
+    var body_index_optional: ?usize = null;
+    for (function.blocks, 0..) |block, index| {
+        if (!std.mem.eql(u8, block.kind, "loop_body")) continue;
+        if (body_index_optional != null) return null;
+        body_index_optional = index;
+    }
+    const body_index = body_index_optional orelse return null;
+    var body_is_successor = false;
+    for (entry.successors) |successor| {
+        if (successor == body_index) body_is_successor = true;
+    }
+    if (!body_is_successor) return null;
     const body = function.blocks[body_index];
     if (!std.mem.eql(u8, body.kind, "loop_body") or body.terminator != .return_ or body.successors.len != 0) return null;
 
     var after_index: ?usize = null;
     for (function.blocks, 0..) |block, index| {
         if (index == 0 or index == body_index) continue;
+        switch (block.terminator) {
+            .trap_ => continue,
+            else => {},
+        }
         if (after_index != null or !std.mem.eql(u8, block.kind, "loop_after") or block.terminator != .return_ or block.successors.len != 0) return null;
         after_index = index;
     }
@@ -638,7 +659,7 @@ pub fn buildFixedArrayForEachReturn(function: mir.Function) ?FixedArrayForEachRe
     var for_marker_count: usize = 0;
     var expression_count: usize = 0;
     for (entry.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type => {},
+        .param, .target_type, .typed_load, .representation_check => {},
         .binary => {
             if (!std.mem.eql(u8, instruction.detail, "for")) return null;
             for_marker_count += 1;
@@ -668,11 +689,12 @@ pub fn buildFixedArrayForEachReturn(function: mir.Function) ?FixedArrayForEachRe
     };
     const iterable = iterable_fact orelse return null;
     const element = element_fact orelse return null;
+    const iterable_kind = std.meta.activeTag(iterable.target_ty.kind);
     if (!iterable.typed_span_id.isValid() or !iterable.typed_span_id.eql(element.typed_span_id) or
-        iterable.result_ty != .array or !element.typed_operand_value_id.isValid()) return null;
+        (iterable_kind != .array and iterable_kind != .slice) or !element.typed_operand_value_id.isValid()) return null;
 
     const binding_name = valueIdentityName(function, element.typed_operand_value_id) orelse return null;
-    var plan: FixedArrayForEachReturnPlan = .{
+    var plan: SequenceForEachReturnPlan = .{
         .iterable = undefined,
         .iterable_fact = iterable,
         .element_fact = element,
@@ -717,7 +739,10 @@ pub fn buildFixedArrayForEachReturn(function: mir.Function) ?FixedArrayForEachRe
             };
             if (!collectDirectCallArguments(function, call_instruction, &candidate)) continue;
             if (!appendDirectCallProjection(function, entry, call_instruction, iterable.typed_span_id, &candidate, 0)) continue;
-            if (candidate.result_fact.result_ty != .array and candidate.projection_count == 0) continue;
+            if (candidate.projection_count == 0) {
+                const result_kind = std.meta.activeTag(candidate.result_fact.target_ty.kind);
+                if (result_kind != .array and result_kind != .slice) continue;
+            }
             var projections_supported = true;
             for (candidate.projections[0..candidate.projection_count]) |projection| switch (projection) {
                 .field => {},
@@ -732,7 +757,8 @@ pub fn buildFixedArrayForEachReturn(function: mir.Function) ?FixedArrayForEachRe
         plan.iterable = .{ .direct_call = root };
     }
 
-    if (plan.iterableType() != .array) return null;
+    if (!sameRepresentationType(plan.iterableType(), iterable.result_ty)) return null;
+    if (!attachForEachRepresentation(function, entry, &plan)) return null;
 
     var body_return: ?mir.Instruction = null;
     var body_expression_count: usize = 0;
@@ -1210,6 +1236,75 @@ fn collectDirectCallArguments(function: mir.Function, call: mir.Instruction, pla
         plan.argument_count = @max(plan.argument_count, index + 1);
     }
     for (seen[0..plan.argument_count]) |present| if (!present) return false;
+    return true;
+}
+
+fn attachForEachRepresentation(function: mir.Function, entry: mir.Block, plan: *SequenceForEachReturnPlan) bool {
+    const iterable_kind = std.meta.activeTag(plan.iterable_fact.target_ty.kind);
+    if (iterable_kind == .array) {
+        return function.blocks.len == 3 and entry.successors.len == 1 and
+            function.trap_edges.len == 0 and function.representation_facts.len == 0;
+    }
+    if (iterable_kind != .slice or function.blocks.len != 4 or entry.successors.len != 2 or
+        function.trap_edges.len != 1 or function.representation_facts.len < 1 or function.representation_facts.len > 2) return false;
+
+    const root_value_id = switch (plan.iterable) {
+        .parameter => |parameter| parameter.value_id,
+        .direct_call => |call| call.callee_value_id,
+    };
+    if (!root_value_id.isValid()) return false;
+
+    var check_instruction: ?mir.Instruction = null;
+    var load_instruction_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .representation_check => {
+            if (check_instruction != null or !instruction.typed_span_id.eql(plan.iterable_fact.typed_span_id) or
+                !std.mem.eql(u8, instruction.detail, "nonnull_pointer") or
+                !sameRepresentationType(instruction.result_ty, plan.iterable_fact.result_ty)) return false;
+            const value_id = instruction.typed_value_id orelse return false;
+            if (!value_id.eql(root_value_id)) return false;
+            check_instruction = instruction;
+        },
+        .typed_load => {
+            if (!instruction.typed_span_id.eql(plan.iterable_fact.typed_span_id)) return false;
+            const value_id = instruction.typed_value_id orelse return false;
+            if (!value_id.eql(root_value_id) or !sameRepresentationType(instruction.result_ty, plan.iterable_fact.result_ty)) return false;
+            load_instruction_count += 1;
+        },
+        else => {},
+    };
+    const check = check_instruction orelse return false;
+    if (load_instruction_count > 1) return false;
+
+    var check_fact_count: usize = 0;
+    var load_fact_count: usize = 0;
+    for (function.representation_facts) |fact| {
+        if (!fact.typed_span_id.eql(plan.iterable_fact.typed_span_id) or
+            !fact.typed_value_id.eql(root_value_id) or
+            !sameRepresentationType(fact.result_ty, plan.iterable_fact.result_ty)) return false;
+        switch (fact.kind) {
+            .representation_check => {
+                if (!std.mem.eql(u8, fact.detail, "nonnull_pointer")) return false;
+                check_fact_count += 1;
+            },
+            .typed_load => load_fact_count += 1,
+            else => return false,
+        }
+    }
+    if (check_fact_count != 1 or load_fact_count != load_instruction_count) return false;
+
+    const edge = function.trap_edges[0];
+    if (edge.from_block != entry.id or edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+        !edge.typed_span_id.eql(plan.iterable_fact.typed_span_id) or edge.trap_block >= function.blocks.len) return false;
+    switch (function.blocks[edge.trap_block].terminator) {
+        .trap_ => |kind| if (kind != .InvalidRepresentation) return false,
+        else => return false,
+    }
+    plan.representation_check = .{
+        .type_fact = plan.iterable_fact,
+        .location = locationFromInstruction(check),
+        .value_id = root_value_id,
+    };
     return true;
 }
 

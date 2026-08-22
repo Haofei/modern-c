@@ -1598,14 +1598,14 @@ pub const CEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
-        const fixed_array_foreach_return_plan = if (simple_trap == null and simple_assert == null)
-            if (mir_statement_plan.buildFixedArrayForEachReturn(fn_mir)) |plan|
-                if (self.mirFixedArrayForEachReturnPlanSupported(function, plan)) plan else null
+        const sequence_foreach_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildSequenceForEachReturn(fn_mir)) |plan|
+                if (self.mirSequenceForEachReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const direct_call_projected_return_plan = if (fixed_array_foreach_return_plan == null and simple_trap == null and simple_assert == null)
+        const direct_call_projected_return_plan = if (sequence_foreach_return_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildDirectCallProjectedReturn(fn_mir)) |plan|
                 if (self.mirDirectCallProjectedReturnPlanSupported(function, plan)) plan else null
             else
@@ -1640,7 +1640,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (fixed_array_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1669,7 +1669,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and fixed_array_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1690,8 +1690,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "if (!(");
             try self.emitSimpleMirCondition(assert_body.condition);
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
-        } else if (fixed_array_foreach_return_plan) |plan| {
-            try self.emitMirFixedArrayForEachReturnPlan(plan);
+        } else if (sequence_foreach_return_plan) |plan| {
+            try self.emitMirSequenceForEachReturnPlan(plan);
         } else if (direct_call_projected_return_plan) |plan| {
             try self.emitMirDirectCallProjectedReturnPlan(plan);
         } else if (local_aggregate_place_update_return_plan) |plan| {
@@ -3970,7 +3970,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn mirFixedArrayForEachReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.FixedArrayForEachReturnPlan) bool {
+    fn mirSequenceForEachReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.SequenceForEachReturnPlan) bool {
         if (!plan.binding_id.isValid()) return false;
         const iterable_ty = switch (plan.iterable) {
             .parameter => |parameter| blk: {
@@ -4006,18 +4006,27 @@ pub const CEmitter = struct {
             },
         };
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(iterable_ty), self.resolveAliasType(plan.iterable_fact.target_ty))) return false;
-        const array = switch (self.resolveAliasType(iterable_ty).kind) {
-            .array => |array| array,
+        const child_ty = switch (self.resolveAliasType(iterable_ty).kind) {
+            .array => |array| blk: {
+                _ = self.arrayLenTextForExpr(array.len) catch return false;
+                if (plan.representation_check != null) return false;
+                break :blk array.child.*;
+            },
+            .slice => |slice| blk: {
+                const check = plan.representation_check orelse return false;
+                if (!check.value_id.isValid() or
+                    !type_bridge.sameTypeSyntax(self.resolveAliasType(check.type_fact.target_ty), self.resolveAliasType(iterable_ty))) return false;
+                break :blk slice.child.*;
+            },
             else => return false,
         };
-        _ = self.arrayLenTextForExpr(array.len) catch return false;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(array.child.*), self.resolveAliasType(plan.element_fact.target_ty))) return false;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(plan.fallback.type_fact.target_ty), self.resolveAliasType(array.child.*))) return false;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(child_ty), self.resolveAliasType(plan.element_fact.target_ty))) return false;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(plan.fallback.type_fact.target_ty), self.resolveAliasType(child_ty))) return false;
         const declared_return = function.signature.transitionalReturnType() orelse return false;
-        return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(array.child.*));
+        return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(child_ty));
     }
 
-    fn emitMirFixedArrayForEachReturnPlan(self: *CEmitter, plan: mir_statement_plan.FixedArrayForEachReturnPlan) !void {
+    fn emitMirSequenceForEachReturnPlan(self: *CEmitter, plan: mir_statement_plan.SequenceForEachReturnPlan) !void {
         var current_ty = plan.iterable_fact.target_ty;
         var current_name: []const u8 = undefined;
         var projections: []const mir_statement_plan.DirectCallProjection = &.{};
@@ -4061,17 +4070,36 @@ pub const CEmitter = struct {
             .index => return error.UnsupportedCEmission,
         };
 
-        const array = switch (self.resolveAliasType(current_ty).kind) {
-            .array => |array| array,
-            else => return error.UnsupportedCEmission,
-        };
-        const bound = try self.arrayLenTextForExpr(array.len);
+        if (plan.representation_check) |check| {
+            try self.emitMirDirectCallRepresentationCheck(.{
+                .projection_index = 0,
+                .type_fact = check.type_fact,
+                .location = check.location,
+                .value_id = check.value_id,
+                .result_ty = check.type_fact.result_ty,
+            }, current_name, current_ty);
+        }
         try self.writeLineDirective(spanFromMirSourcePoint(plan.element_fact.source));
         try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s} != 0) {{\n", .{bound});
+        const child_ty = switch (self.resolveAliasType(current_ty).kind) {
+            .array => |array| blk: {
+                const bound = try self.arrayLenTextForExpr(array.len);
+                try self.out.print(self.allocator, "if ({s} != 0) {{\n", .{bound});
+                break :blk array.child.*;
+            },
+            .slice => |slice| blk: {
+                try self.out.print(self.allocator, "if ({s}.len != 0) {{\n", .{current_name});
+                break :blk slice.child.*;
+            },
+            else => return error.UnsupportedCEmission,
+        };
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}.elems[0];\n", .{ try self.cTypeFor(array.child.*, .typedef_name), try self.cIdent(plan.binding_name), current_name });
+        switch (self.resolveAliasType(current_ty).kind) {
+            .array => try self.out.print(self.allocator, "{s} {s} = {s}.elems[0];\n", .{ try self.cTypeFor(child_ty, .typedef_name), try self.cIdent(plan.binding_name), current_name }),
+            .slice => try self.out.print(self.allocator, "{s} {s} = {s}.ptr[0];\n", .{ try self.cTypeFor(child_ty, .typedef_name), try self.cIdent(plan.binding_name), current_name }),
+            else => unreachable,
+        }
         try self.writeLineDirective(spanFromMirSourcePoint(plan.body_return_location.source));
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.binding_name)});

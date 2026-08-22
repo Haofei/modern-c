@@ -260,6 +260,7 @@ test "LLVM returns first fixed-array element from MIR CFG without body fallback"
         \\extern fn make_values(seed: u32) -> [4]u32;
         \\extern fn make_bag(seed: u32) -> Bag;
         \\extern fn next_seed() -> u32;
+        \\extern fn make_slice() -> []const u32;
         \\fn first_value(seed: u32) -> u32 {
         \\    for value in make_values(seed) { return value; }
         \\    return 0;
@@ -276,10 +277,18 @@ test "LLVM returns first fixed-array element from MIR CFG without body fallback"
         \\    for value in make_values(next_seed()) { return value; }
         \\    return 0;
         \\}
+        \\fn first_slice(values: []const u32) -> u32 {
+        \\    for value in values { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_slice_call() -> u32 {
+        \\    for value in make_slice() { return value; }
+        \\    return 0;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_direct_call_foreach_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_sequence_foreach_return.mc", source, &output);
 
     const direct = try llvmFunctionBody(output.items, "define internal i32 @first_value");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "call [4 x i32] @make_values(i32 %seed)"));
@@ -304,6 +313,16 @@ test "LLVM returns first fixed-array element from MIR CFG without body fallback"
     try std.testing.expect(nested_call < outer_call);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "call i32 @next_seed()"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "call [4 x i32] @make_values("));
+
+    const slice = try llvmFunctionBody(output.items, "define internal i32 @first_slice");
+    try expectContains(slice, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(slice, "extractvalue { ptr, i64 } %values, 1");
+    try expectContains(slice, "getelementptr i32");
+
+    const slice_call = try llvmFunctionBody(output.items, "define internal i32 @first_slice_call");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, slice_call, "call { ptr, i64 } @make_slice()"));
+    try expectContains(slice_call, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(slice_call, "getelementptr i32");
 }
 
 test "LLVM literal unary components lower from MIR without body fallback" {
