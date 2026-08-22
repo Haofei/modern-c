@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the local function-pointer indirect-call MIR slice.
+2026-08-22 after the projected global function-pointer-table MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **112/160 C** and **113/160 LLVM**
+  The current strict ratchet corpus admits **114/160 C** and **115/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -99,7 +99,10 @@ The same module now owns a typed plan for a value-producing function-pointer
 call returned immediately. MIR records indexed `indirect_call_argument` facts
 plus the canonical callee root and optional field projection; both backends
 consume the shared admission result for parameter, global, and global-field
-callees. Closures and non-leaf arguments remain fail-closed.
+callees. It now also reconstructs checked constant-index global table places
+from typed member/index operand edges, so `ops[1](x,y)` and
+`boxes[1].combine(x,y)` share the same Bounds edge, signature and argument
+facts in both backends. Closures and non-leaf arguments remain fail-closed.
 
 The same module now owns a typed aggregate-place plan. MIR records each member's
 base `SpanId` and resolved field index, assignment target/value `SpanId`s, and
@@ -215,7 +218,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 104/160 and LLVM 105/160. The exact-root soundness gate
+current strict corpus is C 114/160 and LLVM 115/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

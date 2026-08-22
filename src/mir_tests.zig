@@ -3986,28 +3986,25 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
         \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
         \\global default_op: fn(u32, u32) -> u32 = add;
+        \\global default_ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
         \\struct BinOp { combine: fn(u32, u32) -> u32 }
         \\global default_box: BinOp = .{ .combine = add };
+        \\global default_boxes: [2]BinOp = .{ .{ .combine = add }, .{ .combine = mul } };
         \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
         \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
+        \\fn global_op_array_call(x: u32, y: u32) -> u32 { return default_ops[1](x, y); }
         \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+        \\fn global_box_array_call(x: u32, y: u32) -> u32 { return default_boxes[1].combine(x, y); }
         \\fn local_fn_pointer_call(x: u32, y: u32) -> u32 {
         \\    let op: fn(u32, u32) -> u32 = mul;
         \\    return op(x, y);
         \\}
     ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_indirect_call_plan.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    var parsed = try test_support.parseCheckedModule("mir_indirect_call_plan.mc", source);
+    defer parsed.deinit();
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer typed_mir.deinit();
-    for ([_][]const u8{ "apply", "global_op_call", "global_box_call", "local_fn_pointer_call" }) |name| {
+    for ([_][]const u8{ "apply", "global_op_call", "global_op_array_call", "global_box_call", "global_box_array_call", "local_fn_pointer_call" }) |name| {
         const function = functionByName(typed_mir, name).?;
         try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .indirect_call_argument));
         const plan = mir_statement_plan.buildSingleBlockIndirectCallReturn(function) orelse return error.TestUnexpectedResult;
@@ -4022,6 +4019,21 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
                 try std.testing.expectEqualStrings("mul", local.function_name);
                 try std.testing.expect(local.local_id.isValid());
                 try std.testing.expect(local.function_id.isValid());
+            },
+            else => return error.TestUnexpectedResult,
+        } else if (std.mem.eql(u8, name, "global_op_array_call")) switch (plan.callee) {
+            .projected_place => |place| {
+                try std.testing.expectEqualStrings("default_ops", place.root_name);
+                try std.testing.expectEqual(@as(usize, 1), place.projection_count);
+                try std.testing.expectEqual(@as(usize, 1), place.projections[0].constant_index.index);
+            },
+            else => return error.TestUnexpectedResult,
+        } else if (std.mem.eql(u8, name, "global_box_array_call")) switch (plan.callee) {
+            .projected_place => |place| {
+                try std.testing.expectEqualStrings("default_boxes", place.root_name);
+                try std.testing.expectEqual(@as(usize, 2), place.projection_count);
+                try std.testing.expectEqual(@as(usize, 1), place.projections[0].constant_index.index);
+                try std.testing.expectEqualStrings("combine", place.projections[1].field.field_name);
             },
             else => return error.TestUnexpectedResult,
         };

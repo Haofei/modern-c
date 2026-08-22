@@ -11,8 +11,8 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits **70.0% of C functions (112/160)** and **70.6% of LLVM functions
-(113/160)**; the rest still ingest the AST body.
+admits **71.2% of C functions (114/160)** and **71.9% of LLVM functions
+(115/160)**; the rest still ingest the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 112 | 48 | 0 | 7000 |
-| LLVM | 160 | 113 | 47 | 0 | 7062 |
+| C | 160 | 114 | 46 | 0 | 7125 |
+| LLVM | 160 | 115 | 45 | 0 | 7187 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -102,7 +102,7 @@ typed-unary operand-descendant bugs before commit.
 | Leaf-operand typed unary call targets | numeric conversion, `phys`, `bitcast`, `enum.raw`; root keyed by `typed_unary_operand` SpanId/type fact | (current batch) |
 | Leaf-operand typed binary domain calls | `wrapping.add`, serial before/after/distance, counter delta; indexed roots keyed by owner-qualified `typed_call_operand` facts | (current batch) |
 | Shared straight-line statement plan | discarded non-void call; zero-argument function-pointer call through param/local | (current batch) |
-| Typed indirect call return plan | `return op(x,y)`, global function-pointer, global struct-field function-pointer | (current batch) |
+| Typed indirect call return plan | `return op(x,y)`, global/local function-pointer, global struct-field function-pointer, and checked constant-index global table projections such as `ops[1](x,y)` / `boxes[1].combine(x,y)` | (current batch) |
 | Pure logical return tree | `return a && b`, `return !a || (b && c)`; MIR owns typed operand edges | (current batch) |
 | Shared field-place read/store plan | global, by-value parameter, and non-local-initialized local fields, including `box.pair.left`; MIR owns local initializer, member-base, field-index, assignment, and return edges | (current batch) |
 | Shared fixed-array place plan | constant-index reads, global stores, and non-local-initialized local array copies; MIR owns base/index identities, canonical literal value, static bound, and Bounds trap edges | (current batch) |

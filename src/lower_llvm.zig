@@ -3908,6 +3908,10 @@ const LlvmEmitter = struct {
                 }
                 break :blk true;
             },
+            .projected_place => |place| blk: {
+                const place_ty = self.mirPlaceType(place, spanFromMirSourcePoint(plan.location.source)) catch break :blk false;
+                break :blk type_bridge.sameTypeSyntax(self.resolveAliasType(place_ty), self.resolveAliasType(plan.callee_fact.target_ty));
+            },
             else => true,
         };
     }
@@ -4948,6 +4952,11 @@ const LlvmEmitter = struct {
                 try self.emitDebugDeclare(local.local_name, callee_ty, address, span, null);
                 try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ value, address });
                 break :blk value;
+            },
+            .projected_place => |place| blk: {
+                const pointer = try self.emitMirGlobalPlacePointer(place, spanFromMirSourcePoint(place.root_location.source));
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.ty), self.resolveAliasType(callee_ty))) return error.UnsupportedLlvmEmission;
+                break :blk try self.emitOrdinaryLoad(pointer.ty, pointer.pointer, !(self.global_is_const.get(place.root_name) orelse false));
             },
             .global_field => |field| blk: {
                 const global_ty = self.global_types.get(field.root_name) orelse return error.UnsupportedLlvmEmission;

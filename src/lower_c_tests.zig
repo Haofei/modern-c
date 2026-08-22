@@ -3207,11 +3207,15 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
         \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
         \\global default_op: fn(u32, u32) -> u32 = add;
+        \\global default_ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
         \\struct BinOp { combine: fn(u32, u32) -> u32 }
         \\global default_box: BinOp = .{ .combine = add };
+        \\global default_boxes: [2]BinOp = .{ .{ .combine = add }, .{ .combine = mul } };
         \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
         \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
+        \\fn global_op_array_call(x: u32, y: u32) -> u32 { return default_ops[1](x, y); }
         \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+        \\fn global_box_array_call(x: u32, y: u32) -> u32 { return default_boxes[1].combine(x, y); }
         \\fn local_fn_pointer_call(x: u32, y: u32) -> u32 {
         \\    let op: fn(u32, u32) -> u32 = mul;
         \\    return op(x, y);
@@ -3232,6 +3236,16 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
     const field_body = try cFunctionBody(output.items, "static uint32_t global_box_call(");
     try expectContains(field_body, "__atomic_load_n(&default_box.combine, __ATOMIC_RELAXED))(x, y)");
     try expectNotContains(field_body, "mc_tmp");
+
+    const array_body = try cFunctionBody(output.items, "static uint32_t global_op_array_call(");
+    try expectContains(array_body, "default_ops.elems[mc_check_index_usize(1, 2)]");
+    try expectContains(array_body, ")(x, y)");
+    try expectNotContains(array_body, "mc_tmp");
+
+    const array_field_body = try cFunctionBody(output.items, "static uint32_t global_box_array_call(");
+    try expectContains(array_field_body, "default_boxes.elems[mc_check_index_usize(1, 2)].combine");
+    try expectContains(array_field_body, ")(x, y)");
+    try expectNotContains(array_field_body, "mc_tmp");
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_fn_pointer_call(");
     try expectContains(local_body, "mc_fnptr_");

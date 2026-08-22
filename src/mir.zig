@@ -12345,26 +12345,25 @@ const FunctionBuilder = struct {
     fn recordIndirectCalleePlace(self: *FunctionBuilder, callee: ast.Expr) !bool {
         const place = exprText(callee);
         const owner_id = try self.internTargetOwnerId(place);
-        const root_name, const root_span, const field_index = switch (callee.kind) {
-            .ident => |ident| .{ ident.text, callee.span, @as(?usize, null) },
-            .member => |member| blk: {
-                const root = directIdentName(member.base.*) orelse return false;
-                const base_ty = self.typeExprForExpr(member.base.*) orelse return false;
-                const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse return false;
-                const summary = self.structs.get(struct_name) orelse return false;
-                var index: ?usize = null;
+        const root = indirectCalleeRoot(callee) orelse return false;
+        const field_index: ?usize = switch (callee.kind) {
+            // Keep the compact direct-global-field identity for the original
+            // single-projection slice. Deeper member/index paths are described
+            // by their typed expression instructions and reconstructed as a
+            // canonical MIR place by the shared statement planner.
+            .member => |member| if (directIdentName(member.base.*)) |_| blk: {
+                const base_ty = self.typeExprForExpr(member.base.*) orelse break :blk null;
+                const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse break :blk null;
+                const summary = self.structs.get(struct_name) orelse break :blk null;
                 for (summary.fields, 0..) |field, candidate| {
-                    if (std.mem.eql(u8, field.name.text, member.name.text)) {
-                        index = candidate;
-                        break;
-                    }
+                    if (std.mem.eql(u8, field.name.text, member.name.text)) break :blk candidate;
                 }
-                break :blk .{ root, member.base.*.span, index orelse return false };
-            },
-            else => return false,
+                break :blk null;
+            } else null,
+            else => null,
         };
-        const root_id = try self.internValueId(root_name);
-        const root_span_id = try self.internSpanId(sourcePointFromSpan(root_span));
+        const root_id = try self.internValueId(root.name);
+        const root_span_id = try self.internSpanId(sourcePointFromSpan(root.span));
         const instructions = &self.blocks.items[self.current].instructions;
         const instruction = &instructions.items[instructions.items.len - 1];
         instruction.target_owner = place;
@@ -12373,6 +12372,22 @@ const FunctionBuilder = struct {
         instruction.typed_callee_root_span_id = root_span_id;
         instruction.callee_field_index = field_index;
         return true;
+    }
+
+    const IndirectCalleeRoot = struct {
+        name: []const u8,
+        span: ast.Span,
+    };
+
+    fn indirectCalleeRoot(callee: ast.Expr) ?IndirectCalleeRoot {
+        return switch (callee.kind) {
+            .ident => |ident| .{ .name = ident.text, .span = callee.span },
+            .grouped => |inner| indirectCalleeRoot(inner.*),
+            .member => |member| indirectCalleeRoot(member.base.*),
+            .index => |index| indirectCalleeRoot(index.base.*),
+            .deref => |inner| indirectCalleeRoot(inner.*),
+            else => null,
+        };
     }
 
     fn exprType(self: *FunctionBuilder, expr: ast.Expr) ValueType {

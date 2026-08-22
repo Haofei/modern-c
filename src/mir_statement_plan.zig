@@ -55,6 +55,7 @@ pub const IndirectArgument = struct {
 pub const IndirectCallee = union(enum) {
     parameter: []const u8,
     global: []const u8,
+    projected_place: Place,
     local_function: struct {
         local_name: []const u8,
         local_id: mir.ValueId,
@@ -1981,18 +1982,18 @@ pub fn buildSingleBlockLogicalReturn(function: mir.Function) ?LogicalReturnPlan 
 /// first slice, must be direct parameter values. The callee may be a parameter,
 /// a global function-pointer object, or one field of a global struct object.
 pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallReturnPlan {
-    if (function.return_ty == .void or function.blocks.len != 1) return null;
-    if (function.trap_edges.len != 0 or function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.return_ty == .void or function.blocks.len == 0) return null;
+    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
     if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
     for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
 
     const block = function.blocks[0];
-    if (block.terminator != .return_ or block.successors.len != 0) return null;
+    if (block.terminator != .return_) return null;
 
     var call_instruction: ?mir.Instruction = null;
     var return_instruction: ?mir.Instruction = null;
     for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .local, .target_type, .expr => {},
+        .param, .local, .target_type, .expr, .cmp_bounds, .index, .integer_literal_conversion => {},
         .indirect_call => {
             if (call_instruction != null) return null;
             call_instruction = instruction;
@@ -2006,7 +2007,7 @@ pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallR
 
     const call = call_instruction orelse return null;
     const returned = return_instruction orelse return null;
-    if (!call.typed_callee_span_id.isValid() or !call.typed_callee_root_value_id.isValid() or !call.typed_callee_root_span_id.isValid()) return null;
+    if (!call.typed_callee_span_id.isValid()) return null;
     if (call.target_owner == null or call.typed_target_owner_id == null) return null;
     if (call.result_ty == .void or !sameRepresentationType(call.result_ty, returned.result_ty) or !sameRepresentationType(call.result_ty, function.return_ty)) return null;
     const returned_value_id = returned.typed_value_id orelse return null;
@@ -2028,7 +2029,19 @@ pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallR
         .callee_fact = callee_fact,
     };
     if (!collectIndirectArguments(function, call, signature.params, &plan)) return null;
-    plan.callee = indirectCalleePlan(function, call) orelse return null;
+    plan.callee = indirectCalleePlan(function, call, callee_fact) orelse return null;
+    switch (plan.callee) {
+        .projected_place => |place| {
+            if (place.root_kind != .global or place.projection_count == 0 or
+                place.resultType() != .value or !placeHasAggregateIntermediates(place)) return null;
+            var indexes: [max_place_projections]CheckedIndexIdentity = undefined;
+            var index_count: usize = 0;
+            appendCheckedIndexLocations(place, &indexes, &index_count) orelse return null;
+            if (!boundsTrapLocationsMatch(function, indexes[0..index_count])) return null;
+        },
+        else => if (function.blocks.len != 1 or block.successors.len != 0 or
+            function.trap_edges.len != 0 or function.bounds_facts.len != 0) return null,
+    }
     return plan;
 }
 
@@ -2436,7 +2449,11 @@ fn collectIndirectArguments(function: mir.Function, call: mir.Instruction, param
     return true;
 }
 
-fn indirectCalleePlan(function: mir.Function, call: mir.Instruction) ?IndirectCallee {
+fn indirectCalleePlan(function: mir.Function, call: mir.Instruction, callee_fact: mir.TargetTypeFact) ?IndirectCallee {
+    if (buildPlace(function, function.blocks[0], callee_fact.typed_span_id)) |place| {
+        return .{ .projected_place = place };
+    }
+    if (!call.typed_callee_root_value_id.isValid() or !call.typed_callee_root_span_id.isValid()) return null;
     const root_name = valueIdentityName(function, call.typed_callee_root_value_id) orelse return null;
     const root_is_parameter = parameterType(function, root_name) != null;
     if (call.callee_field_index) |field_index| {

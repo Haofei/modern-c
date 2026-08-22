@@ -3940,6 +3940,10 @@ pub const CEmitter = struct {
                 }
                 break :blk true;
             },
+            .projected_place => |place| blk: {
+                const place_ty = self.mirPlaceType(place, spanFromMirSourcePoint(plan.location.source)) catch break :blk false;
+                break :blk type_bridge.sameTypeSyntax(self.resolveAliasType(place_ty), self.resolveAliasType(plan.callee_fact.target_ty));
+            },
             else => true,
         };
     }
@@ -4853,6 +4857,11 @@ pub const CEmitter = struct {
             .parameter => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .global => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .local_function => |local| try self.out.appendSlice(self.allocator, try self.cIdent(local.local_name)),
+            .projected_place => |place| {
+                const access = try self.mirPlaceAccess(place);
+                const ty = try self.mirPlaceType(place, spanFromMirSourcePoint(place.root_location.source));
+                try appendGlobalLoadExpr(self.allocator, self.out, access, try self.globalInfoFromType(ty));
+            },
             .global_field => |field| {
                 const struct_name = self.structTypeNameFromType(field.root_type_fact.target_ty) orelse return error.UnsupportedCEmission;
                 const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
