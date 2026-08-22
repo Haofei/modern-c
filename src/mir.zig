@@ -2285,14 +2285,16 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     }
     const is_direct_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.direct_call_argument));
     const is_indirect_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.indirect_call_argument));
+    const is_for_element = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.for_element));
     if (instruction.kind == .call or instruction.kind == .indirect_call or is_direct_argument or is_indirect_argument) {
         if (!instruction.typed_callee_span_id.isValid()) return false;
         if (instruction.typed_callee_span_id.index() >= function.span_identities.len) return false;
     } else if (instruction.typed_callee_span_id.isValid()) {
         return false;
     }
-    if (is_direct_argument or is_indirect_argument) {
+    if (is_direct_argument or is_indirect_argument or is_for_element) {
         if (is_indirect_argument and !instruction.typed_operand_value_id.isValid()) return false;
+        if (is_for_element and !instruction.typed_operand_value_id.isValid()) return false;
         if (instruction.typed_operand_value_id.isValid() and instruction.typed_operand_value_id.index() >= function.value_identities.len) return false;
     } else if (instruction.typed_operand_value_id.isValid()) {
         return false;
@@ -3239,6 +3241,7 @@ fn targetTypeFactFamilyValid(fact: TargetTypeFact) bool {
         .try_operand => isResultOrNullableTargetType(fact.result_ty),
         .direct_call_argument => fact.target_index != null and fact.target_owner != null and fact.typed_callee_span_id.isValid(),
         .indirect_call_argument => fact.target_index != null and fact.target_owner != null and fact.typed_callee_span_id.isValid(),
+        .for_element => fact.typed_operand_value_id.isValid(),
         else => true,
     };
 }
@@ -3271,6 +3274,9 @@ fn targetTypeFactTypedIdentitiesValid(function: Function, fact: TargetTypeFact) 
         if (fact.typed_callee_span_id.index() >= function.span_identities.len) return false;
         if (fact.kind == .indirect_call_argument and !fact.typed_operand_value_id.isValid()) return false;
         if (fact.typed_operand_value_id.isValid() and fact.typed_operand_value_id.index() >= function.value_identities.len) return false;
+    } else if (fact.kind == .for_element) {
+        if (fact.typed_callee_span_id.isValid() or !fact.typed_operand_value_id.isValid()) return false;
+        if (fact.typed_operand_value_id.index() >= function.value_identities.len) return false;
     } else if (fact.typed_callee_span_id.isValid()) {
         return false;
     } else if (fact.typed_operand_value_id.isValid()) {
@@ -3336,6 +3342,11 @@ fn targetTypeInstructionSpansCompatible(left: Instruction, right: Instruction) b
 }
 
 fn targetTypeTypedCalleeSpanCompatible(instruction: Instruction, fact: TargetTypeFact) bool {
+    if (fact.kind == .for_element) {
+        return !fact.typed_callee_span_id.isValid() and !instruction.typed_callee_span_id.isValid() and
+            fact.typed_operand_value_id.isValid() and instruction.typed_operand_value_id.isValid() and
+            fact.typed_operand_value_id.eql(instruction.typed_operand_value_id);
+    }
     if (fact.kind != .direct_call_argument and fact.kind != .indirect_call_argument) {
         return !fact.typed_callee_span_id.isValid() and !instruction.typed_callee_span_id.isValid() and !fact.typed_operand_value_id.isValid() and !instruction.typed_operand_value_id.isValid();
     }
@@ -3346,6 +3357,11 @@ fn targetTypeTypedCalleeSpanCompatible(instruction: Instruction, fact: TargetTyp
 }
 
 fn targetTypeInstructionCalleeSpansCompatible(left: Instruction, right: Instruction, kind: TargetTypeKind) bool {
+    if (kind == .for_element) {
+        return !left.typed_callee_span_id.isValid() and !right.typed_callee_span_id.isValid() and
+            left.typed_operand_value_id.isValid() and right.typed_operand_value_id.isValid() and
+            left.typed_operand_value_id.eql(right.typed_operand_value_id);
+    }
     if (kind != .direct_call_argument and kind != .indirect_call_argument) {
         return !left.typed_callee_span_id.isValid() and !right.typed_callee_span_id.isValid() and !left.typed_operand_value_id.isValid() and !right.typed_operand_value_id.isValid();
     }
@@ -7460,7 +7476,9 @@ const FunctionBuilder = struct {
                 if (self.typeExprForExpr(iterable)) |iterable_ty| {
                     if (storageElementTypeAlias(iterable_ty, self.aliases)) |element_ty| {
                         try self.appendTargetTypeFact(.for_iterable, iterable_ty, self.exprType(iterable), iterable.span);
-                        try self.appendTargetTypeFact(.for_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), iterable.span);
+                        if (node.label) |binding| {
+                            try self.appendForElementTargetTypeFact(element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), iterable.span, binding.text);
+                        }
                         for_binding_ty_expr = element_ty;
                     }
                 }
@@ -9528,6 +9546,14 @@ const FunctionBuilder = struct {
         instructions.items[instructions.items.len - 1].typed_operand_value_id = operand_id orelse .invalid;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_callee_span_id = callee_span_id;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_operand_value_id = operand_id orelse .invalid;
+    }
+
+    fn appendForElementTargetTypeFact(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, binding_name: []const u8) !void {
+        try self.appendTargetTypeFact(.for_element, target_ty, result_ty, span);
+        const binding_id = try self.internValueId(binding_name);
+        const instructions = &self.blocks.items[self.current].instructions;
+        instructions.items[instructions.items.len - 1].typed_operand_value_id = binding_id;
+        self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_operand_value_id = binding_id;
     }
 
     fn valueOptionalPayloadTargetType(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType) ?ast.TypeExpr {

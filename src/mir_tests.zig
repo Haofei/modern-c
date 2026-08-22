@@ -945,6 +945,68 @@ test "MIR direct-call aggregate projected returns own identities and checks" {
     try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(representation_function.*) == null);
 }
 
+test "MIR direct-call fixed-array foreach return owns binding and CFG" {
+    const source =
+        \\struct Bag { values: [4]u32 }
+        \\extern fn make_values(seed: u32) -> [4]u32;
+        \\extern fn make_bag(seed: u32) -> Bag;
+        \\fn first_value(seed: u32) -> u32 {
+        \\    for value in make_values(seed) { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_field(seed: u32) -> u32 {
+        \\    for value in make_bag(seed).values { return value; }
+        \\    return 0;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_direct_call_foreach_return.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const direct = mir_statement_plan.buildDirectCallForEachReturn(functionByName(module_mir, "first_value").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("make_values", direct.callee_name);
+    try std.testing.expectEqual(@as(usize, 1), direct.argument_count);
+    try std.testing.expectEqual(@as(usize, 0), direct.projection_count);
+    try std.testing.expectEqualStrings("value", direct.binding_name);
+    try std.testing.expect(direct.binding_id.isValid());
+    try std.testing.expect(direct.element_fact.typed_operand_value_id.eql(direct.binding_id));
+    try std.testing.expectEqual(@as(usize, 0), direct.fallback.value);
+
+    const field = mir_statement_plan.buildDirectCallForEachReturn(functionByName(module_mir, "first_field").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("make_bag", field.callee_name);
+    try std.testing.expectEqual(@as(usize, 1), field.projection_count);
+    switch (field.projections[0]) {
+        .field => |projection| {
+            try std.testing.expectEqualStrings("values", projection.field_name);
+            try std.testing.expectEqual(@as(usize, 0), projection.field_index);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var binding_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer binding_mir.deinit();
+    const binding_function = functionByNameMut(&binding_mir, "first_value") orelse return error.TestUnexpectedResult;
+    for (binding_function.target_type_facts) |*fact| {
+        if (fact.kind == .for_element) {
+            fact.typed_operand_value_id = .invalid;
+            break;
+        }
+    }
+    try std.testing.expect(mir_statement_plan.buildDirectCallForEachReturn(binding_function.*) == null);
+
+    var field_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer field_mir.deinit();
+    const field_function = functionByNameMut(&field_mir, "first_field") orelse return error.TestUnexpectedResult;
+    for (field_function.blocks[0].instructions) |*instruction| {
+        if (instruction.member_field_index != null) {
+            instruction.member_field_index = std.math.maxInt(usize);
+            break;
+        }
+    }
+    try std.testing.expect(mir_statement_plan.buildDirectCallForEachReturn(field_function.*) == null);
+}
+
 test "MIR target-type owner identities mirror direct calls" {
     const source =
         \\fn callee(x: u32) -> u32 {

@@ -254,6 +254,37 @@ test "LLVM direct-call aggregate projections return from MIR without body fallba
     try expectContains(slice_field, "call void @mc_trap_Bounds()");
 }
 
+test "LLVM returns first direct-call array element from MIR CFG without body fallback" {
+    const source =
+        \\struct Bag { values: [4]u32 }
+        \\extern fn make_values(seed: u32) -> [4]u32;
+        \\extern fn make_bag(seed: u32) -> Bag;
+        \\fn first_value(seed: u32) -> u32 {
+        \\    for value in make_values(seed) { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_field(seed: u32) -> u32 {
+        \\    for value in make_bag(seed).values { return value; }
+        \\    return 0;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_direct_call_foreach_return.mc", source, &output);
+
+    const direct = try llvmFunctionBody(output.items, "define internal i32 @first_value");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "call [4 x i32] @make_values(i32 %seed)"));
+    try expectContains(direct, "icmp ult i64 0, 4");
+    try expectContains(direct, "getelementptr [4 x i32]");
+    try expectContains(direct, "ret i32 0");
+
+    const field = try llvmFunctionBody(output.items, "define internal i32 @first_field");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field, "call { [4 x i32] } @make_bag(i32 %seed)"));
+    try expectContains(field, "extractvalue { [4 x i32] }");
+    try expectContains(field, "icmp ult i64 0, 4");
+    try expectContains(field, "ret i32 0");
+}
+
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
         \\struct Flags { first: bool, second: bool }

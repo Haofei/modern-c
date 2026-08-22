@@ -217,6 +217,34 @@ pub const DirectCallProjectedReturnPlan = struct {
     }
 };
 
+/// A fixed-array `for` whose iterable is one direct call (optionally followed
+/// by resolved field projections), whose body returns the bound element, and
+/// whose after block returns one integer literal. The loop binding is carried
+/// by the `.for_element` fact's ValueId; backends never recover it from AST
+/// syntax or source spelling.
+pub const DirectCallForEachReturnPlan = struct {
+    callee_name: []const u8,
+    callee_value_id: mir.ValueId,
+    call_location: Location,
+    result_fact: mir.TargetTypeFact,
+    arguments: [max_arguments]DirectCallArgument = undefined,
+    argument_count: usize = 0,
+    projections: [max_place_projections]DirectCallProjection = undefined,
+    projection_count: usize = 0,
+    iterable_fact: mir.TargetTypeFact,
+    element_fact: mir.TargetTypeFact,
+    binding_name: []const u8,
+    binding_id: mir.ValueId,
+    body_return_location: Location,
+    fallback: IntegerLiteralValue,
+    fallback_return_location: Location,
+
+    pub fn iterableType(self: DirectCallForEachReturnPlan) mir.ValueType {
+        if (self.projection_count == 0) return self.result_fact.result_ty;
+        return self.projections[self.projection_count - 1].resultType();
+    }
+};
+
 pub const AggregateValueNode = struct {
     type_fact: mir.TargetTypeFact,
     location: Location,
@@ -535,6 +563,156 @@ pub fn buildDirectCallProjectedReturn(function: mir.Function) ?DirectCallProject
     };
     if (consumed_expressions != expression_count) return null;
     if (!directCallProjectedTrapsMatch(function, &plan)) return null;
+    return plan;
+}
+
+/// Admit the deliberately narrow CFG produced by:
+///
+///   for value in make_array(args).field { return value; }
+///   return <integer literal>;
+///
+/// The iterable must be a fixed array. Calls in arguments, slices, loop-body
+/// side effects, cleanup, and additional control flow remain fail-closed.
+pub fn buildDirectCallForEachReturn(function: mir.Function) ?DirectCallForEachReturnPlan {
+    if (function.return_ty == .void or function.blocks.len != 3) return null;
+    if (function.trap_edges.len != 0 or function.bounds_facts.len != 0 or
+        function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    if (entry.terminator != .jump or entry.successors.len != 1) return null;
+    const body_index = entry.terminator.jump;
+    if (body_index >= function.blocks.len or entry.successors[0] != body_index) return null;
+    const body = function.blocks[body_index];
+    if (!std.mem.eql(u8, body.kind, "loop_body") or body.terminator != .return_ or body.successors.len != 0) return null;
+
+    var after_index: ?usize = null;
+    for (function.blocks, 0..) |block, index| {
+        if (index == 0 or index == body_index) continue;
+        if (after_index != null or !std.mem.eql(u8, block.kind, "loop_after") or block.terminator != .return_ or block.successors.len != 0) return null;
+        after_index = index;
+    }
+    const after = function.blocks[after_index orelse return null];
+
+    var call: ?mir.Instruction = null;
+    var for_marker_count: usize = 0;
+    var expression_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type => {},
+        .binary => {
+            if (!std.mem.eql(u8, instruction.detail, "for")) return null;
+            for_marker_count += 1;
+        },
+        .expr => expression_count += 1,
+        .call => {
+            if (call != null) return null;
+            call = instruction;
+        },
+        else => return null,
+    };
+    if (for_marker_count != 1) return null;
+
+    const call_instruction = call orelse return null;
+    if (!call_instruction.typed_span_id.isValid() or !call_instruction.typed_callee_span_id.isValid()) return null;
+    const callee_value_id = call_instruction.typed_value_id orelse return null;
+    const callee_name = valueIdentityName(function, callee_value_id) orelse return null;
+    if (!std.mem.eql(u8, callee_name, call_instruction.detail)) return null;
+    const result_fact = targetFactBySpan(function, .direct_call_result, call_instruction.typed_callee_span_id) orelse return null;
+    if (!std.mem.eql(u8, result_fact.target_owner orelse "", callee_name) or !result_fact.typed_target_owner_id.isValid()) return null;
+    if (!sameRepresentationType(result_fact.result_ty, call_instruction.result_ty)) return null;
+
+    var iterable_fact: ?mir.TargetTypeFact = null;
+    var element_fact: ?mir.TargetTypeFact = null;
+    for (function.target_type_facts) |fact| switch (fact.kind) {
+        .for_iterable => {
+            if (iterable_fact != null) return null;
+            iterable_fact = fact;
+        },
+        .for_element => {
+            if (element_fact != null) return null;
+            element_fact = fact;
+        },
+        else => {},
+    };
+    const iterable = iterable_fact orelse return null;
+    const element = element_fact orelse return null;
+    if (!iterable.typed_span_id.isValid() or !iterable.typed_span_id.eql(element.typed_span_id) or
+        iterable.result_ty != .array or !element.typed_operand_value_id.isValid()) return null;
+
+    const binding_name = valueIdentityName(function, element.typed_operand_value_id) orelse return null;
+    var plan: DirectCallForEachReturnPlan = .{
+        .callee_name = callee_name,
+        .callee_value_id = callee_value_id,
+        .call_location = locationFromInstruction(call_instruction),
+        .result_fact = result_fact,
+        .iterable_fact = iterable,
+        .element_fact = element,
+        .binding_name = binding_name,
+        .binding_id = element.typed_operand_value_id,
+        .body_return_location = undefined,
+        .fallback = undefined,
+        .fallback_return_location = undefined,
+    };
+    if (!collectDirectCallArguments(function, call_instruction, &plan)) return null;
+    if (!appendDirectCallProjection(function, entry, call_instruction, iterable.typed_span_id, &plan, 0)) return null;
+    if (plan.iterableType() != .array) return null;
+    for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+        .field => {},
+        .index => return null,
+    };
+
+    const consumed_expressions: usize = 1 + plan.argument_count + plan.projection_count;
+    if (consumed_expressions != expression_count) return null;
+
+    var body_return: ?mir.Instruction = null;
+    var body_expression_count: usize = 0;
+    for (body.instructions) |instruction| switch (instruction.kind) {
+        .target_type => {},
+        .expr => body_expression_count += 1,
+        .return_value => {
+            if (body_return != null) return null;
+            body_return = instruction;
+        },
+        else => return null,
+    };
+    const returned_element = body_return orelse return null;
+    if (body_expression_count != 1 or !returned_element.typed_value_operand_span_id.isValid()) return null;
+    const binding_expression = expressionAtSpan(body, returned_element.typed_value_operand_span_id) orelse return null;
+    const returned_binding_id = binding_expression.typed_value_id orelse return null;
+    if (!returned_binding_id.eql(plan.binding_id) or !std.mem.eql(u8, binding_expression.detail, plan.binding_name) or
+        !sameRepresentationType(binding_expression.result_ty, element.result_ty) or
+        !sameRepresentationType(returned_element.result_ty, function.return_ty) or
+        !sameRepresentationType(element.result_ty, function.return_ty)) return null;
+    plan.body_return_location = locationFromInstruction(returned_element);
+
+    var fallback_return: ?mir.Instruction = null;
+    var fallback_expression: ?mir.Instruction = null;
+    for (after.instructions) |instruction| switch (instruction.kind) {
+        .target_type, .integer_literal_conversion => {},
+        .expr => {
+            if (fallback_expression != null) return null;
+            fallback_expression = instruction;
+        },
+        .return_value => {
+            if (fallback_return != null) return null;
+            fallback_return = instruction;
+        },
+        else => return null,
+    };
+    const fallback_return_instruction = fallback_return orelse return null;
+    if (!fallback_return_instruction.typed_value_operand_span_id.isValid()) return null;
+    const fallback_instruction = fallback_expression orelse return null;
+    if (!fallback_instruction.typed_span_id.eql(fallback_return_instruction.typed_value_operand_span_id)) return null;
+    const fallback_value = fallback_instruction.constant_usize_value orelse return null;
+    const fallback_fact = targetFactBySpan(function, .expression_result, fallback_instruction.typed_span_id) orelse return null;
+    if (fallback_fact.result_ty != .integer or !sameRepresentationType(fallback_return_instruction.result_ty, function.return_ty)) return null;
+    plan.fallback = .{
+        .value = fallback_value,
+        .type_fact = fallback_fact,
+        .location = locationFromInstruction(fallback_instruction),
+    };
+    plan.fallback_return_location = locationFromInstruction(fallback_return_instruction);
     return plan;
 }
 
@@ -908,7 +1086,7 @@ fn localAggregateBoundsTrapsMatch(function: mir.Function, plan: LocalAggregatePl
     return boundsTrapLocationsMatch(function, indexes[0..index_count]);
 }
 
-fn collectDirectCallArguments(function: mir.Function, call: mir.Instruction, plan: *DirectCallProjectedReturnPlan) bool {
+fn collectDirectCallArguments(function: mir.Function, call: mir.Instruction, plan: anytype) bool {
     var seen = [_]bool{false} ** max_arguments;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .direct_call_argument or !fact.typed_callee_span_id.eql(call.typed_callee_span_id)) continue;
@@ -933,7 +1111,7 @@ fn collectDirectCallArguments(function: mir.Function, call: mir.Instruction, pla
     return true;
 }
 
-fn appendDirectCallProjection(function: mir.Function, block: mir.Block, call: mir.Instruction, span_id: mir.SpanId, plan: *DirectCallProjectedReturnPlan, depth: usize) bool {
+fn appendDirectCallProjection(function: mir.Function, block: mir.Block, call: mir.Instruction, span_id: mir.SpanId, plan: anytype, depth: usize) bool {
     if (!span_id.isValid() or depth > max_place_projections) return false;
 
     if (span_id.eql(call.typed_span_id)) {
@@ -973,7 +1151,7 @@ fn appendDirectCallProjection(function: mir.Function, block: mir.Block, call: mi
         return true;
     }
 
-    if (!instruction.typed_base_operand_span_id.isValid() or instruction.member_field_index == null) return false;
+    if (!instruction.typed_base_operand_span_id.isValid() or instruction.member_field_index == null or instruction.member_field_index.? == std.math.maxInt(usize)) return false;
     if (!appendDirectCallProjection(function, block, call, instruction.typed_base_operand_span_id, plan, depth + 1)) return false;
     plan.projections[plan.projection_count] = .{ .field = .{
         .field_name = instruction.detail,

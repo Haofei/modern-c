@@ -6478,6 +6478,39 @@ test "lower-c projects direct aggregate call results from MIR without body fallb
     try expectContains(slice_field_body, "return mc_tmp");
 }
 
+test "lower-c returns first direct-call array element from MIR CFG without body fallback" {
+    const source =
+        \\struct Bag { values: [4]u32 }
+        \\extern fn make_values(seed: u32) -> [4]u32;
+        \\extern fn make_bag(seed: u32) -> Bag;
+        \\fn first_value(seed: u32) -> u32 {
+        \\    for value in make_values(seed) { return value; }
+        \\    return 0;
+        \\}
+        \\fn first_field(seed: u32) -> u32 {
+        \\    for value in make_bag(seed).values { return value; }
+        \\    return 0;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_direct_call_foreach_return.mc", source, &output);
+
+    const direct = try cFunctionBody(output.items, "static uint32_t first_value(uint32_t seed)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "make_values(seed)"));
+    try expectContains(direct, "if (4 != 0)");
+    try expectContains(direct, ".elems[0]");
+    try expectContains(direct, "return value;");
+    try expectContains(direct, "return 0;");
+
+    const field = try cFunctionBody(output.items, "static uint32_t first_field(uint32_t seed)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field, "make_bag(seed)"));
+    try expectContains(field, ".values;");
+    try expectContains(field, ".elems[0]");
+    try expectContains(field, "return value;");
+    try expectContains(field, "return 0;");
+}
+
 test "lower-c nested array member and index results require MIR expression facts" {
     const source =
         \\struct MatrixHolder { rows: [2][2]u32 }
