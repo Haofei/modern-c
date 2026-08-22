@@ -153,6 +153,70 @@ pub const Place = struct {
     }
 };
 
+pub const DirectCallArgument = struct {
+    index: usize,
+    value_id: mir.ValueId,
+    name: []const u8,
+    type_fact: mir.TargetTypeFact,
+    location: Location,
+};
+
+pub const DirectCallProjection = union(enum) {
+    field: struct {
+        field_name: []const u8,
+        field_index: usize,
+        type_fact: mir.TargetTypeFact,
+        location: Location,
+    },
+    index: struct {
+        operand_name: []const u8,
+        operand_id: mir.ValueId,
+        operand_fact: mir.TargetTypeFact,
+        type_fact: mir.TargetTypeFact,
+        constant_value: ?usize,
+        static_bound: ?usize,
+        checked: bool,
+        location: Location,
+    },
+
+    pub fn resultType(self: DirectCallProjection) mir.ValueType {
+        return switch (self) {
+            .field => |field| field.type_fact.result_ty,
+            .index => |index| index.type_fact.result_ty,
+        };
+    }
+};
+
+pub const DirectCallRepresentationCheck = struct {
+    projection_index: usize,
+    type_fact: mir.TargetTypeFact,
+    location: Location,
+    value_id: mir.ValueId,
+    result_ty: mir.ValueType,
+};
+
+/// A direct call evaluated once and then projected by resolved fields and
+/// checked indexes. Every edge is owned by typed MIR identities: the callee
+/// occurrence, indexed arguments, projection operands, bounds facts, and any
+/// representation check. Backends only encode this plan.
+pub const DirectCallProjectedReturnPlan = struct {
+    callee_name: []const u8,
+    callee_value_id: mir.ValueId,
+    call_location: Location,
+    result_fact: mir.TargetTypeFact,
+    arguments: [max_arguments]DirectCallArgument = undefined,
+    argument_count: usize = 0,
+    projections: [max_place_projections]DirectCallProjection = undefined,
+    projection_count: usize = 0,
+    representation_check: ?DirectCallRepresentationCheck = null,
+    return_location: Location,
+
+    pub fn resultType(self: DirectCallProjectedReturnPlan) mir.ValueType {
+        if (self.projection_count == 0) return self.result_fact.result_ty;
+        return self.projections[self.projection_count - 1].resultType();
+    }
+};
+
 pub const AggregateValueNode = struct {
     type_fact: mir.TargetTypeFact,
     location: Location,
@@ -411,6 +475,68 @@ pub const LocalAggregatePlaceUpdateReturnPlan = struct {
     returned: Place,
     return_location: Location,
 };
+
+/// Admit `return make_value(args).field[index]` without reopening the AST
+/// function body. The first slice intentionally accepts only direct parameter
+/// arguments and parameter index operands, which makes call and index
+/// evaluation order explicit and excludes nested/effectful operands.
+pub fn buildDirectCallProjectedReturn(function: mir.Function) ?DirectCallProjectedReturnPlan {
+    if (function.return_ty == .void or function.blocks.len == 0) return null;
+    if (function.pointer_provenance_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const block = function.blocks[0];
+    if (block.terminator != .return_) return null;
+    var call: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var expression_count: usize = 0;
+    for (block.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .cmp_bounds, .index, .typed_load, .representation_check => {},
+        .expr => expression_count += 1,
+        .call => {
+            if (call != null) return null;
+            call = instruction;
+        },
+        .return_value => {
+            if (returned != null) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+
+    const call_instruction = call orelse return null;
+    const return_instruction = returned orelse return null;
+    if (!call_instruction.typed_span_id.isValid() or !call_instruction.typed_callee_span_id.isValid()) return null;
+    const callee_value_id = call_instruction.typed_value_id orelse return null;
+    const callee_name = valueIdentityName(function, callee_value_id) orelse return null;
+    if (!std.mem.eql(u8, callee_name, call_instruction.detail)) return null;
+    const result_fact = targetFactBySpan(function, .direct_call_result, call_instruction.typed_callee_span_id) orelse return null;
+    if (!std.mem.eql(u8, result_fact.target_owner orelse "", callee_name) or !result_fact.typed_target_owner_id.isValid()) return null;
+    if (!sameRepresentationType(result_fact.result_ty, call_instruction.result_ty)) return null;
+    if (!return_instruction.typed_value_operand_span_id.isValid()) return null;
+
+    var plan: DirectCallProjectedReturnPlan = .{
+        .callee_name = callee_name,
+        .callee_value_id = callee_value_id,
+        .call_location = locationFromInstruction(call_instruction),
+        .result_fact = result_fact,
+        .return_location = locationFromInstruction(return_instruction),
+    };
+    if (!collectDirectCallArguments(function, call_instruction, &plan)) return null;
+    if (!appendDirectCallProjection(function, block, call_instruction, return_instruction.typed_value_operand_span_id, &plan, 0)) return null;
+    if (plan.projection_count == 0 or !sameRepresentationType(plan.resultType(), function.return_ty) or
+        !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
+
+    var consumed_expressions: usize = 1 + plan.argument_count;
+    for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+        .field => consumed_expressions += 1,
+        .index => consumed_expressions += 1,
+    };
+    if (consumed_expressions != expression_count) return null;
+    if (!directCallProjectedTrapsMatch(function, &plan)) return null;
+    return plan;
+}
 
 /// Admit a straight-line local aggregate generation: initialize one local from
 /// a pure (possibly nested) aggregate value, optionally update one projected
@@ -780,6 +906,195 @@ fn localAggregateBoundsTrapsMatch(function: mir.Function, plan: LocalAggregatePl
     appendCheckedIndexLocations(plan.returned, &indexes, &index_count) orelse return false;
     if (plan.update) |update| appendCheckedIndexLocations(update.target, &indexes, &index_count) orelse return false;
     return boundsTrapLocationsMatch(function, indexes[0..index_count]);
+}
+
+fn collectDirectCallArguments(function: mir.Function, call: mir.Instruction, plan: *DirectCallProjectedReturnPlan) bool {
+    var seen = [_]bool{false} ** max_arguments;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .direct_call_argument or !fact.typed_callee_span_id.eql(call.typed_callee_span_id)) continue;
+        if (!std.mem.eql(u8, fact.target_owner orelse "", plan.callee_name) or
+            !fact.typed_target_owner_id.eql(plan.result_fact.typed_target_owner_id)) return false;
+        const index = fact.target_index orelse return false;
+        if (index >= max_arguments or seen[index] or !fact.typed_operand_value_id.isValid()) return false;
+        const name = valueIdentityName(function, fact.typed_operand_value_id) orelse return false;
+        const param_ty = parameterType(function, name) orelse return false;
+        if (!sameRepresentationType(param_ty, fact.result_ty) or !hasOperandInstruction(function, fact)) return false;
+        plan.arguments[index] = .{
+            .index = index,
+            .value_id = fact.typed_operand_value_id,
+            .name = name,
+            .type_fact = fact,
+            .location = locationForSpan(function, fact.typed_span_id) orelse return false,
+        };
+        seen[index] = true;
+        plan.argument_count = @max(plan.argument_count, index + 1);
+    }
+    for (seen[0..plan.argument_count]) |present| if (!present) return false;
+    return true;
+}
+
+fn appendDirectCallProjection(function: mir.Function, block: mir.Block, call: mir.Instruction, span_id: mir.SpanId, plan: *DirectCallProjectedReturnPlan, depth: usize) bool {
+    if (!span_id.isValid() or depth > max_place_projections) return false;
+
+    if (span_id.eql(call.typed_span_id)) {
+        const root = expressionAtSpan(block, call.typed_callee_span_id) orelse return false;
+        const root_id = root.typed_value_id orelse return false;
+        const root_fact = targetFactBySpan(function, .expression_result, span_id) orelse return false;
+        return root_id.eql(plan.callee_value_id) and
+            std.mem.eql(u8, root.detail, plan.callee_name) and
+            sameRepresentationType(root_fact.result_ty, plan.result_fact.result_ty);
+    }
+
+    const instruction = placeInstructionAtSpan(block, span_id) orelse return false;
+    const result_fact = targetFactBySpan(function, .expression_result, span_id) orelse return false;
+    if (!sameRepresentationType(instruction.result_ty, result_fact.result_ty) or plan.projection_count >= max_place_projections) return false;
+
+    if (instruction.kind == .index) {
+        if (!instruction.typed_base_operand_span_id.isValid() or !instruction.typed_index_operand_span_id.isValid()) return false;
+        if (!appendDirectCallProjection(function, block, call, instruction.typed_base_operand_span_id, plan, depth + 1)) return false;
+        const operand = expressionAtSpan(block, instruction.typed_index_operand_span_id) orelse return false;
+        const operand_id = operand.typed_value_id orelse return false;
+        const operand_name = valueIdentityName(function, operand_id) orelse return false;
+        const operand_ty = parameterType(function, operand_name) orelse return false;
+        const operand_fact = targetFactBySpan(function, .expression_result, instruction.typed_index_operand_span_id) orelse return false;
+        if (operand.constant_usize_value != null or operand_ty != .integer or operand_fact.result_ty != .integer) return false;
+        if (!std.mem.eql(u8, instruction.detail, "bounds_checked") or instruction.constant_index_value != null or instruction.static_index_bound != null) return false;
+        plan.projections[plan.projection_count] = .{ .index = .{
+            .operand_name = operand_name,
+            .operand_id = operand_id,
+            .operand_fact = operand_fact,
+            .type_fact = result_fact,
+            .constant_value = null,
+            .static_bound = null,
+            .checked = true,
+            .location = locationFromInstruction(instruction),
+        } };
+        plan.projection_count += 1;
+        return true;
+    }
+
+    if (!instruction.typed_base_operand_span_id.isValid() or instruction.member_field_index == null) return false;
+    if (!appendDirectCallProjection(function, block, call, instruction.typed_base_operand_span_id, plan, depth + 1)) return false;
+    plan.projections[plan.projection_count] = .{ .field = .{
+        .field_name = instruction.detail,
+        .field_index = instruction.member_field_index.?,
+        .type_fact = result_fact,
+        .location = locationFromInstruction(instruction),
+    } };
+    plan.projection_count += 1;
+    return true;
+}
+
+fn directCallProjectedTrapsMatch(function: mir.Function, plan: *DirectCallProjectedReturnPlan) bool {
+    var indexes: [max_place_projections]CheckedIndexIdentity = undefined;
+    var index_count: usize = 0;
+    for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+        .field => {},
+        .index => |index| {
+            if (!index.checked or index_count >= indexes.len or !index.location.span_id.isValid() or !index.operand_fact.typed_span_id.isValid()) return false;
+            indexes[index_count] = .{
+                .expression_span_id = index.location.span_id,
+                .operand_span_id = index.operand_fact.typed_span_id,
+            };
+            index_count += 1;
+        },
+    };
+
+    if (function.bounds_facts.len != index_count) return false;
+    var bounds_seen = [_]bool{false} ** max_place_projections;
+    for (function.bounds_facts) |fact| {
+        if (fact.kind != .index or !fact.typed_span_id.isValid()) return false;
+        var found: ?usize = null;
+        for (indexes[0..index_count], 0..) |identity, index| {
+            if (!bounds_seen[index] and fact.typed_span_id.eql(identity.operand_span_id)) {
+                found = index;
+                break;
+            }
+        }
+        const index = found orelse return false;
+        bounds_seen[index] = true;
+    }
+    for (bounds_seen[0..index_count]) |seen| if (!seen) return false;
+
+    var representation_span_id: ?mir.SpanId = null;
+    if (function.representation_facts.len != 0) {
+        if (function.representation_facts.len < 2 or function.representation_facts.len > 3) return false;
+        var load_fact: ?mir.RepresentationFact = null;
+        var check_fact: ?mir.RepresentationFact = null;
+        for (function.representation_facts) |fact| switch (fact.kind) {
+            .typed_load => {
+                if (load_fact != null) return false;
+                load_fact = fact;
+            },
+            .representation_check => {
+                if (check_fact) |existing| {
+                    if (!existing.typed_span_id.eql(fact.typed_span_id) or
+                        !existing.typed_value_id.eql(fact.typed_value_id) or
+                        !sameRepresentationType(existing.result_ty, fact.result_ty)) return false;
+                } else check_fact = fact;
+            },
+            else => return false,
+        };
+        const load = load_fact orelse return false;
+        const check = check_fact orelse return false;
+        if (!load.typed_span_id.isValid() or !load.typed_span_id.eql(check.typed_span_id) or
+            !load.typed_value_id.isValid() or !load.typed_value_id.eql(check.typed_value_id) or
+            !sameRepresentationType(load.result_ty, check.result_ty)) return false;
+        var matched_projection: ?usize = null;
+        var matched_type_fact: mir.TargetTypeFact = undefined;
+        for (plan.projections[0..plan.projection_count], 0..) |projection, projection_index| switch (projection) {
+            .field => |field| {
+                if (!field.location.span_id.eql(load.typed_span_id) or !sameRepresentationType(field.type_fact.result_ty, load.result_ty)) continue;
+                if (matched_projection != null) return false;
+                matched_projection = projection_index;
+                matched_type_fact = field.type_fact;
+            },
+            .index => |index| {
+                if (!index.location.span_id.eql(load.typed_span_id) or !sameRepresentationType(index.type_fact.result_ty, load.result_ty)) continue;
+                if (matched_projection != null) return false;
+                matched_projection = projection_index;
+                matched_type_fact = index.type_fact;
+            },
+        };
+        const projection_index = matched_projection orelse return false;
+        plan.representation_check = .{
+            .projection_index = projection_index,
+            .type_fact = matched_type_fact,
+            .location = locationForSpan(function, load.typed_span_id) orelse return false,
+            .value_id = load.typed_value_id,
+            .result_ty = load.result_ty,
+        };
+        representation_span_id = load.typed_span_id;
+    }
+
+    const expected_traps = index_count + @intFromBool(representation_span_id != null);
+    if (function.trap_edges.len != expected_traps or function.blocks.len != expected_traps + 1 or function.blocks[0].successors.len != expected_traps) return false;
+    var matched_bounds = [_]bool{false} ** max_place_projections;
+    var matched_representation = false;
+    for (function.trap_edges) |edge| {
+        if (edge.from_block != function.blocks[0].id or !edge.typed_span_id.isValid() or edge.trap_block >= function.blocks.len) return false;
+        switch (function.blocks[edge.trap_block].terminator) {
+            .trap_ => |kind| if (kind != edge.kind) return false,
+            else => return false,
+        }
+        if (edge.kind == .Bounds and edge.source == .bounds_check) {
+            var found: ?usize = null;
+            for (indexes[0..index_count], 0..) |identity, index| {
+                if (!matched_bounds[index] and edge.typed_span_id.eql(identity.expression_span_id)) {
+                    found = index;
+                    break;
+                }
+            }
+            const index = found orelse return false;
+            matched_bounds[index] = true;
+        } else if (edge.kind == .InvalidRepresentation and edge.source == .representation_check) {
+            const span = representation_span_id orelse return false;
+            if (matched_representation or !edge.typed_span_id.eql(span)) return false;
+            matched_representation = true;
+        } else return false;
+    }
+    for (matched_bounds[0..index_count]) |seen| if (!seen) return false;
+    return matched_representation == (representation_span_id != null);
 }
 
 const CheckedIndexIdentity = struct {

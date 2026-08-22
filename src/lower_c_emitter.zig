@@ -1598,35 +1598,42 @@ pub const CEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
-        const local_aggregate_place_update_return_plan = if (simple_trap == null and simple_assert == null)
+        const direct_call_projected_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildDirectCallProjectedReturn(fn_mir)) |plan|
+                if (self.mirDirectCallProjectedReturnPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const local_aggregate_place_update_return_plan = if (direct_call_projected_return_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildLocalAggregatePlaceUpdateReturn(fn_mir)) |plan|
                 if (self.mirLocalAggregatePlaceUpdateReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const local_aggregate_assignment_return_plan = if (local_aggregate_place_update_return_plan == null and simple_trap == null and simple_assert == null)
+        const local_aggregate_assignment_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildLocalAggregateAssignmentReturn(fn_mir)) |plan|
                 if (self.mirLocalAggregateAssignmentReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const place_return_plan = if (local_aggregate_place_update_return_plan == null and simple_trap == null and simple_assert == null)
+        const place_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
                 if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
             else
                 null
         else
             null;
-        const scalar_switch_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and simple_trap == null and simple_assert == null)
+        const scalar_switch_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and simple_trap == null and simple_assert == null)
             if (mir_statement_plan.buildScalarSwitchReturn(fn_mir)) |plan|
                 if (self.mirScalarSwitchPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const simple_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1638,24 +1645,24 @@ pub const CEmitter = struct {
             }
             break :blk null;
         } else null;
-        const simple_void_body = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
-        const simple_conditional_statement_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalStatementReturn(function, fn_mir) else null;
-        const simple_conditional_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        const simple_enum_switch_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
-        const simple_loop_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
+        const simple_void_body = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
+        const simple_conditional_statement_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalStatementReturn(function, fn_mir) else null;
+        const simple_conditional_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
+        const simple_enum_switch_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
+        const simple_loop_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
             mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
         else
             null;
-        const logical_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
+        const logical_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
             mir_statement_plan.buildSingleBlockLogicalReturn(fn_mir)
         else
             null;
-        const statement_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null)
+        const statement_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1676,6 +1683,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "if (!(");
             try self.emitSimpleMirCondition(assert_body.condition);
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        } else if (direct_call_projected_return_plan) |plan| {
+            try self.emitMirDirectCallProjectedReturnPlan(plan);
         } else if (local_aggregate_place_update_return_plan) |plan| {
             try self.emitMirLocalAggregatePlaceUpdateReturnPlan(plan);
         } else if (local_aggregate_assignment_return_plan) |plan| {
@@ -3918,6 +3927,184 @@ pub const CEmitter = struct {
                 try self.out.print(self.allocator, "{d}", .{scalar.magnitude});
             },
         }
+    }
+
+    fn mirDirectCallProjectedReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.DirectCallProjectedReturnPlan) bool {
+        if (!plan.callee_value_id.isValid() or plan.projection_count == 0) return false;
+        const callee = self.functions.get(plan.callee_name) orelse return false;
+        if (callee.is_variadic or plan.argument_count != callee.params.len) return false;
+        const call_ty = callee.return_type orelse return false;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(call_ty), self.resolveAliasType(plan.result_fact.target_ty))) return false;
+
+        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
+            if (argument.index != index or !argument.value_id.isValid()) return false;
+            const parameter = callee.params[index];
+            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(argument.type_fact.target_ty), self.resolveAliasType(parameter.ty))) return false;
+            if (!self.mirAggregateParameterMatchesSignature(function, argument.name, parameter.ty)) return false;
+        }
+
+        var projected_ty = call_ty;
+        for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+            .field => |field| {
+                const struct_name = self.mirDirectCallStructName(projected_ty) orelse return false;
+                const struct_decl = self.structs.get(struct_name) orelse return false;
+                if (field.field_index >= struct_decl.fields.len) return false;
+                const declared_field = struct_decl.fields[field.field_index];
+                if (!std.mem.eql(u8, field.field_name, declared_field.name.text) or !type_bridge.sameTypeSyntax(self.resolveAliasType(field.type_fact.target_ty), self.resolveAliasType(declared_field.ty))) return false;
+                projected_ty = declared_field.ty;
+            },
+            .index => |index| {
+                if (!index.operand_id.isValid() or !self.mirAggregateParameterMatchesSignature(function, index.operand_name, index.operand_fact.target_ty)) return false;
+                switch (self.resolveAliasType(projected_ty).kind) {
+                    .array => |array| {
+                        const bound_text = self.arrayLenTextForExpr(array.len) catch return false;
+                        const bound = std.fmt.parseUnsigned(usize, bound_text, 10) catch return false;
+                        if (index.static_bound) |static_bound| if (static_bound != bound) return false;
+                        if (index.constant_value) |constant| if (constant >= bound) return false;
+                        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(index.type_fact.target_ty), self.resolveAliasType(array.child.*))) return false;
+                        projected_ty = array.child.*;
+                    },
+                    .slice => |slice| {
+                        if (index.static_bound != null or !type_bridge.sameTypeSyntax(self.resolveAliasType(index.type_fact.target_ty), self.resolveAliasType(slice.child.*))) return false;
+                        projected_ty = slice.child.*;
+                    },
+                    else => return false,
+                }
+            },
+        };
+        const declared_return = function.signature.transitionalReturnType() orelse return false;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(projected_ty))) return false;
+
+        if (plan.representation_check) |check| {
+            if (!check.value_id.isValid() or check.projection_index >= plan.projection_count) return false;
+            const projection_fact = switch (plan.projections[check.projection_index]) {
+                .field => |field| field.type_fact,
+                .index => |index| index.type_fact,
+            };
+            if (!projection_fact.typed_span_id.eql(check.type_fact.typed_span_id) or !type_bridge.sameTypeSyntax(self.resolveAliasType(projection_fact.target_ty), self.resolveAliasType(check.type_fact.target_ty)) or std.meta.activeTag(check.result_ty) != std.meta.activeTag(projection_fact.result_ty) or !std.mem.eql(u8, check.result_ty.name(), projection_fact.result_ty.name())) return false;
+            if (check.type_fact.typed_operand_value_id.isValid() and !check.value_id.eql(check.type_fact.typed_operand_value_id)) return false;
+            switch (check.result_ty) {
+                .pointer, .cstr, .slice, .closed_enum => {},
+                else => return false,
+            }
+        }
+        return true;
+    }
+
+    fn emitMirDirectCallProjectedReturnPlan(self: *CEmitter, plan: mir_statement_plan.DirectCallProjectedReturnPlan) !void {
+        var current_ty = plan.result_fact.target_ty;
+        var current_name = try self.nextTempName();
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.call_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s}(", .{ try self.cTypeFor(current_ty, .typedef_name), current_name, try self.cIdent(plan.callee_name) });
+        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
+            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
+        }
+        try self.out.appendSlice(self.allocator, ");\n");
+
+        for (plan.projections[0..plan.projection_count], 0..) |projection, projection_index| switch (projection) {
+            .field => |field| {
+                const struct_name = self.mirDirectCallStructName(current_ty) orelse return error.UnsupportedCEmission;
+                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
+                if (field.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
+                const declared_field = struct_decl.fields[field.field_index];
+                const next_name = try self.nextTempName();
+                try self.writeLineDirective(spanFromMirSourcePoint(field.location.source));
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = {s}.{s};\n", .{ try self.cTypeFor(declared_field.ty, .typedef_name), next_name, current_name, try self.cIdent(declared_field.name.text) });
+                current_ty = declared_field.ty;
+                current_name = next_name;
+                if (plan.representation_check) |check| {
+                    if (check.projection_index == projection_index) try self.emitMirDirectCallRepresentationCheck(check, current_name, current_ty);
+                }
+            },
+            .index => |index| {
+                const index_name = try self.nextTempName();
+                try self.writeLineDirective(spanFromMirSourcePoint(index.location.source));
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(index.operand_fact.target_ty, .typedef_name), index_name });
+                if (index.constant_value) |constant| {
+                    try self.out.print(self.allocator, "{d}", .{constant});
+                } else {
+                    try self.out.appendSlice(self.allocator, try self.cIdent(index.operand_name));
+                }
+                try self.out.appendSlice(self.allocator, ";\n");
+
+                const next_name = try self.nextTempName();
+                const element_ty = index.type_fact.target_ty;
+                try self.writeIndent();
+                switch (self.resolveAliasType(current_ty).kind) {
+                    .array => |array| {
+                        const bound = try self.arrayLenTextForExpr(array.len);
+                        if (index.checked) {
+                            try self.out.print(self.allocator, "{s} {s} = {s}.elems[mc_check_index_usize({s}, {s})];\n", .{ try self.cTypeFor(element_ty, .typedef_name), next_name, current_name, index_name, bound });
+                        } else {
+                            try self.out.print(self.allocator, "{s} {s} = {s}.elems[{s}];\n", .{ try self.cTypeFor(element_ty, .typedef_name), next_name, current_name, index_name });
+                        }
+                    },
+                    .slice => {
+                        if (index.checked) {
+                            try self.out.print(self.allocator, "{s} {s} = {s}.ptr[mc_check_index_usize({s}, {s}.len)];\n", .{ try self.cTypeFor(element_ty, .typedef_name), next_name, current_name, index_name, current_name });
+                        } else {
+                            try self.out.print(self.allocator, "{s} {s} = {s}.ptr[{s}];\n", .{ try self.cTypeFor(element_ty, .typedef_name), next_name, current_name, index_name });
+                        }
+                    },
+                    else => return error.UnsupportedCEmission,
+                }
+                current_ty = element_ty;
+                current_name = next_name;
+                if (plan.representation_check) |check| {
+                    if (check.projection_index == projection_index) try self.emitMirDirectCallRepresentationCheck(check, current_name, current_ty);
+                }
+            },
+        };
+
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{current_name});
+    }
+
+    fn emitMirDirectCallRepresentationCheck(self: *CEmitter, check: mir_statement_plan.DirectCallRepresentationCheck, value_name: []const u8, value_ty: anytype) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(check.location.source));
+        switch (self.resolveAliasType(value_ty).kind) {
+            .slice => {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "if ({s}.ptr == NULL && {s}.len != 0) mc_trap_InvalidRepresentation();\n", .{ value_name, value_name });
+                return;
+            },
+            else => {},
+        }
+        switch (check.result_ty) {
+            .pointer, .cstr => {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_InvalidRepresentation();\n", .{value_name});
+            },
+            .slice => return error.UnsupportedCEmission,
+            .closed_enum => |enum_name| {
+                const enum_decl = self.enums.get(enum_name) orelse return error.UnsupportedCEmission;
+                try self.writeIndent();
+                try self.out.print(self.allocator, "switch ({s}) {{\n", .{value_name});
+                self.indent += 1;
+                for (enum_decl.cases) |case| {
+                    try self.writeIndent();
+                    try self.out.print(self.allocator, "case {s}_{s}: break;\n", .{ enum_name, try self.cIdent(case.name.text) });
+                }
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "default: mc_trap_InvalidRepresentation();\n");
+                self.indent -= 1;
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "}\n");
+            },
+            else => return error.UnsupportedCEmission,
+        }
+    }
+
+    fn mirDirectCallStructName(self: *CEmitter, ty: anytype) ?[]const u8 {
+        return switch (self.resolveAliasType(ty).kind) {
+            .name => |name| name.text,
+            else => null,
+        };
     }
 
     fn mirLocalAggregatePlaceUpdateReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.LocalAggregatePlaceUpdateReturnPlan) bool {

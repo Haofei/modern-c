@@ -6440,6 +6440,44 @@ test "lower-c indexes direct fixed-array call results through MIR return types" 
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".elems[") != null);
 }
 
+test "lower-c projects direct aggregate call results from MIR without body fallback" {
+    const source =
+        \\struct Bag { values: [4]u32, tail: []const u32 }
+        \\extern fn make_values(seed: u32) -> [4]u32;
+        \\extern fn make_bag(seed: u32) -> Bag;
+        \\fn direct_array_call_index(seed: u32, index: usize) -> u32 {
+        \\    return make_values(seed)[index];
+        \\}
+        \\fn call_array_field_index(seed: u32, index: usize) -> u32 {
+        \\    return make_bag(seed).values[index];
+        \\}
+        \\fn call_slice_field_index(seed: u32, index: usize) -> u32 {
+        \\    return make_bag(seed).tail[index];
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_direct_call_projected_return.mc", source, &output);
+
+    const direct_body = try cFunctionBody(output.items, "static uint32_t direct_array_call_index(uint32_t seed, uintptr_t index)");
+    try expectContains(direct_body, "make_values(seed);");
+    try expectContains(direct_body, "= index;");
+    try expectContains(direct_body, ".elems[mc_check_index_usize(");
+    try expectContains(direct_body, "return mc_tmp");
+
+    const array_field_body = try cFunctionBody(output.items, "static uint32_t call_array_field_index(uint32_t seed, uintptr_t index)");
+    try expectContains(array_field_body, "make_bag(seed);");
+    try expectContains(array_field_body, ".values;");
+    try expectContains(array_field_body, ".elems[mc_check_index_usize(");
+    try expectContains(array_field_body, "return mc_tmp");
+
+    const slice_field_body = try cFunctionBody(output.items, "static uint32_t call_slice_field_index(uint32_t seed, uintptr_t index)");
+    try expectContains(slice_field_body, "make_bag(seed);");
+    try expectContains(slice_field_body, ".tail;");
+    try expectContains(slice_field_body, ".ptr[mc_check_index_usize(");
+    try expectContains(slice_field_body, "return mc_tmp");
+}
+
 test "lower-c nested array member and index results require MIR expression facts" {
     const source =
         \\struct MatrixHolder { rows: [2][2]u32 }

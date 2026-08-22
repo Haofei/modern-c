@@ -222,6 +222,38 @@ test "LLVM local aggregate place updates return from MIR without body fallback" 
     try expectNotContains(array_body, "store");
 }
 
+test "LLVM direct-call aggregate projections return from MIR without body fallback" {
+    const source =
+        \\struct Bag { values: [4]u32, tail: []const u32 }
+        \\extern fn make_values(seed: u32) -> [4]u32;
+        \\extern fn make_bag(seed: u32) -> Bag;
+        \\fn direct_array_call_index(seed: u32, index: usize) -> u32 { return make_values(seed)[index]; }
+        \\fn call_array_field_index(seed: u32, index: usize) -> u32 { return make_bag(seed).values[index]; }
+        \\fn call_slice_field_index(seed: u32, index: usize) -> u32 { return make_bag(seed).tail[index]; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_direct_call_aggregate_projections.mc", source, &output);
+
+    const direct_array = try llvmFunctionBody(output.items, "define internal i32 @direct_array_call_index");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct_array, "call [4 x i32] @make_values(i32 %seed)"));
+    try expectContains(direct_array, "call void @mc_trap_Bounds()");
+    try expectContains(direct_array, "getelementptr [4 x i32]");
+
+    const array_field = try llvmFunctionBody(output.items, "define internal i32 @call_array_field_index");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, array_field, "call { [4 x i32], { ptr, i64 } } @make_bag(i32 %seed)"));
+    try expectContains(array_field, "extractvalue { [4 x i32], { ptr, i64 } } %t");
+    try expectContains(array_field, ", 0");
+    try expectContains(array_field, "call void @mc_trap_Bounds()");
+
+    const slice_field = try llvmFunctionBody(output.items, "define internal i32 @call_slice_field_index");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, slice_field, "call { [4 x i32], { ptr, i64 } } @make_bag(i32 %seed)"));
+    try expectContains(slice_field, "extractvalue { [4 x i32], { ptr, i64 } } %t");
+    try expectContains(slice_field, ", 1");
+    try expectContains(slice_field, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(slice_field, "call void @mc_trap_Bounds()");
+}
+
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
         \\struct Flags { first: bool, second: bool }

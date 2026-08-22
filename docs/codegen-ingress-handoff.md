@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the local aggregate assignment MIR slice.
+2026-08-22 after the direct-call aggregate projection MIR slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **90/160 C** and **91/160 LLVM**
+  The current strict ratchet corpus admits **100/160 C** and **101/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — active. A syntax-free callable/body table is
@@ -145,7 +145,7 @@ negative integer cases, multi-pattern arms, and the default edge no longer have
 to be recovered from the AST body. The MIR identity verifier rejects malformed
 or partially populated pattern payloads before either backend runs.
 
-### Six correctness defects were caught by the discipline (learn from these)
+### Seven correctness defects were caught by the discipline (learn from these)
 
 1. **optional-deref dropped the tag**: an early `return p.*` recognizer admitted
    `?u32` derefs as a single load, dropping the optional tag. Fix: gate on
@@ -167,9 +167,15 @@ or partially populated pattern payloads before either backend runs.
    broad `serial` / `counter` class, so `serial<u32>` and `serial<u64>` could be
    passed to the same operation. Fix: compare the exact resolved domain type;
    backend admission repeats the exact-domain check.
+7. **slice representation was checked as a raw pointer**: MIR's coarse result
+   class admitted the projected slice, but the first C emitter draft rendered
+   `slice == NULL`. Fix: representation emission reads the exact verified type
+   fact and checks `ptr == NULL && len != 0`; a real Clang compile caught the
+   invalid aggregate comparison before commit.
 
-All six were caught by unit/regression tests (especially the eval-order test below)
-BEFORE commit. **Never ship a codegen slice without these probes.**
+All seven were caught by unit/regression or emitted-artifact compilation tests
+(especially the eval-order test below) BEFORE commit. **Never ship a codegen
+slice without these probes.**
 
 Local aggregate generations now have one shared recursive value/place plan for
 pure nested struct/array initialization, one optional local field/constant-index
@@ -180,6 +186,15 @@ expression `SpanId` identifies the trap edge and the index-operand `SpanId`
 identifies its bounds fact. Calls, dynamic indexes, multiple stores, cleanup,
 and effectful leaves remain fail-closed until the plan carries their sequencing.
 
+Direct-call aggregate projections now use a separate shared plan. It evaluates
+the call exactly once and walks a bounded MIR-owned field/dynamic-index chain.
+Arguments carry indexed `direct_call_argument` identities rooted at the exact
+callee `SpanId`; field projections carry resolved indices; checked indexes carry
+their exact Bounds edge; and slice projections carry their exact representation
+fact. Both backends now admit `make_values(seed)[index]`,
+`make_bag(seed).values[index]`, and `make_bag(seed).tail[index]` without reading
+the function body. Nested or effectful call arguments remain fail-closed.
+
 ## Next work
 
 The first local-declaration statement primitive is complete for the strict
@@ -187,7 +202,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 97/160 and LLVM 98/160. The exact-root soundness gate
+current strict corpus is C 100/160 and LLVM 101/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

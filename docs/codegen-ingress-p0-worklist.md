@@ -11,8 +11,9 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits 60.6% of C functions and 61.3% of LLVM functions; the rest still ingest
-the AST body.
+admits 62.5% of C functions and 63.1% of LLVM functions; the rest still ingest
+the AST body. The strict ratchet currently admits **62.5% of C functions
+(100/160)** and **63.1% of LLVM functions (101/160)**.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +70,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 97 | 63 | 0 | 6062 |
-| LLVM | 160 | 98 | 62 | 0 | 6125 |
+| C | 160 | 100 | 60 | 0 | 6250 |
+| LLVM | 160 | 101 | 59 | 0 | 6312 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -110,6 +111,7 @@ typed-unary operand-descendant bugs before commit.
 | Scalar switch returns | exhaustive integer/character cases with literal returns; MIR owns normalized signed-magnitude patterns and both backends consume one shared CFG plan | (current batch) |
 | Local aggregate assignment generation | `var x: T = uninit; x = aggregate; return x`; MIR owns the local generation, assignment edges, aggregate operands, and resolved struct field indices | (current batch) |
 | Local aggregate projection updates | nested struct/array literal initialization followed by one local field/constant-index update and projected return; a bounded recursive MIR value graph owns operand order and field indices, local roots join by `ValueId`, and Bounds edges/facts join through `SpanId` | (current batch) |
+| Direct-call aggregate projection returns | `make_values(seed)[index]`, `make_bag(seed).values[index]`, and `make_bag(seed).tail[index]`; MIR owns the callee, indexed arguments, projection chain, dynamic bounds edge, and exact representation fact while both backends evaluate the call once | (current batch) |
 
 ### Remaining families, by tractability
 

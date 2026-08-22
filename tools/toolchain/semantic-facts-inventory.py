@@ -1205,7 +1205,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "appendTargetTypeFact(.for_iterable": 1,
         "appendTargetTypeFact(.for_element": 1,
         "appendOwnedTargetTypeFact(.direct_call_result": 1,
-        ".direct_call_argument,": 2,
+        ".direct_call_argument,": 1,
         "appendTargetTypeFact(.indirect_call_callee": 1,
         "fn indirectCallTarget(": 1,
         "fn appendOwnedTargetTypeFact(": 1,
