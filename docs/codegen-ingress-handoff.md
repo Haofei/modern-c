@@ -347,8 +347,12 @@ offset expression, and the verifier admits only that builtin plus one deref.
 Load, address and mutable store use race-unordered access and no non-null
 representation edge. C emits the existing race helpers; LLVM reuses the GEP SSA
 value. The focused raw-many root is C **25/27** and LLVM **26/27** admitted. The
-522-root census is now C **919/1696 (54.2%)** and LLVM **909/1762 (51.6%)**,
-with 777/853 fallbacks—19 fewer in each backend from this slice.
+522-root census is now C **919/1696 (54.2%)** and LLVM **920/1762 (52.2%)**,
+with 777/842 fallbacks. Computed raw-many places removed 19 fallbacks from each
+backend; the following fixed-arity C-ABI call slice removed the remaining 11
+LLVM ingress mismatches. MIR now owns canonical parameter types and the
+variadic bit, while a syntax-free per-call ABI plan owns target
+`zeroext`/`signext`; variadic calls remain fail-closed on the legacy path.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

@@ -21,7 +21,7 @@ pub const CheckedProgram = struct {
                 return error.InvalidCheckedProgram;
             }
             if (callable.kind == .global_initializer and
-                (callable.param_count != 0 or callable.return_ty != .void)) return error.InvalidCheckedProgram;
+                (callable.param_count != 0 or callable.return_ty != .void or callable.c_abi or callable.is_variadic)) return error.InvalidCheckedProgram;
         }
         return .{ .callables = callables };
     }
@@ -43,7 +43,7 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
     for (callables, module.functions, 0..) |checked, function, index| {
         if (!checked.symbol_id.eql(function.typed_symbol_id) or !checked.source_id.eql(function.typed_source_id)) return false;
         if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
-        if (checked.param_count != function.param_count or checked.c_abi != function.c_abi) return false;
+        if (checked.param_count != function.param_count or checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
         if (checked.no_lang_trap != function.no_lang_trap or checked.irq_context != function.irq_context) return false;
 
         if (function.is_extern) {
@@ -51,7 +51,7 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
         } else {
             if (checked.kind == .extern_function or !checked.body_id.isValid() or checked.body_id.index() != index) return false;
         }
-        if (checked.kind == .global_initializer and (checked.param_count != 0 or checked.return_ty != .void)) return false;
+        if (checked.kind == .global_initializer and (checked.param_count != 0 or checked.return_ty != .void or checked.c_abi or checked.is_variadic)) return false;
     }
     return true;
 }

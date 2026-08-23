@@ -1690,8 +1690,10 @@ pub const Function = struct {
     // Signature obligations are produced once as typed MIR facts. Consumers
     // must not reconstruct them by rescanning source declarations.
     param_count: usize = 0,
+    param_types: []ValueType = &.{},
     is_extern: bool = false,
     c_abi: bool = false,
+    is_variadic: bool = false,
     ffi_param_contracts: []FfiParamContract = &.{},
     no_lang_trap: bool,
     irq_context: bool,
@@ -1745,6 +1747,7 @@ pub const CheckedCallableFact = struct {
     return_ty: ValueType,
     param_count: usize,
     c_abi: bool,
+    is_variadic: bool = false,
     no_lang_trap: bool,
     irq_context: bool,
 };
@@ -1793,6 +1796,7 @@ pub const Module = struct {
             var executable_body = function.executable_body;
             executable_body.deinit(self.allocator);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
+            if (function.param_types.len != 0) self.allocator.free(function.param_types);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
             for (function.generated_type_expr_args) |args| self.allocator.free(args);

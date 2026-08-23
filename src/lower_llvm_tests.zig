@@ -4473,8 +4473,11 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try expectContains(riscv.items, "declare zeroext i8 @c_irq(i8 zeroext)");
     try expectContains(riscv.items, "declare zeroext i8 @c_overflow(i8 zeroext)");
     try expectContains(riscv.items, "declare zeroext i8 @c_conversion(i8 zeroext)");
-    try expectContains(riscv.items, "define signext i8 @c_export(i8 signext %value)");
-    try expectContains(riscv.items, "call signext i8 @c_i8(i8 signext %");
+    if (std.mem.indexOf(u8, riscv.items, "define signext i8 @c_export(i8 signext %mc_arg_0)") == null) std.debug.print("C ABI debug:\n{s}\n", .{riscv.items});
+    try expectContains(riscv.items, "define signext i8 @c_export(i8 signext %mc_arg_0)");
+    const c_export_body = try llvmFunctionBody(riscv.items, "define signext i8 @c_export");
+    try expectContains(c_export_body, "; canonical executable MIR");
+    try expectContains(c_export_body, "call signext i8 @c_i8(i8 signext %mc_arg_0)");
     try expectContains(riscv.items, "declare i8 @mc_i8(i8)");
     try expectContains(riscv.items, "define i8 @mc_export(i8 %mc_arg_0)");
 
@@ -10030,6 +10033,20 @@ test "LLVM ordinary direct calls require MIR result and argument types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_direct_call_type_facts.mc", .{}, false, .riscv64, null));
+
+    var stale_signature = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer stale_signature.deinit();
+    var changed = false;
+    for (stale_signature.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, "widen")) continue;
+        try std.testing.expectEqual(@as(usize, 1), function.param_types.len);
+        function.param_types[0] = .{ .integer = "u32" };
+        changed = true;
+    }
+    try std.testing.expect(changed);
+    var stale_signature_output: std.ArrayList(u8) = .empty;
+    defer stale_signature_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &stale_signature, &stale_signature_output, "llvm_direct_call_signature_mutation.mc", .{}, false, .riscv64, false, null));
 }
 
 test "LLVM indirect calls require MIR callee signature facts" {

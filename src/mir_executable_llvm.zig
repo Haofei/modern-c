@@ -9,6 +9,58 @@ const mir = @import("mir_model.zig");
 
 pub const RenderError = error{ Unsupported, InvalidBody, OutOfMemory };
 
+/// Target ABI facts needed by the syntax-free renderer.  This is deliberately
+/// narrower than the driver target configuration: direct calls only need the
+/// integer-extension rules of the selected C ABI.
+pub const TargetAbi = enum { riscv64, x86_64, aarch64 };
+
+pub const AbiExtension = enum {
+    none,
+    signext,
+    zeroext,
+
+    fn resultPrefix(self: AbiExtension) []const u8 {
+        return switch (self) {
+            .none => "",
+            .signext => "signext ",
+            .zeroext => "zeroext ",
+        };
+    }
+
+    fn parameterSuffix(self: AbiExtension) []const u8 {
+        return switch (self) {
+            .none => "",
+            .signext => " signext",
+            .zeroext => " zeroext",
+        };
+    }
+};
+
+/// One normalized direct-call ABI decision. ExprId and SymbolId are the
+/// semantic identity; no source spelling or syntax node participates.
+pub const DirectCallAbi = struct {
+    expression: mir.ExprId,
+    callee: mir.SymbolId,
+    fixed_arity: usize,
+    c_abi: bool,
+    result_extension: AbiExtension = .none,
+    parameter_extensions: [mir.max_executable_operands]AbiExtension = [_]AbiExtension{.none} ** mir.max_executable_operands,
+};
+
+pub const CallAbiPlan = struct {
+    target: TargetAbi,
+    direct_calls: []const DirectCallAbi,
+};
+
+pub fn abiExtension(target: TargetAbi, ty: mir.ValueType) AbiExtension {
+    if (target == .aarch64) return .none;
+    if (ty == .bool) return .zeroext;
+    const integer = mir.ExecutableCastKind.integerInfo(ty) orelse return .none;
+    if (integer.bits > 32) return .none;
+    if (integer.bits == 32) return if (target == .riscv64) .signext else .none;
+    return if (integer.signed) .signext else .zeroext;
+}
+
 const Value = struct {
     ty: []const u8,
     spelling: []const u8,
@@ -19,6 +71,46 @@ const Local = struct {
     storage: []const u8,
     addressable: bool,
 };
+
+fn directCallAbiFor(plan: CallAbiPlan, expression: mir.ExprId) ?DirectCallAbi {
+    var found: ?DirectCallAbi = null;
+    for (plan.direct_calls) |entry| {
+        if (!entry.expression.eql(expression)) continue;
+        if (found != null) return null;
+        found = entry;
+    }
+    return found;
+}
+
+fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
+    var direct_call_count: usize = 0;
+    for (body.expressions) |expression| switch (expression.operation) {
+        .direct_call => |call| {
+            direct_call_count += 1;
+            const entry = directCallAbiFor(plan, expression.id) orelse return false;
+            if (!entry.callee.eql(call.callee) or entry.fixed_arity != call.argument_count or
+                entry.fixed_arity > mir.max_executable_operands) return false;
+            const expected_result = if (entry.c_abi) abiExtension(plan.target, expression.result_ty) else .none;
+            if (entry.result_extension != expected_result) return false;
+            for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
+                if (!expressionValid(body, argument_id)) return false;
+                const expected = if (entry.c_abi) abiExtension(plan.target, body.expressions[argument_id.index()].result_ty) else .none;
+                if (entry.parameter_extensions[index] != expected) return false;
+            }
+            for (entry.parameter_extensions[call.argument_count..]) |extension| if (extension != .none) return false;
+        },
+        else => {},
+    };
+    if (direct_call_count != plan.direct_calls.len) return false;
+    for (plan.direct_calls) |entry| {
+        if (!entry.expression.isValid() or entry.expression.index() >= body.expressions.len) return false;
+        switch (body.expressions[entry.expression.index()].operation) {
+            .direct_call => {},
+            else => return false,
+        }
+    }
+    return true;
+}
 
 pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
     if (!body.isComplete() or body.terminators.len == 0 or !llvmTypeSupported(body, return_ty)) return false;
@@ -99,9 +191,22 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
 
 pub fn render(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType) RenderError![]u8 {
     if (!supports(body, return_ty)) return error.Unsupported;
+    return renderValidated(allocator, body, return_ty, null);
+}
+
+pub fn supportsWithCallAbi(body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) bool {
+    return supports(body, return_ty) and callAbiPlanValid(body, plan);
+}
+
+pub fn renderWithCallAbi(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) RenderError![]u8 {
+    if (!supportsWithCallAbi(body, return_ty, plan)) return error.Unsupported;
+    return renderValidated(allocator, body, return_ty, &plan);
+}
+
+fn renderValidated(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: ?*const CallAbiPlan) RenderError![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    var renderer = try Renderer.init(arena.allocator(), body, return_ty);
+    var renderer = try Renderer.init(arena.allocator(), body, return_ty, plan);
     defer renderer.deinit();
     try renderer.emit();
     return try allocator.dupe(u8, renderer.output.items);
@@ -116,8 +221,9 @@ const Renderer = struct {
     locals: std.AutoHashMap(u32, Local),
     returns: std.AutoHashMap(u32, ?Value),
     next_temp: usize = 0,
+    call_abi_plan: ?*const CallAbiPlan,
 
-    fn init(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType) RenderError!Renderer {
+    fn init(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, call_abi_plan: ?*const CallAbiPlan) RenderError!Renderer {
         const values = try allocator.alloc(?Value, body.expressions.len);
         @memset(values, null);
         var result: Renderer = .{
@@ -127,6 +233,7 @@ const Renderer = struct {
             .values = values,
             .locals = std.AutoHashMap(u32, Local).init(allocator),
             .returns = std.AutoHashMap(u32, ?Value).init(allocator),
+            .call_abi_plan = call_abi_plan,
         };
         result.return_ty = try result.typeText(return_ty);
         return result;
@@ -277,7 +384,7 @@ const Renderer = struct {
             .literal => |literal| try self.literalValue(ty, literal),
             .unary => |unary| try self.emitUnary(ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
-            .direct_call => |call| try self.emitDirectCall(ty, call),
+            .direct_call => |call| try self.emitDirectCall(expression, ty, call),
             .builtin_call => |call| try self.emitBuiltinCall(expression, call),
             .representation_check => |check| try self.emitRepresentationCheck(expression, check),
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
@@ -651,15 +758,16 @@ const Renderer = struct {
         return .{ .ty = result_ty, .spelling = value };
     }
 
-    fn emitDirectCall(self: *Renderer, ty: []const u8, call: anytype) RenderError!Value {
+    fn emitDirectCall(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, call: anytype) RenderError!Value {
         const symbol = symbolSpelling(self.body, call.callee) orelse return error.InvalidBody;
-        return self.emitCall(ty, try std.fmt.allocPrint(self.allocator, "@{s}", .{symbol}), call.arguments[0..call.argument_count]);
+        const abi = if (self.call_abi_plan) |plan| directCallAbiFor(plan.*, expression.id) orelse return error.InvalidBody else null;
+        return self.emitCall(ty, try std.fmt.allocPrint(self.allocator, "@{s}", .{symbol}), call.arguments[0..call.argument_count], abi);
     }
 
     fn emitIndirectCall(self: *Renderer, ty: []const u8, call: anytype) RenderError!Value {
         const callee = try self.emitExpression(call.callee);
         if (!std.mem.eql(u8, callee.ty, "ptr")) return error.InvalidBody;
-        return self.emitCall(ty, callee.spelling, call.arguments[0..call.argument_count]);
+        return self.emitCall(ty, callee.spelling, call.arguments[0..call.argument_count], null);
     }
 
     fn emitBuiltinCall(self: *Renderer, expression: mir.ExecutableExpression, call: anytype) RenderError!Value {
@@ -760,20 +868,22 @@ const Renderer = struct {
         };
     }
 
-    fn emitCall(self: *Renderer, ty: []const u8, callee: []const u8, arguments: []const mir.ExprId) RenderError!Value {
+    fn emitCall(self: *Renderer, ty: []const u8, callee: []const u8, arguments: []const mir.ExprId, abi: ?DirectCallAbi) RenderError!Value {
         var rendered: std.ArrayList(u8) = .empty;
         defer rendered.deinit(self.allocator);
         for (arguments, 0..) |argument_id, index| {
             const argument = try self.emitExpression(argument_id);
             if (index != 0) try rendered.appendSlice(self.allocator, ", ");
-            try rendered.print(self.allocator, "{s} {s}", .{ argument.ty, argument.spelling });
+            const extension = if (abi) |entry| entry.parameter_extensions[index].parameterSuffix() else "";
+            try rendered.print(self.allocator, "{s}{s} {s}", .{ argument.ty, extension, argument.spelling });
         }
+        const result_extension = if (abi) |entry| entry.result_extension.resultPrefix() else "";
         if (std.mem.eql(u8, ty, "void")) {
             try self.output.print(self.allocator, "  call void {s}({s})\n", .{ callee, rendered.items });
             return .{ .ty = "void", .spelling = "" };
         }
         const result = try self.temp();
-        try self.output.print(self.allocator, "  {s} = call {s} {s}({s})\n", .{ result, ty, callee, rendered.items });
+        try self.output.print(self.allocator, "  {s} = call {s}{s} {s}({s})\n", .{ result, result_extension, ty, callee, rendered.items });
         return .{ .ty = ty, .spelling = result };
     }
 
@@ -1758,6 +1868,56 @@ test "mechanical renderer resolves direct calls by SymbolId" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "call i32 @next_value()") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "%mc_local_0 = alloca i32") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "renaming_does_not_select_semantics") == null);
+}
+
+test "mechanical renderer applies normalized C ABI direct-call extensions" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "c_predicate" }};
+    const parameters = [_]mir.ExecutableParameter{
+        .{ .local = mir.LocalId.fromIndex(0), .ty = .bool, .source = source },
+        .{ .local = mir.LocalId.fromIndex(1), .ty = .{ .integer = "u32" }, .source = source },
+    };
+    const expressions = [_]mir.ExecutableExpression{
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .direct_call = .{
+            .callee = mir.SymbolId.fromIndex(0),
+            .callee_source = source,
+            .arguments = .{ mir.ExprId.fromIndex(0), mir.ExprId.fromIndex(1) } ++ [_]mir.ExprId{.invalid} ** (mir.max_executable_operands - 2),
+            .argument_count = 2,
+        } } },
+    };
+    const statements = [_]mir.ExecutableStatement{
+        .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
+    };
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = @constCast(&parameters),
+        .symbols = @constCast(&symbols),
+        .expressions = @constCast(&expressions),
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+    var calls = [_]DirectCallAbi{.{
+        .expression = mir.ExprId.fromIndex(2),
+        .callee = mir.SymbolId.fromIndex(0),
+        .fixed_arity = 2,
+        .c_abi = true,
+        .result_extension = .zeroext,
+        .parameter_extensions = .{ .zeroext, .signext } ++ [_]AbiExtension{.none} ** (mir.max_executable_operands - 2),
+    }};
+    const plan: CallAbiPlan = .{ .target = .riscv64, .direct_calls = &calls };
+    try std.testing.expect(supportsWithCallAbi(&body, .bool, plan));
+    const rendered = try renderWithCallAbi(std.testing.allocator, &body, .bool, plan);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "call zeroext i1 @c_predicate(i1 zeroext %mc_arg_0, i32 signext %mc_arg_1)") != null);
+
+    calls[0].result_extension = .none;
+    try std.testing.expect(!supportsWithCallAbi(&body, .bool, plan));
+    try std.testing.expectError(error.Unsupported, renderWithCallAbi(std.testing.allocator, &body, .bool, plan));
+    calls[0].result_extension = .zeroext;
+    calls[0].fixed_arity = 1;
+    try std.testing.expect(!supportsWithCallAbi(&body, .bool, plan));
 }
 
 test "mechanical renderer rejects assertions until their trap edge is explicit" {

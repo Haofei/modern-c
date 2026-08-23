@@ -1027,6 +1027,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             .return_ty = .void,
                             .param_count = 0,
                             .c_abi = false,
+                            .is_variadic = false,
                             .no_lang_trap = false,
                             .irq_context = false,
                         };
@@ -1053,7 +1054,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .kind = .function,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                         .param_count = fn_decl.params.len,
-                        .c_abi = fn_decl.abi != null,
+                        .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
+                        .is_variadic = fn_decl.is_variadic,
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
@@ -1077,20 +1079,29 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .kind = .extern_function,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                         .param_count = fn_decl.params.len,
-                        .c_abi = fn_decl.abi != null,
+                        .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
+                        .is_variadic = fn_decl.is_variadic,
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
                     try checked_callables.append(allocator, checked);
+                    const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &packed_bits, &aliases);
+                    var param_types_unowned = true;
+                    errdefer if (param_types_unowned and param_types.len != 0) allocator.free(param_types);
+                    const ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params);
+                    var ffi_contracts_unowned = true;
+                    errdefer if (ffi_contracts_unowned and ffi_param_contracts.len != 0) allocator.free(ffi_param_contracts);
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
                         .typed_symbol_id = checked.symbol_id,
                         .typed_source_id = checked.source_id,
                         .return_ty = checked.return_ty,
                         .param_count = checked.param_count,
+                        .param_types = param_types,
                         .is_extern = true,
                         .c_abi = checked.c_abi,
-                        .ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params),
+                        .is_variadic = checked.is_variadic,
+                        .ffi_param_contracts = ffi_param_contracts,
                         .no_lang_trap = checked.no_lang_trap,
                         .irq_context = checked.irq_context,
                         .blocks = try allocator.alloc(Block, 0),
@@ -1112,6 +1123,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
                     });
+                    param_types_unowned = false;
+                    ffi_contracts_unowned = false;
                 }
             },
             else => {},
@@ -1151,6 +1164,7 @@ fn applyCheckedCallableFact(function: *Function, checked: CheckedCallableFact) v
     function.return_ty = checked.return_ty;
     function.param_count = checked.param_count;
     function.c_abi = checked.c_abi;
+    function.is_variadic = checked.is_variadic;
     function.no_lang_trap = checked.no_lang_trap;
     function.irq_context = checked.irq_context;
 }
@@ -1305,6 +1319,21 @@ fn buildSymbolIdentities(allocator: std.mem.Allocator, symbol_ids: *std.StringHa
 
 pub fn appendDumpFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     return appendDumpOptFromDecls(allocator, decls, out, .{});
+}
+
+fn functionParamValueTypes(
+    allocator: std.mem.Allocator,
+    params: []const ast.Param,
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+) ![]ValueType {
+    const types = try allocator.alloc(ValueType, params.len);
+    for (params, 0..) |parameter, index| {
+        types[index] = valueTypeFromTypeAlias(parameter.ty, enums, structs, packed_bits, aliases);
+    }
+    return types;
 }
 
 fn buildFfiParamContracts(
@@ -6033,6 +6062,7 @@ const FunctionBuilder = struct {
     return_type_expr: ?ast.TypeExpr,
     param_count: usize = 0,
     c_abi: bool = false,
+    is_variadic: bool = false,
     no_lang_trap: bool,
     irq_context: bool,
     naked: bool = false,
@@ -6158,7 +6188,8 @@ const FunctionBuilder = struct {
             .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, enums, structs, packed_bits, aliases) else .void,
             .return_type_expr = fn_decl.return_type,
             .param_count = fn_decl.params.len,
-            .c_abi = fn_decl.abi != null,
+            .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(attrs, "mc_abi")),
+            .is_variadic = fn_decl.is_variadic,
             .no_lang_trap = hasAttr(attrs, "no_lang_trap"),
             .irq_context = hasAttr(attrs, "irq_context"),
             .naked = hasAttr(attrs, "naked"),
@@ -6271,6 +6302,7 @@ const FunctionBuilder = struct {
             .return_type_expr = null,
             .param_count = 0,
             .c_abi = false,
+            .is_variadic = false,
             .no_lang_trap = false,
             .irq_context = false,
             .drop_glue_facts = drop_glue_facts,
@@ -6508,6 +6540,9 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(elided_bounds);
         var executable_body = try self.finishExecutableBody(trap_edges);
         errdefer executable_body.deinit(self.allocator);
+        const param_types = try self.allocator.alloc(ValueType, executable_body.parameters.len);
+        errdefer self.allocator.free(param_types);
+        for (executable_body.parameters, 0..) |parameter, index| param_types[index] = parameter.ty;
 
         self.blocks.deinit(self.allocator);
         self.blocks = .empty;
@@ -6564,7 +6599,9 @@ const FunctionBuilder = struct {
             .name = self.name,
             .return_ty = self.return_ty,
             .param_count = self.param_count,
+            .param_types = param_types,
             .c_abi = self.c_abi,
+            .is_variadic = self.is_variadic,
             .no_lang_trap = self.no_lang_trap,
             .irq_context = self.irq_context,
             .blocks = try blocks.toOwnedSlice(self.allocator),
@@ -14842,6 +14879,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     var cleanup_cfg = function.cleanup_cfg;
     cleanup_cfg.deinit(allocator);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
+    if (function.param_types.len != 0) allocator.free(function.param_types);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);
     for (function.generated_type_expr_args) |args| allocator.free(args);

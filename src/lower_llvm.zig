@@ -1690,7 +1690,8 @@ const LlvmEmitter = struct {
         };
         if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(function, fn_mir)) return false;
 
-        const rendered = mir_executable_llvm.render(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty) catch |err| switch (err) {
+        const call_abi_plan = (try self.buildExecutableDirectCallAbiPlan(fn_mir)) orelse return false;
+        const rendered = mir_executable_llvm.renderWithCallAbi(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty, call_abi_plan) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported, error.InvalidBody => return false,
         };
@@ -5364,7 +5365,10 @@ const LlvmEmitter = struct {
     }
 
     fn mirExecutableBodySupported(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) bool {
-        if (!mir_executable_body.isComplete(&fn_mir) or !mir_executable_llvm.supports(&fn_mir.executable_body, fn_mir.return_ty)) return false;
+        if (!mir_executable_body.isComplete(&fn_mir)) return false;
+        const maybe_call_abi_plan = self.buildExecutableDirectCallAbiPlan(fn_mir) catch return false;
+        const call_abi_plan = maybe_call_abi_plan orelse return false;
+        if (!mir_executable_llvm.supportsWithCallAbi(&fn_mir.executable_body, fn_mir.return_ty, call_abi_plan)) return false;
         if (fn_mir.executable_body.parameters.len != function.signature.params.len) return false;
         const source_return = self.llvmType(function.signature.transitionalReturnType() orelse return false) catch return false;
         if (!std.mem.eql(u8, source_return, self.mirStructuralType(fn_mir.return_ty) orelse return false)) return false;
@@ -5378,12 +5382,16 @@ const LlvmEmitter = struct {
             .symbol, .deref => return false,
             .direct_call => |call| {
                 const symbol = mir_executable_body.symbol(&fn_mir.executable_body, call.callee) orelse return false;
-                const signature = self.fn_sigs.get(symbol.spelling) orelse return false;
-                if (signature.c_abi or signature.is_variadic or signature.params.len != call.argument_count) return false;
-                if (!std.mem.eql(u8, self.llvmType(signature.ret) catch return false, self.mirStructuralType(expression.result_ty) orelse return false)) return false;
-                for (call.arguments[0..call.argument_count], signature.params) |argument_id, parameter| {
+                const signature = self.mirFunctionByName(symbol.spelling) orelse return false;
+                if (signature.is_variadic or signature.param_count != call.argument_count or signature.param_types.len != call.argument_count) return false;
+                if (signature.c_abi) {
+                    if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(signature.return_ty), mir.TypeKey.fromValueType(expression.result_ty))) return false;
+                } else if (!std.mem.eql(u8, self.mirStructuralType(signature.return_ty) orelse return false, self.mirStructuralType(expression.result_ty) orelse return false)) return false;
+                for (call.arguments[0..call.argument_count], signature.param_types) |argument_id, parameter_ty| {
                     const argument = mir_executable_body.expression(&fn_mir.executable_body, argument_id) orelse return false;
-                    if (!std.mem.eql(u8, self.mirStructuralType(argument.result_ty) orelse return false, self.llvmType(parameter.ty) catch return false)) return false;
+                    if (signature.c_abi) {
+                        if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(argument.result_ty), mir.TypeKey.fromValueType(parameter_ty))) return false;
+                    } else if (!std.mem.eql(u8, self.mirStructuralType(argument.result_ty) orelse return false, self.mirStructuralType(parameter_ty) orelse return false)) return false;
                 }
             },
             // The syntax-free renderer performs the closed, typed admission
@@ -5419,6 +5427,61 @@ const LlvmEmitter = struct {
             // typed place semantics here.
         }
         return true;
+    }
+
+    fn mirFunctionByName(self: *const LlvmEmitter, name: []const u8) ?mir.Function {
+        for (self.mir_module.functions) |function| if (std.mem.eql(u8, function.name, name)) return function;
+        return null;
+    }
+
+    fn executableTargetAbi(self: *const LlvmEmitter) mir_executable_llvm.TargetAbi {
+        return switch (self.target_arch) {
+            .riscv64 => .riscv64,
+            .x86_64 => .x86_64,
+            .aarch64 => .aarch64,
+        };
+    }
+
+    fn buildExecutableDirectCallAbiPlan(self: *LlvmEmitter, fn_mir: mir.Function) !?mir_executable_llvm.CallAbiPlan {
+        var direct_call_count: usize = 0;
+        for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
+            .direct_call => direct_call_count += 1,
+            else => {},
+        };
+        const entries = try self.scratch.allocator().alloc(mir_executable_llvm.DirectCallAbi, direct_call_count);
+        var next: usize = 0;
+        const target = self.executableTargetAbi();
+        for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
+            .direct_call => |call| {
+                const symbol = mir_executable_body.symbol(&fn_mir.executable_body, call.callee) orelse return null;
+                const signature = self.mirFunctionByName(symbol.spelling) orelse return null;
+                // Variadic calls still require default argument promotions and
+                // remain on the qualified legacy path.  Do not weaken this
+                // admission until those promotions are canonical MIR facts.
+                if (signature.is_variadic or signature.param_count != call.argument_count or signature.param_types.len != call.argument_count) return null;
+                if (signature.c_abi) {
+                    if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(signature.return_ty), mir.TypeKey.fromValueType(expression.result_ty))) return null;
+                } else if (!std.mem.eql(u8, self.mirStructuralType(signature.return_ty) orelse return null, self.mirStructuralType(expression.result_ty) orelse return null)) return null;
+                var entry: mir_executable_llvm.DirectCallAbi = .{
+                    .expression = expression.id,
+                    .callee = call.callee,
+                    .fixed_arity = call.argument_count,
+                    .c_abi = signature.c_abi,
+                    .result_extension = if (signature.c_abi) mir_executable_llvm.abiExtension(target, expression.result_ty) else .none,
+                };
+                for (call.arguments[0..call.argument_count], signature.param_types, 0..) |argument_id, parameter_ty, index| {
+                    const argument = mir_executable_body.expression(&fn_mir.executable_body, argument_id) orelse return null;
+                    if (signature.c_abi) {
+                        if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(argument.result_ty), mir.TypeKey.fromValueType(parameter_ty))) return null;
+                    } else if (!std.mem.eql(u8, self.mirStructuralType(argument.result_ty) orelse return null, self.mirStructuralType(parameter_ty) orelse return null)) return null;
+                    entry.parameter_extensions[index] = if (signature.c_abi) mir_executable_llvm.abiExtension(target, parameter_ty) else .none;
+                }
+                entries[next] = entry;
+                next += 1;
+            },
+            else => {},
+        };
+        return .{ .target = target, .direct_calls = entries };
     }
 
     fn mirStructuralAccessPlanSupported(self: *LlvmEmitter, function: anytype, body: mir_access_plan.AccessBodyPlan, operation: mir_access_plan.StructuralOperation) bool {

@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 777 C and 853 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 777 C and 842 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -28,7 +28,7 @@ strict-corpus recognizers are no longer an honest completion strategy.
 ### Last completed broad census snapshot (2026-08-23)
 
 The 522-root sweep found C **919/1696 admitted (54.2%)**, 777 fallback, and
-LLVM **909/1762 admitted (51.6%)**, 853 fallback. There were no unsupported
+LLVM **920/1762 admitted (52.2%)**, 842 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
@@ -79,9 +79,18 @@ memory access, and deliberately carry no non-null representation edge. This
 removes 19 broad-corpus fallbacks from each backend; the focused
 `raw_many_pointer.mc` root is now C 25/27 and LLVM 26/27 admitted.
 
+Fixed-arity direct calls now carry a syntax-free LLVM C-ABI plan derived from
+the callee MIR signature. `Function` owns canonical parameter types plus the
+variadic bit; admission checks every argument/result against that signature,
+keeps variadic default promotions on the legacy path, and normalizes target
+`zeroext`/`signext` attributes before the mechanical renderer runs. The MIR
+verifier also rejects parameter-count/type drift between the function signature
+and executable body. This closes the remaining 11 broad-corpus LLVM
+`ingress_mismatch` records without changing C admission.
+
 The census also ranks the canonical stopping layer. For C the remaining 777
 fallbacks are 729 `producer_incomplete`, 46 `renderer_unsupported`, and 2
-`ready`; LLVM is 769/69/11/4. Producer-incomplete
+`ready`; LLVM is 769/69/0/4. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
 The leading C reasons are `producer_invariant` (130), `trap_projection` (120),
 `noncanonical_literal` (116), `unsupported_member` (50), and

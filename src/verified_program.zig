@@ -199,4 +199,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
 
     module_mir.checked_callables[0].param_count = 1;
     try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+    module_mir.checked_callables[0].param_count = 0;
+    module_mir.checked_callables[0].is_variadic = true;
+    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
 }

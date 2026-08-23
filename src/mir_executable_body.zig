@@ -80,6 +80,13 @@ pub fn symbol(body: *const mir.ExecutableBody, id: mir.SymbolId) ?mir.SymbolIden
 
 pub fn verify(function: *const mir.Function) !void {
     const body = &function.executable_body;
+    if (function.param_types.len != function.param_count) return error.InvalidFunctionSignature;
+    if (!function.is_extern and body.parameters.len != function.param_count) return error.InvalidFunctionSignature;
+    if (body.parameters.len == function.param_types.len) {
+        for (body.parameters, function.param_types) |parameter, parameter_ty| {
+            if (!sameValueType(parameter.ty, parameter_ty)) return error.InvalidFunctionSignature;
+        }
+    }
     if (body.complete and body.incomplete_reason != .none) return error.InvalidIncompleteReason;
     if (!body.complete and body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
