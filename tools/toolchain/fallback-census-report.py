@@ -2,7 +2,7 @@
 """Aggregate function-body fallback census JSONL into a ranked worklist.
 
 Reads the records emitted by src/fallback_census.zig (one JSON object per line:
-backend, status, canonical, module, fn, blocks, term, ret, traps, cleanup, instrs,
+backend, status, canonical, canonical_detail, module, fn, blocks, term, ret, traps, cleanup, instrs,
 call_targets) and prints,
 per backend:
 
@@ -86,6 +86,7 @@ def summarize_backend(recs):
     seen = {}
     status_of = {}
     canonical_of = {}
+    canonical_detail_of = {}
     for r in recs:
         sig = signature(r)
         if sig not in seen:
@@ -99,6 +100,7 @@ def summarize_backend(recs):
         previous_canonical = canonical_of.get(sig)
         if previous_canonical is None or CANONICAL_RANK.get(canonical, -1) > CANONICAL_RANK.get(previous_canonical, -1):
             canonical_of[sig] = canonical
+            canonical_detail_of[sig] = r.get("canonical_detail", "unknown")
 
     total = len(seen)
     admitted = sum(1 for s in status_of.values() if s == "admitted")
@@ -114,6 +116,7 @@ def summarize_backend(recs):
         "seen": seen,
         "status_of": status_of,
         "canonical_of": canonical_of,
+        "canonical_detail_of": canonical_detail_of,
     }
 
 
@@ -134,6 +137,7 @@ def report_backend(backend, recs):
     seen = summary["seen"]
     status_of = summary["status_of"]
     canonical_of = summary["canonical_of"]
+    canonical_detail_of = summary["canonical_detail_of"]
     total = summary["total"]
     admitted = summary["admitted"]
     fallback = summary["fallback"]
@@ -167,6 +171,17 @@ def report_backend(backend, recs):
         if count:
             print(f"  {count:>5}  {count/not_admitted*100:4.0f}%  {blocker}")
     print()
+
+    producer_details = collections.Counter(
+        canonical_detail_of.get(sig, "unknown")
+        for sig in fb_sigs
+        if canonical_of.get(sig) == "producer_incomplete"
+    )
+    if producer_details:
+        print("  --- incomplete producer reason ---")
+        for reason, count in producer_details.most_common():
+            print(f"  {count:>5}  {count/sum(producer_details.values())*100:4.0f}%  {reason}")
+        print()
 
     # --- coarse "family" ranking ---
     coarse = collections.Counter()

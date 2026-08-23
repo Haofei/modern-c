@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the 521-root broad census still finds
-  **1003/1800 C** and **1066/1866 LLVM** distinct functions using the AST body
-  (C admits 44.3%, LLVM 42.9%).
+  **1001/1800 C** and **1064/1866 LLVM** distinct functions using the AST body
+  (C admits 44.4%, LLVM 43.0%).
   P0 therefore remains incomplete until the executable MIR body is general
   enough for that corpus and the artifact/branch is physically deleted.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
@@ -46,10 +46,14 @@ broad census without adding a backend-local syntax recognizer.
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-957 to an incomplete MIR producer, 38 to renderer support, 6 to final ingress
-checks and 2 nominally ready; LLVM attributes 996/52/16/2 respectively. This
-turns the remaining migration into a ranked producer/renderer/ingress worklist
-and prevents work on the wrong layer.
+955 to an incomplete MIR producer, 38 to renderer support, 6 to final ingress
+checks and 2 nominally ready; LLVM attributes 994/52/16/2 respectively. The
+producer bucket is now classified by its first stable canonical-model gap. The
+largest C reasons are unsupported expressions (196), producer invariants (161),
+trap projection (154), unresolved member access (153), and non-canonical
+literals (110); LLVM has the same ordering within a few functions. This turns
+the remaining migration into a ranked producer/renderer/ingress worklist and
+prevents work on the wrong layer.
 
 Explicit scalar `uninit` locals are now represented as storage without an
 initializer expression. A following assignment creates the executable value;

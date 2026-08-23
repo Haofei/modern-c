@@ -85,13 +85,13 @@ pub fn isEnabled() bool {
 /// Record one function's admission outcome. No-op unless armed. Best-effort:
 /// any allocation failure is swallowed so the census never changes `mcc`'s
 /// behavior or exit status.
-pub fn record(backend: Backend, status: Status, canonical: CanonicalStatus, module: ?[]const u8, fn_mir: mir.Function) void {
+pub fn record(backend: Backend, status: Status, canonical: CanonicalStatus, canonical_detail: []const u8, module: ?[]const u8, fn_mir: mir.Function) void {
     if (builtin.is_test and !armed) {
         init(std.testing.io, std.process.Environ.getPosix(std.testing.environ, "MC_FALLBACK_CENSUS"));
     }
     if (!enabled) return;
     const a = std.heap.page_allocator;
-    writeRecordJson(&buf, a, backend, status, canonical, module, fn_mir) catch return;
+    writeRecordJson(&buf, a, backend, status, canonical, canonical_detail, module, fn_mir) catch return;
     buf.append(a, '\n') catch return;
 }
 
@@ -123,6 +123,7 @@ fn writeRecordJson(
     backend: Backend,
     status: Status,
     canonical: CanonicalStatus,
+    canonical_detail: []const u8,
     module: ?[]const u8,
     fn_mir: mir.Function,
 ) !void {
@@ -133,7 +134,9 @@ fn writeRecordJson(
     try out.appendSlice(a, @tagName(status));
     try out.appendSlice(a, "\",\"canonical\":\"");
     try out.appendSlice(a, @tagName(canonical));
-    try out.appendSlice(a, "\",\"module\":");
+    try out.appendSlice(a, "\",\"canonical_detail\":");
+    try writeJsonString(out, a, canonical_detail);
+    try out.appendSlice(a, ",\"module\":");
     try writeJsonString(out, a, module orelse "");
     try out.appendSlice(a, ",\"fn\":");
     try writeJsonString(out, a, fn_mir.name);
@@ -330,10 +333,10 @@ test "fallback census JSON includes normalized call targets" {
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(a);
-    try writeRecordJson(&out, a, .c, .fallback, .producer_incomplete, "module.mc", function);
+    try writeRecordJson(&out, a, .c, .fallback, .producer_incomplete, "unlowered_member", "module.mc", function);
 
     try std.testing.expectEqualStrings(
-        "{\"backend\":\"c\",\"status\":\"fallback\",\"canonical\":\"producer_incomplete\",\"module\":\"module.mc\"," ++
+        "{\"backend\":\"c\",\"status\":\"fallback\",\"canonical\":\"producer_incomplete\",\"canonical_detail\":\"unlowered_member\",\"module\":\"module.mc\"," ++
             "\"fn\":\"example\",\"blocks\":1,\"term\":\"return\",\"ret\":\"none\"," ++
             "\"traps\":0,\"cleanup\":false,\"instrs\":\"call_target\"," ++
             "\"call_targets\":\"phys,wrapping_add\"}",

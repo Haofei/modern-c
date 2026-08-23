@@ -12,6 +12,42 @@ pub fn isComplete(function: *const mir.Function) bool {
     return function.executable_body.isComplete();
 }
 
+/// Coarse, stable reason for an incomplete canonical body.  This is migration
+/// telemetry only: admission still depends on `verify` + `complete`.  Keeping
+/// the classifier beside the canonical model lets the broad census rank the
+/// producer gaps without teaching either backend about source syntax.
+pub fn incompleteReason(function: *const mir.Function) []const u8 {
+    const body = &function.executable_body;
+    if (body.complete) return "complete";
+    if (body.expressions.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return "empty_body";
+    for (body.expressions) |expression_value| switch (expression_value.operation) {
+        .unsupported => return "unsupported_expression",
+        .deref => return "unlowered_deref",
+        .index => return "unlowered_index",
+        .range_slice => return "unlowered_range_slice",
+        .member => return "unlowered_member",
+        .array => return "unlowered_array",
+        .literal => |literal| switch (literal) {
+            .string, .uninit, .enum_value => return "noncanonical_literal",
+            else => {},
+        },
+        else => {},
+    };
+    for (body.statements) |statement_value| switch (statement_value.operation) {
+        .unsupported => return "unsupported_statement",
+        .defer_cleanup => return "defer_cleanup",
+        .guard => |guard| if (guard.kind == .assert_) return "assert_guard",
+        else => {},
+    };
+    for (body.terminators) |terminator| switch (terminator.operation) {
+        .switch_ => return "general_switch",
+        .fallthrough => return "invalid_fallthrough",
+        else => {},
+    };
+    if (body.trap_edges.len != function.trap_edges.len) return "trap_projection";
+    return "producer_invariant";
+}
+
 pub fn expression(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
     if (!id.isValid() or id.index() >= body.expressions.len) return null;
     const value = &body.expressions[id.index()];

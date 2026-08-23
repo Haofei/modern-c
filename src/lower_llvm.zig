@@ -829,14 +829,15 @@ const LlvmEmitter = struct {
             self.source_path = self.sourcePathForSpan(function.signature.name.span);
             defer self.source_path = previous_source_path;
             const canonical_status = self.canonicalCensusStatus(function, fn_mir);
+            const canonical_detail = if (canonical_status == .producer_incomplete) mir_executable_body.incompleteReason(&fn_mir) else "";
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
-                fallback_census.record(.llvm, .admitted, canonical_status, self.source_path, fn_mir);
+                fallback_census.record(.llvm, .admitted, canonical_status, canonical_detail, self.source_path, fn_mir);
                 continue;
             } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
-                fallback_census.record(.llvm, .fallback, canonical_status, self.source_path, fn_mir);
+                fallback_census.record(.llvm, .fallback, canonical_status, canonical_detail, self.source_path, fn_mir);
                 try self.emitFunction(function, body, render_attrs);
             } else {
-                fallback_census.record(.llvm, .unsupported, canonical_status, self.source_path, fn_mir);
+                fallback_census.record(.llvm, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 return error.UnsupportedLlvmEmission;
             }
         }
