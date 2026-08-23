@@ -6663,9 +6663,9 @@ const FunctionBuilder = struct {
                     {
                         complete = false;
                     } else {
-                        const projected = self.executable_places.items[store.place.index()].projection_count != 0;
-                        if ((projected and (store.representation_source == null or !store.representation_span_id.isValid())) or
-                            (!projected and (store.representation_source != null or store.representation_span_id.isValid()))) complete = false;
+                        const guarded = self.executablePlaceNeedsRepresentationGuard(self.executable_places.items[store.place.index()]);
+                        if ((guarded and (store.representation_source == null or !store.representation_span_id.isValid())) or
+                            (!guarded and (store.representation_source != null or store.representation_span_id.isValid()))) complete = false;
                         const value = self.executable_expressions.items[store.value.index()];
                         if (!sameValueType(value.result_ty, store.ty)) complete = false;
                     }
@@ -6772,16 +6772,16 @@ const FunctionBuilder = struct {
                 if (!address.place.isValid() or address.place.index() >= self.executable_places.items.len) break :address_complete false;
                 const target = self.executable_places.items[address.place.index()];
                 if (!self.executableAddressOfComplete(expression.result_ty, target)) break :address_complete false;
-                break :address_complete if (target.projection_count == 0)
-                    address.representation_source == null and !address.representation_span_id.isValid()
+                break :address_complete if (self.executablePlaceNeedsRepresentationGuard(target))
+                    address.representation_source != null and address.representation_span_id.isValid()
                 else
-                    address.representation_source != null and address.representation_span_id.isValid();
+                    address.representation_source == null and !address.representation_span_id.isValid();
             },
             .load => |load| load_complete: {
                 if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len or
                     !self.executableMemoryAccessComplete(self.executable_places.items[load.place.index()], expression.result_ty, load.access, false)) break :load_complete false;
-                const projected = self.executable_places.items[load.place.index()].projection_count != 0;
-                break :load_complete if (projected)
+                const guarded = self.executablePlaceNeedsRepresentationGuard(self.executable_places.items[load.place.index()]);
+                break :load_complete if (guarded)
                     load.representation_source != null and load.representation_span_id.isValid()
                 else
                     load.representation_source == null and !load.representation_span_id.isValid();
@@ -6893,6 +6893,7 @@ const FunctionBuilder = struct {
         const local_id = switch (place.root) {
             .local => |id| id,
             .symbol => return false,
+            .value => |id| return self.executableComputedRawManyDerefPlaceComplete(place, id),
         };
         var parameter_ty: ?ValueType = null;
         for (self.executable_parameters.items) |parameter| if (parameter.local.eql(local_id)) {
@@ -6928,7 +6929,10 @@ const FunctionBuilder = struct {
 
     fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
         if (!self.executablePlaceComplete(place) or !executableAddressResultMatchesPlace(result_ty, place.ty)) return false;
-        if (place.projection_count == 1) return sameValueType(result_ty, place.root_ty);
+        if (place.projection_count == 1) return switch (place.root) {
+            .value => true,
+            .local, .symbol => sameValueType(result_ty, place.root_ty),
+        };
         if (place.projection_count != 0) return false;
         return switch (place.root) {
             .local => |id| local: {
@@ -6941,6 +6945,7 @@ const FunctionBuilder = struct {
             },
             .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
                 self.executable_symbols.items[id.index()].kind == .global,
+            .value => false,
         };
     }
 
@@ -6979,7 +6984,30 @@ const FunctionBuilder = struct {
                 const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
                 break :symbol access.kind == expected_kind;
             } else false,
+            .value => false,
         };
+    }
+
+    fn executableComputedRawManyDerefPlaceComplete(
+        self: *const FunctionBuilder,
+        place: ExecutablePlace,
+        root_id: ExprId,
+    ) bool {
+        if (place.projection_count != 1 or place.projections[0] != .deref or
+            !root_id.isValid() or root_id.index() >= self.executable_expressions.items.len or
+            mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        const root = self.executable_expressions.items[root_id.index()];
+        if (!sameValueType(root.result_ty, place.root_ty) or !root.type_id.eql(place.root_type_id)) return false;
+        const builtin = switch (root.operation) {
+            .builtin_call => |call| call,
+            else => return false,
+        };
+        if (builtin.kind != .raw_many_offset) return false;
+        const shape = switch (root.result_ty) {
+            .pointer => |value| value,
+            else => return false,
+        };
+        return shape.kind == .raw_many and std.mem.eql(u8, shape.child, place.ty.name());
     }
 
     fn executableBuiltinComplete(
@@ -7272,21 +7300,29 @@ const FunctionBuilder = struct {
                 const place_id = try self.appendExecutablePlace(inner.*);
                 const place = self.executable_places.items[place_id.index()];
                 if (place.projection_count == 0) break :address .{ .address_of = .{ .place = place_id } };
-                const guard_source = self.executableDerefOperandSource(inner.*) orelse
-                    break :address self.unsupportedExecutableExpression(.unsupported_address);
+                const guard_source: ?SourcePoint = if (self.executablePlaceNeedsRepresentationGuard(place))
+                    self.executableDerefOperandSource(inner.*) orelse
+                        break :address self.unsupportedExecutableExpression(.unsupported_address)
+                else
+                    null;
                 break :address .{ .address_of = .{
                     .place = place_id,
                     .representation_source = guard_source,
-                    .representation_span_id = try self.internSpanId(guard_source),
+                    .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                 } };
             },
             .borrow_expr => self.unsupportedExecutableExpression(.unsupported_borrow),
-            .deref => |inner| .{ .load = .{
-                .place = try self.appendExecutablePlace(expr),
-                .access = self.executableMemoryAccess(expr, result_ty),
-                .representation_source = self.sourcePoint(inner.span),
-                .representation_span_id = try self.internSpanId(self.sourcePoint(inner.span)),
-            } },
+            .deref => |inner| load: {
+                const place_id = try self.appendExecutablePlace(expr);
+                const place = self.executable_places.items[place_id.index()];
+                const guard_source: ?SourcePoint = if (self.executablePlaceNeedsRepresentationGuard(place)) self.sourcePoint(inner.span) else null;
+                break :load .{ .load = .{
+                    .place = place_id,
+                    .access = self.executableMemoryAccess(expr, result_ty),
+                    .representation_source = guard_source,
+                    .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
+                } };
+            },
             .index => |node| .{ .index = .{
                 .base = try self.ensureExecutableExpr(node.base.*),
                 .index = try self.ensureExecutableExpr(node.index.*),
@@ -7777,7 +7813,15 @@ const FunctionBuilder = struct {
             .ty = place_ty,
             .type_id = try self.internTypeId(place_ty),
         };
-        if (!try self.fillExecutablePlace(&place, expr)) {
+        if (self.executableRawManyOffsetDerefOperand(expr)) |root_expr| {
+            const root_id = try self.ensureExecutableExpr(root_expr);
+            const root = self.executable_expressions.items[root_id.index()];
+            place.root = .{ .value = root_id };
+            place.root_ty = root.result_ty;
+            place.root_type_id = root.type_id;
+            place.projections[0] = .deref;
+            place.projection_count = 1;
+        } else if (!try self.fillExecutablePlace(&place, expr)) {
             // Invalid root uses a dedicated synthetic symbol and the verifier
             // keeps this body incomplete; no backend may render the place.
             place.root = .{ .symbol = try self.internExecutableSymbol("<unsupported-place>") };
@@ -7785,6 +7829,30 @@ const FunctionBuilder = struct {
         }
         try self.executable_places.append(self.allocator, place);
         return place.id;
+    }
+
+    fn executableRawManyOffsetDerefOperand(self: *FunctionBuilder, input: ast.Expr) ?ast.Expr {
+        var expr = input;
+        while (expr.kind == .grouped) expr = expr.kind.grouped.*;
+        var root = switch (expr.kind) {
+            .deref => |inner| inner.*,
+            else => return null,
+        };
+        while (root.kind == .grouped) root = root.kind.grouped.*;
+        const call = switch (root.kind) {
+            .call => |node| node,
+            else => return null,
+        };
+        return if (self.rawManyOffsetCallTarget(call) != null) root else null;
+    }
+
+    fn executablePlaceNeedsRepresentationGuard(_: *const FunctionBuilder, place: ExecutablePlace) bool {
+        if (place.projection_count == 0) return false;
+        return switch (place.root_ty) {
+            .pointer => |shape| shape.kind == .single,
+            .nullable_pointer => true,
+            else => false,
+        };
     }
 
     fn fillExecutablePlace(self: *FunctionBuilder, place: *ExecutablePlace, expr: ast.Expr) anyerror!bool {
@@ -8185,9 +8253,14 @@ const FunctionBuilder = struct {
             .assignment => |node| {
                 const assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
-                const representation_source = self.executableDerefOperandSource(node.target);
+                const place_id = try self.appendExecutablePlace(node.target);
+                const place = self.executable_places.items[place_id.index()];
+                const representation_source = if (self.executablePlaceNeedsRepresentationGuard(place))
+                    self.executableDerefOperandSource(node.target)
+                else
+                    null;
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
-                    .place = try self.appendExecutablePlace(node.target),
+                    .place = place_id,
                     .value = try self.ensureExecutableExprAs(node.value, assignment_target_ty),
                     .ty = assignment_target_ty,
                     .access = self.executableMemoryAccess(node.target, assignment_target_ty),

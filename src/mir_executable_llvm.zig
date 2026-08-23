@@ -55,7 +55,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections) return false;
         if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
-        } else if (!parameterScalarAccessPlaceSupported(body, place)) return false;
+        } else if (!scalarAccessPlaceSupported(body, place)) return false;
     }
     for (body.statements) |statement| {
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
@@ -205,7 +205,9 @@ const Renderer = struct {
             .store => |store| {
                 const value = try self.emitExpression(store.value);
                 const place = self.body.places[store.place.index()];
-                const pointer = if (place.projection_count != 0)
+                const pointer = if (computedRawManyDerefPlaceSupported(self.body, place, true))
+                    try self.emitComputedRawManyDerefPointer(place)
+                else if (place.projection_count != 0)
                     try self.emitGuardedParameterStorePointer(statement, store.place)
                 else
                     try self.emitPlace(store.place, value.ty);
@@ -779,7 +781,9 @@ const Renderer = struct {
         if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
         const value_ty = try self.typeText(expression.result_ty);
         const place = self.body.places[load.place.index()];
-        const pointer = if (place.projection_count != 0)
+        const pointer = if (computedRawManyDerefPlaceSupported(self.body, place, false))
+            try self.emitComputedRawManyDerefPointer(place)
+        else if (place.projection_count != 0)
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
             try self.emitPlace(load.place, value_ty);
@@ -800,7 +804,7 @@ const Renderer = struct {
         const place = &self.body.places[place_id.index()];
         const global_bool = switch (place.root) {
             .symbol => std.mem.eql(u8, value.ty, "i1"),
-            .local => false,
+            .local, .value => false,
         };
         var stored = value.spelling;
         const storage_ty: []const u8 = if (global_bool) "i8" else value.ty;
@@ -818,6 +822,10 @@ const Renderer = struct {
         if (directAddressOfSupported(self.body, expression, address)) {
             return .{ .ty = "ptr", .spelling = try self.emitPlace(address.place, "ptr") };
         }
+        const place = self.body.places[address.place.index()];
+        if (computedRawManyDerefPlaceSupported(self.body, place, false)) {
+            return .{ .ty = "ptr", .spelling = try self.emitComputedRawManyDerefPointer(place) };
+        }
         if (!addressOfParameterDerefSupported(self.body, expression, address)) return error.InvalidBody;
         return .{ .ty = "ptr", .spelling = try self.emitGuardedParameterDerefPointer(expression, address.place) };
     }
@@ -831,6 +839,7 @@ const Renderer = struct {
                 break :blk local.storage;
             },
             .symbol => |symbol_id| try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody}),
+            .value => return error.Unsupported,
         };
         if (place.projection_count != 0) return error.Unsupported;
         _ = value_ty;
@@ -844,13 +853,24 @@ const Renderer = struct {
         const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
-            .symbol => return error.InvalidBody,
+            .symbol, .value => return error.InvalidBody,
         };
         const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
         if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
         try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
         return local.storage;
+    }
+
+    fn emitComputedRawManyDerefPointer(self: *Renderer, place: mir.ExecutablePlace) RenderError![]const u8 {
+        if (!computedRawManyDerefPlaceSupported(self.body, place, false)) return error.InvalidBody;
+        const root_id = switch (place.root) {
+            .value => |id| id,
+            .local, .symbol => return error.InvalidBody,
+        };
+        const root = try self.emitExpression(root_id);
+        if (!std.mem.eql(u8, root.ty, "ptr")) return error.InvalidBody;
+        return root.spelling;
     }
 
     fn emitGuardedParameterAccessPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
@@ -860,7 +880,7 @@ const Renderer = struct {
         const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
-            .symbol => return error.InvalidBody,
+            .symbol, .value => return error.InvalidBody,
         };
         const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
         if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
@@ -876,7 +896,7 @@ const Renderer = struct {
         const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
-            .symbol => return error.InvalidBody,
+            .symbol, .value => return error.InvalidBody,
         };
         const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
         if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
@@ -1001,7 +1021,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
-            addressOfParameterDerefSupported(body, expression, address),
+            addressOfParameterDerefSupported(body, expression, address) or
+            addressOfComputedRawManyDerefSupported(body, expression, address),
         .deref => |id| expressionValid(body, id) and switch (body.expressions[id.index()].result_ty) {
             .pointer => true,
             else => false,
@@ -1294,6 +1315,7 @@ fn placeRootValid(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) b
     return switch (place.root) {
         .local => |id| localAddressable(body, id),
         .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
+        .value => false,
     };
 }
 
@@ -1311,7 +1333,7 @@ fn singleParameterDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
     }
     const local_id = switch (place.root) {
         .local => |id| id,
-        .symbol => return false,
+        .symbol, .value => return false,
     };
     const parameter = parameterIdentity(body, local_id) orelse return false;
     if (!parameter.type_id.isValid() or !parameter.type_id.eql(place.root_type_id) or
@@ -1344,7 +1366,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
     };
     const local_id = switch (place.root) {
         .local => |id| id,
-        .symbol => return false,
+        .symbol, .value => return false,
     };
     const parameter = parameterIdentity(body, local_id) orelse return false;
     if (!parameter.type_id.eql(place.root_type_id) or !sameValueType(parameter.ty, place.root_ty)) return false;
@@ -1367,14 +1389,47 @@ fn parameterScalarAccessStorePlaceSupported(body: *const mir.ExecutableBody, pla
     };
 }
 
+fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, require_mutable: bool) bool {
+    if (place.projection_count != 1 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+    const root_id = switch (place.root) {
+        .value => |id| id,
+        .local, .symbol => return false,
+    };
+    if (!expressionValid(body, root_id)) return false;
+    const root = body.expressions[root_id.index()];
+    if (!root.type_id.eql(place.root_type_id) or !sameValueType(root.result_ty, place.root_ty)) return false;
+    const call = switch (root.operation) {
+        .builtin_call => |value| value,
+        else => return false,
+    };
+    if (call.kind != .raw_many_offset) return false;
+    const pointer = switch (root.result_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .raw_many and (!require_mutable or pointer.mutability == .mut) and
+        std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
+fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    return parameterScalarAccessPlaceSupported(body, place) or
+        computedRawManyDerefPlaceSupported(body, place, false);
+}
+
 fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
     if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false)) return false;
     const place = body.places[load.place.index()];
     if (place.projection_count == 0) {
         return load.representation_source == null and !load.representation_span_id.isValid();
     }
-    return expression.type_id.isValid() and expression.type_id.eql(place.type_id) and
-        load.representation_source != null and load.representation_span_id.isValid() and
+    if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return false;
+    if (computedRawManyDerefPlaceSupported(body, place, false)) {
+        return load.representation_source == null and !load.representation_span_id.isValid() and
+            ownedExpressionTrapCount(body, expression.id) == 0;
+    }
+    return load.representation_source != null and load.representation_span_id.isValid() and
         representationTrapEdgeIsExact(body, expression);
 }
 
@@ -1388,6 +1443,15 @@ fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression:
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn addressOfComputedRawManyDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    return computedRawManyDerefPlaceSupported(body, place, false) and
+        addressResultMatchesPlace(expression.result_ty, place.ty) and expression.type_id.isValid() and
+        address.representation_source == null and !address.representation_span_id.isValid() and
+        ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
 fn directAddressOfSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
@@ -1398,6 +1462,7 @@ fn directAddressOfSupported(body: *const mir.ExecutableBody, expression: mir.Exe
     return switch (place.root) {
         .local => |id| localAddressable(body, id) and parameterIdentity(body, id) == null,
         .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
+        .value => false,
     };
 }
 
@@ -1417,9 +1482,13 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     if (place.projection_count == 0) {
         return store.representation_source == null and !store.representation_span_id.isValid();
     }
+    if (!store.type_id.isValid() or !store.type_id.eql(place.type_id) or
+        !value.type_id.isValid() or !value.type_id.eql(store.type_id)) return false;
+    if (computedRawManyDerefPlaceSupported(body, place, true)) {
+        return store.representation_source == null and !store.representation_span_id.isValid() and
+            statementRepresentationTrapEdge(body, statement) == null;
+    }
     return parameterScalarAccessStorePlaceSupported(body, place) and
-        store.type_id.isValid() and store.type_id.eql(place.type_id) and
-        value.type_id.isValid() and value.type_id.eql(store.type_id) and
         store.representation_source != null and store.representation_span_id.isValid() and
         statementRepresentationTrapEdgeIsExact(body, statement);
 }
@@ -1430,9 +1499,9 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     if (place.projection_count != 0) {
         return sameValueType(place.ty, ty) and access.kind == .race_unordered and
             if (is_store)
-                parameterScalarAccessStorePlaceSupported(body, place)
+                parameterScalarAccessStorePlaceSupported(body, place) or computedRawManyDerefPlaceSupported(body, place, true)
             else
-                parameterScalarAccessPlaceSupported(body, place);
+                scalarAccessPlaceSupported(body, place);
     }
     return switch (place.root) {
         .local => |id| localAddressable(body, id) and access.kind == .plain,
@@ -1444,6 +1513,7 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
                     !is_store and access.kind == .plain
         else
             false,
+        .value => false,
     };
 }
 
@@ -1501,7 +1571,7 @@ fn placeIsGlobal(body: *const mir.ExecutableBody, id: mir.PlaceId) bool {
     if (!placeValid(body, id)) return false;
     return switch (body.places[id.index()].root) {
         .symbol => true,
-        .local => false,
+        .local, .value => false,
     };
 }
 

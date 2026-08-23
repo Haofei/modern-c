@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 796 C and 872 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 777 C and 853 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **900/1696 admitted (53.1%)**, 796 fallback, and
-LLVM **890/1762 admitted (50.5%)**, 872 fallback. There were no unsupported
+The 522-root sweep found C **919/1696 admitted (54.2%)**, 777 fallback, and
+LLVM **909/1762 admitted (51.6%)**, 853 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
@@ -70,15 +70,24 @@ operands. It removes 2 further C fallbacks; the focused LLVM unit path is also
 canonical, while the broad LLVM total is unchanged because the surrounding
 roots remain unsupported before those records are published.
 
-The census also ranks the canonical stopping layer. For C the remaining 796
-fallbacks are 748 `producer_incomplete`, 46 `renderer_unsupported`, and 2
-`ready`; LLVM is 788/69/11/4. Producer-incomplete
+Computed raw-many dereference places now use an evaluated `ExprId` root in
+executable MIR. The verifier admits only a typed `raw_many_offset` result plus
+exactly one dereference; arbitrary expression roots, nullable/single pointers
+and extra projections remain fail-closed. Load, address and mutable store share
+that place identity, preserve left-to-right evaluation, use race-unordered
+memory access, and deliberately carry no non-null representation edge. This
+removes 19 broad-corpus fallbacks from each backend; the focused
+`raw_many_pointer.mc` root is now C 25/27 and LLVM 26/27 admitted.
+
+The census also ranks the canonical stopping layer. For C the remaining 777
+fallbacks are 729 `producer_incomplete`, 46 `renderer_unsupported`, and 2
+`ready`; LLVM is 769/69/11/4. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (149), `noncanonical_literal`
-(116), `trap_projection` (111), `unsupported_member` (49), and
-`unlowered_index` (46). LLVM has `producer_invariant` 149,
-`trap_projection` 123, `noncanonical_literal` 119, `unlowered_index` 60 and
-`unsupported_member` 49. By-value struct member
+The leading C reasons are `producer_invariant` (130), `trap_projection` (120),
+`noncanonical_literal` (116), `unsupported_member` (50), and
+`unlowered_index` (46). LLVM has `trap_projection` 133,
+`producer_invariant` 130, `noncanonical_literal` 119, `unlowered_index` 60 and
+`unsupported_member` 50. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be

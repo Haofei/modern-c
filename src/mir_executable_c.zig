@@ -369,13 +369,14 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         }
     }
     for (body.places) |place| {
-        if (place.projection_count != 0 and !parameterScalarAccessPlaceSupported(body, place)) return false;
+        if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place)) return false;
         switch (place.root) {
             .local => |local| if (localById(body, local) == null) return false,
             .symbol => |symbol| {
                 const identity = symbolById(body, symbol) orelse return false;
                 if (identity.kind != .global) return false;
             },
+            .value => |value| if (expressionById(body, value) == null) return false,
         }
     }
     for (body.statements) |statement| {
@@ -608,13 +609,16 @@ fn memoryLoadSupported(
     if (load.access.alignment != scalar.alignment) return false;
     const place = placeById(body, load.place) orelse return false;
     if (place.projection_count != 0) {
-        return parameterScalarAccessPlaceSupported(body, place.*) and
-            load.access.kind == .race_unordered and
-            representationOperationHasExactTrapEdge(body, expression);
+        if (!scalarAccessPlaceSupported(body, place.*) or load.access.kind != .race_unordered) return false;
+        if (computedRawManyDerefPlaceSupported(body, place.*, false)) {
+            return load.representation_source == null and !load.representation_span_id.isValid() and
+                ownedTrapEdgeCount(body, expression.id) == 0;
+        }
+        return representationOperationHasExactTrapEdge(body, expression);
     }
     const symbol = switch (place.root) {
         .symbol => |id| symbolById(body, id) orelse return false,
-        .local => return false,
+        .local, .value => return false,
     };
     if (symbol.kind != .global) return false;
     const expected_kind: mir.ExecutableMemoryAccessKind = if (symbol.mutable) .race_unordered else .plain;
@@ -632,8 +636,12 @@ fn addressOfSupported(
         return directAddressablePlaceSupported(body, place.*) and address.representation_source == null and
             !address.representation_span_id.isValid() and ownedTrapEdgeCount(body, expression.id) == 0;
     }
+    if (computedRawManyDerefPlaceSupported(body, place.*, false)) {
+        return address.representation_source == null and !address.representation_span_id.isValid() and
+            ownedTrapEdgeCount(body, expression.id) == 0;
+    }
     return singleParameterScalarDerefPlaceSupported(body, place.*) and
-        mir.TypeKey.eql(mir.TypeKey.fromValueType(expression.result_ty), mir.TypeKey.fromValueType(place.root_ty)) and
+        sameValueType(expression.result_ty, place.root_ty) and
         representationOperationHasExactTrapEdge(body, expression);
 }
 
@@ -657,6 +665,7 @@ fn directAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.E
             break :local false;
         },
         .symbol => |id| if (symbolById(body, id)) |identity| identity.kind == .global else false,
+        .value => false,
     };
 }
 
@@ -664,7 +673,7 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
     if (place.projection_count != 1 or place.projections[0] != .deref or scalarMemoryInfo(place.ty) == null) return false;
     const local = switch (place.root) {
         .local => |id| id,
-        .symbol => return false,
+        .symbol, .value => return false,
     };
     var parameter_ty: ?mir.ValueType = null;
     for (body.parameters) |parameter| if (parameter.local.eql(local)) {
@@ -690,7 +699,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
     };
     const local = switch (place.root) {
         .local => |id| id,
-        .symbol => return false,
+        .symbol, .value => return false,
     };
     var parameter: ?mir.ExecutableParameter = null;
     for (body.parameters) |candidate| if (candidate.local.eql(local)) {
@@ -720,6 +729,34 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
         mir.TypeKey.eql(mir.TypeKey.fromValueType(shape.field_types[field_index]), mir.TypeKey.fromValueType(place.ty));
 }
 
+fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, require_mutable: bool) bool {
+    if (place.projection_count != 1 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or scalarMemoryInfo(place.ty) == null) return false;
+    const root_id = switch (place.root) {
+        .value => |id| id,
+        .local, .symbol => return false,
+    };
+    const root = expressionById(body, root_id) orelse return false;
+    if (!root.type_id.eql(place.root_type_id) or
+        !sameValueType(root.result_ty, place.root_ty)) return false;
+    const call = switch (root.operation) {
+        .builtin_call => |value| value,
+        else => return false,
+    };
+    if (call.kind != .raw_many_offset) return false;
+    const pointer = switch (root.result_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .raw_many and (!require_mutable or pointer.mutability == .mut) and
+        std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
+fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    return parameterScalarAccessPlaceSupported(body, place) or
+        computedRawManyDerefPlaceSupported(body, place, false);
+}
+
 fn memoryStoreSupported(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
@@ -735,9 +772,12 @@ fn memoryStoreSupported(
             .pointer => |pointer| pointer,
             else => return false,
         };
-        return shape.mutability == .mut and
-            parameterScalarAccessPlaceSupported(body, place.*) and
-            store.access.kind == .race_unordered and
+        if (shape.mutability != .mut or store.access.kind != .race_unordered) return false;
+        if (computedRawManyDerefPlaceSupported(body, place.*, true)) {
+            return store.representation_source == null and !store.representation_span_id.isValid() and
+                ownedStatementTrapEdgeCount(body, statement.id) == 0;
+        }
+        return parameterScalarAccessPlaceSupported(body, place.*) and
             statementRepresentationOperationHasExactTrapEdge(body, statement, store);
     }
     return switch (place.root) {
@@ -746,6 +786,7 @@ fn memoryStoreSupported(
             symbol.kind == .global and symbol.mutable and store.access.kind == .race_unordered
         else
             false,
+        .value => false,
     };
 }
 
@@ -1079,7 +1120,7 @@ fn emitPlaceAddress(
         try emitPlaceRootValue(allocator, out, body, place.*);
         return;
     }
-    if (!parameterScalarAccessPlaceSupported(body, place.*)) return error.UnsupportedOperation;
+    if (!scalarAccessPlaceSupported(body, place.*)) return error.UnsupportedOperation;
     if (place.projection_count == 2) {
         const field_index = switch (place.projections[1]) {
             .field => |index| index,
@@ -1129,6 +1170,7 @@ fn emitPlaceRootValue(
     switch (place.root) {
         .local => |local| try appendLocal(allocator, out, body, local),
         .symbol => |symbol| try appendSymbol(allocator, out, body, symbol),
+        .value => |value| try emitExpression(allocator, out, body, value, 0),
     }
 }
 

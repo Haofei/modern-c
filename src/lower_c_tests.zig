@@ -3387,7 +3387,8 @@ test "lower-c preserves nullable pointer promotion locals from MIR without body 
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_pointer_promotions.mc", source, &output);
 
     const none_body = try cFunctionBody(output.items, "static uint8_t * pointer_none(void)");
-    try expectContains(none_body, "return NULL;");
+    try expectContains(none_body, "= NULL;");
+    try expectContains(none_body, "return mc_exec_tmp_");
     try expectNotContains(none_body, ".present");
 
     const local_body = try cFunctionBody(output.items, "static uint8_t * local_promotion(uint8_t * p)");
@@ -6541,6 +6542,12 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         \\fn raw_many_offset_deref_fact_gate(p: Words, index: usize) -> u16 {
         \\    unsafe { let value = p.offset(index).*; return value; }
         \\}
+        \\fn raw_many_offset_address_fact_gate(p: Words, index: usize) -> *mut u16 {
+        \\    unsafe { return &p.offset(index).*; }
+        \\}
+        \\fn raw_many_offset_store_fact_gate(p: Words, index: usize, value: u16) -> void {
+        \\    unsafe { p.offset(index).* = value; }
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_raw_many_offset_facts.mc", source);
     defer parsed.deinit();
@@ -6550,8 +6557,21 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null);
-        try std.testing.expect(std.mem.indexOf(u8, output.items, "(p + index)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, " + ") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_load_u16(mc_exec_tmp_") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t value =") != null);
+        const deref_body = try cFunctionBody(output.items, "static uint16_t raw_many_offset_deref_fact_gate(uint16_t * p, uintptr_t index)");
+        try expectContains(deref_body, "/* canonical executable MIR */");
+        try expectNotContains(deref_body, "mc_trap_InvalidRepresentation");
+        const address_body = try cFunctionBody(output.items, "static uint16_t * raw_many_offset_address_fact_gate(uint16_t * p, uintptr_t index)");
+        try expectContains(address_body, "/* canonical executable MIR */");
+        try expectContains(address_body, "return mc_exec_tmp_");
+        try expectNotContains(address_body, "mc_trap_InvalidRepresentation");
+        const store_body = try cFunctionBody(output.items, "static void raw_many_offset_store_fact_gate(uint16_t * p, uintptr_t index, uint16_t value)");
+        try expectContains(store_body, "/* canonical executable MIR */");
+        try expectContains(store_body, "mc_race_store_u16(mc_exec_tmp_");
+        try expectNotContains(store_body, "mc_trap_InvalidRepresentation");
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
@@ -8923,7 +8943,8 @@ test "lower-c inferred local direct calls require MIR types" {
     const caller_body = try cFunctionBody(complete_output.items, "static uint64_t caller(void)");
     try expectLegacyOrCanonicalReturn(caller_body, "return make_count();", "= make_count(");
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return maybe_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "= maybe_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_trap_InvalidRepresentation()") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -12027,7 +12048,7 @@ test "lower-c applies pointer return coercions through canonical MIR" {
 
     for ([_][]const u8{
         "static uint32_t * promote(uint32_t * p)",
-        "static const uint32_t * narrow(uint32_t * p)",
+        "static uint32_t const * narrow(uint32_t * p)",
     }) |signature| {
         const body = try cFunctionBody(output.items, signature);
         try expectContains(body, "/* canonical executable MIR */");

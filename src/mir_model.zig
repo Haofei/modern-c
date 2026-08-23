@@ -843,7 +843,11 @@ pub const ExecutablePlace = struct {
     id: PlaceId,
     source: SourcePoint,
     span_id: SpanId = .invalid,
-    root: union(enum) { local: LocalId, symbol: SymbolId },
+    /// A place can start at stable storage or at a previously evaluated
+    /// pointer value.  `value` is deliberately narrow: the executable-body
+    /// verifier currently admits only a raw-many `offset` result followed by
+    /// exactly one dereference.
+    root: union(enum) { local: LocalId, symbol: SymbolId, value: ExprId },
     root_ty: ValueType = .unknown,
     root_type_id: TypeId = .invalid,
     ty: ValueType = .unknown,

@@ -178,6 +178,44 @@ test "executable MIR owns direct global address place without a trap" {
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 
+test "executable MIR owns computed raw-many dereference places" {
+    const source =
+        \\fn read(p: [*]const u32, index: usize) -> u32 {
+        \\    unsafe { return p.offset(index).*; }
+        \\}
+        \\fn address(p: [*]mut u32, index: usize) -> *mut u32 {
+        \\    unsafe { return &p.offset(index).*; }
+        \\}
+        \\fn write(p: [*]mut u32, index: usize, value: u32) -> void {
+        \\    unsafe { p.offset(index).* = value; }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_raw_many_place.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    for ([_][]const u8{ "read", "address", "write" }) |name| {
+        const function = functionByName(module_mir, name) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(function.executable_body.complete);
+        try std.testing.expectEqual(@as(usize, 0), function.executable_body.trap_edges.len);
+        try std.testing.expectEqual(@as(usize, 1), function.executable_body.places.len);
+        const computed = function.executable_body.places[0];
+        try std.testing.expect(computed.root == .value);
+        try std.testing.expectEqual(@as(usize, 1), computed.projection_count);
+        try std.testing.expect(computed.projections[0] == .deref);
+        const root = function.executable_body.expressions[computed.root.value.index()];
+        try std.testing.expect(root.operation == .builtin_call);
+        try std.testing.expectEqual(mir.CallTargetKind.raw_many_offset, root.operation.builtin_call.kind);
+    }
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_read = functionByNameMut(&module_mir, "read") orelse return error.TestUnexpectedResult;
+    const result_id = mutable_read.executable_body.expressions[mutable_read.executable_body.expressions.len - 1].id;
+    mutable_read.executable_body.places[0].root = .{ .value = result_id };
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
 test "executable MIR owns declared struct literal field order and types" {
     const source =
         \\struct Pair { first: u32, second: u64 }

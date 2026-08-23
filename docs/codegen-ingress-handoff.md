@@ -341,11 +341,14 @@ census is now C **900/1696 (53.1%)** and LLVM **890/1762 (50.5%)**, with
 The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced
 `usize` index, exact raw-many pointer type, evaluation order, and an
-`unsafe_authorized` bit verified before codegen. The C and LLVM renderers emit
-pointer addition/GEP mechanically. The focused raw-many corpus is C 20/40 and LLVM
-21/40. Do not reopen `p.offset(i).*` with an AST recognizer: its correct next
-primitive is an expression-root load/store/address operation carrying the
-race-unordered access mode and representation edge.
+`unsafe_authorized` bit verified before codegen. Its computed dereference is now
+also canonical: `ExecutablePlace.root.value` points at the already evaluated
+offset expression, and the verifier admits only that builtin plus one deref.
+Load, address and mutable store use race-unordered access and no non-null
+representation edge. C emits the existing race helpers; LLVM reuses the GEP SSA
+value. The focused raw-many root is C **25/27** and LLVM **26/27** admitted. The
+522-root census is now C **919/1696 (54.2%)** and LLVM **909/1762 (51.6%)**,
+with 777/853 fallbacks—19 fewer in each backend from this slice.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

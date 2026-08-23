@@ -120,6 +120,7 @@ pub fn verify(function: *const mir.Function) !void {
         switch (value.root) {
             .local => |id| try verifyLocal(body, id),
             .symbol => |id| try verifySymbol(body, id),
+            .value => |id| try verifyExpr(body, id),
         }
         for (value.projections[0..value.projection_count]) |projection| switch (projection) {
             .index => |id| try verifyExpr(body, id),
@@ -149,10 +150,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .local => |id| try verifyLocal(body, id),
         .symbol => |id| try verifySymbol(body, id),
         .load => |operation| {
+            const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
+            if (target.root == .value) try verifyOperand(body, value, target.root.value);
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
-                const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
-                const expected_traps: usize = if (target.projection_count != 0) 1 else 0;
+                const expected_traps: usize = if (placeNeedsRepresentationGuard(target.*)) 1 else 0;
                 if (expected_traps == 1) {
                     const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, operation.representation_span_id, source);
@@ -274,11 +276,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         },
         .address_of => |address| {
             const target = place(body, address.place) orelse return error.InvalidPlaceReference;
+            if (target.root == .value) try verifyOperand(body, value, target.root.value);
             if (body.complete) {
                 if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
                 if (target.projection_count == 0) {
                     if (!directAddressablePlace(body, target.*) or address.representation_source != null or
                         address.representation_span_id.isValid() or ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                        return error.InvalidMemoryAccessTrap;
+                } else if (isComputedRawManyDerefPlace(body, target.*, false)) {
+                    if (address.representation_source != null or address.representation_span_id.isValid() or
+                        ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
                 } else {
                     if (!isSingleParameterDerefPlace(body, target.*, false) or !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
@@ -426,11 +433,15 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
         },
         .store => |operation| {
             const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
+            if (target.root == .value) {
+                try verifyStatementExpr(body, statement_value, target.root.value);
+                if (target.root.value.index() >= operation.value.index()) return error.InvalidEvaluationOrder;
+            }
             try verifyType(function, operation.type_id, operation.ty, body.complete);
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
-                const projected = target.projection_count != 0;
-                if (projected) {
+                const guarded = placeNeedsRepresentationGuard(target.*);
+                if (guarded) {
                     const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, operation.representation_span_id, source);
                     if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 1 or
@@ -542,7 +553,7 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         },
         else => {},
     };
-    for (body.places) |value| if (value.projection_count != 0 and !isParameterScalarAccessPlace(body, value, false)) return true;
+    for (body.places) |value| if (value.projection_count != 0 and !isScalarAccessPlace(body, value, false)) return true;
     for (body.statements) |value| switch (value.operation) {
         .unsupported, .defer_cleanup => return true,
         else => {},
@@ -625,7 +636,7 @@ fn verifyMemoryAccess(
     const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return error.InvalidMemoryAccessType;
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
     if (target.projection_count != 0) {
-        if (!isParameterScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
+        if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
         if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
         return;
     }
@@ -640,12 +651,13 @@ fn verifyMemoryAccess(
             const expected_kind: mir.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
             if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
         },
+        .value => return error.InvalidPlaceType,
     }
 }
 
 fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) !void {
     if (target.projection_count == 0) return;
-    if (!isParameterScalarAccessPlace(body, target, false)) return error.InvalidPlaceType;
+    if (!isScalarAccessPlace(body, target, false)) return error.InvalidPlaceType;
 }
 
 fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) bool {
@@ -668,6 +680,44 @@ fn directAddressablePlace(body: *const mir.ExecutableBody, target: mir.Executabl
             break :local false;
         },
         .symbol => |id| if (symbol(body, id)) |identity| identity.kind == .global else false,
+        .value => false,
+    };
+}
+
+fn isComputedRawManyDerefPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
+    if (target.projection_count != 1 or target.projections[0] != .deref or
+        !target.root_type_id.isValid() or !target.type_id.isValid() or
+        mir.ExecutableMemoryAccess.scalarAlignment(target.ty) == null) return false;
+    const root_id = switch (target.root) {
+        .value => |id| id,
+        .local, .symbol => return false,
+    };
+    const root = expression(body, root_id) orelse return false;
+    if (!root.type_id.eql(target.root_type_id) or !sameValueType(root.result_ty, target.root_ty)) return false;
+    const call = switch (root.operation) {
+        .builtin_call => |value| value,
+        else => return false,
+    };
+    if (call.kind != .raw_many_offset) return false;
+    const pointer = switch (root.result_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .raw_many and (!require_mutable or pointer.mutability == .mut) and
+        std.mem.eql(u8, pointer.child, target.ty.name());
+}
+
+fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
+    return isParameterScalarAccessPlace(body, target, require_mutable) or
+        isComputedRawManyDerefPlace(body, target, require_mutable);
+}
+
+fn placeNeedsRepresentationGuard(target: mir.ExecutablePlace) bool {
+    if (target.projection_count == 0) return false;
+    return switch (target.root_ty) {
+        .pointer => |shape| shape.kind == .single,
+        .nullable_pointer => true,
+        else => false,
     };
 }
 
@@ -679,7 +729,7 @@ fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
     }
     const local_id = switch (target.root) {
         .local => |id| id,
-        .symbol => return false,
+        .symbol, .value => return false,
     };
     var parameter_ty: ?mir.ValueType = null;
     for (body.parameters) |parameter| if (parameter.local.eql(local_id)) {
@@ -709,7 +759,7 @@ fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.Exe
     };
     const local_id = switch (target.root) {
         .local => |id| id,
-        .symbol => return false,
+        .symbol, .value => return false,
     };
     var parameter: ?mir.ExecutableParameter = null;
     for (body.parameters) |candidate| if (candidate.local.eql(local_id)) {

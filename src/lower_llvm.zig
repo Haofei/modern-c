@@ -5407,7 +5407,7 @@ const LlvmEmitter = struct {
         };
         for (fn_mir.executable_body.places) |place| {
             switch (place.root) {
-                .local => {},
+                .local, .value => {},
                 .symbol => |id| {
                     const identity = mir_executable_body.symbol(&fn_mir.executable_body, id) orelse return false;
                     if (identity.kind != .global or !self.global_types.contains(identity.spelling)) return false;

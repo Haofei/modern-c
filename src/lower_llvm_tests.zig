@@ -10921,6 +10921,15 @@ test "LLVM emits raw-many offset from typed MIR without body fallback" {
         \\fn offset(pointer: [*]mut u8) -> [*]mut u8 {
         \\    unsafe { return pointer.offset(next_index()); }
         \\}
+        \\fn load(pointer: [*]const u8) -> u8 {
+        \\    unsafe { return pointer.offset(next_index()).*; }
+        \\}
+        \\fn address(pointer: [*]mut u8) -> *mut u8 {
+        \\    unsafe { return &pointer.offset(next_index()).*; }
+        \\}
+        \\fn store(pointer: [*]mut u8, value: u8) -> void {
+        \\    unsafe { pointer.offset(next_index()).* = value; }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -10931,6 +10940,24 @@ test "LLVM emits raw-many offset from typed MIR without body fallback" {
     const offset = std.mem.indexOf(u8, body, "getelementptr i8, ptr %mc_arg_0, i64 %") orelse return error.TestUnexpectedResult;
     const ret = std.mem.indexOf(u8, body, "ret ptr %") orelse return error.TestUnexpectedResult;
     try std.testing.expect(call < offset and offset < ret);
+
+    const load_body = try llvmFunctionBody(output.items, "define internal i8 @load");
+    try expectContains(load_body, "; canonical executable MIR");
+    try expectContains(load_body, "getelementptr i8");
+    try expectContains(load_body, "load atomic i8");
+    try expectNotContains(load_body, "mc_trap_InvalidRepresentation");
+
+    const address_body = try llvmFunctionBody(output.items, "define internal ptr @address");
+    try expectContains(address_body, "; canonical executable MIR");
+    try expectContains(address_body, "getelementptr i8");
+    try expectContains(address_body, "ret ptr %");
+    try expectNotContains(address_body, "mc_trap_InvalidRepresentation");
+
+    const store_body = try llvmFunctionBody(output.items, "define internal void @store");
+    try expectContains(store_body, "; canonical executable MIR");
+    try expectContains(store_body, "getelementptr i8");
+    try expectContains(store_body, "store atomic i8");
+    try expectNotContains(store_body, "mc_trap_InvalidRepresentation");
 }
 
 test "LLVM admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
