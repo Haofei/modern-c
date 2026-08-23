@@ -41,6 +41,18 @@ pub const Status = enum {
     unsupported,
 };
 
+/// Where the canonical executable-MIR path stopped.  This is deliberately
+/// separate from `Status`: a function can be admitted by a transitional
+/// syntax-free plan while its canonical body is still incomplete.  Ranking
+/// this field tells the migration whether to fix the producer, the mechanical
+/// renderer, or the final declaration/signature ingress check.
+pub const CanonicalStatus = enum {
+    producer_incomplete,
+    renderer_unsupported,
+    ingress_mismatch,
+    ready,
+};
+
 var enabled: bool = false;
 var armed: bool = false;
 var out_path_buf: [4096]u8 = undefined;
@@ -63,16 +75,23 @@ pub fn init(value: std.Io, out_path: ?[]const u8) void {
     enabled = true;
 }
 
+/// Backends use this to avoid evaluating detailed canonical admission during
+/// ordinary compilation.  When the census is disabled, `record` remains the
+/// single cheap branch it was designed to be.
+pub fn isEnabled() bool {
+    return enabled;
+}
+
 /// Record one function's admission outcome. No-op unless armed. Best-effort:
 /// any allocation failure is swallowed so the census never changes `mcc`'s
 /// behavior or exit status.
-pub fn record(backend: Backend, status: Status, module: ?[]const u8, fn_mir: mir.Function) void {
+pub fn record(backend: Backend, status: Status, canonical: CanonicalStatus, module: ?[]const u8, fn_mir: mir.Function) void {
     if (builtin.is_test and !armed) {
         init(std.testing.io, std.process.Environ.getPosix(std.testing.environ, "MC_FALLBACK_CENSUS"));
     }
     if (!enabled) return;
     const a = std.heap.page_allocator;
-    writeRecordJson(&buf, a, backend, status, module, fn_mir) catch return;
+    writeRecordJson(&buf, a, backend, status, canonical, module, fn_mir) catch return;
     buf.append(a, '\n') catch return;
 }
 
@@ -103,6 +122,7 @@ fn writeRecordJson(
     a: std.mem.Allocator,
     backend: Backend,
     status: Status,
+    canonical: CanonicalStatus,
     module: ?[]const u8,
     fn_mir: mir.Function,
 ) !void {
@@ -111,6 +131,8 @@ fn writeRecordJson(
     try out.appendSlice(a, @tagName(backend));
     try out.appendSlice(a, "\",\"status\":\"");
     try out.appendSlice(a, @tagName(status));
+    try out.appendSlice(a, "\",\"canonical\":\"");
+    try out.appendSlice(a, @tagName(canonical));
     try out.appendSlice(a, "\",\"module\":");
     try writeJsonString(out, a, module orelse "");
     try out.appendSlice(a, ",\"fn\":");
@@ -308,10 +330,10 @@ test "fallback census JSON includes normalized call targets" {
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(a);
-    try writeRecordJson(&out, a, .c, .fallback, "module.mc", function);
+    try writeRecordJson(&out, a, .c, .fallback, .producer_incomplete, "module.mc", function);
 
     try std.testing.expectEqualStrings(
-        "{\"backend\":\"c\",\"status\":\"fallback\",\"module\":\"module.mc\"," ++
+        "{\"backend\":\"c\",\"status\":\"fallback\",\"canonical\":\"producer_incomplete\",\"module\":\"module.mc\"," ++
             "\"fn\":\"example\",\"blocks\":1,\"term\":\"return\",\"ret\":\"none\"," ++
             "\"traps\":0,\"cleanup\":false,\"instrs\":\"call_target\"," ++
             "\"call_targets\":\"phys,wrapping_add\"}",

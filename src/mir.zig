@@ -6772,7 +6772,7 @@ const FunctionBuilder = struct {
             },
             .literal => |literal| switch (literal) {
                 .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
-                .string, .character, .uninit, .enum_value => false,
+                .string, .uninit, .enum_value => false,
                 else => true,
             },
             .binary => |binary| binary.op != .logical_and and binary.op != .logical_or,
@@ -7028,6 +7028,9 @@ const FunctionBuilder = struct {
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
             result_ty = expected;
         };
+        if (expr.kind == .char_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
+            result_ty = expected;
+        };
         if (expr.kind == .address_of or expr.kind == .borrow_expr) if (expected_ty) |expected| switch (expected) {
             .pointer => result_ty = expected,
             else => {},
@@ -7064,7 +7067,13 @@ const FunctionBuilder = struct {
                 break :float_literal .{ .literal = .{ .float = value } };
             },
             .string_literal => |literal| .{ .literal = .{ .string = literal } },
-            .char_literal => |literal| .{ .literal = .{ .character = literal } },
+            .char_literal => |literal| character: {
+                const magnitude = numeric.parseCharLiteral(literal) orelse {
+                    self.executable_supported = false;
+                    break :character .unsupported;
+                };
+                break :character .{ .literal = .{ .integer = magnitude } };
+            },
             .bool_literal => |literal| .{ .literal = .{ .boolean = literal } },
             .null_literal => .{ .literal = .null },
             .uninit_literal => .{ .literal = .uninit },
@@ -7094,10 +7103,12 @@ const FunctionBuilder = struct {
                 const arithmetic: mir_model.ExecutableArithmeticSemantics = if (binaryMayOverflow(node.op) and
                     std.meta.activeTag(result_ty) == .integer and !self.binaryIsNoTrapArithmeticDomain(node) and
                     !self.binaryIsFloat(node) and !optimized_safe_div_mod) .checked else .ordinary;
-                if (arithmetic == .checked) {
-                    self.contextualizeExecutableLiteral(left, result_ty);
-                    self.contextualizeExecutableLiteral(right, result_ty);
-                }
+                // Unsuffixed integer and character literals are semantically
+                // target-typed for every binary operation, not only checked
+                // arithmetic. Canonical MIR owns that choice before a
+                // renderer compares operand types.
+                self.contextualizeExecutableLiteral(left, operand_ty);
+                self.contextualizeExecutableLiteral(right, operand_ty);
                 break :binary .{ .binary = .{
                     .op = executableBinaryOp(node.op),
                     .left = left,

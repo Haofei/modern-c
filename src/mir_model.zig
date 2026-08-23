@@ -576,7 +576,6 @@ pub const ExecutableLiteral = union(enum) {
     integer: u128,
     float: ExecutableFloatLiteral,
     string: []const u8,
-    character: []const u8,
     boolean: bool,
     null,
     uninit,

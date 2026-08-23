@@ -828,17 +828,26 @@ const LlvmEmitter = struct {
             const previous_source_path = self.source_path;
             self.source_path = self.sourcePathForSpan(function.signature.name.span);
             defer self.source_path = previous_source_path;
+            const canonical_status = self.canonicalCensusStatus(function, fn_mir);
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
-                fallback_census.record(.llvm, .admitted, self.source_path, fn_mir);
+                fallback_census.record(.llvm, .admitted, canonical_status, self.source_path, fn_mir);
                 continue;
             } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
-                fallback_census.record(.llvm, .fallback, self.source_path, fn_mir);
+                fallback_census.record(.llvm, .fallback, canonical_status, self.source_path, fn_mir);
                 try self.emitFunction(function, body, render_attrs);
             } else {
-                fallback_census.record(.llvm, .unsupported, self.source_path, fn_mir);
+                fallback_census.record(.llvm, .unsupported, canonical_status, self.source_path, fn_mir);
                 return error.UnsupportedLlvmEmission;
             }
         }
+    }
+
+    fn canonicalCensusStatus(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) fallback_census.CanonicalStatus {
+        if (!fallback_census.isEnabled()) return .producer_incomplete;
+        if (!mir_executable_body.isComplete(&fn_mir)) return .producer_incomplete;
+        if (!mir_executable_llvm.supports(&fn_mir.executable_body, fn_mir.return_ty)) return .renderer_unsupported;
+        if (!self.mirExecutableBodySupported(function, fn_mir)) return .ingress_mismatch;
+        return .ready;
     }
 
     fn functionArtifactIndexByName(self: *const LlvmEmitter, name: []const u8) ?usize {

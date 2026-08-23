@@ -384,9 +384,10 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .load => |load| memoryLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
-            // Raw source string/character spelling is not a canonical byte
-            // payload and must not cross the syntax-free boundary.
-            .string, .character, .enum_value => false,
+            // Raw source string spelling is not a canonical byte payload and
+            // must not cross the syntax-free boundary. Character literals
+            // have already become canonical integer magnitudes in MIR.
+            .string, .enum_value => false,
             else => true,
         },
         .unary => |unary| expressionById(body, unary.operand) != null,
@@ -931,7 +932,7 @@ fn emitLiteral(
             .f32_bits => |bits| try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits}),
             .f64_bits => |bits| try out.print(allocator, "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))", .{bits}),
         },
-        .string, .character => |spelling| try out.appendSlice(allocator, spelling),
+        .string => |spelling| try out.appendSlice(allocator, spelling),
         .boolean => |value| try out.appendSlice(allocator, if (value) "true" else "false"),
         .null => try out.appendSlice(allocator, "NULL"),
         .void => try out.appendSlice(allocator, "((void)0)"),

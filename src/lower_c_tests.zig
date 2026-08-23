@@ -398,9 +398,9 @@ test "lower-c scalar expression plans preserve high-word typing and flag-set ord
     try std.testing.expect(shift < add);
 
     const flag = try cFunctionBody(output.items, "static bool flag_set(uintptr_t addr, uint64_t mask)");
-    const call = std.mem.indexOf(u8, flag, "= read_word(addr);") orelse return error.TestUnexpectedResult;
-    const and_ = std.mem.indexOf(u8, flag, "= mc_tmp0 & mask;") orelse return error.TestUnexpectedResult;
-    const compare = std.mem.indexOf(u8, flag, "return mc_tmp1 != 0;") orelse return error.TestUnexpectedResult;
+    const call = std.mem.indexOf(u8, flag, "read_word(") orelse return error.TestUnexpectedResult;
+    const and_ = std.mem.indexOf(u8, flag, " & ") orelse return error.TestUnexpectedResult;
+    const compare = std.mem.indexOf(u8, flag, " != ") orelse return error.TestUnexpectedResult;
     try std.testing.expect(call < and_ and and_ < compare);
 }
 
@@ -2958,8 +2958,13 @@ test "lower-c emits char literal return from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_char_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint16_t char_value(void)");
-    try expectContains(body, "return 65;");
-    try expectNotContains(body, "mc_tmp");
+    try expectContains(body, "65;");
+    if (isCanonicalExecutableCBody(body)) {
+        try expectContains(body, "return mc_exec_tmp_");
+    } else {
+        try expectContains(body, "return 65;");
+        try expectNotContains(body, "mc_tmp");
+    }
 }
 
 test "lower-c emits float literal returns from MIR without body fallback" {
@@ -3103,25 +3108,50 @@ test "lower-c emits local and assigned char literal returns from MIR without bod
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_char_literal_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint16_t local_char(void)");
-    try expectContains(local_body, "return 65;");
-    try expectNotContains(local_body, "uint16_t x");
-    try expectNotContains(local_body, "mc_tmp");
+    try expectContains(local_body, "65;");
+    if (isCanonicalExecutableCBody(local_body)) {
+        try expectContains(local_body, "uint16_t x = mc_exec_tmp_");
+        try expectContains(local_body, "return mc_exec_tmp_");
+    } else {
+        try expectContains(local_body, "return 65;");
+        try expectNotContains(local_body, "uint16_t x");
+        try expectNotContains(local_body, "mc_tmp");
+    }
 
     const assigned_body = try cFunctionBody(output.items, "static uint16_t assigned_char(void)");
-    try expectContains(assigned_body, "return 66;");
-    try expectNotContains(assigned_body, "uint16_t x");
-    try expectNotContains(assigned_body, "x =");
-    try expectNotContains(assigned_body, "mc_tmp");
+    try expectContains(assigned_body, "66;");
+    if (isCanonicalExecutableCBody(assigned_body)) {
+        try expectContains(assigned_body, "uint16_t x = mc_exec_tmp_");
+        try expectContains(assigned_body, "x = mc_exec_tmp_");
+        try expectContains(assigned_body, "return mc_exec_tmp_");
+    } else {
+        try expectContains(assigned_body, "return 66;");
+        try expectNotContains(assigned_body, "uint16_t x");
+        try expectNotContains(assigned_body, "x =");
+        try expectNotContains(assigned_body, "mc_tmp");
+    }
 
     const choose_body = try cFunctionBody(output.items, "static uint16_t choose_char(bool flag)");
-    try expectContains(choose_body, "return 65;");
-    try expectContains(choose_body, "return 66;");
-    try expectNotContains(choose_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(choose_body)) {
+        try expectContains(choose_body, "= 65;");
+        try expectContains(choose_body, "= 66;");
+        try expectContains(choose_body, "return mc_exec_tmp_");
+    } else {
+        try expectContains(choose_body, "return 65;");
+        try expectContains(choose_body, "return 66;");
+        try expectNotContains(choose_body, "mc_tmp");
+    }
 
     const choose_early_body = try cFunctionBody(output.items, "static uint16_t choose_char_early(bool flag)");
-    try expectContains(choose_early_body, "return 65;");
-    try expectContains(choose_early_body, "return 66;");
-    try expectNotContains(choose_early_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(choose_early_body)) {
+        try expectContains(choose_early_body, "= 65;");
+        try expectContains(choose_early_body, "= 66;");
+        try expectContains(choose_early_body, "return mc_exec_tmp_");
+    } else {
+        try expectContains(choose_early_body, "return 65;");
+        try expectContains(choose_early_body, "return 66;");
+        try expectNotContains(choose_early_body, "mc_tmp");
+    }
 }
 
 test "lower-c emits logical-not returns from MIR without body fallback" {
@@ -4839,7 +4869,8 @@ test "lower-c target-typed char literals require MIR facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null);
-        try std.testing.expect(std.mem.indexOf(u8, output.items, "return 65;") != null or
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "= 65;") != null or
+            std.mem.indexOf(u8, output.items, "return 65;") != null or
             std.mem.indexOf(u8, output.items, "((uint16_t)65)") != null);
     }
     {
@@ -8649,7 +8680,8 @@ test "lower-c sequenced comparison literals require MIR result types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_condition_literal_result.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t mc_tmp") != null or
+        std.mem.indexOf(u8, complete_output.items, "uint64_t mc_exec_tmp_") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

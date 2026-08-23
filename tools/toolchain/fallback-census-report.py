@@ -2,7 +2,7 @@
 """Aggregate function-body fallback census JSONL into a ranked worklist.
 
 Reads the records emitted by src/fallback_census.zig (one JSON object per line:
-backend, status, module, fn, blocks, term, ret, traps, cleanup, instrs,
+backend, status, canonical, module, fn, blocks, term, ret, traps, cleanup, instrs,
 call_targets) and prints,
 per backend:
 
@@ -24,6 +24,12 @@ import json
 import sys
 
 STATUS_RANK = {"admitted": 0, "fallback": 1, "unsupported": 2}
+CANONICAL_RANK = {
+    "ready": 0,
+    "ingress_mismatch": 1,
+    "renderer_unsupported": 2,
+    "producer_incomplete": 3,
+}
 
 
 def blocks_bucket(n):
@@ -79,6 +85,7 @@ def summarize_backend(recs):
     """Return de-duplicated headline counts for one backend."""
     seen = {}
     status_of = {}
+    canonical_of = {}
     for r in recs:
         sig = signature(r)
         if sig not in seen:
@@ -88,6 +95,10 @@ def summarize_backend(recs):
         prev = status_of.get(sig)
         if prev is None or STATUS_RANK.get(st, 0) > STATUS_RANK.get(prev, 0):
             status_of[sig] = st
+        canonical = r.get("canonical", "unknown")
+        previous_canonical = canonical_of.get(sig)
+        if previous_canonical is None or CANONICAL_RANK.get(canonical, -1) > CANONICAL_RANK.get(previous_canonical, -1):
+            canonical_of[sig] = canonical
 
     total = len(seen)
     admitted = sum(1 for s in status_of.values() if s == "admitted")
@@ -102,6 +113,7 @@ def summarize_backend(recs):
         "admission_bps": admission_bps,
         "seen": seen,
         "status_of": status_of,
+        "canonical_of": canonical_of,
     }
 
 
@@ -121,6 +133,7 @@ def report_backend(backend, recs):
     summary = summarize_backend(recs)
     seen = summary["seen"]
     status_of = summary["status_of"]
+    canonical_of = summary["canonical_of"]
     total = summary["total"]
     admitted = summary["admitted"]
     fallback = summary["fallback"]
@@ -146,6 +159,14 @@ def report_backend(backend, recs):
         return
 
     fb_sigs = [sig for sig, s in status_of.items() if s in ("fallback", "unsupported")]
+
+    canonical = collections.Counter(canonical_of.get(sig, "unknown") for sig in fb_sigs)
+    print("  --- canonical executable-MIR blocker ---")
+    for blocker in ("producer_incomplete", "renderer_unsupported", "ingress_mismatch", "ready", "unknown"):
+        count = canonical.get(blocker, 0)
+        if count:
+            print(f"  {count:>5}  {count/not_admitted*100:4.0f}%  {blocker}")
+    print()
 
     # --- coarse "family" ranking ---
     coarse = collections.Counter()

@@ -17,32 +17,39 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. A 2026-08-22 broad sweep
 over all 521 `tests/**/*.mc` roots de-duplicated to 1800 C and 1866 LLVM
-functions. It still found 1029 C and 1087 LLVM AST-body fallbacks. Those
+functions. It still found 1003 C and 1066 LLVM AST-body fallbacks. Those
 figures establish that final deletion now requires a
 general syntax-free executable MIR body and mechanical backend renderers; more
 strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-22)
 
-The 521-root sweep found C **771/1800 admitted (42.8%)**, 1029 fallback, and
-LLVM **779/1866 admitted (41.7%)**, 1087 fallback. There were no unsupported
+The 521-root sweep found C **797/1800 admitted (44.3%)**, 1003 fallback, and
+LLVM **800/1866 admitted (42.9%)**, 1066 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
-adds a canonical typed aggregate table and declared-struct construction. It
-preserves source evaluation order separately from declaration/layout order and
-keeps packed-bit and union construction fail-closed. Remaining C fallbacks
-ranked by family (LLVM has the same distribution within a few functions):
+target-types unsuffixed integer/character operands for every binary operation
+and converts character spelling to a canonical integer magnitude before
+codegen. It added 26 C and 21 LLVM admissions without a source-shaped
+recognizer.
+
+The census also ranks the canonical stopping layer. For C the remaining 1003
+fallbacks are 957 `producer_incomplete`, 38 `renderer_unsupported`, 6
+`ingress_mismatch`, and 2 `ready`; LLVM is 996/52/16/2. Therefore producer work
+is the dominant next step and renderer work can be selected as a small bounded
+parallel lane. Remaining C fallbacks ranked by family (LLVM has the same
+distribution within a few functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
 | 144 | 14% | return `<ident>` 1 blk 0 trap | region_holds, sat_literal | remaining local-computed / multi-statement forms |
 | 97 | 9% | return `<ident>` 2 blk 1 trap | pa_offset, slice_of_struct | same + a bounds/repr trap |
-| 64 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 63 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
 | 52 | 5% | switch return `<ident>` 5+ blk | pa_align_down, pr_contains | general CFG + value graph |
 | 45 | 4% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
-| 39 | 4% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
+| 34 | 3% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
 | 39 | 4% | fallthrough void 2 blk 1 trap | array/field address stores | statement/place graph + check edge |
 | 30 | 3% | branch return `<ident>` 5+ blk | loop_condition, break_labeled | general CFG + loop control |
-| 24 | 2% | return binary 1 blk 0 trap | sat_mul, raw_ret | ordering-sensitive or domain-specific binary |
+| 21 | 2% | return binary 1 blk 0 trap | sat_mul, raw_ret | ordering-sensitive or domain-specific binary |
 
 Every remaining bucket is now either **large** (general local/multi-statement
 value graphs, statement-level builtin/void lowering, or CFG rendering) or
@@ -141,6 +148,8 @@ typed-unary operand-descendant bugs before commit.
 | Checked scalar local generation | `let x: u32 = n + 1; return x`; a shared plan owns the local generation, typed operands, overflow edge, source locations and return identity while both backends preserve a materialized local instead of folding it | (current batch) |
 | Pure scalar bitcast | equal-width integer/float reinterpretation; MIR owns canonical operand/result types and C uses `__builtin_bit_cast` while LLVM uses `bitcast` or identity | `21e8a53a` |
 | Compile-time reflection constants | `sizeof`, `alignof`, `field_offset`, `bit_offset`, `repr_of`; MIR selects a checked 64-bit `usize` value and both backends render the same literal, including struct/overlay/C-union layout | (current batch) |
+| Declared-struct construction | MIR owns aggregate `TypeId`, declaration-order field table and source-order operands; both renderers consume the same verified permutation | `7e95352b` |
+| Target-typed binary/character literals | unsuffixed integer and character operands adopt the binary operand type; character spelling is parsed once and removed from executable MIR | (current batch) |
 | Declared-struct construction | MIR owns a `TypeId`-keyed aggregate table, exact field types and resolved field indices; operands evaluate in source order while C/LLVM assemble declaration-order layout; duplicate/incomplete/mistyped fields fail verification | (current batch) |
 
 ### Remaining strict-corpus families
