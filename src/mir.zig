@@ -6627,6 +6627,16 @@ const FunctionBuilder = struct {
                         if (!sameValueType(value.result_ty, local.ty)) complete = false;
                     }
                 },
+                .store => |*store| {
+                    store.type_id = self.type_ids.get(TypeKey.fromValueType(store.ty)) orelse .invalid;
+                    if (!store.type_id.isValid() or store.value.index() >= self.executable_expressions.items.len) {
+                        complete = false;
+                    } else {
+                        const value = self.executable_expressions.items[store.value.index()];
+                        if (!sameValueType(value.result_ty, store.ty)) complete = false;
+                    }
+                    if (store.access.alignment == 0) complete = false;
+                },
                 .return_ => |maybe_value| if (maybe_value) |value_id| {
                     const value = self.executable_expressions.items[value_id.index()];
                     if (!sameValueType(value.result_ty, self.return_ty)) complete = false;
@@ -6717,6 +6727,7 @@ const FunctionBuilder = struct {
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
             .unsupported, .cast, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => false,
+            .load => |load| load.place.isValid() and load.place.index() < self.executable_places.items.len and load.access.alignment != 0,
             .literal => |literal| switch (literal) {
                 .float, .string, .character, .uninit, .enum_value => false,
                 else => true,
@@ -6799,7 +6810,24 @@ const FunctionBuilder = struct {
         return entry.value_ptr.*;
     }
 
-    fn ensureExecutableExpr(self: *FunctionBuilder, input: ast.Expr) !ExprId {
+    fn internExecutableFunctionSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
+        const id = try self.internExecutableSymbol(spelling);
+        const identity = &self.executable_symbols.items[id.index()];
+        if (identity.kind != .unknown and identity.kind != .function) self.executable_supported = false;
+        identity.kind = .function;
+        return id;
+    }
+
+    fn internExecutableGlobalSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
+        const id = try self.internExecutableSymbol(spelling);
+        const identity = &self.executable_symbols.items[id.index()];
+        if (identity.kind != .unknown and identity.kind != .global) self.executable_supported = false;
+        identity.kind = .global;
+        identity.mutable = self.mutable_globals.contains(spelling);
+        return id;
+    }
+
+    fn ensureExecutableExpr(self: *FunctionBuilder, input: ast.Expr) anyerror!ExprId {
         var expr = input;
         while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
             .grouped => |inner| inner.*,
@@ -6814,8 +6842,13 @@ const FunctionBuilder = struct {
         const operation: ExecutableExpression.Operation = switch (expr.kind) {
             .ident => |ident| if (self.executable_local_ids.get(ident.text)) |local|
                 .{ .local = local }
+            else if (self.globals.contains(ident.text))
+                .{ .load = .{
+                    .place = try self.appendExecutablePlace(expr),
+                    .access = self.executableMemoryAccess(expr, result_ty),
+                } }
             else
-                .{ .symbol = try self.internExecutableSymbol(ident.text) },
+                .{ .symbol = try self.internExecutableFunctionSymbol(ident.text) },
             .int_literal => |literal| integer: {
                 const magnitude = numeric.parseIntegerLiteral(literal) orelse {
                     self.executable_supported = false;
@@ -6853,8 +6886,8 @@ const FunctionBuilder = struct {
                 } };
             },
             .cast => |node| .{ .cast = .{ .operand = try self.ensureExecutableExpr(node.value.*) } },
-            .address_of => |inner| .{ .address_of = try self.ensureExecutableExpr(inner.*) },
-            .borrow_expr => |node| .{ .address_of = try self.ensureExecutableExpr(node.value.*) },
+            .address_of => |inner| .{ .address_of = try self.appendExecutablePlace(inner.*) },
+            .borrow_expr => |node| .{ .address_of = try self.appendExecutablePlace(node.value.*) },
             .deref => |inner| .{ .deref = try self.ensureExecutableExpr(inner.*) },
             .index => |node| .{ .index = .{
                 .base = try self.ensureExecutableExpr(node.base.*),
@@ -6887,7 +6920,7 @@ const FunctionBuilder = struct {
                 if (directCalleeName(node.callee.*)) |callee_name| {
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     var call_value: @FieldType(ExecutableExpression.Operation, "direct_call") = .{
-                        .callee = try self.internExecutableSymbol(callee_name),
+                        .callee = try self.internExecutableFunctionSymbol(callee_name),
                         .callee_source = callee_source,
                         .callee_span_id = try self.internSpanId(callee_source),
                         .argument_count = node.args.len,
@@ -6951,6 +6984,28 @@ const FunctionBuilder = struct {
             else => unreachable,
         };
         return expr.kind == .int_literal;
+    }
+
+    fn executableMemoryAccess(self: *FunctionBuilder, place_expr: ast.Expr, ty: ValueType) mir_model.ExecutableMemoryAccess {
+        const alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse 0;
+        if (alignment == 0) self.executable_supported = false;
+        const root = executablePlaceRootIdent(place_expr);
+        const kind: mir_model.ExecutableMemoryAccessKind = if (root) |name|
+            if (self.globals.contains(name) and self.mutable_globals.contains(name)) .race_unordered else .plain
+        else
+            .plain;
+        return .{ .kind = kind, .alignment = alignment };
+    }
+
+    fn executablePlaceRootIdent(input: ast.Expr) ?[]const u8 {
+        return switch (input.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| executablePlaceRootIdent(inner.*),
+            .member => |node| executablePlaceRootIdent(node.base.*),
+            .index => |node| executablePlaceRootIdent(node.base.*),
+            .deref => |inner| executablePlaceRootIdent(inner.*),
+            else => null,
+        };
     }
 
     fn executableUnaryOp(op: ast.UnaryOp) mir_model.ExecutableUnaryOp {
@@ -7050,7 +7105,7 @@ const FunctionBuilder = struct {
         });
     }
 
-    fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) !PlaceId {
+    fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) anyerror!PlaceId {
         var place: ExecutablePlace = .{
             .id = PlaceId.fromIndex(self.executable_places.items.len),
             .source = self.sourcePoint(expr.span),
@@ -7067,11 +7122,16 @@ const FunctionBuilder = struct {
         return place.id;
     }
 
-    fn fillExecutablePlace(self: *FunctionBuilder, place: *ExecutablePlace, expr: ast.Expr) !bool {
+    fn fillExecutablePlace(self: *FunctionBuilder, place: *ExecutablePlace, expr: ast.Expr) anyerror!bool {
         return switch (expr.kind) {
             .grouped => |inner| try self.fillExecutablePlace(place, inner.*),
             .ident => |ident| root: {
-                place.root = if (self.executable_local_ids.get(ident.text)) |local| .{ .local = local } else .{ .symbol = try self.internExecutableSymbol(ident.text) };
+                place.root = if (self.executable_local_ids.get(ident.text)) |local|
+                    .{ .local = local }
+                else if (self.globals.contains(ident.text))
+                    .{ .symbol = try self.internExecutableGlobalSymbol(ident.text) }
+                else
+                    .{ .symbol = try self.internExecutableSymbol(ident.text) };
                 break :root true;
             },
             .member => |node| projection: {
@@ -7422,6 +7482,8 @@ const FunctionBuilder = struct {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = try self.appendExecutablePlace(node.target),
                     .value = try self.ensureExecutableExpr(node.value),
+                    .ty = assignment_target_ty,
+                    .access = self.executableMemoryAccess(node.target, assignment_target_ty),
                 } });
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
                 const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];

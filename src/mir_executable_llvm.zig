@@ -41,10 +41,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
     }
     for (body.places) |place| {
         if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections or !placeRootValid(body, place)) return false;
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .deref => {},
-            .field, .index => return false,
-        };
+        if (place.projection_count != 0) return false;
     }
     for (body.statements) |statement| {
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
@@ -53,7 +50,11 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                 if (!local.local.isValid() or llvmType(local.ty) == null) return false;
                 if (local.value) |value| if (!expressionValid(body, value)) return false;
             },
-            .store => |store| if (!placeValid(body, store.place) or !expressionValid(body, store.value)) return false,
+            .store => |store| {
+                if (!placeValid(body, store.place) or !expressionValid(body, store.value) or
+                    !sameValueType(store.ty, body.expressions[store.value.index()].result_ty) or
+                    !memoryAccessSupported(body, store.place, store.ty, store.access, true)) return false;
+            },
             .eval => |value| if (!expressionValid(body, value)) return false,
             .guard => |guard| {
                 // A branch guard is consumed by its terminator. An assertion
@@ -170,7 +171,8 @@ const Renderer = struct {
             .store => |store| {
                 const value = try self.emitExpression(store.value);
                 const pointer = try self.emitPlace(store.place, value.ty);
-                try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ value.ty, value.spelling, pointer });
+                if (!sameValueType(store.ty, self.body.expressions[store.value.index()].result_ty)) return error.InvalidBody;
+                try self.emitMemoryStore(store.place, value, pointer, store.access);
             },
             .eval => |value| _ = try self.emitExpression(value),
             .guard => |guard| _ = try self.emitExpression(guard.condition),
@@ -231,6 +233,7 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = load {s}, ptr @{s}\n", .{ value, ty, symbol });
                 break :blk .{ .ty = ty, .spelling = value };
             },
+            .load => |load| try self.emitMemoryLoad(expression, load),
             .literal => |literal| try self.literalValue(ty, literal),
             .unary => |unary| try self.emitUnary(ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
@@ -363,17 +366,43 @@ const Renderer = struct {
         return .{ .ty = ty, .spelling = result };
     }
 
-    fn emitAddressOf(self: *Renderer, operand_id: mir.ExprId) RenderError!Value {
-        const operand = self.body.expressions[operand_id.index()];
-        return switch (operand.operation) {
-            .local => |local_id| blk: {
-                const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
-                if (!local.addressable) return error.Unsupported;
-                break :blk .{ .ty = "ptr", .spelling = local.storage };
-            },
-            .symbol => |symbol_id| .{ .ty = "ptr", .spelling = try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody}) },
-            else => error.Unsupported,
+    fn emitMemoryLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
+        if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
+        const value_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        const pointer = try self.emitPlace(load.place, value_ty);
+        const global_bool = placeIsGlobal(self.body, load.place) and expression.result_ty == .bool;
+        const storage_ty: []const u8 = if (global_bool) "i8" else value_ty;
+        const loaded = try self.temp();
+        switch (load.access.kind) {
+            .plain => try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}, align {d}\n", .{ loaded, storage_ty, pointer, load.access.alignment }),
+            .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ loaded, storage_ty, pointer, load.access.alignment }),
+        }
+        if (!global_bool) return .{ .ty = value_ty, .spelling = loaded };
+        const converted = try self.temp();
+        try self.output.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ converted, loaded });
+        return .{ .ty = "i1", .spelling = converted };
+    }
+
+    fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
+        const place = &self.body.places[place_id.index()];
+        const global_bool = switch (place.root) {
+            .symbol => std.mem.eql(u8, value.ty, "i1"),
+            .local => false,
         };
+        var stored = value.spelling;
+        const storage_ty: []const u8 = if (global_bool) "i8" else value.ty;
+        if (global_bool) {
+            stored = try self.temp();
+            try self.output.print(self.allocator, "  {s} = zext i1 {s} to i8\n", .{ stored, value.spelling });
+        }
+        switch (access.kind) {
+            .plain => try self.output.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}\n", .{ storage_ty, stored, pointer, access.alignment }),
+            .race_unordered => try self.output.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}\n", .{ storage_ty, stored, pointer, access.alignment }),
+        }
+    }
+
+    fn emitAddressOf(self: *Renderer, place_id: mir.PlaceId) RenderError!Value {
+        return .{ .ty = "ptr", .spelling = try self.emitPlace(place_id, "ptr") };
     }
 
     fn emitPlace(self: *Renderer, place_id: mir.PlaceId, value_ty: []const u8) RenderError![]const u8 {
@@ -424,6 +453,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         // A bare symbol has no memory access mode. Direct calls carry their
         // SymbolId separately; global value reads remain fail-closed.
         .symbol => false,
+        .load => |load| memoryAccessSupported(body, load.place, expression.result_ty, load.access, false),
         .literal => |literal| switch (literal) {
             .integer, .boolean, .null, .void => true,
             else => false,
@@ -433,11 +463,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
         .builtin_call => false,
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
-        .address_of => |id| expressionValid(body, id) and switch (body.expressions[id.index()].operation) {
-            .local => |local_id| localAddressable(body, local_id),
-            .symbol => true,
-            else => false,
-        },
+        .address_of => |id| placeValid(body, id) and body.places[id.index()].projection_count == 0,
         .deref => |id| expressionValid(body, id) and switch (body.expressions[id.index()].result_ty) {
             .pointer => true,
             else => false,
@@ -555,10 +581,32 @@ fn placeValid(body: *const mir.ExecutableBody, id: mir.PlaceId) bool {
 fn placeRootValid(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     return switch (place.root) {
         .local => |id| localAddressable(body, id),
-        // A symbol place is memory, but this body format does not yet carry
-        // ordinary/atomic/volatile/MMIO access semantics.  Keep global stores
-        // fail-closed rather than silently emitting a plain LLVM store.
-        .symbol => false,
+        .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
+    };
+}
+
+fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool) bool {
+    if (!placeValid(body, place_id) or mir.ExecutableMemoryAccess.scalarAlignment(ty) != access.alignment) return false;
+    const place = body.places[place_id.index()];
+    if (place.projection_count != 0) return false;
+    return switch (place.root) {
+        .local => |id| localAddressable(body, id) and access.kind == .plain,
+        .symbol => |id| if (symbolIdentity(body, id)) |identity|
+            identity.kind == .global and
+                if (identity.mutable)
+                    access.kind == .race_unordered
+                else
+                    !is_store and access.kind == .plain
+        else
+            false,
+    };
+}
+
+fn placeIsGlobal(body: *const mir.ExecutableBody, id: mir.PlaceId) bool {
+    if (!placeValid(body, id)) return false;
+    return switch (body.places[id.index()].root) {
+        .symbol => true,
+        .local => false,
     };
 }
 
@@ -576,8 +624,12 @@ fn localExists(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
 }
 
 fn symbolSpelling(body: *const mir.ExecutableBody, id: mir.SymbolId) ?[]const u8 {
+    return if (symbolIdentity(body, id)) |identity| identity.spelling else null;
+}
+
+fn symbolIdentity(body: *const mir.ExecutableBody, id: mir.SymbolId) ?mir.SymbolIdentity {
     if (!id.isValid()) return null;
-    for (body.symbols) |identity| if (identity.id.eql(id)) return identity.spelling;
+    for (body.symbols) |identity| if (identity.id.eql(id)) return identity;
     return null;
 }
 
@@ -940,4 +992,117 @@ test "mechanical renderer rejects mutated checked arithmetic trap edges" {
     const valid_edges = [_]mir.ExecutableTrapEdge{valid_edge};
     const wrong_trap_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&valid_edges), .statements = @constCast(&statements), .terminators = @constCast(&wrong_trap_terminators) };
     try std.testing.expect(!supports(&wrong_trap_body, int_ty));
+}
+
+test "mechanical renderer emits plain immutable global load" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const int_ty: mir.ValueType = .{ .integer = "u32" };
+    const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "constant_count", .kind = .global, .mutable = false }};
+    const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .source = source, .root = .{ .symbol = mir.SymbolId.fromIndex(0) } }};
+    const expressions = [_]mir.ExecutableExpression{.{
+        .id = mir.ExprId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .source = source,
+        .result_ty = int_ty,
+        .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .plain, .alignment = 4 } } },
+    }};
+    const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(0) } }};
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .symbols = @constCast(&symbols),
+        .expressions = @constCast(&expressions),
+        .places = @constCast(&places),
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+
+    try std.testing.expect(supports(&body, int_ty));
+    const rendered = try render(std.testing.allocator, &body, int_ty);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "load i32, ptr @constant_count, align 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "load atomic") == null);
+}
+
+test "mechanical renderer emits race-unordered mutable bool global load and store" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = .bool, .source = source }};
+    const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "ready", .kind = .global, .mutable = true }};
+    const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .source = source, .root = .{ .symbol = mir.SymbolId.fromIndex(0) } }};
+    const expressions = [_]mir.ExecutableExpression{
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .bool, .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .race_unordered, .alignment = 1 } } } },
+    };
+    const statements = [_]mir.ExecutableStatement{
+        .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .store = .{ .place = mir.PlaceId.fromIndex(0), .value = mir.ExprId.fromIndex(0), .ty = .bool, .access = .{ .kind = .race_unordered, .alignment = 1 } } } },
+        .{ .id = mir.InstId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(1) } },
+    };
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = @constCast(&parameters),
+        .symbols = @constCast(&symbols),
+        .expressions = @constCast(&expressions),
+        .places = @constCast(&places),
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+
+    try std.testing.expect(supports(&body, .bool));
+    const rendered = try render(std.testing.allocator, &body, .bool);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "zext i1 %mc_arg_0 to i8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "store atomic i8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ptr @ready unordered, align 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "load atomic i8, ptr @ready unordered, align 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "trunc i8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " to i1") != null);
+}
+
+test "mechanical renderer preserves plain local stores" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const int_ty: mir.ValueType = .{ .integer = "u32" };
+    const locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "value" }};
+    const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .source = source, .root = .{ .local = mir.LocalId.fromIndex(0) } }};
+    const expressions = [_]mir.ExecutableExpression{
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .literal = .{ .integer = 7 } } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(2), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+    };
+    const statements = [_]mir.ExecutableStatement{
+        .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .local_init = .{ .local = mir.LocalId.fromIndex(0), .ty = int_ty, .value = null, .mutable = true } } },
+        .{ .id = mir.InstId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .store = .{ .place = mir.PlaceId.fromIndex(0), .value = mir.ExprId.fromIndex(0), .ty = int_ty, .access = .{ .kind = .plain, .alignment = 4 } } } },
+        .{ .id = mir.InstId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(1) } },
+    };
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+    const body: mir.ExecutableBody = .{ .locals = @constCast(&locals), .expressions = @constCast(&expressions), .places = @constCast(&places), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
+
+    try std.testing.expect(supports(&body, int_ty));
+    const rendered = try render(std.testing.allocator, &body, int_ty);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "store i32 7, ptr %mc_local_0, align 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "store atomic") == null);
+}
+
+test "mechanical renderer rejects mutated scalar memory access facts" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const int_ty: mir.ValueType = .{ .integer = "u32" };
+    const mutable_symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "count", .kind = .global, .mutable = true }};
+    const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .source = source, .root = .{ .symbol = mir.SymbolId.fromIndex(0) } }};
+    const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(0) } }};
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+
+    var expression: mir.ExecutableExpression = .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .race_unordered, .alignment = 2 } } } };
+    var expressions = [_]mir.ExecutableExpression{expression};
+    var body: mir.ExecutableBody = .{ .symbols = @constCast(&mutable_symbols), .expressions = &expressions, .places = @constCast(&places), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
+    try std.testing.expect(!supports(&body, int_ty));
+
+    expression.operation.load.access = .{ .kind = .plain, .alignment = 4 };
+    expressions[0] = expression;
+    try std.testing.expect(!supports(&body, int_ty));
+
+    const function_symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "count", .kind = .function, .mutable = false }};
+    expression.operation.load.access = .{ .kind = .plain, .alignment = 4 };
+    expressions[0] = expression;
+    body.symbols = @constCast(&function_symbols);
+    try std.testing.expect(!supports(&body, int_ty));
+    try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, int_ty));
 }

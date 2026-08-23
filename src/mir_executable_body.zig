@@ -98,6 +98,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
     switch (value.operation) {
         .local => |id| try verifyLocal(body, id),
         .symbol => |id| try verifySymbol(body, id),
+        .load => |operation| {
+            if (body.complete) {
+                try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
+            } else if (place(body, operation.place) == null) return error.InvalidPlaceReference;
+        },
         .literal, .unsupported => {},
         .unary => |operation| try verifyOperand(body, value, operation.operand),
         .binary => |operation| {
@@ -116,6 +121,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .cast => |operation| try verifyOperand(body, value, operation.operand),
         .direct_call => |call| {
             try verifySymbol(body, call.callee);
+            if (body.complete and body.symbols[call.callee.index()].kind != .function) return error.InvalidCalleeSymbol;
             try verifySpan(function, call.callee_span_id, call.callee_source);
             try verifyArguments(body, value, call.arguments, call.argument_count);
         },
@@ -127,7 +133,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyOperand(body, value, call.callee);
             try verifyArguments(body, value, call.arguments, call.argument_count);
         },
-        .address_of, .deref, .slice_length => |id| try verifyOperand(body, value, id),
+        .address_of => |id| if (place(body, id) == null) return error.InvalidPlaceReference,
+        .deref, .slice_length => |id| try verifyOperand(body, value, id),
         .index => |operation| {
             try verifyOperand(body, value, operation.base);
             try verifyOperand(body, value, operation.index);
@@ -214,11 +221,15 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
         },
         .store => |operation| {
             const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
+            try verifyType(function, operation.type_id, operation.ty, body.complete);
+            if (body.complete) try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
             for (target.projections[0..target.projection_count]) |projection| switch (projection) {
                 .index => |id| try verifyStatementExpr(body, statement_value, id),
                 .field, .deref => {},
             };
             try verifyStatementExpr(body, statement_value, operation.value);
+            const stored = expression(body, operation.value) orelse return error.InvalidExpressionReference;
+            if (body.complete and !sameValueType(stored.result_ty, operation.ty)) return error.InvalidStoreType;
         },
         .eval => |id| try verifyStatementExpr(body, statement_value, id),
         .guard => |operation| try verifyStatementExpr(body, statement_value, operation.condition),
@@ -312,6 +323,31 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         else => {},
     };
     return false;
+}
+
+fn verifyMemoryAccess(
+    function: *const mir.Function,
+    place_id: mir.PlaceId,
+    ty: mir.ValueType,
+    access: mir.ExecutableMemoryAccess,
+    is_store: bool,
+) !void {
+    const body = &function.executable_body;
+    const target = place(body, place_id) orelse return error.InvalidPlaceReference;
+    const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return error.InvalidMemoryAccessType;
+    if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
+    switch (target.root) {
+        .local => {
+            if (access.kind != .plain) return error.InvalidMemoryAccessKind;
+        },
+        .symbol => |id| {
+            const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
+            if (identity.kind != .global) return error.InvalidGlobalSymbol;
+            if (is_store and !identity.mutable) return error.ImmutableGlobalStore;
+            const expected_kind: mir.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+            if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
+        },
+    }
 }
 
 fn verifyExpr(body: *const mir.ExecutableBody, id: mir.ExprId) !void {

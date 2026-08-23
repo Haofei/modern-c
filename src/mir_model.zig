@@ -428,6 +428,26 @@ pub const ExecutableArithmeticSemantics = enum {
     checked,
 };
 
+pub const ExecutableMemoryAccessKind = enum {
+    plain,
+    race_unordered,
+};
+
+pub const ExecutableMemoryAccess = struct {
+    kind: ExecutableMemoryAccessKind,
+    alignment: u16,
+
+    pub fn scalarAlignment(ty: ValueType) ?u16 {
+        return switch (ty) {
+            .bool => 1,
+            .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) 1 else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) 2 else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) 4 else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) 8 else null,
+            .float => |name| if (std.mem.eql(u8, name, "f32")) 4 else if (std.mem.eql(u8, name, "f64")) 8 else null,
+            .pointer, .nullable_pointer, .cstr, .address => 8,
+            else => null,
+        };
+    }
+};
+
 pub const ExecutableLiteral = union(enum) {
     /// Canonical unsigned magnitude. A negative source expression is a
     /// separate unary operation, so radix, separators and suffix spelling do
@@ -461,6 +481,7 @@ pub const ExecutableExpression = struct {
     pub const Operation = union(enum) {
         local: LocalId,
         symbol: SymbolId,
+        load: struct { place: PlaceId, access: ExecutableMemoryAccess },
         literal: ExecutableLiteral,
         unary: struct { op: ExecutableUnaryOp, operand: ExprId },
         binary: struct {
@@ -489,7 +510,7 @@ pub const ExecutableExpression = struct {
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
-        address_of: ExprId,
+        address_of: PlaceId,
         deref: ExprId,
         index: struct { base: ExprId, index: ExprId },
         range_slice: struct { base: ExprId, start: ExprId, end: ExprId },
@@ -544,7 +565,7 @@ pub const ExecutableStatement = struct {
 
     pub const Operation = union(enum) {
         local_init: struct { local: LocalId, ty: ValueType, type_id: TypeId = .invalid, value: ?ExprId, mutable: bool },
-        store: struct { place: PlaceId, value: ExprId },
+        store: struct { place: PlaceId, value: ExprId, ty: ValueType, type_id: TypeId = .invalid, access: ExecutableMemoryAccess },
         eval: ExprId,
         guard: struct { kind: enum { if_, while_, switch_, assert_ }, condition: ExprId },
         return_: ?ExprId,
@@ -1264,6 +1285,8 @@ pub const TypeIdentity = struct {
 pub const SymbolIdentity = struct {
     id: SymbolId,
     spelling: []const u8,
+    kind: enum { unknown, function, global } = .unknown,
+    mutable: bool = false,
 };
 
 pub const SourceIdentity = struct {
