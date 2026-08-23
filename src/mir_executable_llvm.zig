@@ -255,7 +255,8 @@ const Renderer = struct {
                 break :blk .{ .ty = "i64", .spelling = value };
             },
             .address_of => |operand| try self.emitAddressOf(operand),
-            .cast, .index, .range_slice, .member, .array, .struct_, .unsupported => return error.Unsupported,
+            .cast => |cast| try self.emitCast(expression, cast),
+            .index, .range_slice, .member, .array, .struct_, .unsupported => return error.Unsupported,
         };
         self.values[id.index()] = result;
         return result;
@@ -285,6 +286,39 @@ const Renderer = struct {
             .neg => return error.Unsupported,
         }
         return .{ .ty = ty, .spelling = value };
+    }
+
+    fn emitCast(self: *Renderer, expression: mir.ExecutableExpression, cast: anytype) RenderError!Value {
+        if (!castSupported(self.body, expression, cast)) return error.InvalidBody;
+        const operand_expression = self.body.expressions[cast.operand.index()];
+        const operand = try self.emitExpression(cast.operand);
+        const target_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        const expected = mir.ExecutableCastKind.classify(operand_expression.result_ty, expression.result_ty) orelse return error.InvalidBody;
+        if (expected != cast.kind) return error.InvalidBody;
+
+        const source_info = mir.ExecutableCastKind.integerInfo(operand_expression.result_ty);
+        const target_info = mir.ExecutableCastKind.integerInfo(expression.result_ty);
+        const operation: ?[]const u8 = switch (expected) {
+            .identity => null,
+            .unsigned_resize => resize: {
+                const source = source_info orelse return error.InvalidBody;
+                const target = target_info orelse return error.InvalidBody;
+                break :resize if (target.bits > source.bits) "zext" else if (target.bits < source.bits) "trunc" else null;
+            },
+            .signed_widen => widen: {
+                const source = source_info orelse return error.InvalidBody;
+                const target = target_info orelse return error.InvalidBody;
+                if (target.bits < source.bits) return error.InvalidBody;
+                break :widen if (target.bits == source.bits) null else "sext";
+            },
+        };
+        const op = operation orelse {
+            if (!std.mem.eql(u8, operand.ty, target_ty)) return error.InvalidBody;
+            return .{ .ty = target_ty, .spelling = operand.spelling };
+        };
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, operand.ty, operand.spelling, target_ty });
+        return .{ .ty = target_ty, .spelling = result };
     }
 
     fn emitBinary(self: *Renderer, expression: mir.ExecutableExpression, result_ty: []const u8, binary: anytype) RenderError!Value {
@@ -472,7 +506,22 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
             .slice => true,
             else => false,
         },
-        .cast, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
+        .cast => |cast| castSupported(body, expression, cast),
+        .index, .range_slice, .member, .array, .struct_, .unsupported => false,
+    };
+}
+
+fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, cast: anytype) bool {
+    if (!expressionValid(body, cast.operand)) return false;
+    const operand = body.expressions[cast.operand.index()];
+    const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse return false;
+    if (expected != cast.kind or llvmType(operand.result_ty) == null or llvmType(expression.result_ty) == null) return false;
+    const source = mir.ExecutableCastKind.integerInfo(operand.result_ty);
+    const target = mir.ExecutableCastKind.integerInfo(expression.result_ty);
+    return switch (expected) {
+        .identity => true,
+        .unsigned_resize => source != null and target != null and !source.?.signed and !target.?.signed,
+        .signed_widen => source != null and target != null and source.?.signed and target.?.signed and target.?.bits >= source.?.bits,
     };
 }
 
@@ -1105,4 +1154,75 @@ test "mechanical renderer rejects mutated scalar memory access facts" {
     body.symbols = @constCast(&function_symbols);
     try std.testing.expect(!supports(&body, int_ty));
     try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, int_ty));
+}
+
+test "mechanical renderer emits canonical restricted integer casts" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const Case = struct {
+        source_name: []const u8,
+        target_name: []const u8,
+        kind: mir.ExecutableCastKind,
+        instruction: ?[]const u8,
+    };
+    const cases = [_]Case{
+        .{ .source_name = "u32", .target_name = "u32", .kind = .identity, .instruction = null },
+        .{ .source_name = "u8", .target_name = "u32", .kind = .unsigned_resize, .instruction = "zext i8 %mc_arg_0 to i32" },
+        .{ .source_name = "u32", .target_name = "u8", .kind = .unsigned_resize, .instruction = "trunc i32 %mc_arg_0 to i8" },
+        .{ .source_name = "u64", .target_name = "usize", .kind = .unsigned_resize, .instruction = null },
+        .{ .source_name = "i8", .target_name = "i32", .kind = .signed_widen, .instruction = "sext i8 %mc_arg_0 to i32" },
+        .{ .source_name = "i64", .target_name = "isize", .kind = .signed_widen, .instruction = null },
+    };
+
+    for (cases) |case| {
+        const source_ty: mir.ValueType = .{ .integer = case.source_name };
+        const target_ty: mir.ValueType = .{ .integer = case.target_name };
+        const parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = source_ty, .source = source }};
+        const expressions = [_]mir.ExecutableExpression{
+            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = source_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = target_ty, .operation = .{ .cast = .{ .operand = mir.ExprId.fromIndex(0), .kind = case.kind } } },
+        };
+        const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
+        const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+        const body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
+
+        try std.testing.expect(supports(&body, target_ty));
+        const rendered = try render(std.testing.allocator, &body, target_ty);
+        defer std.testing.allocator.free(rendered);
+        if (case.instruction) |instruction| {
+            try std.testing.expect(std.mem.indexOf(u8, rendered, instruction) != null);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, rendered, " = zext ") == null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, " = trunc ") == null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, " = sext ") == null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "%mc_arg_0") != null);
+        }
+    }
+}
+
+test "mechanical renderer rejects mutated restricted cast facts" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const source_ty: mir.ValueType = .{ .integer = "u8" };
+    const target_ty: mir.ValueType = .{ .integer = "u32" };
+    const parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = source_ty, .source = source }};
+    var cast_expression: mir.ExecutableExpression = .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = target_ty, .operation = .{ .cast = .{ .operand = mir.ExprId.fromIndex(0), .kind = .signed_widen } } };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = source_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        cast_expression,
+    };
+    const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+    var body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = &expressions, .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
+
+    try std.testing.expect(!supports(&body, target_ty));
+    try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, target_ty));
+
+    const signed_source_ty: mir.ValueType = .{ .integer = "i32" };
+    const signed_target_ty: mir.ValueType = .{ .integer = "i8" };
+    const signed_parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = signed_source_ty, .source = source }};
+    expressions[0].result_ty = signed_source_ty;
+    cast_expression.result_ty = signed_target_ty;
+    cast_expression.operation.cast.kind = .signed_widen;
+    expressions[1] = cast_expression;
+    body.parameters = @constCast(&signed_parameters);
+    try std.testing.expect(!supports(&body, signed_target_ty));
 }

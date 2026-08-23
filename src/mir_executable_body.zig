@@ -118,7 +118,12 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidCheckedArithmetic;
             }
         },
-        .cast => |operation| try verifyOperand(body, value, operation.operand),
+        .cast => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
+            const expected = mir.ExecutableCastKind.classify(operand.result_ty, value.result_ty) orelse return error.InvalidCast;
+            if (operation.kind != expected) return error.InvalidCast;
+        },
         .direct_call => |call| {
             try verifySymbol(body, call.callee);
             if (body.complete and body.symbols[call.callee.index()].kind != .function) return error.InvalidCalleeSymbol;
@@ -306,7 +311,7 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .builtin_call, .cast, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => return true,
+        .unsupported, .builtin_call, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => return true,
         .literal => |literal| switch (literal) {
             .uninit, .enum_value => return true,
             else => {},

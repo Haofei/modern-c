@@ -357,12 +357,22 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         },
         .unary => |unary| expressionById(body, unary.operand) != null,
         .binary => |binary| binarySupported(body, expression, binary),
-        .cast => false,
+        .cast => |cast| castSupported(body, expression, cast),
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .indirect_call => |call| call.argument_count <= call.arguments.len and expressionById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call, .address_of, .deref, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
     };
+}
+
+fn castSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    cast: @FieldType(mir.ExecutableExpression.Operation, "cast"),
+) bool {
+    const operand = expressionById(body, cast.operand) orelse return false;
+    const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse return false;
+    return cast.kind == expected;
 }
 
 fn memoryLoadSupported(
@@ -1157,5 +1167,102 @@ test "executable C renderer emits exact race-unordered scalar helpers" {
     expressions[1].operation.load.access.kind = .race_unordered;
     statements[0].operation.store.access.kind = .race_unordered;
     symbols[0].kind = .function;
+    try std.testing.expect(!canEmitBody(&body));
+}
+
+test "executable C renderer emits classified restricted casts in value order" {
+    const identity_local = mir.LocalId.fromIndex(0);
+    const unsigned_local = mir.LocalId.fromIndex(1);
+    const signed_local = mir.LocalId.fromIndex(2);
+    const identity_value = mir.ExprId.fromIndex(0);
+    const identity_cast = mir.ExprId.fromIndex(1);
+    const unsigned_value = mir.ExprId.fromIndex(2);
+    const unsigned_cast = mir.ExprId.fromIndex(3);
+    const signed_value = mir.ExprId.fromIndex(4);
+    const signed_cast = mir.ExprId.fromIndex(5);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const u8_ty: mir.ValueType = .{ .integer = "u8" };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    const i8_ty: mir.ValueType = .{ .integer = "i8" };
+    const i64_ty: mir.ValueType = .{ .integer = "i64" };
+    var parameters = [_]mir.ExecutableParameter{
+        .{ .local = identity_local, .ty = u32_ty, .source = source },
+        .{ .local = unsigned_local, .ty = u8_ty, .source = source },
+        .{ .local = signed_local, .ty = i8_ty, .source = source },
+    };
+    var locals = [_]mir.ExecutableLocalIdentity{
+        .{ .id = identity_local, .spelling = "same" },
+        .{ .id = unsigned_local, .spelling = "small_unsigned" },
+        .{ .id = signed_local, .spelling = "small_signed" },
+    };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = identity_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = identity_local } },
+        .{ .id = identity_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = identity_value, .kind = .identity } } },
+        .{ .id = unsigned_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = unsigned_local } },
+        .{ .id = unsigned_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = unsigned_value, .kind = .unsigned_resize } } },
+        .{ .id = signed_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = i8_ty, .operation = .{ .local = signed_local } },
+        .{ .id = signed_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = i64_ty, .operation = .{ .cast = .{ .operand = signed_value, .kind = .signed_widen } } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = signed_cast } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    const identity_value_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = same;") orelse return error.TestUnexpectedResult;
+    const identity_cast_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_1 = ((uint32_t)(mc_exec_tmp_0));") orelse return error.TestUnexpectedResult;
+    const unsigned_value_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_2 = small_unsigned;") orelse return error.TestUnexpectedResult;
+    const unsigned_cast_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_3 = ((uint32_t)(mc_exec_tmp_2));") orelse return error.TestUnexpectedResult;
+    const signed_value_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_4 = small_signed;") orelse return error.TestUnexpectedResult;
+    const signed_cast_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_5 = ((int64_t)(mc_exec_tmp_4));") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(identity_value_pos < identity_cast_pos and identity_cast_pos < unsigned_value_pos);
+    try std.testing.expect(unsigned_value_pos < unsigned_cast_pos and unsigned_cast_pos < signed_value_pos);
+    try std.testing.expect(signed_value_pos < signed_cast_pos);
+}
+
+test "executable C renderer rejects restricted cast fact drift" {
+    const local = mir.LocalId.fromIndex(0);
+    const operand = mir.ExprId.fromIndex(0);
+    const result = mir.ExprId.fromIndex(1);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const u8_ty: mir.ValueType = .{ .integer = "u8" };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty, .source = source }};
+    var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = operand, .kind = .unsigned_resize } } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    expressions[1].operation.cast.kind = .signed_widen;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].operation.cast.kind = .unsigned_resize;
+
+    expressions[1].result_ty = .{ .integer = "i8" };
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].result_ty = u32_ty;
+
+    expressions[1].operation.cast.operand = mir.ExprId.invalid;
     try std.testing.expect(!canEmitBody(&body));
 }

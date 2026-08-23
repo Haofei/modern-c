@@ -6726,7 +6726,7 @@ const FunctionBuilder = struct {
 
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
-            .unsupported, .cast, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => false,
+            .unsupported, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => false,
             .load => |load| load.place.isValid() and load.place.index() < self.executable_places.items.len and load.access.alignment != 0,
             .literal => |literal| switch (literal) {
                 .float, .string, .character, .uninit, .enum_value => false,
@@ -6885,7 +6885,15 @@ const FunctionBuilder = struct {
                     .arithmetic = arithmetic,
                 } };
             },
-            .cast => |node| .{ .cast = .{ .operand = try self.ensureExecutableExpr(node.value.*) } },
+            .cast => |node| cast: {
+                const operand = try self.ensureExecutableExpr(node.value.*);
+                const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
+                const kind = mir_model.ExecutableCastKind.classify(operand_ty, result_ty) orelse {
+                    self.executable_supported = false;
+                    break :cast .unsupported;
+                };
+                break :cast .{ .cast = .{ .operand = operand, .kind = kind } };
+            },
             .address_of => |inner| .{ .address_of = try self.appendExecutablePlace(inner.*) },
             .borrow_expr => |node| .{ .address_of = try self.appendExecutablePlace(node.value.*) },
             .deref => |inner| .{ .deref = try self.ensureExecutableExpr(inner.*) },

@@ -428,6 +428,37 @@ pub const ExecutableArithmeticSemantics = enum {
     checked,
 };
 
+pub const ExecutableCastKind = enum {
+    identity,
+    unsigned_resize,
+    signed_widen,
+
+    pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
+        if (TypeKey.eql(TypeKey.fromValueType(source), TypeKey.fromValueType(target))) return .identity;
+        const source_integer = integerInfo(source) orelse return null;
+        const target_integer = integerInfo(target) orelse return null;
+        if (!source_integer.signed and !target_integer.signed) return .unsigned_resize;
+        if (source_integer.signed and target_integer.signed and target_integer.bits >= source_integer.bits) return .signed_widen;
+        return null;
+    }
+
+    pub fn integerInfo(ty: ValueType) ?struct { signed: bool, bits: u16 } {
+        const name = switch (ty) {
+            .integer => |name| name,
+            else => return null,
+        };
+        if (std.mem.eql(u8, name, "u8")) return .{ .signed = false, .bits = 8 };
+        if (std.mem.eql(u8, name, "u16")) return .{ .signed = false, .bits = 16 };
+        if (std.mem.eql(u8, name, "u32")) return .{ .signed = false, .bits = 32 };
+        if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "usize")) return .{ .signed = false, .bits = 64 };
+        if (std.mem.eql(u8, name, "i8")) return .{ .signed = true, .bits = 8 };
+        if (std.mem.eql(u8, name, "i16")) return .{ .signed = true, .bits = 16 };
+        if (std.mem.eql(u8, name, "i32")) return .{ .signed = true, .bits = 32 };
+        if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return .{ .signed = true, .bits = 64 };
+        return null;
+    }
+};
+
 pub const ExecutableMemoryAccessKind = enum {
     plain,
     race_unordered,
@@ -490,7 +521,7 @@ pub const ExecutableExpression = struct {
             right: ExprId,
             arithmetic: ExecutableArithmeticSemantics = .ordinary,
         },
-        cast: struct { operand: ExprId },
+        cast: struct { operand: ExprId, kind: ExecutableCastKind },
         direct_call: struct {
             callee: SymbolId,
             callee_source: SourcePoint,

@@ -5256,7 +5256,7 @@ test "lower-c explicit casts require MIR source and target type facts" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_explicit_cast_type_facts.mc", source, &complete_output);
-    try expectContains(complete_output.items, "return ((uint64_t)(value));");
+    try expectContains(complete_output.items, "((uint64_t)(mc_exec_tmp_");
 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
@@ -5283,14 +5283,14 @@ test "lower-c local and assigned explicit casts lower from MIR without body fall
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_explicit_cast_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint64_t local_cast(uint32_t value)");
-    try expectContains(local_body, "return ((uint64_t)(value));");
-    try expectNotContains(local_body, "uint64_t widened");
+    try expectContains(local_body, "((uint64_t)(mc_exec_tmp_");
+    try expectContains(local_body, "return mc_exec_tmp_");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static uint64_t assigned_cast(uint32_t value)");
-    try expectContains(assigned_body, "return ((uint64_t)(value));");
-    try expectNotContains(assigned_body, "uint64_t widened");
-    try expectNotContains(assigned_body, "widened =");
+    try expectContains(assigned_body, "((uint64_t)(mc_exec_tmp_");
+    try expectContains(assigned_body, "widened = mc_exec_tmp_");
+    try expectContains(assigned_body, "return mc_exec_tmp_");
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
