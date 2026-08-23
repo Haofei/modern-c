@@ -103,6 +103,7 @@ pub const DeferCleanupExprFact = mir_model.DeferCleanupExprFact;
 pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
+pub const ExecutableCastKind = mir_model.ExecutableCastKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
 pub const FfiParamContract = mir_model.FfiParamContract;
 

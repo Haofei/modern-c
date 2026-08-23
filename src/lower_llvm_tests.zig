@@ -13806,6 +13806,20 @@ test "LLVM checked pointer-to-integer cast does not use function body fallback" 
     try expectContains(body, "ptrtoint ptr %p to i64");
 }
 
+test "LLVM address representation cast does not use function body fallback" {
+    const source =
+        \\fn address_value(value: PAddr) -> usize {
+        \\    return value as usize;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_address_representation_cast.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @address_value");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "ret i64 %mc_arg_0");
+}
+
 test "LLVM checked scalar local return does not use function body fallback" {
     const source =
         \\fn local_copy(n: u32) -> u32 {

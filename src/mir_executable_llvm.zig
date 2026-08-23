@@ -385,6 +385,7 @@ const Renderer = struct {
         const target_info = mir.ExecutableCastKind.integerInfo(expression.result_ty);
         const operation: ?[]const u8 = switch (expected) {
             .identity => null,
+            .address_to_integer, .integer_to_address => null,
             .unsigned_resize => resize: {
                 const source = source_info orelse return error.InvalidBody;
                 const target = target_info orelse return error.InvalidBody;
@@ -934,6 +935,8 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     const target = mir.ExecutableCastKind.integerInfo(expression.result_ty);
     return switch (expected) {
         .identity => true,
+        .address_to_integer => operand.result_ty == .address and target != null and !target.?.signed and target.?.bits == 64,
+        .integer_to_address => source != null and !source.?.signed and source.?.bits == 64 and expression.result_ty == .address,
         .unsigned_resize => source != null and target != null and !source.?.signed and !target.?.signed,
         .signed_widen => source != null and target != null and source.?.signed and target.?.signed and target.?.bits >= source.?.bits,
     };

@@ -73,6 +73,13 @@ scalar access is now canonical in the targeted census; the remaining
 the remaining migration into a ranked producer/renderer/ingress worklist and
 prevents work on the wrong layer.
 
+Address-class representation casts are now canonical executable casts rather
+than backend special cases. Only 64-bit unsigned integer ↔ address-class
+conversions are admitted; narrower/signed and pointer conversions remain
+closed. In the targeted `std/addr.mc` census this removed 14
+`unsupported_expression` classifications and left only 6 C / 8 LLVM
+fallbacks, all in larger control/value-graph families.
+
 Explicit scalar `uninit` locals are now represented as storage without an
 initializer expression. A following assignment creates the executable value;
 the front-end definite-initialization rules still reject reads before that

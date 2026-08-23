@@ -32,6 +32,32 @@ const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;
 
+test "executable MIR classifies address representation casts" {
+    const paddr: ValueType = .{ .address = .paddr };
+    const usize_ty: ValueType = .{ .integer = "usize" };
+    try std.testing.expectEqual(mir.ExecutableCastKind.address_to_integer, mir.ExecutableCastKind.classify(paddr, usize_ty).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.integer_to_address, mir.ExecutableCastKind.classify(usize_ty, paddr).?);
+    try std.testing.expect(mir.ExecutableCastKind.classify(paddr, .{ .integer = "u32" }) == null);
+}
+
+test "executable MIR owns address representation cast" {
+    const source =
+        \\fn address_value(value: PAddr) -> usize {
+        \\    return value as usize;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_address_cast.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByName(module_mir, "address_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try mir.validateLoweringAdmission(module_mir);
+    const expression = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    try std.testing.expectEqual(mir.ExecutableCastKind.address_to_integer, expression.operation.cast.kind);
+}
+
 test "executable MIR owns declared struct literal field order and types" {
     const source =
         \\struct Pair { first: u32, second: u64 }

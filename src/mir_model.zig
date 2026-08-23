@@ -477,9 +477,19 @@ pub const ExecutableCastKind = enum {
     identity,
     unsigned_resize,
     signed_widen,
+    address_to_integer,
+    integer_to_address,
 
     pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
         if (TypeKey.eql(TypeKey.fromValueType(source), TypeKey.fromValueType(target))) return .identity;
+        if (source == .address) {
+            const target_integer = integerInfo(target) orelse return null;
+            return if (!target_integer.signed and target_integer.bits == 64) .address_to_integer else null;
+        }
+        if (target == .address) {
+            const source_integer = integerInfo(source) orelse return null;
+            return if (!source_integer.signed and source_integer.bits == 64) .integer_to_address else null;
+        }
         const source_integer = integerInfo(source) orelse return null;
         const target_integer = integerInfo(target) orelse return null;
         if (!source_integer.signed and !target_integer.signed) return .unsigned_resize;

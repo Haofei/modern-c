@@ -13549,6 +13549,20 @@ test "lower-c checked pointer-to-integer cast does not use function body fallbac
     try expectContains(output.items, "return ((uintptr_t)p);");
 }
 
+test "lower-c address representation cast does not use function body fallback" {
+    const source =
+        \\fn address_value(value: PAddr) -> usize {
+        \\    return value as usize;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_address_representation_cast.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uintptr_t address_value(uintptr_t value)");
+    try expectContains(body, "= ((uintptr_t)(mc_exec_tmp_0));");
+    try expectContains(body, "return mc_exec_tmp_1;");
+}
+
 test "lower-c checked scalar local return does not use function body fallback" {
     const source =
         \\fn local_copy(n: u32) -> u32 {
