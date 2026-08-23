@@ -745,6 +745,7 @@ pub const ExecutablePlace = mir_model.ExecutablePlace;
 pub const ExecutableStatement = mir_model.ExecutableStatement;
 pub const ExecutableTerminator = mir_model.ExecutableTerminator;
 pub const ExecutableBody = mir_model.ExecutableBody;
+pub const executableCheckedBinaryTrapRequirements = mir_model.executableCheckedBinaryTrapRequirements;
 pub const CallableKind = mir_model.CallableKind;
 pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const Function = mir_model.Function;
@@ -6729,7 +6730,8 @@ const FunctionBuilder = struct {
             .unsupported, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => false,
             .load => |load| load.place.isValid() and load.place.index() < self.executable_places.items.len and load.access.alignment != 0,
             .literal => |literal| switch (literal) {
-                .float, .string, .character, .uninit, .enum_value => false,
+                .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
+                .string, .character, .uninit, .enum_value => false,
                 else => true,
             },
             .binary => |binary| binary.op != .logical_and and binary.op != .logical_or,
@@ -6842,6 +6844,33 @@ const FunctionBuilder = struct {
     }
 
     fn ensureExecutableExpr(self: *FunctionBuilder, input: ast.Expr) anyerror!ExprId {
+        return self.ensureExecutableExprAs(input, null);
+    }
+
+    fn ensureExecutableCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
+        const operand = try self.ensureExecutableExprAs(input, target_ty);
+        const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
+        if (sameValueType(operand_ty, target_ty)) return operand;
+        const kind = mir_model.ExecutableCastKind.classify(operand_ty, target_ty) orelse {
+            self.executable_supported = false;
+            return operand;
+        };
+        const source = self.sourcePoint(input.span);
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = target_ty,
+            .type_id = try self.internTypeId(target_ty),
+            .operation = .{ .cast = .{ .operand = operand, .kind = kind } },
+        });
+        return id;
+    }
+
+    fn ensureExecutableExprAs(self: *FunctionBuilder, input: ast.Expr, expected_ty: ?ValueType) anyerror!ExprId {
         var expr = input;
         while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
             .grouped => |inner| inner.*,
@@ -6850,6 +6879,9 @@ const FunctionBuilder = struct {
         };
         const source = self.sourcePoint(expr.span);
         var result_ty = self.exprType(expr);
+        if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
+            result_ty = expected;
+        };
         // Recursively materialize operands first. ExprId order is therefore
         // the language evaluation order, rather than an AST tree a backend is
         // free to visit in a different order.
@@ -6870,7 +6902,13 @@ const FunctionBuilder = struct {
                 };
                 break :integer .{ .literal = .{ .integer = magnitude } };
             },
-            .float_literal => |literal| .{ .literal = .{ .float = literal } },
+            .float_literal => |literal| float_literal: {
+                const value = try self.canonicalExecutableFloat(literal, result_ty) orelse {
+                    self.executable_supported = false;
+                    break :float_literal .unsupported;
+                };
+                break :float_literal .{ .literal = .{ .float = value } };
+            },
             .string_literal => |literal| .{ .literal = .{ .string = literal } },
             .char_literal => |literal| .{ .literal = .{ .character = literal } },
             .bool_literal => |literal| .{ .literal = .{ .boolean = literal } },
@@ -6880,14 +6918,28 @@ const FunctionBuilder = struct {
             .enum_literal => |literal| .{ .literal = .{ .enum_value = literal.text } },
             .unary => |node| .{ .unary = .{
                 .op = executableUnaryOp(node.op),
-                .operand = try self.ensureExecutableExpr(node.expr.*),
+                .operand = try self.ensureExecutableExprAs(node.expr.*, result_ty),
             } },
             .binary => |node| binary: {
-                const left = try self.ensureExecutableExpr(node.left.*);
-                const right = try self.ensureExecutableExpr(node.right.*);
                 result_ty = self.executableBinaryResultType(node);
-                const arithmetic: mir_model.ExecutableArithmeticSemantics = if ((node.op == .add or node.op == .sub or node.op == .mul) and
-                    std.meta.activeTag(result_ty) == .integer and !self.binaryIsNoTrapArithmeticDomain(node) and !self.binaryIsFloat(node)) .checked else .ordinary;
+                if (expected_ty) |expected| {
+                    if (std.meta.activeTag(expected) == std.meta.activeTag(result_ty)) result_ty = expected;
+                }
+                const operand_ty = if (mirIsComparisonBinary(node.op)) comparison_operand: {
+                    const left_ty = self.exprType(node.left.*);
+                    const right_ty = self.exprType(node.right.*);
+                    if (left_ty != .unknown and std.meta.activeTag(left_ty) != .value) break :comparison_operand left_ty;
+                    break :comparison_operand right_ty;
+                } else result_ty;
+                const left = try self.ensureExecutableExprAs(node.left.*, operand_ty);
+                const right = if (node.op == .shl or node.op == .shr)
+                    try self.ensureExecutableCoercedExpr(node.right.*, operand_ty)
+                else
+                    try self.ensureExecutableExprAs(node.right.*, operand_ty);
+                const optimized_safe_div_mod = (node.op == .div or node.op == .mod) and self.optimize and self.divModProvablySafe(node);
+                const arithmetic: mir_model.ExecutableArithmeticSemantics = if (binaryMayOverflow(node.op) and
+                    std.meta.activeTag(result_ty) == .integer and !self.binaryIsNoTrapArithmeticDomain(node) and
+                    !self.binaryIsFloat(node) and !optimized_safe_div_mod) .checked else .ordinary;
                 if (arithmetic == .checked) {
                     self.contextualizeExecutableLiteral(left, result_ty);
                     self.contextualizeExecutableLiteral(right, result_ty);
@@ -6950,7 +7002,17 @@ const FunctionBuilder = struct {
                         .callee_span_id = try self.internSpanId(callee_source),
                         .argument_count = node.args.len,
                     };
-                    for (node.args, 0..) |argument, index| call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                    const summary = self.summaries.get(callee_name);
+                    for (node.args, 0..) |argument, index| {
+                        const parameter_ty: ?ValueType = if (summary) |callee_summary|
+                            if (index < callee_summary.params.len)
+                                valueTypeFromTypeAlias(callee_summary.params[index].ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                            else
+                                null
+                        else
+                            null;
+                        call_value.arguments[index] = try self.ensureExecutableExprAs(argument, parameter_ty);
+                    }
                     break :call .{ .direct_call = call_value };
                 }
                 var call_value: @FieldType(ExecutableExpression.Operation, "indirect_call") = .{
@@ -7102,6 +7164,28 @@ const FunctionBuilder = struct {
         if (self.byteViewCallTarget(call)) |target| return target.kind;
         if (try self.semanticEscapeCallTarget(call)) |target| return target.kind;
         return null;
+    }
+
+    fn canonicalExecutableFloat(
+        self: *FunctionBuilder,
+        literal: []const u8,
+        result_ty: ValueType,
+    ) !?mir_model.ExecutableFloatLiteral {
+        return switch (result_ty) {
+            .float => |name| if (std.mem.eql(u8, name, "f32"))
+                .{ .f32_bits = @bitCast(numeric.parseFloatLiteral(f32, self.allocator, literal) catch |err| switch (err) {
+                    error.InvalidFloatLiteral => return null,
+                    error.OutOfMemory => return error.OutOfMemory,
+                }) }
+            else if (std.mem.eql(u8, name, "f64"))
+                .{ .f64_bits = @bitCast(numeric.parseFloatLiteral(f64, self.allocator, literal) catch |err| switch (err) {
+                    error.InvalidFloatLiteral => return null,
+                    error.OutOfMemory => return error.OutOfMemory,
+                }) }
+            else
+                null,
+            else => null,
+        };
     }
 
     /// Literal expressions are target-typed by their containing declaration or
@@ -7443,7 +7527,7 @@ const FunctionBuilder = struct {
                 }
                 for (local.names) |name| {
                     const executable_local = try self.internExecutableLocal(name.text);
-                    const executable_initializer = if (local.names.len == 1) if (local.init) |initializer| try self.ensureExecutableExpr(initializer) else null else null;
+                    const executable_initializer = if (local.names.len == 1) if (local.init) |initializer| try self.ensureExecutableExprAs(initializer, ty) else null else null;
                     if (executable_initializer) |initializer| self.contextualizeExecutableLiteral(initializer, ty);
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
@@ -7513,7 +7597,7 @@ const FunctionBuilder = struct {
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = try self.appendExecutablePlace(node.target),
-                    .value = try self.ensureExecutableExpr(node.value),
+                    .value = try self.ensureExecutableExprAs(node.value, assignment_target_ty),
                     .ty = assignment_target_ty,
                     .access = self.executableMemoryAccess(node.target, assignment_target_ty),
                 } });
@@ -7602,7 +7686,7 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"return" => |maybe| {
-                const executable_return = if (maybe) |expr| try self.ensureExecutableExpr(expr) else null;
+                const executable_return = if (maybe) |expr| try self.ensureExecutableExprAs(expr, self.return_ty) else null;
                 if (executable_return) |value| self.contextualizeExecutableLiteral(value, self.return_ty);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
                 if (maybe) |expr| {
@@ -10089,16 +10173,23 @@ const FunctionBuilder = struct {
                     try self.elided_bounds.append(self.allocator, .{ .line = node.right.span.line, .column = node.right.span.column });
                 } else {
                     try self.addTrapEdge(.DivideByZero, .checked_arithmetic, span);
+                    try self.attachExecutableTrapEdge(span, .DivideByZero, .checked_arithmetic);
                     if (isCheckedSignedType(self.exprType(node.left.*))) {
                         try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
+                        try self.attachExecutableTrapEdge(span, .IntegerOverflow, .checked_arithmetic);
                     }
                 }
             },
             .shl => {
                 try self.addTrapEdge(.InvalidShift, .checked_shift, span);
+                try self.attachExecutableTrapEdge(span, .InvalidShift, .checked_shift);
                 try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
+                try self.attachExecutableTrapEdge(span, .IntegerOverflow, .checked_arithmetic);
             },
-            .shr => try self.addTrapEdge(.InvalidShift, .checked_shift, span),
+            .shr => {
+                try self.addTrapEdge(.InvalidShift, .checked_shift, span);
+                try self.attachExecutableTrapEdge(span, .InvalidShift, .checked_shift);
+            },
             .add, .sub, .mul => {
                 try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
                 try self.attachExecutableTrapEdge(span, .IntegerOverflow, .checked_arithmetic);
@@ -10121,7 +10212,7 @@ const FunctionBuilder = struct {
             if (!expression.block_id.eql(BlockId.fromIndex(self.current)) or !expression.span_id.eql(span_id)) continue;
             switch (expression.operation) {
                 .binary => |binary| if (binary.arithmetic == .checked and
-                    (binary.op == .add or binary.op == .sub or binary.op == .mul))
+                    mir_model.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty) != null)
                 {
                     owner = expression.id;
                     break;

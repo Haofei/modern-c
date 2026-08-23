@@ -103,7 +103,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
             } else if (place(body, operation.place) == null) return error.InvalidPlaceReference;
         },
-        .literal, .unsupported => {},
+        .literal => |literal| switch (literal) {
+            .float => |float| if (!mir.executableFloatMatchesType(float, value.result_ty)) return error.InvalidLiteral,
+            else => {},
+        },
+        .unsupported => {},
         .unary => |operation| try verifyOperand(body, value, operation.operand),
         .binary => |operation| {
             try verifyOperand(body, value, operation.left);
@@ -111,11 +115,13 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             const left = expression(body, operation.left) orelse return error.InvalidExpressionReference;
             const right = expression(body, operation.right) orelse return error.InvalidExpressionReference;
             if (operation.arithmetic == .checked) {
-                if (operation.op != .add and operation.op != .sub and operation.op != .mul) return error.InvalidCheckedArithmetic;
                 if (!sameValueType(value.result_ty, left.result_ty) or !sameValueType(left.result_ty, right.result_ty) or
                     std.meta.activeTag(value.result_ty) != .integer) return error.InvalidCheckedArithmetic;
-                if (ownedTrapCount(body, value.id, .IntegerOverflow, .checked_arithmetic) != 1 or ownedTrapCountAll(body, value.id) != 1)
-                    return error.InvalidCheckedArithmetic;
+                const requirements = mir.executableCheckedBinaryTrapRequirements(operation.op, value.result_ty) orelse return error.InvalidCheckedArithmetic;
+                if (ownedTrapCountAll(body, value.id) != requirements.count) return error.InvalidCheckedArithmetic;
+                for (requirements.items[0..requirements.count]) |requirement| {
+                    if (ownedTrapCount(body, value.id, requirement.kind, requirement.source) != 1) return error.InvalidCheckedArithmetic;
+                }
             }
         },
         .cast => |operation| {

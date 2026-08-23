@@ -1726,22 +1726,32 @@ test "lower-c emits simple global stores from MIR" {
 
     const float_body = try cFunctionBody(output.items, "static void store_float(void)");
     try expectContains(float_body, "mc_race_store_f32(&small_float, (float)");
-    try expectNotContains(float_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(float_body)) try expectContains(float_body, "0x3FC00000U") else try expectNotContains(float_body, "mc_tmp");
 
     const double_body = try cFunctionBody(output.items, "static void store_double(void)");
     try expectContains(double_body, "mc_race_store_f64(&wide_float, (double)");
-    try expectNotContains(double_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(double_body)) try expectContains(double_body, "__builtin_bit_cast(double") else try expectNotContains(double_body, "mc_tmp");
 
     const local_float_body = try cFunctionBody(output.items, "static void store_local_float(void)");
     try expectContains(local_float_body, "mc_race_store_f32(&small_float, (float)");
-    try expectNotContains(local_float_body, "float x");
-    try expectNotContains(local_float_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(local_float_body)) {
+        try expectContains(local_float_body, "float x = mc_exec_tmp_");
+        try expectContains(local_float_body, "0x3FC00000U");
+    } else {
+        try expectNotContains(local_float_body, "float x");
+        try expectNotContains(local_float_body, "mc_tmp");
+    }
 
     const assigned_float_body = try cFunctionBody(output.items, "static void store_assigned_float(void)");
-    try expectContains(assigned_float_body, "mc_race_store_f32(&small_float, (float)1.5f);");
-    try expectNotContains(assigned_float_body, "float x");
-    try expectNotContains(assigned_float_body, "x =");
-    try expectNotContains(assigned_float_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(assigned_float_body)) {
+        try expectContains(assigned_float_body, "mc_race_store_f32(&small_float, (float)");
+        try expectContains(assigned_float_body, "0x3FC00000U");
+    } else {
+        try expectContains(assigned_float_body, "mc_race_store_f32(&small_float, (float)1.5f);");
+        try expectNotContains(assigned_float_body, "float x");
+        try expectNotContains(assigned_float_body, "x =");
+        try expectNotContains(assigned_float_body, "mc_tmp");
+    }
 
     const bool_literal_body = try cFunctionBody(output.items, "static void store_bool_literal(void)");
     try expectContains(bool_literal_body, "mc_race_store_bool(&flag, (bool)");
@@ -2933,44 +2943,48 @@ test "lower-c emits float literal returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_float_literal_return.mc", source, &output);
 
     const small_body = try cFunctionBody(output.items, "static float small(void)");
-    try expectContains(small_body, "return 1.5f;");
-    try expectNotContains(small_body, "mc_tmp");
+    try expectContains(small_body, "__builtin_bit_cast(float, ((uint32_t)0x3FC00000U))");
+    try expectContains(small_body, "return mc_exec_tmp_");
 
     const wide_body = try cFunctionBody(output.items, "static double wide(void)");
-    try expectContains(wide_body, "return 2.5;");
-    try expectNotContains(wide_body, "mc_tmp");
+    try expectContains(wide_body, "__builtin_bit_cast(double, ((uint64_t)0x4004000000000000ULL))");
+    try expectContains(wide_body, "return mc_exec_tmp_");
 
     const local_body = try cFunctionBody(output.items, "static float local_small(void)");
-    try expectContains(local_body, "return 1.5f;");
-    try expectNotContains(local_body, "float x");
-    try expectNotContains(local_body, "mc_tmp");
+    try expectContains(local_body, "__builtin_bit_cast(float, ((uint32_t)0x3FC00000U))");
+    try expectContains(local_body, "float x = mc_exec_tmp_");
+    try expectContains(local_body, "return mc_exec_tmp_");
 
     const assigned_body = try cFunctionBody(output.items, "static float assigned_small(void)");
-    try expectContains(assigned_body, "return 1.5f;");
-    try expectNotContains(assigned_body, "float x");
-    try expectNotContains(assigned_body, "x =");
-    try expectNotContains(assigned_body, "mc_tmp");
+    try expectContains(assigned_body, "__builtin_bit_cast(float, ((uint32_t)0x3FC00000U))");
+    try expectContains(assigned_body, "return mc_exec_tmp_");
 
     const call_body = try cFunctionBody(output.items, "static float direct_call_small(void)");
-    try expectContains(call_body, "return mark_float(1.5f);");
-    try expectNotContains(call_body, "float x");
-    try expectNotContains(call_body, "mc_tmp");
+    try expectContains(call_body, "__builtin_bit_cast(float, ((uint32_t)0x3FC00000U))");
+    try expectContains(call_body, "mark_float(mc_exec_tmp_");
 
     const choose_body = try cFunctionBody(output.items, "static float choose(bool flag)");
-    try expectContains(choose_body, "if (flag) {");
-    try expectContains(choose_body, "return 1.5f;");
-    try expectContains(choose_body, "return 2.5f;");
-    try expectNotContains(choose_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(choose_body)) {
+        try expectContains(choose_body, "0x3FC00000U");
+        try expectContains(choose_body, "0x40200000U");
+    } else {
+        try expectContains(choose_body, "return 1.5f;");
+        try expectContains(choose_body, "return 2.5f;");
+    }
 
     const choose_early_body = try cFunctionBody(output.items, "static float choose_early(bool flag)");
-    try expectContains(choose_early_body, "if (flag) {");
-    try expectContains(choose_early_body, "return 1.5f;");
-    try expectContains(choose_early_body, "return 2.5f;");
-    try expectNotContains(choose_early_body, "mc_tmp");
+    if (isCanonicalExecutableCBody(choose_early_body)) {
+        try expectContains(choose_early_body, "0x3FC00000U");
+        try expectContains(choose_early_body, "0x40200000U");
+    } else {
+        try expectContains(choose_early_body, "return 1.5f;");
+        try expectContains(choose_early_body, "return 2.5f;");
+    }
 
     const less_body = try cFunctionBody(output.items, "static bool less_than_literal(float value)");
-    try expectContains(less_body, "return (value < 1.5f);");
-    try expectNotContains(less_body, "mc_tmp");
+    try expectContains(less_body, "0x3FC00000U");
+    try expectContains(less_body, " < ");
+    try expectContains(less_body, "return mc_exec_tmp_");
 }
 
 test "lower-c emits plain float binary returns from MIR without body fallback" {
@@ -2987,12 +3001,14 @@ test "lower-c emits plain float binary returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_plain_float_binary_returns.mc", source, &output);
 
     const product_body = try cFunctionBody(output.items, "static float product(void)");
-    try expectContains(product_body, "return (1.7f * 2.3f);");
-    try expectNotContains(product_body, "mc_tmp");
+    try std.testing.expect(std.mem.count(u8, product_body, "__builtin_bit_cast(float") >= 2);
+    try expectContains(product_body, " * ");
+    try expectContains(product_body, "return mc_exec_tmp_");
 
     const quotient_body = try cFunctionBody(output.items, "static double quotient(void)");
-    try expectContains(quotient_body, "return (4.0 / 2.0);");
-    try expectNotContains(quotient_body, "mc_tmp");
+    try std.testing.expect(std.mem.count(u8, quotient_body, "__builtin_bit_cast(double") >= 2);
+    try expectContains(quotient_body, " / ");
+    try expectContains(quotient_body, "return mc_exec_tmp_");
 }
 
 test "lower-c emits local and assigned char literal returns from MIR without body fallback" {

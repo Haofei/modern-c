@@ -154,6 +154,50 @@ test "builtin call is explicit and keeps mechanical admission closed" {
     try std.testing.expect(saw_builtin);
 }
 
+test "float literal carries canonical width-specific IEEE bits" {
+    const source =
+        \\fn small() -> f32 { return 1.5; }
+        \\fn wide() -> f64 { return 1.5; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_float.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    var checked: usize = 0;
+    for (module.functions, 0..) |*function, function_index| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        for (function.executable_body.expressions) |*value| switch (value.operation) {
+            .literal => |*literal| switch (literal.*) {
+                .float => |*float| {
+                    const saved = float.*;
+                    if (function_index == 0) {
+                        try std.testing.expectEqual(@as(u32, @bitCast(@as(f32, 1.5))), float.f32_bits);
+                        float.* = .{ .f64_bits = @bitCast(@as(f64, 1.5)) };
+                    } else {
+                        try std.testing.expectEqual(@as(u64, @bitCast(@as(f64, 1.5))), float.f64_bits);
+                        float.* = .{ .f32_bits = @bitCast(@as(f32, 1.5)) };
+                    }
+                    try std.testing.expectError(error.InvalidLiteral, executable.verify(function));
+                    float.* = saved;
+                    try executable.verify(function);
+                    checked += 1;
+                },
+                else => {},
+            },
+            else => {},
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 2), checked);
+}
+
 test "verifier rejects expression evaluation order drift" {
     const source = "fn add(left: u32, right: u32) -> u32 { return left + right; }";
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_order.mc", source);
@@ -266,6 +310,50 @@ test "checked add owns an explicit verified overflow edge" {
     try std.testing.expectError(error.InvalidTrapEdge, executable.verify(function));
     function.executable_body.trap_edges[0].trap_block = saved_target;
     try executable.verify(function);
+}
+
+test "checked div mod and shifts own their exact exceptional edges" {
+    const source =
+        \\fn div_u(left: u32, right: u32) -> u32 { return left / right; }
+        \\fn mod_i(left: i32, right: i32) -> i32 { return left % right; }
+        \\fn shift_left(left: u32, right: u32) -> u32 { return left << right; }
+        \\fn shift_right(left: i32, right: i32) -> i32 { return left >> right; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_checked_binary.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const expected_counts = [_]usize{ 1, 2, 2, 1 };
+    for (module.functions, expected_counts) |*function, expected_count| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        try std.testing.expectEqual(expected_count, function.executable_body.trap_edges.len);
+        var checked_owner: ?mir.ExprId = null;
+        for (function.executable_body.expressions) |value| switch (value.operation) {
+            .binary => |binary| if (binary.arithmetic == .checked) {
+                checked_owner = value.id;
+                const requirements = mir.executableCheckedBinaryTrapRequirements(binary.op, value.result_ty) orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expected_count, requirements.count);
+            },
+            else => {},
+        };
+        const owner = checked_owner orelse return error.TestUnexpectedResult;
+        for (function.executable_body.trap_edges) |edge| try std.testing.expect(edge.owner.eql(owner));
+    }
+
+    const mutated = &module.functions[2];
+    const saved = mutated.executable_body.trap_edges[0].kind;
+    mutated.executable_body.trap_edges[0].kind = .DivideByZero;
+    try std.testing.expectError(error.InvalidCheckedArithmetic, executable.verify(mutated));
+    mutated.executable_body.trap_edges[0].kind = saved;
+    try executable.verify(mutated);
 }
 
 test "ownership cleanup obligations keep executable admission closed" {

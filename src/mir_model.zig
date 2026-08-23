@@ -428,6 +428,51 @@ pub const ExecutableArithmeticSemantics = enum {
     checked,
 };
 
+pub const ExecutableTrapRequirement = struct {
+    kind: TrapKind,
+    source: TrapSource,
+};
+
+pub const ExecutableTrapRequirements = struct {
+    items: [2]ExecutableTrapRequirement = undefined,
+    count: usize,
+};
+
+/// Exact exceptional effects for one checked integer binary operation.  This
+/// table is shared by the producer, verifier and both mechanical renderers so
+/// no backend can silently implement a weaker checked-arithmetic contract.
+pub fn executableCheckedBinaryTrapRequirements(op: ExecutableBinaryOp, ty: ValueType) ?ExecutableTrapRequirements {
+    const info = ExecutableCastKind.integerInfo(ty) orelse return null;
+    return switch (op) {
+        .add, .sub, .mul => .{
+            .items = .{ .{ .kind = .IntegerOverflow, .source = .checked_arithmetic }, undefined },
+            .count = 1,
+        },
+        .div, .mod => if (info.signed) .{
+            .items = .{
+                .{ .kind = .DivideByZero, .source = .checked_arithmetic },
+                .{ .kind = .IntegerOverflow, .source = .checked_arithmetic },
+            },
+            .count = 2,
+        } else .{
+            .items = .{ .{ .kind = .DivideByZero, .source = .checked_arithmetic }, undefined },
+            .count = 1,
+        },
+        .shl => .{
+            .items = .{
+                .{ .kind = .InvalidShift, .source = .checked_shift },
+                .{ .kind = .IntegerOverflow, .source = .checked_arithmetic },
+            },
+            .count = 2,
+        },
+        .shr => .{
+            .items = .{ .{ .kind = .InvalidShift, .source = .checked_shift }, undefined },
+            .count = 1,
+        },
+        else => null,
+    };
+}
+
 pub const ExecutableCastKind = enum {
     identity,
     unsigned_resize,
@@ -514,7 +559,7 @@ pub const ExecutableLiteral = union(enum) {
     /// separate unary operation, so radix, separators and suffix spelling do
     /// not leak into backend syntax.
     integer: u128,
-    float: []const u8,
+    float: ExecutableFloatLiteral,
     string: []const u8,
     character: []const u8,
     boolean: bool,
@@ -523,6 +568,26 @@ pub const ExecutableLiteral = union(enum) {
     void,
     enum_value: []const u8,
 };
+
+/// Canonical IEEE payload selected at the literal's checked semantic width.
+/// Raw spelling remains syntax/source-map data and never reaches codegen.
+pub const ExecutableFloatLiteral = union(enum) {
+    f32_bits: u32,
+    f64_bits: u64,
+};
+
+pub fn executableFloatMatchesType(value: ExecutableFloatLiteral, ty: ValueType) bool {
+    return switch (value) {
+        .f32_bits => switch (ty) {
+            .float => |name| std.mem.eql(u8, name, "f32"),
+            else => false,
+        },
+        .f64_bits => switch (ty) {
+            .float => |name| std.mem.eql(u8, name, "f64"),
+            else => false,
+        },
+    };
+}
 
 pub const ExecutableExpression = struct {
     id: ExprId,

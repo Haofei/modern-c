@@ -301,7 +301,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     // kind from being silently ignored while still emitting ordinary C.
     for (body.trap_edges) |edge| {
         const owner = expressionById(body, edge.owner) orelse return false;
-        if (!checkedIntegerBinaryHasExactOverflowEdge(body, owner.*)) return false;
+        if (!checkedIntegerBinaryHasExactTrapEdges(body, owner.*)) return false;
     }
     for (body.places) |place| {
         if (place.projection_count != 0) return false;
@@ -350,6 +350,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .symbol => false,
         .load => |load| memoryLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
+            .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             // Raw source string/character spelling is not a canonical byte
             // payload and must not cross the syntax-free boundary.
             .string, .character, .enum_value => false,
@@ -478,38 +479,45 @@ fn binarySupported(
     if (expressionById(body, binary.left) == null or expressionById(body, binary.right) == null) return false;
     return switch (binary.arithmetic) {
         .ordinary => ownedTrapEdgeCount(body, expression.id) == 0,
-        .checked => checkedIntegerBinaryHasExactOverflowEdge(body, expression),
+        .checked => checkedIntegerBinaryHasExactTrapEdges(body, expression),
     };
 }
 
-fn checkedIntegerBinaryHasExactOverflowEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     const binary = switch (expression.operation) {
         .binary => |value| value,
         else => return false,
     };
     if (binary.arithmetic != .checked) return false;
-    if (binary.op != .add and binary.op != .sub and binary.op != .mul) return false;
     if (integerSuffix(expression.result_ty) == null) return false;
     const left = expressionById(body, binary.left) orelse return false;
     const right = expressionById(body, binary.right) orelse return false;
     const result_key = mir.TypeKey.fromValueType(expression.result_ty);
     if (!mir.TypeKey.eql(result_key, mir.TypeKey.fromValueType(left.result_ty)) or
         !mir.TypeKey.eql(result_key, mir.TypeKey.fromValueType(right.result_ty))) return false;
-    var matching: usize = 0;
+    const requirements = mir.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty) orelse return false;
     var total: usize = 0;
     for (body.trap_edges) |edge| {
         if (!edge.owner.eql(expression.id)) continue;
         total += 1;
-        if (!edge.from_block.eql(expression.block_id) or edge.kind != .IntegerOverflow or edge.source != .checked_arithmetic) continue;
-        const trap_terminator = terminatorByBlock(body, edge.trap_block) orelse continue;
-        switch (trap_terminator.operation) {
-            .trap_ => |kind| if (kind == .IntegerOverflow) {
-                matching += 1;
-            },
-            else => {},
-        }
+        if (!edge.from_block.eql(expression.block_id)) return false;
     }
-    return total == 1 and matching == 1;
+    if (total != requirements.count) return false;
+    for (requirements.items[0..requirements.count]) |requirement| {
+        var matching: usize = 0;
+        for (body.trap_edges) |edge| {
+            if (!edge.owner.eql(expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
+            const trap_terminator = terminatorByBlock(body, edge.trap_block) orelse return false;
+            switch (trap_terminator.operation) {
+                .trap_ => |kind| {
+                    if (kind == requirement.kind) matching += 1;
+                },
+                else => return false,
+            }
+        }
+        if (matching != 1) return false;
+    }
+    return true;
 }
 
 fn ownedTrapEdgeCount(body: *const mir.ExecutableBody, owner: mir.ExprId) usize {
@@ -655,7 +663,11 @@ fn emitLiteral(
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (literal) {
         .integer => |magnitude| try out.print(allocator, "{d}", .{magnitude}),
-        .float, .string, .character => |spelling| try out.appendSlice(allocator, spelling),
+        .float => |value| switch (value) {
+            .f32_bits => |bits| try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits}),
+            .f64_bits => |bits| try out.print(allocator, "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))", .{bits}),
+        },
+        .string, .character => |spelling| try out.appendSlice(allocator, spelling),
         .boolean => |value| try out.appendSlice(allocator, if (value) "true" else "false"),
         .null => try out.appendSlice(allocator, "NULL"),
         .void => try out.appendSlice(allocator, "((void)0)"),
@@ -1449,4 +1461,164 @@ test "executable C renderer rejects selected builtin fact mutations" {
 
     expressions[1].operation.builtin_call.kind = .conversion_from_mod;
     try std.testing.expect(!canEmitBody(&body));
+}
+
+test "executable C renderer emits canonical float payloads bit exactly" {
+    const negative_zero = mir.ExprId.fromIndex(0);
+    const nan32 = mir.ExprId.fromIndex(1);
+    const nan64 = mir.ExprId.fromIndex(2);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const f32_ty: mir.ValueType = .{ .float = "f32" };
+    const f64_ty: mir.ValueType = .{ .float = "f64" };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = negative_zero, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x80000000 } } } },
+        .{ .id = nan32, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x7FC01234 } } } },
+        .{ .id = nan64, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f64_bits = 0xFFF8000000001234 } } } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = nan64 } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = __builtin_bit_cast(float, ((uint32_t)0x80000000U));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_1 = __builtin_bit_cast(float, ((uint32_t)0x7FC01234U));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_2 = __builtin_bit_cast(double, ((uint64_t)0xFFF8000000001234ULL));") != null);
+}
+
+test "executable C renderer rejects canonical float type tag drift" {
+    const value = mir.ExprId.fromIndex(0);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = value,
+        .block_id = entry,
+        .owner_statement = statement,
+        .source = source,
+        .result_ty = .{ .float = "f32" },
+        .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x3FC00000 } } },
+    }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = value } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    expressions[0].result_ty = .{ .float = "f64" };
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[0].result_ty = .{ .integer = "u32" };
+    try std.testing.expect(!canEmitBody(&body));
+
+    expressions[0].result_ty = .{ .float = "f32" };
+    expressions[0].operation.literal.float = .{ .f64_bits = 0x3FF8000000000000 };
+    try std.testing.expect(!canEmitBody(&body));
+}
+
+const CheckedTrapTestSpec = struct {
+    kind: mir.TrapKind,
+    source: mir.TrapSource,
+};
+
+fn expectCheckedIntegerBinaryTrapSet(
+    op: mir.ExecutableBinaryOp,
+    type_name: []const u8,
+    specs: []const CheckedTrapTestSpec,
+) !void {
+    const entry = mir.BlockId.fromIndex(0);
+    const statement = mir.InstId.fromIndex(0);
+    const left = mir.ExprId.fromIndex(0);
+    const right = mir.ExprId.fromIndex(1);
+    const result = mir.ExprId.fromIndex(2);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const ty: mir.ValueType = .{ .integer = type_name };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = ty, .operation = .{ .literal = .{ .integer = 8 } } },
+        .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = ty, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = ty, .operation = .{ .binary = .{ .op = op, .left = left, .right = right, .arithmetic = .checked } } },
+    };
+    var edges: [3]mir.ExecutableTrapEdge = undefined;
+    var terminators: [3]mir.ExecutableTerminator = undefined;
+    terminators[0] = .{ .block_id = entry, .operation = .return_ };
+    for (specs, 0..) |spec, index| {
+        const trap_block = mir.BlockId.fromIndex(index + 1);
+        edges[index] = .{
+            .owner = result,
+            .from_block = entry,
+            .trap_block = trap_block,
+            .kind = spec.kind,
+            .source = spec.source,
+        };
+        terminators[index + 1] = .{ .block_id = trap_block, .operation = .{ .trap_ = spec.kind } };
+    }
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var body: mir.ExecutableBody = .{
+        .complete = true,
+        .expressions = &expressions,
+        .trap_edges = edges[0..specs.len],
+        .statements = &statements,
+        .terminators = terminators[0 .. specs.len + 1],
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    const helper = try std.fmt.allocPrint(std.testing.allocator, "mc_checked_{s}_{s}", .{ @tagName(op), type_name });
+    defer std.testing.allocator.free(helper);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, helper) != null);
+
+    body.trap_edges = edges[0 .. specs.len - 1];
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = edges[0..specs.len];
+
+    edges[specs.len] = edges[0];
+    body.trap_edges = edges[0 .. specs.len + 1];
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = edges[0..specs.len];
+
+    const original_kind = edges[0].kind;
+    edges[0].kind = if (original_kind == .Bounds) .Assert else .Bounds;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].kind = original_kind;
+
+    const original_source = edges[0].source;
+    edges[0].source = if (original_source == .checked_shift) .checked_arithmetic else .checked_shift;
+    try std.testing.expect(!canEmitBody(&body));
+}
+
+test "executable C renderer enforces exact checked div mod and shift trap sets" {
+    const unsigned_div_mod = [_]CheckedTrapTestSpec{
+        .{ .kind = .DivideByZero, .source = .checked_arithmetic },
+    };
+    const signed_div_mod = [_]CheckedTrapTestSpec{
+        .{ .kind = .DivideByZero, .source = .checked_arithmetic },
+        .{ .kind = .IntegerOverflow, .source = .checked_arithmetic },
+    };
+    const checked_shl = [_]CheckedTrapTestSpec{
+        .{ .kind = .InvalidShift, .source = .checked_shift },
+        .{ .kind = .IntegerOverflow, .source = .checked_arithmetic },
+    };
+    const checked_shr = [_]CheckedTrapTestSpec{
+        .{ .kind = .InvalidShift, .source = .checked_shift },
+    };
+
+    try expectCheckedIntegerBinaryTrapSet(.div, "u32", &unsigned_div_mod);
+    try expectCheckedIntegerBinaryTrapSet(.div, "i32", &signed_div_mod);
+    try expectCheckedIntegerBinaryTrapSet(.mod, "u32", &unsigned_div_mod);
+    try expectCheckedIntegerBinaryTrapSet(.mod, "i32", &signed_div_mod);
+    try expectCheckedIntegerBinaryTrapSet(.shl, "u32", &checked_shl);
+    try expectCheckedIntegerBinaryTrapSet(.shl, "i32", &checked_shl);
+    try expectCheckedIntegerBinaryTrapSet(.shr, "u32", &checked_shr);
+    try expectCheckedIntegerBinaryTrapSet(.shr, "i32", &checked_shr);
 }

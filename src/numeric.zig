@@ -152,6 +152,28 @@ pub fn parseI128Literal(raw: []const u8) ?i128 {
     return std.math.cast(i128, parseIntegerLiteral(raw) orelse return null);
 }
 
+pub const ParseFloatLiteralError = std.mem.Allocator.Error || error{InvalidFloatLiteral};
+
+/// Parse one source float directly at its checked semantic width.  In
+/// particular, an `f32` literal is never parsed through `f64`, which avoids a
+/// second rounding step at decimal midpoints.  Source separators are syntax;
+/// callers receive only the value that will be stored in executable MIR.
+pub fn parseFloatLiteral(
+    comptime Float: type,
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+) ParseFloatLiteralError!Float {
+    if (Float != f32 and Float != f64) @compileError("MC float literals support only f32/f64");
+    if (std.mem.eql(u8, raw, "inf")) return std.math.inf(Float);
+    if (std.mem.eql(u8, raw, "nan")) return std.math.nan(Float);
+
+    var cleaned: std.ArrayList(u8) = .empty;
+    defer cleaned.deinit(allocator);
+    try cleaned.ensureTotalCapacity(allocator, raw.len);
+    for (raw) |ch| if (ch != '_') cleaned.appendAssumeCapacity(ch);
+    return std.fmt.parseFloat(Float, cleaned.items) catch error.InvalidFloatLiteral;
+}
+
 /// The code-point value of a char literal (`'a'`, `'\n'`, …), or null if it is not a
 /// single-character or recognized-escape literal.
 pub fn parseCharLiteral(literal: []const u8) ?u128 {
@@ -222,4 +244,12 @@ test "integer literal parser separates suffixes and validates separators" {
     const long = parseIntegerLiteralParts(long_zeroes).?;
     try std.testing.expectEqual(@as(u128, 1), long.magnitude);
     try std.testing.expectEqual(IntegerSuffix.u8, long.suffix.?);
+}
+
+test "float literal parser preserves semantic-width IEEE values" {
+    try std.testing.expectEqual(@as(f32, 1.5), try parseFloatLiteral(f32, std.testing.allocator, "1.5"));
+    try std.testing.expectEqual(@as(f64, 10.25), try parseFloatLiteral(f64, std.testing.allocator, "1_0.2_5"));
+    try std.testing.expect(std.math.isInf(try parseFloatLiteral(f32, std.testing.allocator, "inf")));
+    try std.testing.expect(std.math.isNan(try parseFloatLiteral(f64, std.testing.allocator, "nan")));
+    try std.testing.expectError(error.InvalidFloatLiteral, parseFloatLiteral(f32, std.testing.allocator, "not-a-float"));
 }
