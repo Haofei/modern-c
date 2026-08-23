@@ -14182,7 +14182,7 @@ test "LLVM canonical executable MIR precedes legacy specialized plans" {
 test "LLVM canonical executable MIR guards parameter deref load and address identity" {
     const source =
         \\fn read(pointer: *u32) -> u32 { return pointer.*; }
-        \\fn write(pointer: *mut u32, value: u32) -> void { pointer.* = value; return; }
+        \\fn write(pointer: *mut u32, value: u32) -> void { pointer.* = value; }
         \\fn identity(pointer: *mut u32) -> *mut u32 { return &pointer.*; }
     ;
     var output: std.ArrayList(u8) = .empty;

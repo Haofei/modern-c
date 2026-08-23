@@ -90,7 +90,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .branch => |branch| if (!expressionValid(body, branch.condition) or !blockExists(body, branch.true_block) or !blockExists(body, branch.false_block)) return false,
             .switch_ => return false,
             .trap_ => |kind| if (trapHelper(kind) == null) return false,
-            .return_ => if (!hasReturnStatement(body, terminator.block_id)) return false,
+            .return_ => if (!hasReturnStatement(body, terminator.block_id) and return_ty != .void) return false,
             .unreachable_ => {},
         }
     }
