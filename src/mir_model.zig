@@ -518,7 +518,22 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
                 TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[1]));
         },
         .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
+        // `bitcast` preserves the complete scalar bit pattern; it is neither a
+        // numeric conversion nor a backend-selected coercion.  Keep this
+        // first executable slice deliberately bounded to scalar integer/float
+        // values of identical width.  Aggregate bitcasts need canonical layout
+        // facts before they can cross the syntax-free boundary.
+        .bitcast => operands.len == 1 and executableScalarBitWidth(operands[0]) != null and
+            executableScalarBitWidth(operands[0]) == executableScalarBitWidth(result),
         else => false,
+    };
+}
+
+fn executableScalarBitWidth(ty: ValueType) ?u16 {
+    if (ExecutableCastKind.integerInfo(ty)) |info| return info.bits;
+    return switch (ty) {
+        .float => |name| if (std.mem.eql(u8, name, "f32")) 32 else if (std.mem.eql(u8, name, "f64")) 64 else null,
+        else => null,
     };
 }
 

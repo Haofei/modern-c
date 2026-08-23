@@ -13958,6 +13958,8 @@ const FunctionBuilder = struct {
             .cast => |node| valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases),
             .call => |node| if (self.qualifiedUnionConstructorTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else if (self.bitcastCallValueType(node)) |ty|
+                ty
             else if (self.enumRawCallTarget(node)) |target|
                 target.result_ty
             else if (self.dmaCallTarget(node)) |target|

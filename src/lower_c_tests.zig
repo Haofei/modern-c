@@ -2805,13 +2805,18 @@ test "lower-c emits typed unary call-target returns from MIR without body fallba
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_unary_call_target_returns.mc", source, &output);
 
     const float_bits = try cFunctionBody(output.items, "static uint32_t float_bits(float value)");
-    try expectContains(float_bits, "__builtin_memcpy");
-    try expectContains(float_bits, "_Static_assert(sizeof(mc_bc_src");
-    try expectContains(float_bits, "return ({ float mc_bc_src");
+    try expectContains(float_bits, "mc_exec_tmp_0 = value;");
+    try expectContains(float_bits, "mc_exec_tmp_1 = __builtin_bit_cast(uint32_t, mc_exec_tmp_0);");
+    try expectContains(float_bits, "return mc_exec_tmp_1;");
+    try expectNotContains(float_bits, "__builtin_memcpy");
+    try expectNotContains(float_bits, "((uint32_t)(mc_exec_tmp_0))");
 
     const bits_float = try cFunctionBody(output.items, "static float bits_float(uint32_t value)");
-    try expectContains(bits_float, "__builtin_memcpy");
-    try expectContains(bits_float, "return ({ uint32_t mc_bc_src");
+    try expectContains(bits_float, "mc_exec_tmp_0 = value;");
+    try expectContains(bits_float, "mc_exec_tmp_1 = __builtin_bit_cast(float, mc_exec_tmp_0);");
+    try expectContains(bits_float, "return mc_exec_tmp_1;");
+    try expectNotContains(bits_float, "__builtin_memcpy");
+    try expectNotContains(bits_float, "((float)(mc_exec_tmp_0))");
 
     const state_raw = try cFunctionBody(output.items, "static uint8_t state_raw(State state)");
     try expectContains(state_raw, "return state;");

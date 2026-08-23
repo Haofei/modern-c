@@ -385,7 +385,7 @@ fn builtinCallSupported(
     call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
 ) bool {
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -430,6 +430,16 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.appendSlice(allocator, ")))");
+        },
+        .bitcast => {
+            // `__builtin_bit_cast` copies the object representation. A C
+            // numerical cast would change values for integer/float pairs and
+            // pointer-punning would violate strict aliasing.
+            try out.appendSlice(allocator, "__builtin_bit_cast(");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, ", ");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.append(allocator, ')');
         },
         else => return error.UnsupportedOperation,
     }
@@ -1614,6 +1624,94 @@ test "executable C renderer emits selected typed builtins in operand order" {
     try std.testing.expect(phys_operand_pos < phys_pos and phys_pos < wrap_left_pos);
     try std.testing.expect(wrap_left_pos < wrap_right_pos and wrap_right_pos < wrap_pos);
     try std.testing.expect(wrap_pos < conversion_operand_pos and conversion_operand_pos < conversion_pos);
+}
+
+test "executable C renderer emits scalar bitcast as a bit preserving builtin" {
+    const local = mir.LocalId.fromIndex(0);
+    const operand = mir.ExprId.fromIndex(0);
+    const result = mir.ExprId.fromIndex(1);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const f32_ty: mir.ValueType = .{ .float = "f32" };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty, .source = source }};
+    var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
+    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .callee_source = source, .argument_count = 1 };
+    call.arguments[0] = operand;
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_1 = __builtin_bit_cast(uint32_t, mc_exec_tmp_0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "((uint32_t)(mc_exec_tmp_0))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "memcpy") == null);
+}
+
+test "executable C renderer rejects scalar bitcast fact mutations" {
+    const local = mir.LocalId.fromIndex(0);
+    const operand = mir.ExprId.fromIndex(0);
+    const result = mir.ExprId.fromIndex(1);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const f32_ty: mir.ValueType = .{ .float = "f32" };
+    const f64_ty: mir.ValueType = .{ .float = "f64" };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    const u64_ty: mir.ValueType = .{ .integer = "u64" };
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty, .source = source }};
+    var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
+    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .callee_source = source, .argument_count = 1 };
+    call.arguments[0] = operand;
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    expressions[1].operation.builtin_call.argument_count = 0;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].operation.builtin_call.argument_count = 2;
+    expressions[1].operation.builtin_call.arguments[1] = operand;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].operation.builtin_call.argument_count = 1;
+
+    expressions[1].result_ty = u64_ty;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].result_ty = u32_ty;
+    expressions[0].result_ty = f64_ty;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[0].result_ty = f32_ty;
+
+    expressions[1].operation.builtin_call.arguments[0] = .invalid;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].operation.builtin_call.arguments[0] = operand;
+    try std.testing.expect(canEmitBody(&body));
 }
 
 test "executable C renderer rejects selected builtin fact mutations" {

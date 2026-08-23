@@ -2,6 +2,7 @@ const std = @import("std");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
+const mir_model = @import("mir_model.zig");
 const executable = @import("mir_executable_body.zig");
 
 test "owned executable body is complete for scalar locals calls and returns" {
@@ -314,6 +315,44 @@ test "builtin call is explicit and keeps mechanical admission closed" {
         else => {},
     };
     try std.testing.expect(saw_builtin);
+}
+
+test "scalar bitcast builtin is complete only for an equal-width bit pattern" {
+    const source =
+        \\fn int_bits(value: i32) -> u32 { return bitcast<u32>(value); }
+        \\fn float_bits(value: f32) -> u32 { return bitcast<u32>(value); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_bitcast.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions) |*function| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        var saw_bitcast = false;
+        for (function.executable_body.expressions) |expression| switch (expression.operation) {
+            .builtin_call => |call| {
+                try std.testing.expectEqual(mir.CallTargetKind.bitcast, call.kind);
+                try std.testing.expectEqual(@as(usize, 1), call.argument_count);
+                const operand = function.executable_body.expressions[call.arguments[0].index()];
+                try std.testing.expect(mir_model.executableBuiltinTypesValid(.bitcast, expression.result_ty, &.{operand.result_ty}));
+                saw_bitcast = true;
+            },
+            else => {},
+        };
+        try std.testing.expect(saw_bitcast);
+    }
+
+    try std.testing.expect(!mir_model.executableBuiltinTypesValid(.bitcast, .{ .integer = "u64" }, &.{.{ .integer = "u32" }}));
+    try std.testing.expect(!mir_model.executableBuiltinTypesValid(.bitcast, .{ .float = "f64" }, &.{.{ .integer = "u32" }}));
+    try std.testing.expect(!mir_model.executableBuiltinTypesValid(.bitcast, .{ .integer = "u32" }, &.{}));
 }
 
 test "float literal carries canonical width-specific IEEE bits" {

@@ -14179,6 +14179,32 @@ test "LLVM canonical executable MIR precedes legacy specialized plans" {
     try expectContains(body, "ret i32 %mc_arg_0");
 }
 
+test "LLVM canonical executable MIR lowers pure scalar bitcasts without body fallback" {
+    const source =
+        \\fn bits_to_float(value: u32) -> f32 { return bitcast<f32>(value); }
+        \\fn float_to_bits(value: f64) -> u64 { return bitcast<u64>(value); }
+        \\fn signed_to_unsigned(value: i32) -> u32 { return bitcast<u32>(value); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_scalar_bitcast.mc", source, &output);
+
+    const bits_to_float = try llvmFunctionBody(output.items, "define internal float @bits_to_float");
+    try expectContains(bits_to_float, "; canonical executable MIR");
+    try expectContains(bits_to_float, "bitcast i32 %mc_arg_0 to float");
+    try expectContains(bits_to_float, "ret float %mc_expr_tmp_");
+
+    const float_to_bits = try llvmFunctionBody(output.items, "define internal i64 @float_to_bits");
+    try expectContains(float_to_bits, "; canonical executable MIR");
+    try expectContains(float_to_bits, "bitcast double %mc_arg_0 to i64");
+    try expectContains(float_to_bits, "ret i64 %mc_expr_tmp_");
+
+    const signed_to_unsigned = try llvmFunctionBody(output.items, "define internal i32 @signed_to_unsigned");
+    try expectContains(signed_to_unsigned, "; canonical executable MIR");
+    try expectContains(signed_to_unsigned, "ret i32 %mc_arg_0");
+    try expectNotContains(signed_to_unsigned, "bitcast");
+}
+
 test "LLVM canonical executable MIR guards parameter deref load and address identity" {
     const source =
         \\fn read(pointer: *u32) -> u32 { return pointer.*; }

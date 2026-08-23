@@ -560,6 +560,15 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, if (source.signed) "sext" else "zext", operand.ty, operand.spelling, result_ty });
                 return .{ .ty = result_ty, .spelling = result };
             },
+            .bitcast => {
+                const operand = operands[0];
+                const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
+                if (!pureScalarBitcastTypesSupported(source_ty, expression.result_ty)) return error.InvalidBody;
+                if (std.mem.eql(u8, operand.ty, result_ty)) return .{ .ty = result_ty, .spelling = operand.spelling };
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = bitcast {s} {s} to {s}\n", .{ result, operand.ty, operand.spelling, result_ty });
+                return .{ .ty = result_ty, .spelling = result };
+            },
             else => return error.Unsupported,
         };
     }
@@ -736,7 +745,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
 
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -745,7 +754,23 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         if (!expressionValid(body, id)) return false;
         operand_types[index] = body.expressions[id.index()].result_ty;
     }
-    return mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count]);
+    if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    return call.kind != .bitcast or
+        (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
+}
+
+fn pureScalarBitcastTypesSupported(source: mir.ValueType, target: mir.ValueType) bool {
+    const source_bits = pureScalarBitWidth(source) orelse return false;
+    const target_bits = pureScalarBitWidth(target) orelse return false;
+    return source_bits == target_bits and llvmType(source) != null and llvmType(target) != null;
+}
+
+fn pureScalarBitWidth(ty: mir.ValueType) ?u16 {
+    if (mir.ExecutableCastKind.integerInfo(ty)) |info| return info.bits;
+    return switch (ty) {
+        .float => |name| if (std.mem.eql(u8, name, "f32")) 32 else if (std.mem.eql(u8, name, "f64")) 64 else null,
+        else => null,
+    };
 }
 
 fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, cast: anytype) bool {
@@ -1874,6 +1899,9 @@ test "mechanical renderer emits selected canonical builtins" {
     const signed_source = [_]mir.ValueType{.{ .integer = "i8" }};
     const same_width_source = [_]mir.ValueType{.{ .integer = "u64" }};
     const wrapping_operands = [_]mir.ValueType{ .{ .integer = "u32" }, .{ .integer = "u32" } };
+    const u32_source = [_]mir.ValueType{.{ .integer = "u32" }};
+    const f64_source = [_]mir.ValueType{.{ .float = "f64" }};
+    const i32_source = [_]mir.ValueType{.{ .integer = "i32" }};
 
     const phys = try renderBuiltinForTest(std.testing.allocator, .phys, &same_width_source, .{ .address = .paddr });
     defer std.testing.allocator.free(phys);
@@ -1898,6 +1926,19 @@ test "mechanical renderer emits selected canonical builtins" {
     defer std.testing.allocator.free(same_width_conversion);
     try std.testing.expect(std.mem.indexOf(u8, same_width_conversion, "ret i64 %mc_arg_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, same_width_conversion, " = zext ") == null);
+
+    const bits_float = try renderBuiltinForTest(std.testing.allocator, .bitcast, &u32_source, .{ .float = "f32" });
+    defer std.testing.allocator.free(bits_float);
+    try std.testing.expect(std.mem.indexOf(u8, bits_float, " = bitcast i32 %mc_arg_0 to float") != null);
+
+    const float_bits = try renderBuiltinForTest(std.testing.allocator, .bitcast, &f64_source, .{ .integer = "u64" });
+    defer std.testing.allocator.free(float_bits);
+    try std.testing.expect(std.mem.indexOf(u8, float_bits, " = bitcast double %mc_arg_0 to i64") != null);
+
+    const same_llvm_type = try renderBuiltinForTest(std.testing.allocator, .bitcast, &i32_source, .{ .integer = "u32" });
+    defer std.testing.allocator.free(same_llvm_type);
+    try std.testing.expect(std.mem.indexOf(u8, same_llvm_type, "ret i32 %mc_arg_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, same_llvm_type, " = bitcast ") == null);
 }
 
 test "mechanical renderer rejects mutated selected builtin types and kinds" {
@@ -1911,6 +1952,13 @@ test "mechanical renderer rejects mutated selected builtin types and kinds" {
     const narrowing_source = [_]mir.ValueType{.{ .integer = "u32" }};
     try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .conversion_from, &narrowing_source, .{ .integer = "u8" }));
     try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .cpu_pause, &narrowing_source, .{ .integer = "u32" }));
+
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .bitcast, &narrowing_source, .{ .float = "f64" }));
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .bitcast, &wrapping_operands, .{ .float = "f32" }));
+    const bool_source = [_]mir.ValueType{.bool};
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .bitcast, &bool_source, .{ .integer = "u8" }));
+    const pointer_source = [_]mir.ValueType{.{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } }};
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .bitcast, &pointer_source, .{ .integer = "u64" }));
 }
 
 test "mechanical renderer guards single parameter deref before race-unordered load" {

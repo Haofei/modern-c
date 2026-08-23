@@ -5375,7 +5375,10 @@ const LlvmEmitter = struct {
                     if (!std.mem.eql(u8, self.mirStructuralType(argument.result_ty) orelse return false, self.llvmType(parameter.ty) catch return false)) return false;
                 }
             },
-            .builtin_call => return false,
+            // The syntax-free renderer performs the closed, typed admission
+            // for builtin operations.  Re-rejecting the whole union here kept
+            // even fully modelled pure builtins on the AST fallback path.
+            .builtin_call => {},
             .indirect_call => return false,
             .address_of => {
                 switch (expression.result_ty) {
