@@ -78,6 +78,11 @@ check mode fails on any compile error, timeout, or crash; it does not use `|| tr
 to turn a failed root into a successful gate. The checked-in baseline is
 `tools/toolchain/fallback-census-baseline.tsv`:
 
+The runner uses four bounded workers by default (`JOBS=1` restores serial
+execution). Each compiler invocation has private output, log, status, and
+scratch files; the parent concatenates JSONL parts in numeric launch order, so
+parallel execution does not change the raw census or ranked report.
+
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
 | C | 160 | 160 | 0 | 0 | 10000 |

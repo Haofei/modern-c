@@ -272,7 +272,7 @@ clang -std=c11 -c out.c -o /dev/null
 clang -Wno-override-module -c out.ll -o /dev/null
 MC_FALLBACK_CENSUS=/tmp/c.jsonl zig-out/bin/mcc-real emit-c file.mc -o /dev/null   # per-fn admitted/fallback
 zig-out/bin/mcc-real lower-mir file.mc      # dump MIR to understand a shape
-bash tools/toolchain/fallback-census.sh     # full-corpus ranked census (slow, ~330 invocations)
+JOBS=4 bash tools/toolchain/fallback-census.sh  # bounded parallel full-corpus census; JOBS=1 is deterministic serial mode
 ```
 
 The **eval-order regression test** `lower-c sequences return call arguments left

@@ -29,6 +29,7 @@
 #   MCC        compiler binary (default: zig-out/bin/mcc; built if absent)
 #   OUTDIR     work/output dir (default: zig-out/fallback-census)
 #   BACKENDS   space-separated subset of "c llvm" (default: both)
+#   JOBS       maximum concurrent compiler invocations (default: 4)
 #   FALLBACK_CENSUS_BASELINE
 #              baseline TSV for --check (default: tools/toolchain/fallback-census-baseline.tsv)
 set -euo pipefail
@@ -39,14 +40,21 @@ cd "$SRC_ROOT"
 MCC="${MCC:-zig-out/bin/mcc}"
 OUTDIR="${OUTDIR:-zig-out/fallback-census}"
 BACKENDS="${BACKENDS:-c llvm}"
+JOBS="${JOBS:-4}"
 CMD_TIMEOUT="${CMD_TIMEOUT:-20}"   # per-invocation wall clock; a fixture must never hang the sweep
 BASELINE="${FALLBACK_CENSUS_BASELINE:-tools/toolchain/fallback-census-baseline.tsv}"
 CHECK=0
+case "$JOBS" in
+    ''|*[!0-9]*|0)
+        echo "JOBS must be a positive integer (got: $JOBS)" >&2
+        exit 2
+        ;;
+esac
 case "$OUTDIR" in /*) ;; *) OUTDIR="$SRC_ROOT/$OUTDIR" ;; esac
 case "$BASELINE" in /*) ;; *) BASELINE="$SRC_ROOT/$BASELINE" ;; esac
 
 usage() {
-    sed -n '1,32p' "$0" >&2
+    sed -n '1,34p' "$0" >&2
 }
 
 POSITIONAL=()
@@ -108,7 +116,6 @@ rm -rf "$OUTDIR"
 mkdir -p "$OUTDIR/parts"
 CENSUS="$OUTDIR/census.jsonl"
 : > "$CENSUS"
-SCRATCH="$OUTDIR/scratch.out"
 
 # Corpus: explicit roots, else report mode uses the broad differential fixture
 # tree and check mode uses a C/LLVM-positive gate corpus.
@@ -133,6 +140,75 @@ emit_cmd() {
     esac
 }
 
+# Each child owns all of its writable paths.  It always returns success to the
+# shell so `set -e` cannot terminate the parent before the batch has been
+# reaped; the compiler status is recorded separately for deterministic handling
+# by finish_batch.
+run_one() {
+    local run_id="$1"
+    local sub="$2"
+    local root="$3"
+    local part="$OUTDIR/parts/part.$run_id.jsonl"
+    local log="$OUTDIR/parts/part.$run_id.log"
+    local status="$OUTDIR/parts/part.$run_id.status"
+    local scratch="$OUTDIR/parts/scratch.$run_id.out"
+    local rc=0
+
+    : > "$part"
+    : > "$log"
+    if MC_FALLBACK_CENSUS="$part" "${TIMEOUT_CMD[@]}" "$MCC" "$sub" "$root" -o "$scratch" >"$log" 2>&1; then
+        rc=0
+    else
+        rc=$?
+    fi
+    # The emitted artifact is only a vehicle for exercising admission. Keep
+    # the census/log, but discard per-run artifacts once mcc has closed them so
+    # a broad parallel sweep does not multiply disk usage by the corpus size.
+    rm -f -- "$scratch" "$scratch.mcmeta" "$scratch.mcmeta.json" || true
+    printf '%s\n' "$rc" > "$status"
+    return 0
+}
+
+BATCH_PIDS=()
+BATCH_RUN_IDS=()
+RUN_ROOTS=()
+RUN_SUBS=()
+
+# Wait for a bounded batch in launch order.  Check mode stops before launching
+# the next batch when any member failed.  The other already-running members are
+# still reaped, which keeps logs complete and makes the selected failure
+# deterministic (the lowest numeric run id in the failed batch).
+finish_batch() {
+    local position pid run_id rc wait_rc
+    local failed_run=""
+
+    position=0
+    while [ "$position" -lt "${#BATCH_PIDS[@]}" ]; do
+        pid="${BATCH_PIDS[$position]}"
+        run_id="${BATCH_RUN_IDS[$position]}"
+        wait_rc=0
+        wait "$pid" || wait_rc=$?
+        if [ -f "$OUTDIR/parts/part.$run_id.status" ]; then
+            rc="$(sed -n '1p' "$OUTDIR/parts/part.$run_id.status")"
+        else
+            rc="${wait_rc:-125}"
+            [ "$rc" -ne 0 ] || rc=125
+        fi
+        if [ "$CHECK" -eq 1 ] && [ "${rc:-125}" -ne 0 ] && [ -z "$failed_run" ]; then
+            failed_run="$run_id"
+        fi
+        position=$((position + 1))
+    done
+    BATCH_PIDS=()
+    BATCH_RUN_IDS=()
+
+    if [ -n "$failed_run" ]; then
+        echo "FAIL: fallback-census-ratchet-test - ${RUN_SUBS[$failed_run]} failed for ${RUN_ROOTS[$failed_run]}" >&2
+        sed -n '1,120p' "$OUTDIR/parts/part.$failed_run.log" >&2
+        exit 1
+    fi
+}
+
 n_roots=0
 n_runs=0
 for root in "${ROOTS[@]}"; do
@@ -141,28 +217,34 @@ for root in "${ROOTS[@]}"; do
     for be in $BACKENDS; do
         sub="$(emit_cmd "$be")"
         [ -n "$sub" ] || continue
-        part="$OUTDIR/parts/part.$n_runs.jsonl"
-        log="$OUTDIR/parts/part.$n_runs.log"
-        if [ "$CHECK" -eq 1 ]; then
-            if ! MC_FALLBACK_CENSUS="$part" "${TIMEOUT_CMD[@]}" "$MCC" "$sub" "$root" -o "$SCRATCH" >"$log" 2>&1; then
-                echo "FAIL: fallback-census-ratchet-test - $sub failed for $root" >&2
-                sed -n '1,120p' "$log" >&2
-                exit 1
-            fi
-        else
-            # Best-effort: a fixture that fails to compile still leaves whatever
-            # it emitted before erroring; negative/ill-typed fixtures simply
-            # contribute nothing. Never let one root abort the report sweep.
-            MC_FALLBACK_CENSUS="$part" "${TIMEOUT_CMD[@]}" "$MCC" "$sub" "$root" -o "$SCRATCH" >/dev/null 2>&1 || true
-        fi
-        if [ -s "$part" ]; then
-            cat "$part" >> "$CENSUS"
-        fi
+        RUN_ROOTS[$n_runs]="$root"
+        RUN_SUBS[$n_runs]="$sub"
+        run_one "$n_runs" "$sub" "$root" &
+        BATCH_PIDS+=("$!")
+        BATCH_RUN_IDS+=("$n_runs")
         n_runs=$((n_runs + 1))
+        if [ "${#BATCH_PIDS[@]}" -ge "$JOBS" ]; then
+            finish_batch
+        fi
     done
 done
+if [ "${#BATCH_PIDS[@]}" -gt 0 ]; then
+    finish_batch
+fi
 
-echo "swept $n_roots roots across [$BACKENDS] ($n_runs runs) -> $CENSUS" >&2
+# Child completion order is intentionally irrelevant.  Concatenate only after
+# every batch has finished, in the numeric launch order used by the serial
+# implementation, so raw JSONL and all derived summaries remain reproducible.
+run_id=0
+while [ "$run_id" -lt "$n_runs" ]; do
+    part="$OUTDIR/parts/part.$run_id.jsonl"
+    if [ -s "$part" ]; then
+        cat "$part" >> "$CENSUS"
+    fi
+    run_id=$((run_id + 1))
+done
+
+echo "swept $n_roots roots across [$BACKENDS] ($n_runs runs, jobs=$JOBS) -> $CENSUS" >&2
 python3 "$SRC_ROOT/tools/toolchain/fallback-census-report.py" "$CENSUS"
 if [ "$CHECK" -eq 1 ]; then
     python3 "$SRC_ROOT/tools/toolchain/fallback-census-ratchet.py" --baseline "$BASELINE" "$CENSUS"
