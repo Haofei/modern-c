@@ -12212,6 +12212,30 @@ test "lower-c admits unsigned wrap binary returns from typed MIR" {
     try expectContains(u8_body, " + ");
 }
 
+test "lower-c emits raw-many offset from typed MIR without body fallback" {
+    const source =
+        \\extern fn next_index() -> usize;
+        \\fn offset(pointer: [*]mut u8) -> [*]mut u8 {
+        \\    unsafe { return pointer.offset(next_index()); }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "raw_many_offset_executable.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+    const body = try cFunctionBody(output.items, "static uint8_t * offset(uint8_t * pointer)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(body, &.{ "= pointer;", "= next_index();", " + ", "return mc_exec_tmp_" });
+}
+
 test "lower-c admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
     const source =
         \\fn u_and(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a & b; }

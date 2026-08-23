@@ -7297,15 +7297,33 @@ const FunctionBuilder = struct {
                 }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
                     const callee_source = self.sourcePoint(node.callee.*.span);
+                    const receiver = if (kind == .raw_many_offset)
+                        (memberExpr(node.callee.*) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*
+                    else
+                        null;
+                    const argument_count = node.args.len + @as(usize, if (receiver != null) 1 else 0);
+                    if (argument_count > mir_model.max_executable_operands)
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
                     var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
                         .kind = kind,
+                        .unsafe_authorized = kind == .raw_many_offset and self.active_unsafe,
                         .callee_source = callee_source,
                         .callee_span_id = try self.internSpanId(callee_source),
-                        .argument_count = node.args.len,
+                        .argument_count = argument_count,
                     };
-                    for (node.args, 0..) |argument, index| {
-                        call_value.arguments[index] = try self.ensureExecutableExpr(argument);
-                        if (kind == .wrapping_add) self.contextualizeExecutableLiteral(call_value.arguments[index], result_ty);
+                    var argument_index: usize = 0;
+                    if (receiver) |base| {
+                        call_value.arguments[0] = try self.ensureExecutableExprAs(base, result_ty);
+                        argument_index = 1;
+                    }
+                    for (node.args) |argument| {
+                        call_value.arguments[argument_index] = if (kind == .raw_many_offset)
+                            try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
+                        else
+                            try self.ensureExecutableExpr(argument);
+                        if (kind == .wrapping_add) self.contextualizeExecutableLiteral(call_value.arguments[argument_index], result_ty);
+                        argument_index += 1;
                     }
                     break :call .{ .builtin_call = call_value };
                 }
@@ -7935,14 +7953,25 @@ const FunctionBuilder = struct {
     }
 
     fn buildUnsafeBlock(self: *FunctionBuilder, block: ast.Block) anyerror!bool {
-        // The executable body does not yet carry lexical unsafe-scope markers.
-        // Keep the canonical lowering closed instead of erasing an auditable
-        // boundary in generated code.
-        self.executable_supported = false;
+        const expression_start = self.executable_expressions.items.len;
         const old_unsafe = self.active_unsafe;
         self.active_unsafe = true;
         defer self.active_unsafe = old_unsafe;
-        return try self.buildBlock(block);
+        const terminated = try self.buildBlock(block);
+        var owns_typed_authority = false;
+        for (self.executable_expressions.items[expression_start..]) |expression| switch (expression.operation) {
+            .builtin_call => |call| if (call.unsafe_authorized) {
+                owns_typed_authority = true;
+                break;
+            },
+            else => {},
+        };
+        // Keep a lexical unsafe block on the transitional path unless every
+        // unsafe-sensitive operation it enables carries typed authority. The
+        // raw-many offset slice above is the first such operation; plain code
+        // wrapped in `unsafe {}` must still preserve the source-level scope.
+        if (!owns_typed_authority) self.executable_supported = false;
+        return terminated;
     }
 
     fn buildStmt(self: *FunctionBuilder, stmt: ast.Stmt) anyerror!bool {

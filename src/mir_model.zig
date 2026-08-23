@@ -555,6 +555,18 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         // facts before they can cross the syntax-free boundary.
         .bitcast => operands.len == 1 and executableScalarBitWidth(operands[0]) != null and
             executableScalarBitWidth(operands[0]) == executableScalarBitWidth(result),
+        .raw_many_offset => raw_many: {
+            if (operands.len != 2 or !TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[0])))
+                break :raw_many false;
+            const pointer = switch (result) {
+                .pointer => |shape| shape,
+                else => break :raw_many false,
+            };
+            break :raw_many pointer.kind == .raw_many and TypeKey.eql(
+                TypeKey.fromValueType(operands[1]),
+                TypeKey.fromValueType(.{ .integer = "usize" }),
+            );
+        },
         else => false,
     };
 }
@@ -676,6 +688,9 @@ pub const ExecutableExpression = struct {
         },
         builtin_call: struct {
             kind: CallTargetKind,
+            /// Source-level unsafe authority carried by operations whose
+            /// contract requires a lexical unsafe boundary.
+            unsafe_authorized: bool = false,
             callee_source: SourcePoint,
             callee_span_id: SpanId = .invalid,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,

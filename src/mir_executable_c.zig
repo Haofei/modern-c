@@ -476,8 +476,9 @@ fn builtinCallSupported(
     expression: mir.ExecutableExpression,
     call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
 ) bool {
+    if ((call.kind == .raw_many_offset) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -531,6 +532,13 @@ fn emitBuiltinCall(
             try appendCType(allocator, out, result_ty);
             try out.appendSlice(allocator, ", ");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.append(allocator, ')');
+        },
+        .raw_many_offset => {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, " + ");
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.append(allocator, ')');
         },
         else => return error.UnsupportedOperation,
@@ -1110,7 +1118,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.Va
         .domain_integer => |shape| try out.appendSlice(allocator, primitiveType(shape.child) orelse return error.UnsupportedType),
         .cstr => try out.appendSlice(allocator, "char const *"),
         .pointer, .nullable_pointer => |shape| {
-            const child = primitiveType(shape.child) orelse shape.child;
+            const child = if (std.mem.eql(u8, shape.child, "c_void")) "void" else primitiveType(shape.child) orelse shape.child;
             try out.appendSlice(allocator, child);
             try out.appendSlice(allocator, if (shape.mutability == .mut) " *" else " const *");
         },

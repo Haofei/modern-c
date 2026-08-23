@@ -298,6 +298,16 @@ side-effecting bodies, and general loops remain fail-closed.
 
 ## Next work
 
+The raw-many offset slice is now canonical for direct values and nested call
+arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced
+`usize` index, exact raw-many pointer type, evaluation order, and an
+`unsafe_authorized` bit verified before codegen. The C and LLVM renderers emit
+pointer addition/GEP mechanically. The 522-root broad census is now C 828/1696
+and LLVM 832/1762 admitted; the focused raw-many corpus is C 20/40 and LLVM
+21/40. Do not reopen `p.offset(i).*` with an AST recognizer: its correct next
+primitive is an expression-root load/store/address operation carrying the
+race-unordered access mode and representation edge.
+
 The first local-declaration statement primitive is complete for the strict
 single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer

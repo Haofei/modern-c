@@ -2937,7 +2937,10 @@ pub const CEmitter = struct {
                 else => false,
             },
             .pointer => |pointer| switch (resolved.kind) {
-                .pointer => |source_pointer| std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
+                .pointer => |source_pointer| pointer.kind == .single and pointer.mutability == source_pointer.mutability and
+                    std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
+                .raw_many_pointer => |source_pointer| pointer.kind == .raw_many and pointer.mutability == source_pointer.mutability and
+                    std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
                 else => false,
             },
             else => false,

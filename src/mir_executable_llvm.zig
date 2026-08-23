@@ -687,6 +687,20 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = bitcast {s} {s} to {s}\n", .{ result, operand.ty, operand.spelling, result_ty });
                 return .{ .ty = result_ty, .spelling = result };
             },
+            .raw_many_offset => {
+                const pointer_shape = switch (expression.result_ty) {
+                    .pointer => |shape| shape,
+                    else => return error.InvalidBody,
+                };
+                if (pointer_shape.kind != .raw_many or !std.mem.eql(u8, result_ty, "ptr") or
+                    !std.mem.eql(u8, operands[0].ty, "ptr") or !std.mem.eql(u8, operands[1].ty, "i64"))
+                    return error.InvalidBody;
+                const element_ty = rawManyElementValueType(self.body, pointer_shape.child) orelse return error.Unsupported;
+                const element_text = try self.typeText(element_ty);
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, element_text, operands[0].spelling, operands[1].spelling });
+                return .{ .ty = "ptr", .spelling = result };
+            },
             else => return error.Unsupported,
         };
     }
@@ -961,8 +975,9 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 }
 
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
+    if ((call.kind == .raw_many_offset) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -974,6 +989,15 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
     return call.kind != .bitcast or
         (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
+}
+
+fn rawManyElementValueType(body: *const mir.ExecutableBody, name: []const u8) ?mir.ValueType {
+    if (std.mem.eql(u8, name, "bool")) return .bool;
+    const integer: mir.ValueType = .{ .integer = name };
+    if (mir.ExecutableCastKind.integerInfo(integer) != null) return integer;
+    if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) return .{ .float = name };
+    const aggregate: mir.ValueType = .{ .struct_ = name };
+    return if (aggregateTypeForValueType(body, aggregate) != null) aggregate else null;
 }
 
 fn pureScalarBitcastTypesSupported(source: mir.ValueType, target: mir.ValueType) bool {

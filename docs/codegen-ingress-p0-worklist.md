@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-22
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 884 C and 942 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 868 C and 930 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,22 +27,23 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-22)
 
-The 522-root sweep found C **812/1696 admitted (47.9%)**, 884 fallback, and
-LLVM **820/1762 admitted (46.5%)**, 942 fallback. There were no unsupported
+The 522-root sweep found C **828/1696 admitted (48.8%)**, 868 fallback, and
+LLVM **832/1762 admitted (47.2%)**, 930 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
-preserves `wrap<T>` and `sat<T>` as typed executable-MIR integer domains.
-Wrapping/saturating add/sub/mul, bitwise operations, comparisons, and explicitly
-masked wrapping shifts now lower mechanically in both backends. The focused
-arithmetic corpus admits 29/30 functions in each backend; its only remaining
-fallback is the unrelated `raw_many_offset` pointer intrinsic.
+makes `raw_many_offset` a typed executable-MIR builtin with an explicit receiver,
+`usize` index, exact raw-many pointer result, evaluation order, and lexical
+unsafe authorization. Both mechanical renderers consume that contract; the
+focused raw-many corpus moved from C 9/40 and LLVM 12/40 to C 20/40 and LLVM
+21/40. Offset-result dereference/address operations remain closed until MIR owns
+an expression-root memory access with its race/representation semantics.
 
-The census also ranks the canonical stopping layer. For C the remaining 884
-fallbacks are 836 `producer_incomplete`, 40 `renderer_unsupported`, 6
-`ingress_mismatch`, and 2 `ready`; LLVM is 874/56/9/3. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 868
+fallbacks are 824 `producer_incomplete`, 41 `renderer_unsupported`, 1
+`ingress_mismatch`, and 2 `ready`; LLVM is 862/56/9/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (183), `trap_projection` (164),
+The leading C reasons are `producer_invariant` (171), `trap_projection` (164),
 `noncanonical_literal` (116), `unsupported_member` (49), and `unlowered_index`
-(46); LLVM has 183/174/119/49/60 respectively. By-value struct member
+(46); LLVM has 171/174/119/49/60 respectively. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be
@@ -51,15 +52,15 @@ family (LLVM has the same distribution within a few functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
-| 138 | 14% | return `<ident>` 1 blk 0 trap | region_holds, sat_literal | remaining local-computed / multi-statement forms |
-| 97 | 9% | return `<ident>` 2 blk 1 trap | pa_offset, slice_of_struct | same + a bounds/repr trap |
-| 63 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
-| 52 | 5% | switch return `<ident>` 5+ blk | pa_align_down, pr_contains | general CFG + value graph |
-| 45 | 4% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
-| 34 | 3% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
-| 39 | 4% | fallthrough void 2 blk 1 trap | array/field address stores | statement/place graph + check edge |
-| 30 | 3% | branch return `<ident>` 5+ blk | loop_condition, break_labeled | general CFG + loop control |
-| 21 | 2% | return binary 1 blk 0 trap | sat_mul, raw_ret | ordering-sensitive or domain-specific binary |
+| 116 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
+| 96 | 11% | return `<ident>` 2 blk 1 trap | pa_offset, slice_of_struct | same + a bounds/repr trap |
+| 60 | 7% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 46 | 5% | switch return `<ident>` 5+ blk | pa_align_down, SlotFuture__poll | general CFG + value graph |
+| 41 | 5% | return `<ident>` 3-4 blk 2+ trap | inferred_call_slice_element | same, more control flow |
+| 18 | 2% | return binary 2 blk 1 trap | counter_differs, ptr_differs | checked/atomic operands with exact trap edges |
+| 36 | 4% | fallthrough void 2 blk 1 trap | array/field address stores | statement/place graph + check edge |
+| 22 | 3% | branch return `<ident>` 5+ blk | loops and UB probes | general CFG + loop control |
+| 15 | 2% | return binary 1 blk 0 trap | raw_ret, neg_f64 | ordering-sensitive or domain-specific binary |
 
 Every remaining bucket is now either **large** (general local/multi-statement
 value graphs, statement-level builtin/void lowering, or CFG rendering) or

@@ -10865,6 +10865,24 @@ test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     try expectContains(body, "add i32 %mc_arg_0, %mc_arg_1");
 }
 
+test "LLVM emits raw-many offset from typed MIR without body fallback" {
+    const source =
+        \\extern fn next_index() -> usize;
+        \\fn offset(pointer: [*]mut u8) -> [*]mut u8 {
+        \\    unsafe { return pointer.offset(next_index()); }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_raw_many_offset_executable.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal ptr @offset");
+    try expectContains(body, "; canonical executable MIR");
+    const call = std.mem.indexOf(u8, body, "call i64 @next_index()") orelse return error.TestUnexpectedResult;
+    const offset = std.mem.indexOf(u8, body, "getelementptr i8, ptr %mc_arg_0, i64 %") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "ret ptr %") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call < offset and offset < ret);
+}
+
 test "LLVM admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
     const source =
         \\fn u_and(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a & b; }

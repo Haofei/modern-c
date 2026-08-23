@@ -355,6 +355,50 @@ test "scalar bitcast builtin is complete only for an equal-width bit pattern" {
     try std.testing.expect(!mir_model.executableBuiltinTypesValid(.bitcast, .{ .integer = "u32" }, &.{}));
 }
 
+test "raw many offset owns its receiver and index operands" {
+    const source =
+        \\fn offset(pointer: [*]mut u8, index: usize) -> [*]mut u8 {
+        \\    unsafe { return pointer.offset(index); }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_raw_many_offset.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    var saw_offset = false;
+    for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .builtin_call => |*call| {
+            try std.testing.expectEqual(mir_model.CallTargetKind.raw_many_offset, call.kind);
+            try std.testing.expectEqual(@as(usize, 2), call.argument_count);
+            const receiver = function.executable_body.expressions[call.arguments[0].index()];
+            const index = function.executable_body.expressions[call.arguments[1].index()];
+            try std.testing.expect(mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, &.{ receiver.result_ty, index.result_ty }));
+            saw_offset = true;
+
+            const saved = call.argument_count;
+            call.argument_count = 1;
+            try std.testing.expectError(error.InvalidArgumentCount, executable.verify(function));
+            call.argument_count = saved;
+            call.unsafe_authorized = false;
+            try std.testing.expectError(error.InvalidUnsafeAuthorization, executable.verify(function));
+            call.unsafe_authorized = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_offset);
+    try executable.verify(function);
+}
+
 test "float literal carries canonical width-specific IEEE bits" {
     const source =
         \\fn small() -> f32 { return 1.5; }
