@@ -39,6 +39,9 @@ pub fn emitBodyWithSourcePath(
     if (!body.isComplete() or !canEmitBody(body)) return error.IncompleteBody;
     if (body.terminators.len == 0) return error.InvalidBlock;
 
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "/* canonical executable MIR */\n");
+
     // Every value is materialized once in canonical ExprId order.  C leaves
     // operand and argument evaluation order unspecified, so rendering a pure
     // expression tree here would lose the order already verified by MIR.
@@ -283,7 +286,26 @@ fn emitExpressionOperation(
             try emitExpression(allocator, out, body, base, depth + 1);
             try out.appendSlice(allocator, ".len");
         },
-        .range_slice, .member, .array, .struct_, .unsupported => return error.UnsupportedOperation,
+        .struct_ => |aggregate| {
+            const shape = aggregateType(body, expression.type_id) orelse return error.InvalidExpression;
+            if (!structConstructionSupported(body, expression.*, aggregate)) return error.InvalidExpression;
+            try out.append(allocator, '(');
+            try appendCType(allocator, out, shape.ty);
+            try out.appendSlice(allocator, "){ ");
+            for (0..shape.field_count) |field_index| {
+                if (field_index != 0) try out.appendSlice(allocator, ", ");
+                var operand: ?mir.ExprId = null;
+                for (aggregate.field_indices[0..aggregate.operand_count], aggregate.operands[0..aggregate.operand_count]) |candidate_index, candidate| {
+                    if (candidate_index == field_index) {
+                        operand = candidate;
+                        break;
+                    }
+                }
+                try emitExpression(allocator, out, body, operand orelse return error.InvalidExpression, depth + 1);
+            }
+            try out.appendSlice(allocator, " }");
+        },
+        .range_slice, .member, .array, .unsupported => return error.UnsupportedOperation,
     }
 }
 
@@ -375,8 +397,35 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call => |call| builtinCallSupported(body, expression, call),
         .address_of => |address| addressOfSupported(body, expression, address),
-        .deref, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
+        .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
+        .deref, .index, .range_slice, .member, .array, .unsupported => false,
     };
+}
+
+fn structConstructionSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "struct_"),
+) bool {
+    const shape = aggregateType(body, expression.type_id) orelse return false;
+    if (shape.construction != .declared_struct or operation.construction != .declared_struct or
+        shape.field_count == 0 or shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
+    var seen = [_]bool{false} ** mir.max_executable_operands;
+    for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
+        if (field_index >= shape.field_count or seen[field_index]) return false;
+        seen[field_index] = true;
+        const operand = expressionById(body, operand_id) orelse return false;
+        if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
+            !operand.type_id.eql(shape.field_type_ids[field_index]) or !supportsType(operand.result_ty)) return false;
+    }
+    for (seen[0..shape.field_count]) |present| if (!present) return false;
+    return true;
+}
+
+fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableAggregateType {
+    if (!type_id.isValid()) return null;
+    for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
+    return null;
 }
 
 fn builtinCallSupported(
@@ -681,6 +730,10 @@ fn ownedTrapEdgeCount(body: *const mir.ExecutableBody, owner: mir.ExprId) usize 
 fn allExpressionsExist(body: *const mir.ExecutableBody, expressions: []const mir.ExprId) bool {
     for (expressions) |expression| if (expressionById(body, expression) == null) return false;
     return true;
+}
+
+fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
+    return mir.TypeKey.eql(mir.TypeKey.fromValueType(left), mir.TypeKey.fromValueType(right));
 }
 
 fn supportsType(ty: mir.ValueType) bool {
@@ -1107,6 +1160,7 @@ test "executable C renderer emits typed CFG labels and branches" {
     defer output.deinit(std.testing.allocator);
     try emitBody(std.testing.allocator, &output, &body, 0);
     try std.testing.expectEqualStrings(
+        \\/* canonical executable MIR */
         \\bool mc_exec_tmp_0;
         \\uint32_t mc_exec_tmp_1;
         \\uint32_t mc_exec_tmp_2;

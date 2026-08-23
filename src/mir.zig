@@ -6073,6 +6073,7 @@ const FunctionBuilder = struct {
     executable_parameters: std.ArrayList(ExecutableParameter),
     executable_locals: std.ArrayList(ExecutableLocalIdentity),
     executable_symbols: std.ArrayList(SymbolIdentity),
+    executable_aggregate_types: std.ArrayList(mir_model.ExecutableAggregateType),
     executable_expressions: std.ArrayList(ExecutableExpression),
     executable_trap_edges: std.ArrayList(mir_model.ExecutableTrapEdge),
     executable_places: std.ArrayList(ExecutablePlace),
@@ -6201,6 +6202,7 @@ const FunctionBuilder = struct {
             .executable_parameters = .empty,
             .executable_locals = .empty,
             .executable_symbols = .empty,
+            .executable_aggregate_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6308,6 +6310,7 @@ const FunctionBuilder = struct {
             .executable_parameters = .empty,
             .executable_locals = .empty,
             .executable_symbols = .empty,
+            .executable_aggregate_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6382,6 +6385,7 @@ const FunctionBuilder = struct {
         self.executable_parameters.deinit(self.allocator);
         self.executable_locals.deinit(self.allocator);
         self.executable_symbols.deinit(self.allocator);
+        self.executable_aggregate_types.deinit(self.allocator);
         self.executable_expressions.deinit(self.allocator);
         self.executable_trap_edges.deinit(self.allocator);
         self.executable_places.deinit(self.allocator);
@@ -6473,6 +6477,7 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(target_type_facts);
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(ownership_events);
+        _ = try self.internTypeId(self.return_ty);
         const span_identities = try self.buildSpanIdentities();
         errdefer self.allocator.free(span_identities);
         const type_identities = try self.buildTypeIdentities();
@@ -6718,6 +6723,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(locals);
         const symbols = try self.executable_symbols.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(symbols);
+        const aggregate_types = try self.executable_aggregate_types.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(aggregate_types);
         const expressions = try self.executable_expressions.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(expressions);
         const executable_trap_edges = try self.executable_trap_edges.toOwnedSlice(self.allocator);
@@ -6734,9 +6741,11 @@ const FunctionBuilder = struct {
         self.executable_symbol_ids = std.StringHashMap(SymbolId).init(self.allocator);
         return .{
             .complete = complete,
+            .return_type_id = self.type_ids.get(TypeKey.fromValueType(self.return_ty)) orelse .invalid,
             .parameters = parameters,
             .locals = locals,
             .symbols = symbols,
+            .aggregate_types = aggregate_types,
             .expressions = expressions,
             .trap_edges = executable_trap_edges,
             .places = places,
@@ -6747,7 +6756,8 @@ const FunctionBuilder = struct {
 
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
-            .unsupported, .deref, .index, .range_slice, .member, .array, .struct_ => false,
+            .unsupported, .deref, .index, .range_slice, .member, .array => false,
+            .struct_ => |operation| self.executableStructConstructionComplete(expression, operation),
             .address_of => |address| address.place.isValid() and address.place.index() < self.executable_places.items.len and
                 self.executableAddressOfComplete(expression.result_ty, self.executable_places.items[address.place.index()]) and
                 address.representation_source != null and address.representation_span_id.isValid(),
@@ -6775,6 +6785,36 @@ const FunctionBuilder = struct {
             .builtin_call => |call| self.executableBuiltinComplete(expression, call),
             else => true,
         };
+    }
+
+    fn executableStructConstructionComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "struct_"),
+    ) bool {
+        if (operation.construction != .declared_struct or operation.operand_count == 0 or
+            operation.operand_count > mir_model.max_executable_operands) return false;
+        var aggregate: ?mir_model.ExecutableAggregateType = null;
+        for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(expression.type_id)) {
+            aggregate = candidate;
+            break;
+        };
+        const shape = aggregate orelse return false;
+        if (!sameValueType(shape.ty, expression.result_ty) or shape.field_count != operation.operand_count or
+            shape.construction != operation.construction) return false;
+        var seen = [_]bool{false} ** mir_model.max_executable_operands;
+        for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
+            if (!operand_id.isValid() or operand_id.index() >= self.executable_expressions.items.len or
+                field_index >= shape.field_count or seen[field_index]) return false;
+            seen[field_index] = true;
+            const operand = self.executable_expressions.items[operand_id.index()];
+            if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
+                !operand.type_id.eql(shape.field_type_ids[field_index])) return false;
+        }
+        for (seen[0..shape.field_count]) |present| if (!present) return false;
+        for (operation.operands[operation.operand_count..]) |operand_id| if (operand_id.isValid()) return false;
+        for (operation.field_indices[operation.operand_count..]) |field_index| if (field_index != std.math.maxInt(usize)) return false;
+        return true;
     }
 
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -6992,6 +7032,10 @@ const FunctionBuilder = struct {
             .pointer => result_ty = expected,
             else => {},
         };
+        if (expr.kind == .struct_literal) if (expected_ty) |expected| switch (expected) {
+            .struct_ => result_ty = expected,
+            else => {},
+        };
         // Recursively materialize operands first. ExprId order is therefore
         // the language evaluation order, rather than an AST tree a backend is
         // free to visit in a different order.
@@ -7161,10 +7205,37 @@ const FunctionBuilder = struct {
                 for (items, 0..) |item, index| aggregate.operands[index] = try self.ensureExecutableExpr(item);
                 break :array .{ .array = aggregate };
             },
-            // Field spelling/layout is not yet in the executable type table;
-            // keep struct construction fail-closed rather than making a
-            // backend rediscover field names from syntax.
-            .struct_literal, .try_expr, .block, .unreachable_expr, .await_expr => .unsupported,
+            .struct_literal => |fields| aggregate: {
+                const struct_name = switch (result_ty) {
+                    .struct_ => |name| name,
+                    else => break :aggregate .unsupported,
+                };
+                const summary = self.structs.get(struct_name) orelse break :aggregate .unsupported;
+                const construction: AggregateConstructionKind = if (summary.is_c_union) .c_union else .declared_struct;
+                // Union and packed-bit construction have storage semantics,
+                // not ordinary field insertion semantics. Keep those closed
+                // until their canonical executable operations exist.
+                if (construction != .declared_struct or fields.len == 0 or fields.len != summary.fields.len or fields.len > mir_model.max_executable_operands)
+                    break :aggregate .unsupported;
+                if (!try self.internExecutableAggregateType(result_ty, construction, summary.fields)) break :aggregate .unsupported;
+
+                var value: @FieldType(ExecutableExpression.Operation, "struct_") = .{
+                    .operand_count = fields.len,
+                    .construction = construction,
+                };
+                var seen = [_]bool{false} ** mir_model.max_executable_operands;
+                for (fields, 0..) |field, source_index| {
+                    const field_index = self.structFieldIndex(struct_name, field.name.text) orelse break :aggregate .unsupported;
+                    if (field_index >= summary.fields.len or seen[field_index]) break :aggregate .unsupported;
+                    seen[field_index] = true;
+                    value.field_indices[source_index] = field_index;
+                    const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                    value.operands[source_index] = try self.ensureExecutableExprAs(field.value, field_ty);
+                }
+                for (seen[0..fields.len]) |present| if (!present) break :aggregate .unsupported;
+                break :aggregate .{ .struct_ = value };
+            },
+            .try_expr, .block, .unreachable_expr, .await_expr => .unsupported,
             .grouped, .move_expr => unreachable,
         };
         const id = ExprId.fromIndex(self.executable_expressions.items.len);
@@ -7179,6 +7250,34 @@ const FunctionBuilder = struct {
             .operation = operation,
         });
         return id;
+    }
+
+    fn internExecutableAggregateType(
+        self: *FunctionBuilder,
+        ty: ValueType,
+        construction: AggregateConstructionKind,
+        fields: []const ast.Field,
+    ) !bool {
+        if (construction != .declared_struct or fields.len == 0 or fields.len > mir_model.max_executable_operands) return false;
+        const type_id = try self.internTypeId(ty);
+        for (self.executable_aggregate_types.items) |aggregate| {
+            if (!aggregate.type_id.eql(type_id)) continue;
+            return sameValueType(aggregate.ty, ty) and aggregate.construction == construction and aggregate.field_count == fields.len;
+        }
+        var aggregate: mir_model.ExecutableAggregateType = .{
+            .type_id = type_id,
+            .ty = ty,
+            .construction = construction,
+            .field_count = fields.len,
+        };
+        for (fields, 0..) |field, index| {
+            const field_ty = valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (field_ty == .unknown or field_ty == .value) return false;
+            aggregate.field_types[index] = field_ty;
+            aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
+        }
+        try self.executable_aggregate_types.append(self.allocator, aggregate);
+        return true;
     }
 
     fn executableReflectionConstant(self: *FunctionBuilder, expr: ast.Expr) ?u128 {

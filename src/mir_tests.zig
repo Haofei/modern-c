@@ -31,6 +31,52 @@ const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;
 
+test "executable MIR owns declared struct literal field order and types" {
+    const source =
+        \\struct Pair { first: u32, second: u64 }
+        \\fn pair(first: u32, second: u64) -> Pair {
+        \\    return .{ .second = second, .first = first };
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_struct_literal.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const module = try source_parser.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "pair") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expect(function.executable_body.return_type_id.isValid());
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.aggregate_types.len);
+    const aggregate_type = function.executable_body.aggregate_types[0];
+    try std.testing.expectEqual(@as(usize, 2), aggregate_type.field_count);
+    try std.testing.expectEqualStrings("u32", aggregate_type.field_types[0].name());
+    try std.testing.expectEqualStrings("u64", aggregate_type.field_types[1].name());
+
+    const result = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    const aggregate = switch (result.operation) {
+        .struct_ => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 2), aggregate.operand_count);
+    try std.testing.expectEqual(@as(usize, 1), aggregate.field_indices[0]);
+    try std.testing.expectEqual(@as(usize, 0), aggregate.field_indices[1]);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "pair") orelse return error.TestUnexpectedResult;
+    const aggregate_expression = &mutable_function.executable_body.expressions[mutable_function.executable_body.expressions.len - 1];
+    aggregate_expression.operation.struct_.field_indices[1] = 1;
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+    aggregate_expression.operation.struct_.field_indices[1] = 0;
+    mutable_function.executable_body.aggregate_types[0].field_type_ids[0] = mutable_function.executable_body.aggregate_types[0].field_type_ids[1];
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
 test "MIR carries resolved per-file source identity into verified functions" {
     const first_source = "fn first() -> u32 { return 1; }\n";
     const second_source = "fn second() -> u32 { return 2; }\n";

@@ -21,12 +21,12 @@ const Local = struct {
 };
 
 pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
-    if (!body.isComplete() or body.terminators.len == 0 or llvmType(return_ty) == null) return false;
+    if (!body.isComplete() or body.terminators.len == 0 or !llvmTypeSupported(body, return_ty)) return false;
     for (body.parameters) |parameter| {
-        if (!parameter.local.isValid() or llvmType(parameter.ty) == null) return false;
+        if (!parameter.local.isValid() or !llvmTypeSupported(body, parameter.ty)) return false;
     }
     for (body.expressions) |expression| {
-        if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or llvmType(expression.result_ty) == null) return false;
+        if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or !llvmTypeSupported(body, expression.result_ty)) return false;
         if (!operationSupported(body, expression)) return false;
     }
     for (body.trap_edges) |edge| {
@@ -61,7 +61,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
         switch (statement.operation) {
             .local_init => |local| {
-                if (!local.local.isValid() or llvmType(local.ty) == null) return false;
+                if (!local.local.isValid() or !llvmTypeSupported(body, local.ty)) return false;
                 if (local.value) |value| if (!expressionValid(body, value)) return false;
             },
             .store => |store| {
@@ -120,14 +120,34 @@ const Renderer = struct {
     fn init(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType) RenderError!Renderer {
         const values = try allocator.alloc(?Value, body.expressions.len);
         @memset(values, null);
-        return .{
+        var result: Renderer = .{
             .allocator = allocator,
             .body = body,
-            .return_ty = llvmType(return_ty) orelse "",
+            .return_ty = "",
             .values = values,
             .locals = std.AutoHashMap(u32, Local).init(allocator),
             .returns = std.AutoHashMap(u32, ?Value).init(allocator),
         };
+        result.return_ty = try result.typeText(return_ty);
+        return result;
+    }
+
+    fn typeText(self: *Renderer, ty: mir.ValueType) RenderError![]const u8 {
+        return self.typeTextDepth(ty, 0);
+    }
+
+    fn typeTextDepth(self: *Renderer, ty: mir.ValueType, depth: usize) RenderError![]const u8 {
+        if (scalarLlvmType(ty)) |scalar| return scalar;
+        if (depth >= mir.max_executable_operands) return error.Unsupported;
+        const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
+        var text: std.ArrayList(u8) = .empty;
+        try text.appendSlice(self.allocator, "{ ");
+        for (aggregate.field_types[0..aggregate.field_count], 0..) |field_ty, index| {
+            if (index != 0) try text.appendSlice(self.allocator, ", ");
+            try text.appendSlice(self.allocator, try self.typeTextDepth(field_ty, depth + 1));
+        }
+        try text.appendSlice(self.allocator, " }");
+        return text.toOwnedSlice(self.allocator);
     }
 
     fn deinit(self: *Renderer) void {
@@ -140,7 +160,7 @@ const Renderer = struct {
     fn emit(self: *Renderer) RenderError!void {
         if (self.values.len != self.body.expressions.len) return error.OutOfMemory;
         for (self.body.parameters) |parameter| {
-            const ty = llvmType(parameter.ty) orelse return error.Unsupported;
+            const ty = try self.typeText(parameter.ty);
             try self.locals.put(parameter.local.raw, .{ .ty = ty, .storage = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw}), .addressable = false });
         }
         try self.output.appendSlice(self.allocator, "  ; canonical executable MIR\n");
@@ -149,7 +169,7 @@ const Renderer = struct {
         for (self.body.statements) |statement| switch (statement.operation) {
             .local_init => |local| {
                 if (self.locals.contains(local.local.raw)) return error.InvalidBody;
-                const ty = llvmType(local.ty) orelse return error.Unsupported;
+                const ty = try self.typeText(local.ty);
                 const slot = try std.fmt.allocPrint(self.allocator, "%mc_local_{d}", .{local.local.raw});
                 try self.output.print(self.allocator, "  {s} = alloca {s}\n", .{ slot, ty });
                 try self.locals.put(local.local.raw, .{ .ty = ty, .storage = slot, .addressable = true });
@@ -174,7 +194,7 @@ const Renderer = struct {
     fn emitStatement(self: *Renderer, statement: mir.ExecutableStatement) RenderError!void {
         switch (statement.operation) {
             .local_init => |local| {
-                const ty = llvmType(local.ty) orelse return error.Unsupported;
+                const ty = try self.typeText(local.ty);
                 const slot = (self.locals.get(local.local.raw) orelse return error.InvalidBody).storage;
                 if (local.value) |initializer| {
                     const value = try self.emitExpression(initializer);
@@ -231,7 +251,7 @@ const Renderer = struct {
         if (!expressionValid(self.body, id)) return error.InvalidBody;
         if (self.values[id.index()]) |cached| return cached;
         const expression = self.body.expressions[id.index()];
-        const ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        const ty = try self.typeText(expression.result_ty);
         const result: Value = switch (expression.operation) {
             .local => |local_id| blk: {
                 const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
@@ -274,10 +294,34 @@ const Renderer = struct {
             },
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
-            .index, .range_slice, .member, .array, .struct_, .unsupported => return error.Unsupported,
+            .struct_ => |aggregate| try self.emitStruct(expression, aggregate),
+            .index, .range_slice, .member, .array, .unsupported => return error.Unsupported,
         };
         self.values[id.index()] = result;
         return result;
+    }
+
+    fn emitStruct(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
+        if (!structConstructionSupported(self.body, expression, operation)) return error.InvalidBody;
+        const shape = aggregateType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const aggregate_ty = try self.typeText(shape.ty);
+        var current: []const u8 = "zeroinitializer";
+        for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
+            const operand = try self.emitExpression(operand_id);
+            const field_ty = try self.typeText(shape.field_types[field_index]);
+            if (!std.mem.eql(u8, operand.ty, field_ty)) return error.InvalidBody;
+            const result = try self.temp();
+            try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
+                result,
+                aggregate_ty,
+                current,
+                field_ty,
+                operand.spelling,
+                field_index,
+            });
+            current = result;
+        }
+        return .{ .ty = aggregate_ty, .spelling = current };
     }
 
     fn literalValue(self: *Renderer, ty: []const u8, literal: mir.ExecutableLiteral) RenderError!Value {
@@ -319,7 +363,7 @@ const Renderer = struct {
         if (!castSupported(self.body, expression, cast)) return error.InvalidBody;
         const operand_expression = self.body.expressions[cast.operand.index()];
         const operand = try self.emitExpression(cast.operand);
-        const target_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        const target_ty = try self.typeText(expression.result_ty);
         const expected = mir.ExecutableCastKind.classify(operand_expression.result_ty, expression.result_ty) orelse return error.InvalidBody;
         if (expected != cast.kind) return error.InvalidBody;
 
@@ -534,7 +578,7 @@ const Renderer = struct {
         if (!builtinSupported(self.body, expression, call)) return error.InvalidBody;
         var operands: [mir.max_executable_operands]Value = undefined;
         for (call.arguments[0..call.argument_count], 0..) |id, index| operands[index] = try self.emitExpression(id);
-        const result_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        const result_ty = try self.typeText(expression.result_ty);
         return switch (call.kind) {
             .phys => {
                 const operand = operands[0];
@@ -592,7 +636,7 @@ const Renderer = struct {
 
     fn emitMemoryLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
         if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
-        const value_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        const value_ty = try self.typeText(expression.result_ty);
         const place = self.body.places[load.place.index()];
         const pointer = if (place.projection_count == 1)
             try self.emitGuardedParameterDerefPointer(expression, load.place)
@@ -699,7 +743,7 @@ const Renderer = struct {
     }
 };
 
-fn llvmType(ty: mir.ValueType) ?[]const u8 {
+fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
     return switch (ty) {
         .void => "void",
         .bool => "i1",
@@ -710,6 +754,48 @@ fn llvmType(ty: mir.ValueType) ?[]const u8 {
         .address => "i64",
         else => null,
     };
+}
+
+fn llvmTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
+    return llvmTypeSupportedDepth(body, ty, 0);
+}
+
+fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
+    if (scalarLlvmType(ty) != null) return true;
+    if (depth >= mir.max_executable_operands) return false;
+    const aggregate = aggregateTypeForValueType(body, ty) orelse return false;
+    if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
+    for (aggregate.field_types[0..aggregate.field_count]) |field_ty| {
+        if (!llvmTypeSupportedDepth(body, field_ty, depth + 1)) return false;
+    }
+    return true;
+}
+
+fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableAggregateType {
+    if (!type_id.isValid()) return null;
+    for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
+    return null;
+}
+
+fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableAggregateType {
+    for (body.aggregate_types) |*aggregate| if (sameValueType(aggregate.ty, ty)) return aggregate;
+    return null;
+}
+
+fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
+    const shape = aggregateType(body, expression.type_id) orelse return false;
+    if (shape.construction != .declared_struct or operation.construction != .declared_struct or
+        shape.field_count == 0 or shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
+    var seen = [_]bool{false} ** mir.max_executable_operands;
+    for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
+        if (field_index >= shape.field_count or seen[field_index] or !expressionValid(body, operand_id)) return false;
+        seen[field_index] = true;
+        const operand = body.expressions[operand_id.index()];
+        if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
+            !operand.type_id.eql(shape.field_type_ids[field_index]) or !llvmTypeSupported(body, operand.result_ty)) return false;
+    }
+    for (seen[0..shape.field_count]) |present| if (!present) return false;
+    return true;
 }
 
 fn operationSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -739,7 +825,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
             else => false,
         },
         .cast => |cast| castSupported(body, expression, cast),
-        .index, .range_slice, .member, .array, .struct_, .unsupported => false,
+        .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
+        .index, .range_slice, .member, .array, .unsupported => false,
     };
 }
 
@@ -762,7 +849,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
 fn pureScalarBitcastTypesSupported(source: mir.ValueType, target: mir.ValueType) bool {
     const source_bits = pureScalarBitWidth(source) orelse return false;
     const target_bits = pureScalarBitWidth(target) orelse return false;
-    return source_bits == target_bits and llvmType(source) != null and llvmType(target) != null;
+    return source_bits == target_bits and scalarLlvmType(source) != null and scalarLlvmType(target) != null;
 }
 
 fn pureScalarBitWidth(ty: mir.ValueType) ?u16 {
@@ -777,7 +864,7 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     if (!expressionValid(body, cast.operand)) return false;
     const operand = body.expressions[cast.operand.index()];
     const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse return false;
-    if (expected != cast.kind or llvmType(operand.result_ty) == null or llvmType(expression.result_ty) == null) return false;
+    if (expected != cast.kind or scalarLlvmType(operand.result_ty) == null or scalarLlvmType(expression.result_ty) == null) return false;
     const source = mir.ExecutableCastKind.integerInfo(operand.result_ty);
     const target = mir.ExecutableCastKind.integerInfo(expression.result_ty);
     return switch (expected) {

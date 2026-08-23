@@ -2378,7 +2378,9 @@ test "lower-c emits simple struct literal returns from MIR" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_returns.mc", source, &output);
 
     const make_body = try cFunctionBody(output.items, "static Pair make_pair(int32_t a, int32_t b)");
-    try expectContains(make_body, "return (Pair){ .a = a, .b = b };");
+    try expectContains(make_body, "/* canonical executable MIR */");
+    try expectContains(make_body, "= (Pair){ mc_exec_tmp_");
+    try expectContains(make_body, "return mc_exec_tmp_");
     try expectNotContains(make_body, "mc_tmp");
 
     const field_body = try cFunctionBody(output.items, "static Pair return_field_pair(Pair p)");
@@ -2416,7 +2418,9 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectNotContains(choose_assign_field_body, "switch");
 
     const local_body = try cFunctionBody(output.items, "static Pair local_pair(int32_t a, int32_t b)");
-    try expectContains(local_body, "return (Pair){ .a = a, .b = b };");
+    try expectContains(local_body, "/* canonical executable MIR */");
+    try expectContains(local_body, "= (Pair){ mc_exec_tmp_");
+    try expectContains(local_body, "return mc_exec_tmp_");
     try expectNotContains(local_body, "mc_tmp");
 
     const local_field_body = try cFunctionBody(output.items, "static Pair local_field_pair(Pair p)");
@@ -2434,33 +2438,40 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectNotContains(assigned_field_body, "mc_tmp");
 
     const loop_body = try cFunctionBody(output.items, "static Pair loop_pair(bool flag, int32_t a, int32_t b)");
-    try expectContains(loop_body, "while (flag) {");
-    try expectContains(loop_body, "return (Pair){ .a = a, .b = b };");
+    try expectContains(loop_body, "/* canonical executable MIR */");
+    try expectContains(loop_body, "goto mc_bb_");
+    try expectContains(loop_body, "= (Pair){ mc_exec_tmp_");
+    try expectContains(loop_body, "return mc_exec_tmp_");
     try expectNotContains(loop_body, "mc_tmp");
     try expectNotContains(loop_body, "switch");
 
     const loop_local_body = try cFunctionBody(output.items, "static Pair loop_local_pair(bool flag, int32_t a, int32_t b)");
-    try expectContains(loop_local_body, "while (flag) {");
-    try expectContains(loop_local_body, "return (Pair){ .a = a, .b = b };");
+    try expectContains(loop_local_body, "/* canonical executable MIR */");
+    try expectContains(loop_local_body, "goto mc_bb_");
+    try expectContains(loop_local_body, "= (Pair){ mc_exec_tmp_");
+    try expectContains(loop_local_body, "return mc_exec_tmp_");
     try expectNotContains(loop_local_body, "mc_tmp");
     try expectNotContains(loop_local_body, "switch");
 
     const side_body = try cFunctionBody(output.items, "static Pair side_then_pair(int32_t a, int32_t b)");
-    const side_call = std.mem.indexOf(u8, side_body, "hit(a);") orelse return error.TestUnexpectedResult;
-    const side_ret = std.mem.indexOf(u8, side_body, "return (Pair){ .a = a, .b = b };") orelse return error.TestUnexpectedResult;
+    try expectContains(side_body, "/* canonical executable MIR */");
+    const side_call = std.mem.indexOf(u8, side_body, "hit(") orelse return error.TestUnexpectedResult;
+    const side_ret = std.mem.indexOf(u8, side_body, "= (Pair){") orelse return error.TestUnexpectedResult;
     try std.testing.expect(side_call < side_ret);
     try expectNotContains(side_body, "mc_tmp");
 
     const side_local_body = try cFunctionBody(output.items, "static Pair side_then_local_pair(int32_t a, int32_t b)");
-    const side_local_call = std.mem.indexOf(u8, side_local_body, "hit(a);") orelse return error.TestUnexpectedResult;
-    const side_local_ret = std.mem.indexOf(u8, side_local_body, "return (Pair){ .a = a, .b = b };") orelse return error.TestUnexpectedResult;
+    try expectContains(side_local_body, "/* canonical executable MIR */");
+    const side_local_call = std.mem.indexOf(u8, side_local_body, "hit(") orelse return error.TestUnexpectedResult;
+    const side_local_ret = std.mem.indexOf(u8, side_local_body, "= (Pair){") orelse return error.TestUnexpectedResult;
     try std.testing.expect(side_local_call < side_local_ret);
     try expectNotContains(side_local_body, "mc_tmp");
 
     const early_body = try cFunctionBody(output.items, "static Pair early_pair(bool flag, int32_t a, int32_t b)");
-    try expectContains(early_body, "if (flag) {");
-    try expectContains(early_body, "return (Pair){ .a = b, .b = a };");
-    try expectContains(early_body, "return (Pair){ .a = a, .b = b };");
+    try expectContains(early_body, "/* canonical executable MIR */");
+    try expectContains(early_body, "if (mc_exec_tmp_");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, early_body, "= (Pair){"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, early_body, "return mc_exec_tmp_"));
     try expectNotContains(early_body, "mc_tmp");
     try expectNotContains(early_body, "switch");
 }
@@ -4221,7 +4232,8 @@ test "lower-c literal unary components lower from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_unary_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Flags struct_ops(bool flag, bool other)");
-    try expectContains(struct_body, "return (Flags){ .first = !flag, .second = !other };");
+    try expectContains(struct_body, "/* canonical executable MIR */");
+    try expectContains(struct_body, "= (Flags){ mc_exec_tmp_");
 
     const array_body = try cFunctionBody(output.items, "static mc_array_bool_2 array_ops(bool flag, bool other)");
     try expectContains(array_body, "return (mc_array_bool_2){ .elems = { !flag, !other } };");
@@ -4242,7 +4254,8 @@ test "lower-c literal compare components lower from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_compare_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Flags struct_ops(bool flag, bool other)");
-    try expectContains(struct_body, "return (Flags){ .first = (flag == other), .second = (flag != other) };");
+    try expectContains(struct_body, "/* canonical executable MIR */");
+    try expectContains(struct_body, "= (Flags){ mc_exec_tmp_");
 
     const array_body = try cFunctionBody(output.items, "static mc_array_bool_2 array_ops(bool flag, bool other)");
     try expectContains(array_body, "return (mc_array_bool_2){ .elems = { (flag == other), (flag != other) } };");
@@ -4263,7 +4276,9 @@ test "lower-c literal checked arithmetic components lower from MIR without body 
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_checked_arithmetic_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Pair struct_ops(uint32_t a, uint32_t b, uint32_t c)");
-    try expectContains(struct_body, "return (Pair){ .first = mc_checked_add_u32(a, b), .second = mc_checked_add_u32(b, c) };");
+    try expectContains(struct_body, "/* canonical executable MIR */");
+    try expectContains(struct_body, "mc_checked_add_u32(");
+    try expectContains(struct_body, "= (Pair){ mc_exec_tmp_");
 
     const array_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_ops(uint32_t a, uint32_t b, uint32_t c)");
     try expectContains(array_body, "return (mc_array_u32_2){ .elems = { mc_checked_add_u32(a, b), mc_checked_add_u32(b, c) } };");
@@ -4307,7 +4322,9 @@ test "lower-c local literal checked components return from MIR without body fall
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_literal_checked_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Pair local_struct(uint32_t a, uint32_t b, uint32_t c)");
-    try expectContains(struct_body, "return (Pair){ .first = mc_checked_add_u32(a, b), .second = mc_checked_add_u32(b, c) };");
+    try expectContains(struct_body, "/* canonical executable MIR */");
+    try expectContains(struct_body, "mc_checked_add_u32(");
+    try expectContains(struct_body, "= (Pair){ mc_exec_tmp_");
 
     const array_body = try cFunctionBody(output.items, "static mc_array_u32_2 local_array(uint32_t a, uint32_t b, uint32_t c)");
     try expectContains(array_body, "return (mc_array_u32_2){ .elems = { mc_checked_add_u32(a, b), mc_checked_add_u32(b, c) } };");

@@ -17,20 +17,20 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. A 2026-08-22 broad sweep
 over all 521 `tests/**/*.mc` roots de-duplicated to 1800 C and 1866 LLVM
-functions. It still found 1031 C and 1088 LLVM AST-body fallbacks. Those
+functions. It still found 1029 C and 1087 LLVM AST-body fallbacks. Those
 figures establish that final deletion now requires a
 general syntax-free executable MIR body and mechanical backend renderers; more
 strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-22)
 
-The 521-root sweep found C **769/1800 admitted (42.7%)**, 1031 fallback, and
-LLVM **778/1866 admitted (41.7%)**, 1088 fallback. There were no unsupported
-bodies because the transitional AST ingress is still present. Canonical scalar
-bitcasts and compile-time reflection constants account for the latest broad
-gain; reflection values are now selected once in MIR and emitted as ordinary
-`usize` literals. Remaining C fallbacks ranked by family (LLVM has the same
-distribution within a few functions):
+The 521-root sweep found C **771/1800 admitted (42.8%)**, 1029 fallback, and
+LLVM **779/1866 admitted (41.7%)**, 1087 fallback. There were no unsupported
+bodies because the transitional AST ingress is still present. The latest slice
+adds a canonical typed aggregate table and declared-struct construction. It
+preserves source evaluation order separately from declaration/layout order and
+keeps packed-bit and union construction fail-closed. Remaining C fallbacks
+ranked by family (LLVM has the same distribution within a few functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
@@ -141,6 +141,7 @@ typed-unary operand-descendant bugs before commit.
 | Checked scalar local generation | `let x: u32 = n + 1; return x`; a shared plan owns the local generation, typed operands, overflow edge, source locations and return identity while both backends preserve a materialized local instead of folding it | (current batch) |
 | Pure scalar bitcast | equal-width integer/float reinterpretation; MIR owns canonical operand/result types and C uses `__builtin_bit_cast` while LLVM uses `bitcast` or identity | `21e8a53a` |
 | Compile-time reflection constants | `sizeof`, `alignof`, `field_offset`, `bit_offset`, `repr_of`; MIR selects a checked 64-bit `usize` value and both backends render the same literal, including struct/overlay/C-union layout | (current batch) |
+| Declared-struct construction | MIR owns a `TypeId`-keyed aggregate table, exact field types and resolved field indices; operands evaluate in source order while C/LLVM assemble declaration-order layout; duplicate/incomplete/mistyped fields fail verification | (current batch) |
 
 ### Remaining strict-corpus families
 

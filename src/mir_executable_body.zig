@@ -47,6 +47,10 @@ pub fn verify(function: *const mir.Function) !void {
     if (!body.complete and body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
+    try verifyType(function, body.return_type_id, function.return_ty, body.complete);
+    for (body.aggregate_types, 0..) |aggregate, index| {
+        try verifyAggregateType(function, aggregate, index);
+    }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
     }
@@ -195,7 +199,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         },
         .member => |operation| try verifyOperand(body, value, operation.base),
         .array => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
-        .struct_ => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
+        .struct_ => |operation| {
+            try verifyArguments(body, value, operation.operands, operation.operand_count);
+            if (body.complete) try verifyStructConstruction(function, value, operation);
+        },
     }
 }
 
@@ -401,7 +408,7 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .deref, .index, .range_slice, .member, .array, .struct_ => return true,
+        .unsupported, .deref, .index, .range_slice, .member, .array => return true,
         .builtin_call => |call| {
             if (call.argument_count > mir.max_executable_operands) return true;
             var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
@@ -427,6 +434,50 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         else => {},
     };
     return false;
+}
+
+fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableAggregateType, index: usize) !void {
+    const body = &function.executable_body;
+    if (!aggregate.type_id.isValid() or aggregate.field_count == 0 or aggregate.field_count > mir.max_executable_operands or
+        aggregate.construction != .declared_struct) return error.InvalidAggregateType;
+    try verifyType(function, aggregate.type_id, aggregate.ty, body.complete);
+    if (aggregate.ty != .struct_) return error.InvalidAggregateType;
+    for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
+        if (field_ty == .unknown or field_ty == .value) return error.InvalidAggregateType;
+        try verifyType(function, field_type_id, field_ty, body.complete);
+    }
+    for (aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_ty, field_type_id| {
+        if (field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
+    }
+}
+
+fn verifyStructConstruction(
+    function: *const mir.Function,
+    value: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "struct_"),
+) !void {
+    const body = &function.executable_body;
+    const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
+    if (!sameValueType(aggregate.ty, value.result_ty) or operation.construction != aggregate.construction or
+        operation.operand_count != aggregate.field_count) return error.InvalidAggregateConstruction;
+    var seen = [_]bool{false} ** mir.max_executable_operands;
+    for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
+        if (field_index >= aggregate.field_count or seen[field_index]) return error.InvalidAggregateConstruction;
+        seen[field_index] = true;
+        const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+        if (!sameValueType(operand.result_ty, aggregate.field_types[field_index]) or !operand.type_id.eql(aggregate.field_type_ids[field_index]))
+            return error.InvalidAggregateConstruction;
+    }
+    for (seen[0..aggregate.field_count]) |present| if (!present) return error.InvalidAggregateConstruction;
+    for (operation.field_indices[operation.operand_count..]) |field_index| if (field_index != std.math.maxInt(usize))
+        return error.InvalidAggregateConstruction;
+}
+
+pub fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableAggregateType {
+    if (!type_id.isValid()) return null;
+    for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
+    return null;
 }
 
 fn verifyMemoryAccess(

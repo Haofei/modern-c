@@ -774,6 +774,15 @@ pub const ExecutableParameter = struct {
 
 pub const ExecutableLocalIdentity = struct { id: LocalId, spelling: []const u8 };
 
+pub const ExecutableAggregateType = struct {
+    type_id: TypeId,
+    ty: ValueType,
+    construction: AggregateConstructionKind,
+    field_types: [max_executable_operands]ValueType = [_]ValueType{.unknown} ** max_executable_operands,
+    field_type_ids: [max_executable_operands]TypeId = [_]TypeId{.invalid} ** max_executable_operands,
+    field_count: usize = 0,
+};
+
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
     operation: union(enum) {
@@ -789,9 +798,11 @@ pub const ExecutableTerminator = struct {
 
 pub const ExecutableBody = struct {
     complete: bool = true,
+    return_type_id: TypeId = .invalid,
     parameters: []ExecutableParameter = &.{},
     locals: []ExecutableLocalIdentity = &.{},
     symbols: []SymbolIdentity = &.{},
+    aggregate_types: []ExecutableAggregateType = &.{},
     expressions: []ExecutableExpression = &.{},
     trap_edges: []ExecutableTrapEdge = &.{},
     places: []ExecutablePlace = &.{},
@@ -806,6 +817,7 @@ pub const ExecutableBody = struct {
         if (self.parameters.len != 0) allocator.free(self.parameters);
         if (self.locals.len != 0) allocator.free(self.locals);
         if (self.symbols.len != 0) allocator.free(self.symbols);
+        if (self.aggregate_types.len != 0) allocator.free(self.aggregate_types);
         if (self.expressions.len != 0) allocator.free(self.expressions);
         if (self.trap_edges.len != 0) allocator.free(self.trap_edges);
         if (self.places.len != 0) allocator.free(self.places);
