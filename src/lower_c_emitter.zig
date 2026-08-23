@@ -21,6 +21,8 @@ const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
 const mir_statement_plan = @import("mir_statement_plan.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
+const mir_executable_c = @import("mir_executable_c.zig");
+const mir_executable_body = @import("mir_executable_body.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_bridge = @import("type_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
@@ -1841,7 +1843,12 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and access_structural_operation == null and scalar_expression_plan == null and scalar_control_plan == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and slice_length_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        const no_specialized_body = simple_trap == null and simple_assert == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and access_structural_operation == null and scalar_expression_plan == null and scalar_control_plan == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and slice_length_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null;
+        const executable_body = if (no_specialized_body and self.mirExecutableBodySupported(function, &fn_mir)) body: {
+            mir_executable_body.verify(&fn_mir) catch break :body null;
+            break :body &fn_mir.executable_body;
+        } else null;
+        if (no_specialized_body and executable_body == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -2256,9 +2263,54 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, ";\n");
         } else if (access_structural_operation) |operation| {
             try self.emitMirAccessStructuralPlan(access_body_plan.?, operation);
+        } else if (executable_body) |body| {
+            try mir_executable_c.emitBody(self.allocator, self.out, body, self.indent);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
+    }
+
+    fn mirExecutableBodySupported(self: *CEmitter, function_artifact: anytype, function: *const mir.Function) bool {
+        // The generic renderer does not schedule cleanup edges.  Admission is
+        // fail-closed until ownership cleanup is itself represented by
+        // executable-body statements/blocks.
+        if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return false;
+        for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
+        const body = &function.executable_body;
+        if (!mir_executable_c.canEmitBody(body)) return false;
+        if (body.parameters.len != function_artifact.signature.params.len) return false;
+        if (!self.mirExecutableTypeMatchesSource(function.return_ty, function_artifact.signature.transitionalReturnType())) return false;
+        for (body.parameters, function_artifact.signature.params) |parameter, source_parameter| {
+            if (!self.mirExecutableTypeMatchesSource(parameter.ty, source_parameter.ty)) return false;
+        }
+        for (body.expressions) |expression| switch (expression.operation) {
+            .symbol => |symbol_id| {
+                if (!symbol_id.isValid() or symbol_id.index() >= body.symbols.len) return false;
+                const symbol = body.symbols[symbol_id.index()];
+                if (!symbol.id.eql(symbol_id)) return false;
+                const global = self.globals.get(symbol.spelling) orelse return false;
+                if (!self.mirExecutableTypeMatchesSource(expression.result_ty, global.source_ty)) return false;
+            },
+            .direct_call => |call| {
+                if (!call.callee.isValid() or call.callee.index() >= body.symbols.len) return false;
+                const symbol = body.symbols[call.callee.index()];
+                if (!symbol.id.eql(call.callee)) return false;
+                const signature = self.functions.get(symbol.spelling) orelse return false;
+                if (signature.is_variadic or signature.params.len != call.argument_count or
+                    !self.mirExecutableTypeMatchesSource(expression.result_ty, signature.return_type)) return false;
+                for (call.arguments[0..call.argument_count], signature.params) |argument_id, source_parameter| {
+                    if (!argument_id.isValid() or argument_id.index() >= body.expressions.len) return false;
+                    if (!self.mirExecutableTypeMatchesSource(body.expressions[argument_id.index()].result_ty, source_parameter.ty)) return false;
+                }
+            },
+            else => {},
+        };
+        return true;
+    }
+
+    fn mirExecutableTypeMatchesSource(self: *CEmitter, value_ty: mir.ValueType, maybe_source_ty: ?TransitionalTypeExpr) bool {
+        if (maybe_source_ty == null) return value_ty == .void;
+        return self.mirWorkflowValueTypeMatchesSource(value_ty, maybe_source_ty.?);
     }
 
     fn simpleMirTrapBody(self: *CEmitter, fn_mir: mir.Function) ?SimpleMirTrapBody {
@@ -2842,7 +2894,7 @@ pub const CEmitter = struct {
         const resolved = self.resolveAliasType(source_ty);
         return switch (value_ty) {
             .void => isCVoidType(resolved),
-            .integer, .struct_ => self.mirScalarExpressionSourceTypeIs(resolved, value_ty.name()),
+            .bool, .integer, .float, .address, .struct_ => self.mirScalarExpressionSourceTypeIs(resolved, value_ty.name()),
             .pointer => |pointer| switch (resolved.kind) {
                 .pointer => |source_pointer| std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
                 else => false,

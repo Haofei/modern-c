@@ -94,6 +94,41 @@ test "lower-c function symbol returns lower from MIR without body fallback" {
     try expectContains(body, "return tick;");
 }
 
+test "lower-c executable body renders broad CFG calls without AST fallback" {
+    const source =
+        \\extern fn next_value() -> u32;
+        \\extern fn combine_values(left: u32, right: u32) -> u32;
+        \\fn executable_cfg(flag: bool, seed: u32) -> u32 {
+        \\    var value: u32 = seed;
+        \\    while flag {
+        \\        value = combine_values(next_value(), seed);
+        \\        break;
+        \\    }
+        \\    return combine_values(value, next_value());
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_executable_cfg.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t executable_cfg(bool flag, uint32_t seed)");
+    try expectContains(body, "mc_bb_");
+    try expectContains(body, "goto mc_bb_");
+    const first_next = std.mem.indexOf(u8, body, "= next_value();") orelse return error.TestUnexpectedResult;
+    const first_combine = std.mem.indexOfPos(u8, body, first_next, "= combine_values(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first_next < first_combine);
+
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "executable_cfg.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "executable_cfg.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{ "clang", "-std=c11", "-fsyntax-only", generated_c } });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+}
+
 test "lower-c emits slice length returns from MIR without body fallback" {
     const source =
         \\fn const_slice_len(values: []const u8) -> usize {
@@ -11211,6 +11246,14 @@ fn cFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
     return output[content_start..body_end];
 }
 
+fn expectNeedlesInOrder(haystack: []const u8, needles: []const []const u8) !void {
+    var search_from: usize = 0;
+    for (needles) |needle| {
+        const found = std.mem.indexOfPos(u8, haystack, search_from, needle) orelse return error.TestUnexpectedResult;
+        search_from = found + needle.len;
+    }
+}
+
 test "C bitcast query accepts only the real builtin call shape" {
     const source =
         \\fn probe(x: u32) -> u32 {
@@ -11693,9 +11736,9 @@ test "lower-c admits single nested-call argument returns inline" {
 }
 
 test "lower-c admits multi-arg call with one nested call and pure leaves" {
-    // A single nested call plus pure-leaf args (param / literal) has no
-    // evaluation-order ambiguity, so it inlines. Two nested calls in one arg
-    // list stay on the fallback (sequenced through temps).
+    // The canonical executable body gives every evaluated operand an ExprId,
+    // so both the formerly-inline and formerly-fallback shapes are staged in
+    // source order without relying on C argument evaluation order.
     const source =
         \\extern fn f() -> u32;
         \\extern fn k() -> u32;
@@ -11717,10 +11760,16 @@ test "lower-c admits multi-arg call with one nested call and pure leaves" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return g2(f(), b);");
-    try expectContains(output.items, "return g2(f(), 4096);");
-    // Two nested calls must be sequenced through temps, not inlined.
-    try expectContains(output.items, "return g2(mc_tmp");
+    const one_call = try cFunctionBody(output.items, "static uint32_t one_call(uint32_t b)");
+    if (std.mem.indexOf(u8, one_call, "return g2(f(), b);") == null)
+        try expectNeedlesInOrder(one_call, &.{ "= f();", "= b;", "= g2(" });
+    const one_call_lit = try cFunctionBody(output.items, "static uint32_t one_call_lit(void)");
+    if (std.mem.indexOf(u8, one_call_lit, "return g2(f(), 4096);") == null)
+        try expectNeedlesInOrder(one_call_lit, &.{ "= f();", "= 4096;", "= g2(" });
+    const two_calls = try cFunctionBody(output.items, "static uint32_t two_calls(void)");
+    if (std.mem.indexOf(u8, two_calls, "return g2(mc_tmp") == null)
+        try expectNeedlesInOrder(two_calls, &.{ "= f();", "= k();", "= g2(" });
+    try expectNotContains(output.items, "g2(f(), k())");
 }
 
 test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
@@ -20385,16 +20434,27 @@ test "lower-c sequences return call arguments left to right" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_eval_order.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = next_value();\n    uint32_t mc_tmp1 = next_value();\n    return combine(mc_tmp0, mc_tmp1);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp2 = next_value();\n    uint32_t mc_tmp3 = next_value();\n    uint32_t value = combine(mc_tmp2, mc_tmp3);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp4 = next_value();\n    uint32_t mc_tmp5 = next_value();\n    uint32_t value = combine(mc_tmp4, mc_tmp5);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp6 = next_value();\n    uint32_t mc_tmp7 = next_value();\n    consume(mc_tmp6, mc_tmp7);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp8 = next_value();\n    uint32_t mc_tmp9 = box_value(mc_tmp8);\n    uint32_t mc_tmp10 = next_value();\n    return combine(mc_tmp9, mc_tmp10);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp11 = next_value();\n    uint32_t mc_tmp12 = box_value(mc_tmp11);\n    uint32_t mc_tmp13 = next_value();\n    uint32_t value = combine(mc_tmp12, mc_tmp13);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp14 = next_value();\n    uint32_t mc_tmp15 = box_value(mc_tmp14);\n    uint32_t mc_tmp16 = next_value();\n    consume(mc_tmp15, mc_tmp16);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp17 = next_value();\n    uint32_t mc_tmp18 = next_value();\n    uint32_t mc_tmp19 = combine(mc_tmp17, mc_tmp18);\n    value = mc_tmp19;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp20 = next_value();\n    uint32_t mc_tmp21 = box_value(mc_tmp20);\n    uint32_t mc_tmp22 = next_value();\n    uint32_t mc_tmp23 = combine(mc_tmp21, mc_tmp22);\n    value = mc_tmp23;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp24 = next_value();\n    uint32_t mc_tmp25 = next_value();\n    uint32_t mc_tmp26 = combine(mc_tmp24, mc_tmp25);\n    mc_race_store_u32(&ordered_global, (uint32_t)mc_tmp26);") != null);
+
+    const ordered_two_args = try cFunctionBody(output.items, "static uint32_t ordered_two_args(void)");
+    try expectNeedlesInOrder(ordered_two_args, &.{ "= next_value();", "= next_value();", "= combine(" });
+    const ordered_local_init = try cFunctionBody(output.items, "static uint32_t ordered_local_init(void)");
+    try expectNeedlesInOrder(ordered_local_init, &.{ "= next_value();", "= next_value();", "= combine(" });
+    const ordered_typed_local_init = try cFunctionBody(output.items, "static uint32_t ordered_typed_local_init(void)");
+    try expectNeedlesInOrder(ordered_typed_local_init, &.{ "= next_value();", "= next_value();", "= combine(" });
+    const ordered_expr_stmt = try cFunctionBody(output.items, "static void ordered_expr_stmt(void)");
+    try expectNeedlesInOrder(ordered_expr_stmt, &.{ "= next_value();", "= next_value();", "consume(" });
+    const ordered_nested_return = try cFunctionBody(output.items, "static uint32_t ordered_nested_return(void)");
+    try expectNeedlesInOrder(ordered_nested_return, &.{ "= next_value();", "= box_value(", "= next_value();", "= combine(" });
+    const ordered_nested_local_init = try cFunctionBody(output.items, "static uint32_t ordered_nested_local_init(void)");
+    try expectNeedlesInOrder(ordered_nested_local_init, &.{ "= next_value();", "= box_value(", "= next_value();", "= combine(" });
+    const ordered_nested_expr_stmt = try cFunctionBody(output.items, "static void ordered_nested_expr_stmt(void)");
+    try expectNeedlesInOrder(ordered_nested_expr_stmt, &.{ "= next_value();", "= box_value(", "= next_value();", "consume(" });
+    const ordered_assignment = try cFunctionBody(output.items, "static uint32_t ordered_assignment(void)");
+    try expectNeedlesInOrder(ordered_assignment, &.{ "= next_value();", "= next_value();", "= combine(", "value = " });
+    const ordered_nested_assignment = try cFunctionBody(output.items, "static uint32_t ordered_nested_assignment(void)");
+    try expectNeedlesInOrder(ordered_nested_assignment, &.{ "= next_value();", "= box_value(", "= next_value();", "= combine(", "value = " });
+    const ordered_global_assignment = try cFunctionBody(output.items, "static void ordered_global_assignment(void)");
+    try expectNeedlesInOrder(ordered_global_assignment, &.{ "= next_value();", "= next_value();", "= combine(", "mc_race_store_u32(&ordered_global" });
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return combine(next_value(), next_value());") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = combine(next_value(), next_value());") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "value = combine(next_value(), next_value());") == null);

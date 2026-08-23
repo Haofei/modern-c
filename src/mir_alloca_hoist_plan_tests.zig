@@ -57,7 +57,19 @@ test "alloca hoist plan fails closed for stale bound and trap identities" {
     var type_module = try buildFixture();
     defer type_module.deinit();
     const stale_type = functionByName(&type_module, "alloca_hoist_run").?;
-    stale_type.type_identities[0].id = .invalid;
+    // Type identities now also include the canonical executable-body
+    // projection.  Corrupt an identity actually referenced by the legacy
+    // alloca plan instead of assuming that it occupies slot zero.
+    var referenced_type: mir.TypeId = .invalid;
+    outer: for (stale_type.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!instruction.typed_result_ty.isValid()) continue;
+            referenced_type = instruction.typed_result_ty;
+            break :outer;
+        }
+    }
+    try std.testing.expect(referenced_type.isValid());
+    stale_type.type_identities[referenced_type.index()].id = .invalid;
     try std.testing.expect(plan.build(stale_type) == null);
 
     var cfg_module = try buildFixture();

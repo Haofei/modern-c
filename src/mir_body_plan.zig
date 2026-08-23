@@ -27,6 +27,7 @@ pub const OperandSpans = struct {
     callee: mir.SpanId = .invalid,
     callee_root: mir.SpanId = .invalid,
     aggregate: [mir.Instruction.max_aggregate_operands]mir.SpanId = [_]mir.SpanId{.invalid} ** mir.Instruction.max_aggregate_operands,
+    aggregate_field_indices: [mir.Instruction.max_aggregate_operands]usize = [_]usize{std.math.maxInt(usize)} ** mir.Instruction.max_aggregate_operands,
     aggregate_count: usize = 0,
 };
 
@@ -137,7 +138,11 @@ pub const BodyPlan = struct {
     types: []const mir.TypeIdentity,
     spans: []const mir.SpanIdentity,
     values: []const mir.ValueIdentity,
+    symbols: []const mir.SymbolIdentity,
     access_facts: []const mir.AccessFact,
+    integer_facts: []const mir.IntegerFact,
+    bool_facts: []const mir.BoolFact,
+    float_facts: []const mir.FloatFact,
 
     pub fn deinit(self: *BodyPlan, allocator: std.mem.Allocator) void {
         for (self.blocks) |body_block| {
@@ -152,7 +157,11 @@ pub const BodyPlan = struct {
         allocator.free(self.types);
         allocator.free(self.spans);
         allocator.free(self.values);
+        allocator.free(self.symbols);
         allocator.free(self.access_facts);
+        allocator.free(self.integer_facts);
+        allocator.free(self.bool_facts);
+        allocator.free(self.float_facts);
         self.* = undefined;
     }
 
@@ -179,6 +188,12 @@ pub const BodyPlan = struct {
         const identity = self.types[id.index()];
         return if (identity.id.eql(id)) identity else null;
     }
+
+    pub fn symbol(self: *const BodyPlan, id: mir.SymbolId) ?mir.SymbolIdentity {
+        if (!id.isValid() or id.index() >= self.symbols.len) return null;
+        const identity = self.symbols[id.index()];
+        return if (identity.id.eql(id)) identity else null;
+    }
 };
 
 pub fn build(allocator: std.mem.Allocator, function: *const mir.Function) !BodyPlan {
@@ -190,8 +205,16 @@ pub fn build(allocator: std.mem.Allocator, function: *const mir.Function) !BodyP
     errdefer allocator.free(spans);
     const values = try allocator.dupe(mir.ValueIdentity, function.value_identities);
     errdefer allocator.free(values);
+    const symbols = try allocator.dupe(mir.SymbolIdentity, function.target_owner_identities);
+    errdefer allocator.free(symbols);
     const access_facts = try allocator.dupe(mir.AccessFact, function.access_facts);
     errdefer allocator.free(access_facts);
+    const integer_facts = try allocator.dupe(mir.IntegerFact, function.integer_facts);
+    errdefer allocator.free(integer_facts);
+    const bool_facts = try allocator.dupe(mir.BoolFact, function.bool_facts);
+    errdefer allocator.free(bool_facts);
+    const float_facts = try allocator.dupe(mir.FloatFact, function.float_facts);
+    errdefer allocator.free(float_facts);
     const blocks = try buildBlocks(allocator, function);
     errdefer freeBlocks(allocator, blocks);
     const trap_edges = try buildTrapEdges(allocator, function);
@@ -213,7 +236,11 @@ pub fn build(allocator: std.mem.Allocator, function: *const mir.Function) !BodyP
         .types = types,
         .spans = spans,
         .values = values,
+        .symbols = symbols,
         .access_facts = access_facts,
+        .integer_facts = integer_facts,
+        .bool_facts = bool_facts,
+        .float_facts = float_facts,
     };
 }
 
@@ -525,6 +552,7 @@ fn instructionPlan(function: *const mir.Function, instruction: mir.Instruction) 
             .callee = instruction.typed_callee_span_id,
             .callee_root = instruction.typed_callee_root_span_id,
             .aggregate = instruction.typed_aggregate_operand_span_ids,
+            .aggregate_field_indices = instruction.typed_aggregate_field_indices,
             .aggregate_count = instruction.typed_aggregate_operand_count,
         },
         .operand_value_id = instruction.typed_operand_value_id,

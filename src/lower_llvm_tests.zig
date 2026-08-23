@@ -9299,8 +9299,11 @@ test "LLVM inferred local literals require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_literal_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%count") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%enabled") != null);
+    // Local spelling is not semantic identity.  The canonical executable MIR
+    // renderer names storage by LocalId, so assert the typed values instead of
+    // coupling this test to source variable names.
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "store i32 7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "store i1 true") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -14137,6 +14140,27 @@ test "LLVM structural access plan lowers store-return and range builtin terminal
     try expectContains(range, "alloca { ptr, i64 }");
     try expectContains(range, "extractvalue { ptr, i64 }");
     try expectContains(range, "ret i64");
+}
+
+test "LLVM canonical executable MIR lowers broad local bodies without AST fallback" {
+    const source =
+        \\extern fn transform(value: u32) -> u32;
+        \\fn local_pipeline(a: u32, b: u32) -> u32 {
+        \\    let left: u32 = transform(a);
+        \\    let right: u32 = transform(b);
+        \\    let mixed: u32 = left ^ right;
+        \\    return mixed;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_body_broad.mc", source, &output);
+
+    const pipeline = try llvmFunctionBody(output.items, "define internal i32 @local_pipeline");
+    try expectContains(pipeline, "; canonical executable MIR");
+    try expectContains(pipeline, "call i32 @transform(i32 %mc_arg_0)");
+    try expectContains(pipeline, "call i32 @transform(i32 %mc_arg_1)");
+    try expectContains(pipeline, " = xor i32 ");
 }
 
 test "LLVM local-address access tag lowers checked update without function body fallback" {

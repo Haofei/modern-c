@@ -37,6 +37,10 @@ pub const ValueId = TypedIndex("ValueId");
 pub const BlockId = TypedIndex("BlockId");
 pub const SpanId = TypedIndex("SpanId");
 pub const BodyId = TypedIndex("BodyId");
+pub const InstId = TypedIndex("InstId");
+pub const ExprId = TypedIndex("ExprId");
+pub const LocalId = TypedIndex("LocalId");
+pub const PlaceId = TypedIndex("PlaceId");
 
 pub const CallableKind = enum {
     function,
@@ -285,6 +289,190 @@ pub const Instruction = struct {
         control_transfer,
         return_value,
     };
+};
+
+pub const max_executable_operands: usize = 16;
+pub const max_executable_projections: usize = 8;
+
+pub const ExecutableUnaryOp = enum { neg, bit_not, logical_not };
+pub const ExecutableBinaryOp = enum {
+    logical_or,
+    logical_and,
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+    bit_or,
+    bit_xor,
+    bit_and,
+    shl,
+    shr,
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+};
+
+pub const ExecutableLiteral = union(enum) {
+    /// Canonical unsigned magnitude. A negative source expression is a
+    /// separate unary operation, so radix, separators and suffix spelling do
+    /// not leak into backend syntax.
+    integer: u128,
+    float: []const u8,
+    string: []const u8,
+    character: []const u8,
+    boolean: bool,
+    null,
+    uninit,
+    void,
+    enum_value: []const u8,
+};
+
+pub const ExecutableExpression = struct {
+    id: ExprId,
+    /// The basic block that owns this value operation. Operands are required
+    /// to be earlier ExprIds in the same block, making source evaluation order
+    /// explicit and preventing a backend from choosing its own AST traversal.
+    block_id: BlockId,
+    /// Statement whose evaluation owns this operation. ExprIds are dense and
+    /// operands must precede their consumer within this statement.
+    owner_statement: InstId,
+    source: SourcePoint,
+    span_id: SpanId = .invalid,
+    result_ty: ValueType,
+    type_id: TypeId = .invalid,
+    operation: Operation,
+
+    pub const Operation = union(enum) {
+        local: LocalId,
+        symbol: SymbolId,
+        literal: ExecutableLiteral,
+        unary: struct { op: ExecutableUnaryOp, operand: ExprId },
+        binary: struct { op: ExecutableBinaryOp, left: ExprId, right: ExprId },
+        cast: struct { operand: ExprId },
+        direct_call: struct {
+            callee: SymbolId,
+            callee_source: SourcePoint,
+            callee_span_id: SpanId = .invalid,
+            arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
+            argument_count: usize = 0,
+        },
+        builtin_call: struct {
+            kind: CallTargetKind,
+            callee_source: SourcePoint,
+            callee_span_id: SpanId = .invalid,
+            arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
+            argument_count: usize = 0,
+        },
+        indirect_call: struct {
+            callee: ExprId,
+            arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
+            argument_count: usize = 0,
+        },
+        address_of: ExprId,
+        deref: ExprId,
+        index: struct { base: ExprId, index: ExprId },
+        range_slice: struct { base: ExprId, start: ExprId, end: ExprId },
+        member: struct { base: ExprId, field_index: usize },
+        slice_length: ExprId,
+        array: struct {
+            operands: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
+            operand_count: usize = 0,
+        },
+        struct_: struct {
+            operands: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
+            field_indices: [max_executable_operands]usize = [_]usize{std.math.maxInt(usize)} ** max_executable_operands,
+            operand_count: usize = 0,
+            construction: AggregateConstructionKind,
+        },
+        unsupported,
+    };
+};
+
+pub const ExecutablePlace = struct {
+    id: PlaceId,
+    source: SourcePoint,
+    span_id: SpanId = .invalid,
+    root: union(enum) { local: LocalId, symbol: SymbolId },
+    projections: [max_executable_projections]Projection = [_]Projection{.deref} ** max_executable_projections,
+    projection_count: usize = 0,
+
+    pub const Projection = union(enum) {
+        field: usize,
+        index: ExprId,
+        deref,
+    };
+};
+
+pub const ExecutableStatement = struct {
+    id: InstId,
+    block_id: BlockId,
+    source: SourcePoint,
+    span_id: SpanId = .invalid,
+    operation: Operation,
+
+    pub const Operation = union(enum) {
+        local_init: struct { local: LocalId, ty: ValueType, type_id: TypeId = .invalid, value: ?ExprId, mutable: bool },
+        store: struct { place: PlaceId, value: ExprId },
+        eval: ExprId,
+        guard: struct { kind: enum { if_, while_, switch_, assert_ }, condition: ExprId },
+        return_: ?ExprId,
+        control_transfer: enum { break_, continue_ },
+        defer_cleanup,
+        unsupported,
+    };
+};
+
+pub const ExecutableParameter = struct {
+    local: LocalId,
+    ty: ValueType,
+    type_id: TypeId = .invalid,
+    source: SourcePoint,
+    span_id: SpanId = .invalid,
+};
+
+pub const ExecutableLocalIdentity = struct { id: LocalId, spelling: []const u8 };
+
+pub const ExecutableTerminator = struct {
+    block_id: BlockId,
+    operation: union(enum) {
+        fallthrough,
+        jump: BlockId,
+        branch: struct { condition: ExprId, true_block: BlockId, false_block: BlockId },
+        switch_: struct { subject: ExprId },
+        return_,
+        trap_: TrapKind,
+        unreachable_,
+    },
+};
+
+pub const ExecutableBody = struct {
+    complete: bool = true,
+    parameters: []ExecutableParameter = &.{},
+    locals: []ExecutableLocalIdentity = &.{},
+    symbols: []SymbolIdentity = &.{},
+    expressions: []ExecutableExpression = &.{},
+    places: []ExecutablePlace = &.{},
+    statements: []ExecutableStatement = &.{},
+    terminators: []ExecutableTerminator = &.{},
+
+    pub fn isComplete(self: *const ExecutableBody) bool {
+        return self.complete;
+    }
+
+    pub fn deinit(self: *ExecutableBody, allocator: std.mem.Allocator) void {
+        if (self.parameters.len != 0) allocator.free(self.parameters);
+        if (self.locals.len != 0) allocator.free(self.locals);
+        if (self.symbols.len != 0) allocator.free(self.symbols);
+        if (self.expressions.len != 0) allocator.free(self.expressions);
+        if (self.places.len != 0) allocator.free(self.places);
+        if (self.statements.len != 0) allocator.free(self.statements);
+        if (self.terminators.len != 0) allocator.free(self.terminators);
+        self.* = .{};
+    }
 };
 
 pub const Terminator = union(enum) {
@@ -1016,6 +1204,10 @@ pub const Function = struct {
     ownership_events: []OwnershipEvent = &.{},
     ownership_cleanup_plan: OwnershipCleanupPlan = .{},
     cleanup_cfg: CleanupCfg = .{},
+    /// Hand-built/legacy MIR fixtures may omit this projection. Production
+    /// builders replace it with a populated body; omission is explicitly
+    /// incomplete and can never reach mechanical codegen.
+    executable_body: ExecutableBody = .{ .complete = false },
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
@@ -1085,6 +1277,8 @@ pub const Module = struct {
             function.ownership_cleanup_plan.deinit(self.allocator);
             var cleanup_cfg = function.cleanup_cfg;
             cleanup_cfg.deinit(self.allocator);
+            var executable_body = function.executable_body;
+            executable_body.deinit(self.allocator);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);

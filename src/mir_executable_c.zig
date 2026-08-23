@@ -1,0 +1,777 @@
+//! Mechanical C rendering for a complete syntax-free MIR executable body.
+//!
+//! This module deliberately knows nothing about AST declarations, source
+//! spelling joins, or the specialized C body plans.  All control flow comes
+//! from `BlockId` terminators and all values come from typed executable-body
+//! operations.  The surrounding C emitter remains responsible for the
+//! function signature and braces.
+
+const std = @import("std");
+const mir = @import("mir_model.zig");
+
+pub const RenderError = error{
+    IncompleteBody,
+    InvalidBlock,
+    InvalidExpression,
+    InvalidLocal,
+    InvalidPlace,
+    InvalidSymbol,
+    UnsupportedOperation,
+    UnsupportedType,
+};
+
+pub fn emitBody(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (!body.isComplete() or !canEmitBody(body)) return error.IncompleteBody;
+    if (body.terminators.len == 0) return error.InvalidBlock;
+
+    // Every value is materialized once in canonical ExprId order.  C leaves
+    // operand and argument evaluation order unspecified, so rendering a pure
+    // expression tree here would lose the order already verified by MIR.
+    for (body.expressions) |expression| {
+        if (!expressionNeedsTemporary(expression)) continue;
+        try writeIndent(allocator, out, indent);
+        try appendCType(allocator, out, expression.result_ty);
+        try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
+    }
+
+    for (body.terminators) |terminator| {
+        try writeIndent(allocator, out, indent);
+        // A C11 label must precede a statement, not a declaration.
+        try out.print(allocator, "mc_bb_{d}: ;\n", .{terminator.block_id.raw});
+
+        for (body.statements) |statement| {
+            if (!statement.block_id.eql(terminator.block_id)) continue;
+            try emitStatement(allocator, out, body, statement, indent + 1);
+        }
+        try emitTerminator(allocator, out, body, terminator, indent + 1);
+    }
+}
+
+fn emitStatement(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try prepareStatementExpressions(allocator, out, body, statement, indent);
+    switch (statement.operation) {
+        .local_init => |local| {
+            try writeIndent(allocator, out, indent);
+            try appendCType(allocator, out, local.ty);
+            try out.append(allocator, ' ');
+            try appendLocal(allocator, out, body, local.local);
+            if (local.value) |value| {
+                try out.appendSlice(allocator, " = ");
+                try emitExpression(allocator, out, body, value, 0);
+            }
+            try out.appendSlice(allocator, ";\n");
+        },
+        .store => |store| {
+            try writeIndent(allocator, out, indent);
+            try emitPlace(allocator, out, body, store.place);
+            try out.appendSlice(allocator, " = ");
+            try emitExpression(allocator, out, body, store.value, 0);
+            try out.appendSlice(allocator, ";\n");
+        },
+        .eval => |value| {
+            // `prepareStatementExpressions` evaluated the complete expression
+            // graph, including a void-valued root.  Emitting it again would
+            // duplicate effects.
+            _ = expressionById(body, value) orelse return error.InvalidExpression;
+        },
+        .guard => |guard| switch (guard.kind) {
+            .assert_ => {
+                try writeIndent(allocator, out, indent);
+                try out.appendSlice(allocator, "if (!(");
+                try emitExpression(allocator, out, body, guard.condition, 0);
+                try out.appendSlice(allocator, ")) mc_trap_Assert();\n");
+            },
+            // Branch/loop/switch guards are represented by the block
+            // terminator.  The statement only preserves the source operation.
+            .if_, .while_, .switch_ => {},
+        },
+        .return_ => |value| {
+            try writeIndent(allocator, out, indent);
+            if (value) |expression| {
+                try out.appendSlice(allocator, "return ");
+                try emitExpression(allocator, out, body, expression, 0);
+                try out.appendSlice(allocator, ";\n");
+            } else {
+                try out.appendSlice(allocator, "return;\n");
+            }
+        },
+        // The corresponding CFG edge is the authority for these transfers.
+        .control_transfer => {},
+        .defer_cleanup, .unsupported => return error.UnsupportedOperation,
+    }
+}
+
+fn emitTerminator(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    terminator: mir.ExecutableTerminator,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    switch (terminator.operation) {
+        .fallthrough => return error.UnsupportedOperation,
+        .jump => |target| {
+            if (!hasBlock(body, target)) return error.InvalidBlock;
+            try writeIndent(allocator, out, indent);
+            try out.print(allocator, "goto mc_bb_{d};\n", .{target.raw});
+        },
+        .branch => |branch| {
+            if (!hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block)) return error.InvalidBlock;
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "if (");
+            try emitExpression(allocator, out, body, branch.condition, 0);
+            try out.print(allocator, ") goto mc_bb_{d}; else goto mc_bb_{d};\n", .{ branch.true_block.raw, branch.false_block.raw });
+        },
+        // The value-bearing return is an executable statement.  A bare return
+        // terminator only closes paths whose statement stream has no explicit
+        // return operation.
+        .return_ => {
+            if (!blockHasReturn(body, terminator.block_id)) {
+                try writeIndent(allocator, out, indent);
+                try out.appendSlice(allocator, "return;\n");
+            }
+        },
+        .trap_ => |kind| {
+            const helper = trapHelper(kind) orelse return error.UnsupportedOperation;
+            try writeIndent(allocator, out, indent);
+            try out.print(allocator, "{s}();\n", .{helper});
+        },
+        .unreachable_ => {
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "mc_trap_Unreachable();\n");
+        },
+        .switch_ => return error.UnsupportedOperation,
+    }
+}
+
+fn emitExpression(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    id: mir.ExprId,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (depth > body.expressions.len) return error.InvalidExpression;
+    const expression = expressionById(body, id) orelse return error.InvalidExpression;
+    if (expressionNeedsTemporary(expression.*)) {
+        try out.print(allocator, "mc_exec_tmp_{d}", .{expression.id.raw});
+        return;
+    }
+    try emitExpressionOperation(allocator, out, body, expression, depth);
+}
+
+fn emitExpressionOperation(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    expression: *const mir.ExecutableExpression,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    switch (expression.operation) {
+        .local => |local| try appendLocal(allocator, out, body, local),
+        .symbol => |symbol| try appendSymbol(allocator, out, body, symbol),
+        .literal => |literal| try emitLiteral(allocator, out, expression.result_ty, literal),
+        .unary => |unary| {
+            if (unary.op == .neg and integerSuffix(expression.result_ty) != null) {
+                try out.print(allocator, "mc_checked_neg_{s}(", .{integerSuffix(expression.result_ty).?});
+                try emitExpression(allocator, out, body, unary.operand, depth + 1);
+                try out.append(allocator, ')');
+            } else {
+                try out.appendSlice(allocator, switch (unary.op) {
+                    .neg => "(-",
+                    .bit_not => "(~",
+                    .logical_not => "(!",
+                });
+                try emitExpression(allocator, out, body, unary.operand, depth + 1);
+                try out.append(allocator, ')');
+            }
+        },
+        .binary => |binary| {
+            if (checkedBinaryParts(binary.op, expression.result_ty)) |helper| {
+                try out.print(allocator, "mc_checked_{s}_{s}(", .{ helper.operation, helper.suffix });
+                try emitExpression(allocator, out, body, binary.left, depth + 1);
+                try out.appendSlice(allocator, ", ");
+                try emitExpression(allocator, out, body, binary.right, depth + 1);
+                try out.append(allocator, ')');
+            } else {
+                try out.append(allocator, '(');
+                try emitExpression(allocator, out, body, binary.left, depth + 1);
+                try out.print(allocator, " {s} ", .{binaryToken(binary.op)});
+                try emitExpression(allocator, out, body, binary.right, depth + 1);
+                try out.append(allocator, ')');
+            }
+        },
+        .cast => |cast| {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, expression.result_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, cast.operand, depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .direct_call => |call| {
+            try appendSymbol(allocator, out, body, call.callee);
+            try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
+        },
+        .indirect_call => |call| {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, call.callee, depth + 1);
+            try out.append(allocator, ')');
+            try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
+        },
+        .builtin_call => return error.UnsupportedOperation,
+        .address_of => |operand| {
+            try out.appendSlice(allocator, "(&(");
+            try emitExpression(allocator, out, body, operand, depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .deref => |operand| {
+            try out.appendSlice(allocator, "(*(");
+            try emitExpression(allocator, out, body, operand, depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .index => |index| {
+            try emitExpression(allocator, out, body, index.base, depth + 1);
+            try out.append(allocator, '[');
+            try emitExpression(allocator, out, body, index.index, depth + 1);
+            try out.append(allocator, ']');
+        },
+        .slice_length => |base| {
+            try emitExpression(allocator, out, body, base, depth + 1);
+            try out.appendSlice(allocator, ".len");
+        },
+        .range_slice, .member, .array, .struct_, .unsupported => return error.UnsupportedOperation,
+    }
+}
+
+/// Backend capability admission layered on top of the producer's semantic
+/// completeness bit.  This is deliberately structural and typed: it never
+/// consults source text, spans, or declaration ASTs.
+pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
+    if (!body.isComplete() or body.terminators.len == 0) return false;
+    for (body.parameters) |parameter| if (!supportsType(parameter.ty) or localById(body, parameter.local) == null) return false;
+    for (body.expressions) |expression| {
+        if (!supportsExpression(body, expression)) return false;
+    }
+    for (body.places) |place| {
+        if (place.projection_count != 0) return false;
+        switch (place.root) {
+            .local => |local| if (localById(body, local) == null) return false,
+            // A symbol place is memory, but the executable body does not yet
+            // carry the access mode (ordinary/atomic/volatile/MMIO).  Emitting
+            // a plain C assignment here would silently bypass the selected
+            // runtime access primitive.  Keep global stores on the legacy
+            // path until that semantic fact is explicit.
+            .symbol => return false,
+        }
+    }
+    for (body.statements) |statement| {
+        if (!hasBlock(body, statement.block_id)) return false;
+        switch (statement.operation) {
+            .local_init => |local| {
+                if (!supportsType(local.ty) or localById(body, local.local) == null) return false;
+                if (local.value) |value| if (expressionById(body, value) == null) return false;
+            },
+            .store => |store| if (placeById(body, store.place) == null or expressionById(body, store.value) == null) return false,
+            .eval => |value| if (expressionById(body, value) == null) return false,
+            .guard => |guard| if (expressionById(body, guard.condition) == null) return false,
+            .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return false,
+            .control_transfer => {},
+            .defer_cleanup, .unsupported => return false,
+        }
+    }
+    for (body.terminators) |terminator| switch (terminator.operation) {
+        // Block slice order is storage order, not a verified CFG edge.
+        .fallthrough => return false,
+        .return_, .unreachable_ => {},
+        .trap_ => |kind| if (trapHelper(kind) == null) return false,
+        .jump => |target| if (!hasBlock(body, target)) return false,
+        .branch => |branch| if (expressionById(body, branch.condition) == null or !hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block)) return false,
+        .switch_ => return false,
+    };
+    return true;
+}
+
+fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (!supportsType(expression.result_ty)) return false;
+    return switch (expression.operation) {
+        .local => |local| localById(body, local) != null,
+        // A bare symbol does not state ordinary/atomic/volatile/MMIO access.
+        // Direct calls carry their SymbolId separately; global value reads
+        // remain closed until MIR owns an explicit access mode.
+        .symbol => false,
+        .literal => |literal| switch (literal) {
+            // Raw source string/character spelling is not a canonical byte
+            // payload and must not cross the syntax-free boundary.
+            .string, .character, .enum_value => false,
+            else => true,
+        },
+        .unary => |unary| expressionById(body, unary.operand) != null,
+        .binary => |binary| binary.op != .logical_and and binary.op != .logical_or and expressionById(body, binary.left) != null and expressionById(body, binary.right) != null,
+        .cast => false,
+        .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
+        .indirect_call => |call| call.argument_count <= call.arguments.len and expressionById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
+        .slice_length => |base| expressionById(body, base) != null,
+        .builtin_call, .address_of, .deref, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
+    };
+}
+
+fn allExpressionsExist(body: *const mir.ExecutableBody, expressions: []const mir.ExprId) bool {
+    for (expressions) |expression| if (expressionById(body, expression) == null) return false;
+    return true;
+}
+
+fn supportsType(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .void, .never, .bool, .cstr, .address => true,
+        .integer, .float => |name| primitiveType(name) != null,
+        .pointer, .nullable_pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
+        .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
+        else => false,
+    };
+}
+
+fn prepareStatementExpressions(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    // ExprIds are emitted by the producer in source evaluation order and the
+    // verified body requires operands to precede their consumer under one
+    // owner statement.  Materialize every value, including reads, so a later
+    // call or store cannot change what an earlier operand observes.
+    for (body.expressions) |expression| {
+        if (!expression.owner_statement.eql(statement.id)) continue;
+        try writeIndent(allocator, out, indent);
+        if (expressionNeedsTemporary(expression)) try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
+        try emitExpressionOperation(allocator, out, body, &expression, 0);
+        try out.appendSlice(allocator, ";\n");
+    }
+}
+
+fn emitPreparedArguments(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, arguments: []const mir.ExprId) (RenderError || std.mem.Allocator.Error)!void {
+    try out.append(allocator, '(');
+    for (arguments, 0..) |argument, index| {
+        if (index != 0) try out.appendSlice(allocator, ", ");
+        try emitExpression(allocator, out, body, argument, 0);
+    }
+    try out.append(allocator, ')');
+}
+
+fn expressionNeedsTemporary(expression: mir.ExecutableExpression) bool {
+    if (expression.result_ty == .void or expression.result_ty == .never) return false;
+    return true;
+}
+
+fn trapHelper(kind: mir.TrapKind) ?[]const u8 {
+    return switch (kind) {
+        .IntegerOverflow => "mc_trap_IntegerOverflow",
+        .DivideByZero => "mc_trap_DivideByZero",
+        .InvalidShift => "mc_trap_InvalidShift",
+        .Bounds => "mc_trap_Bounds",
+        .Assert => "mc_trap_Assert",
+        .Unreachable => "mc_trap_Unreachable",
+        .Unwrap => "mc_trap_NullUnwrap",
+        .InvalidRepresentation => "mc_trap_InvalidRepresentation",
+        .ExplicitTrap, .CallMayTrap, .Unknown => null,
+    };
+}
+
+fn emitPlace(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    id: mir.PlaceId,
+) (RenderError || std.mem.Allocator.Error)!void {
+    const place = placeById(body, id) orelse return error.InvalidPlace;
+    switch (place.root) {
+        .local => |local| try appendLocal(allocator, out, body, local),
+        .symbol => |symbol| try appendSymbol(allocator, out, body, symbol),
+    }
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| {
+            try out.append(allocator, '[');
+            try emitExpression(allocator, out, body, index, 0);
+            try out.append(allocator, ']');
+        },
+        .deref => {
+            // Prefixing an already-emitted root would require retaining and
+            // re-parenthesizing it.  Completion currently excludes deref
+            // places; fail closed if an invalid producer admits one.
+            return error.UnsupportedOperation;
+        },
+        .field => return error.UnsupportedOperation,
+    };
+}
+
+fn emitArguments(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    arguments: []const mir.ExprId,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.append(allocator, '(');
+    for (arguments, 0..) |argument, index| {
+        if (index != 0) try out.appendSlice(allocator, ", ");
+        try emitExpression(allocator, out, body, argument, depth + 1);
+    }
+    try out.append(allocator, ')');
+}
+
+fn emitLiteral(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    result_ty: mir.ValueType,
+    literal: mir.ExecutableLiteral,
+) (RenderError || std.mem.Allocator.Error)!void {
+    switch (literal) {
+        .integer => |magnitude| try out.print(allocator, "{d}", .{magnitude}),
+        .float, .string, .character => |spelling| try out.appendSlice(allocator, spelling),
+        .boolean => |value| try out.appendSlice(allocator, if (value) "true" else "false"),
+        .null => try out.appendSlice(allocator, "NULL"),
+        .void => try out.appendSlice(allocator, "((void)0)"),
+        .uninit => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, "){0})");
+        },
+        .enum_value => return error.UnsupportedOperation,
+    }
+}
+
+fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
+    switch (ty) {
+        .void, .never => try out.appendSlice(allocator, "void"),
+        .bool => try out.appendSlice(allocator, "bool"),
+        .integer, .float => |name| try out.appendSlice(allocator, primitiveType(name) orelse return error.UnsupportedType),
+        .cstr => try out.appendSlice(allocator, "char const *"),
+        .pointer, .nullable_pointer => |shape| {
+            const child = primitiveType(shape.child) orelse shape.child;
+            try out.appendSlice(allocator, child);
+            try out.appendSlice(allocator, if (shape.mutability == .mut) " *" else " const *");
+        },
+        .address => try out.appendSlice(allocator, "uintptr_t"),
+        .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
+        else => return error.UnsupportedType,
+    }
+}
+
+fn appendLocal(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, id: mir.LocalId) (RenderError || std.mem.Allocator.Error)!void {
+    const local = localById(body, id) orelse return error.InvalidLocal;
+    return appendIdent(allocator, out, local.spelling);
+}
+
+fn appendSymbol(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, id: mir.SymbolId) (RenderError || std.mem.Allocator.Error)!void {
+    const symbol = symbolById(body, id) orelse return error.InvalidSymbol;
+    return appendIdent(allocator, out, symbol.spelling);
+}
+
+fn localById(body: *const mir.ExecutableBody, id: mir.LocalId) ?*const mir.ExecutableLocalIdentity {
+    if (!id.isValid()) return null;
+    for (body.locals) |*local| if (local.id.eql(id)) return local;
+    return null;
+}
+
+fn symbolById(body: *const mir.ExecutableBody, id: mir.SymbolId) ?*const mir.SymbolIdentity {
+    if (!id.isValid()) return null;
+    for (body.symbols) |*symbol| if (symbol.id.eql(id)) return symbol;
+    return null;
+}
+
+fn appendIdent(allocator: std.mem.Allocator, out: *std.ArrayList(u8), spelling: []const u8) std.mem.Allocator.Error!void {
+    try out.appendSlice(allocator, spelling);
+    if (isCKeyword(spelling)) try out.append(allocator, '_');
+}
+
+fn expressionById(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
+    if (!id.isValid()) return null;
+    for (body.expressions) |*expression| if (expression.id.eql(id)) return expression;
+    return null;
+}
+
+fn placeById(body: *const mir.ExecutableBody, id: mir.PlaceId) ?*const mir.ExecutablePlace {
+    if (!id.isValid()) return null;
+    for (body.places) |*place| if (place.id.eql(id)) return place;
+    return null;
+}
+
+fn hasBlock(body: *const mir.ExecutableBody, id: mir.BlockId) bool {
+    for (body.terminators) |terminator| if (terminator.block_id.eql(id)) return true;
+    return false;
+}
+
+fn blockHasReturn(body: *const mir.ExecutableBody, id: mir.BlockId) bool {
+    for (body.statements) |statement| {
+        if (statement.block_id.eql(id) and statement.operation == .return_) return true;
+    }
+    return false;
+}
+
+fn writeIndent(allocator: std.mem.Allocator, out: *std.ArrayList(u8), level: usize) std.mem.Allocator.Error!void {
+    for (0..level) |_| try out.appendSlice(allocator, "    ");
+}
+
+const CheckedBinaryParts = struct { operation: []const u8, suffix: []const u8 };
+
+fn checkedBinaryParts(op: mir.ExecutableBinaryOp, ty: mir.ValueType) ?CheckedBinaryParts {
+    const suffix = integerSuffix(ty) orelse return null;
+    const opname = switch (op) {
+        .add => "add",
+        .sub => "sub",
+        .mul => "mul",
+        .div => "div",
+        .mod => "mod",
+        .shl => "shl",
+        .shr => "shr",
+        else => return null,
+    };
+    return .{ .operation = opname, .suffix = suffix };
+}
+
+fn integerSuffix(ty: mir.ValueType) ?[]const u8 {
+    return switch (ty) {
+        .integer => |name| if (primitiveType(name) != null) name else null,
+        else => null,
+    };
+}
+
+fn binaryToken(op: mir.ExecutableBinaryOp) []const u8 {
+    return switch (op) {
+        .logical_or => "||",
+        .logical_and => "&&",
+        .eq => "==",
+        .ne => "!=",
+        .lt => "<",
+        .le => "<=",
+        .gt => ">",
+        .ge => ">=",
+        .bit_or => "|",
+        .bit_xor => "^",
+        .bit_and => "&",
+        .shl => "<<",
+        .shr => ">>",
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+        .div => "/",
+        .mod => "%",
+    };
+}
+
+fn primitiveType(name: []const u8) ?[]const u8 {
+    const Entry = struct { mc: []const u8, c: []const u8 };
+    const entries = [_]Entry{
+        .{ .mc = "u8", .c = "uint8_t" },      .{ .mc = "u16", .c = "uint16_t" },   .{ .mc = "u32", .c = "uint32_t" }, .{ .mc = "u64", .c = "uint64_t" }, .{ .mc = "u128", .c = "unsigned __int128" },
+        .{ .mc = "i8", .c = "int8_t" },       .{ .mc = "i16", .c = "int16_t" },    .{ .mc = "i32", .c = "int32_t" },  .{ .mc = "i64", .c = "int64_t" },  .{ .mc = "i128", .c = "__int128" },
+        .{ .mc = "usize", .c = "uintptr_t" }, .{ .mc = "isize", .c = "intptr_t" }, .{ .mc = "f32", .c = "float" },    .{ .mc = "f64", .c = "double" },   .{ .mc = "bool", .c = "bool" },
+    };
+    for (entries) |entry| if (std.mem.eql(u8, name, entry.mc)) return entry.c;
+    return null;
+}
+
+fn isCKeyword(name: []const u8) bool {
+    const keywords = [_][]const u8{ "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local" };
+    for (keywords) |keyword| if (std.mem.eql(u8, name, keyword)) return true;
+    return false;
+}
+
+fn isSafeIdentifier(name: []const u8) bool {
+    if (name.len == 0 or !(std.ascii.isAlphabetic(name[0]) or name[0] == '_')) return false;
+    for (name[1..]) |byte| if (!(std.ascii.isAlphanumeric(byte) or byte == '_')) return false;
+    return true;
+}
+
+test "executable C renderer emits typed CFG labels and branches" {
+    const local_flag = mir.LocalId.fromIndex(0);
+    const local_x = mir.LocalId.fromIndex(1);
+    const expr_flag = mir.ExprId.fromIndex(0);
+    const expr_one = mir.ExprId.fromIndex(1);
+    const expr_two = mir.ExprId.fromIndex(2);
+    const expr_x = mir.ExprId.fromIndex(3);
+    const block_entry = mir.BlockId.fromIndex(0);
+    const block_true = mir.BlockId.fromIndex(1);
+    const block_false = mir.BlockId.fromIndex(2);
+    const statement_guard = mir.InstId.fromIndex(0);
+    const statement_true_local = mir.InstId.fromIndex(1);
+    const statement_true_return = mir.InstId.fromIndex(2);
+    const statement_false_return = mir.InstId.fromIndex(3);
+    var locals = [_]mir.ExecutableLocalIdentity{ .{ .id = local_flag, .spelling = "flag" }, .{ .id = local_x, .spelling = "x" } };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = expr_flag, .block_id = block_entry, .owner_statement = statement_guard, .source = .{ .line = 1, .column = 1 }, .result_ty = .bool, .operation = .{ .local = local_flag } },
+        .{ .id = expr_one, .block_id = block_true, .owner_statement = statement_true_local, .source = .{ .line = 2, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = expr_two, .block_id = block_false, .owner_statement = statement_false_return, .source = .{ .line = 3, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = expr_x, .block_id = block_true, .owner_statement = statement_true_return, .source = .{ .line = 4, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
+    };
+    var statements = [_]mir.ExecutableStatement{
+        .{ .id = statement_guard, .block_id = block_entry, .source = .{ .line = 1, .column = 1 }, .operation = .{ .guard = .{ .kind = .if_, .condition = expr_flag } } },
+        .{ .id = statement_true_local, .block_id = block_true, .source = .{ .line = 2, .column = 1 }, .operation = .{ .local_init = .{ .local = local_x, .ty = .{ .integer = "u32" }, .value = expr_one, .mutable = true } } },
+        .{ .id = statement_true_return, .block_id = block_true, .source = .{ .line = 2, .column = 2 }, .operation = .{ .return_ = expr_x } },
+        .{ .id = statement_false_return, .block_id = block_false, .source = .{ .line = 3, .column = 1 }, .operation = .{ .return_ = expr_two } },
+    };
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = block_entry, .operation = .{ .branch = .{ .condition = expr_flag, .true_block = block_true, .false_block = block_false } } },
+        .{ .block_id = block_true, .operation = .return_ },
+        .{ .block_id = block_false, .operation = .return_ },
+    };
+    const body: mir.ExecutableBody = .{
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    try std.testing.expectEqualStrings(
+        \\bool mc_exec_tmp_0;
+        \\uint32_t mc_exec_tmp_1;
+        \\uint32_t mc_exec_tmp_2;
+        \\uint32_t mc_exec_tmp_3;
+        \\mc_bb_0: ;
+        \\    mc_exec_tmp_0 = flag;
+        \\    if (mc_exec_tmp_0) goto mc_bb_1; else goto mc_bb_2;
+        \\mc_bb_1: ;
+        \\    mc_exec_tmp_1 = 1;
+        \\    uint32_t x = mc_exec_tmp_1;
+        \\    mc_exec_tmp_3 = x;
+        \\    return mc_exec_tmp_3;
+        \\mc_bb_2: ;
+        \\    mc_exec_tmp_2 = 2;
+        \\    return mc_exec_tmp_2;
+        \\
+    , output.items);
+}
+
+test "executable C renderer stages call arguments left to right" {
+    const next_symbol = mir.SymbolId.fromIndex(0);
+    const combine_symbol = mir.SymbolId.fromIndex(1);
+    const first = mir.ExprId.fromIndex(0);
+    const second = mir.ExprId.fromIndex(1);
+    const combined = mir.ExprId.fromIndex(2);
+    const entry = mir.BlockId.fromIndex(0);
+    const return_statement = mir.InstId.fromIndex(0);
+    const source_first: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const source_second: mir.SourcePoint = .{ .line = 1, .column = 2 };
+    const source_combined: mir.SourcePoint = .{ .line = 1, .column = 3 };
+    var symbols = [_]mir.SymbolIdentity{
+        .{ .id = next_symbol, .spelling = "next" },
+        .{ .id = combine_symbol, .spelling = "combine" },
+    };
+    const first_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = next_symbol, .callee_source = source_first };
+    const second_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = next_symbol, .callee_source = source_second };
+    var combine_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = combine_symbol, .callee_source = source_combined, .argument_count = 2 };
+    combine_call.arguments[0] = first;
+    combine_call.arguments[1] = second;
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = first, .block_id = entry, .owner_statement = return_statement, .source = source_first, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = first_call } },
+        .{ .id = second, .block_id = entry, .owner_statement = return_statement, .source = source_second, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = second_call } },
+        .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .source = source_combined, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
+    };
+    var statements = [_]mir.ExecutableStatement{
+        .{ .id = return_statement, .block_id = entry, .source = source_first, .operation = .{ .return_ = combined } },
+    };
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .symbols = &symbols,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+
+    const first_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = next();") orelse return error.TestUnexpectedResult;
+    const second_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_1 = next();") orelse return error.TestUnexpectedResult;
+    const combine_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_2 = combine(mc_exec_tmp_0, mc_exec_tmp_1);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first_pos < second_pos and second_pos < combine_pos);
+}
+
+test "executable C renderer snapshots reads before a later effect" {
+    const local_x = mir.LocalId.fromIndex(0);
+    const mutate_symbol = mir.SymbolId.fromIndex(0);
+    const combine_symbol = mir.SymbolId.fromIndex(1);
+    const read_x = mir.ExprId.fromIndex(0);
+    const mutate = mir.ExprId.fromIndex(1);
+    const combined = mir.ExprId.fromIndex(2);
+    const entry = mir.BlockId.fromIndex(0);
+    const return_statement = mir.InstId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local_x, .spelling = "x" }};
+    var symbols = [_]mir.SymbolIdentity{
+        .{ .id = mutate_symbol, .spelling = "mutate_x" },
+        .{ .id = combine_symbol, .spelling = "combine" },
+    };
+    const mutate_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = mutate_symbol, .callee_source = source };
+    var combine_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = combine_symbol, .callee_source = source, .argument_count = 2 };
+    combine_call.arguments[0] = read_x;
+    combine_call.arguments[1] = mutate;
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = read_x, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
+        .{ .id = mutate, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = mutate_call } },
+        .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = combined } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{ .locals = &locals, .symbols = &symbols, .expressions = &expressions, .statements = &statements, .terminators = &terminators };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    const read_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = x;") orelse return error.TestUnexpectedResult;
+    const mutate_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_1 = mutate_x();") orelse return error.TestUnexpectedResult;
+    const combine_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_2 = combine(mc_exec_tmp_0, mc_exec_tmp_1);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(read_pos < mutate_pos and mutate_pos < combine_pos);
+}
+
+test "executable C renderer rejects implicit CFG and short circuit effects" {
+    const entry = mir.BlockId.fromIndex(0);
+    const other = mir.BlockId.fromIndex(1);
+    var fallthrough_terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = entry, .operation = .fallthrough },
+        .{ .block_id = other, .operation = .return_ },
+    };
+    const fallthrough_body: mir.ExecutableBody = .{ .terminators = &fallthrough_terminators };
+    try std.testing.expect(!canEmitBody(&fallthrough_body));
+
+    const statement = mir.InstId.fromIndex(0);
+    const lhs = mir.ExprId.fromIndex(0);
+    const rhs = mir.ExprId.fromIndex(1);
+    const result = mir.ExprId.fromIndex(2);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = lhs, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = false } } },
+        .{ .id = rhs, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = true } } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = lhs, .right = rhs } } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const logical_body: mir.ExecutableBody = .{ .expressions = &expressions, .statements = &statements, .terminators = &terminators };
+    try std.testing.expect(!canEmitBody(&logical_body));
+}
+
+test "executable C renderer maps only closed trap helpers" {
+    const entry = mir.BlockId.fromIndex(0);
+    var unwrap_terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .{ .trap_ = .Unwrap } }};
+    const unwrap_body: mir.ExecutableBody = .{ .terminators = &unwrap_terminators };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &unwrap_body, 0);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_NullUnwrap();") != null);
+
+    var unknown_terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .{ .trap_ = .Unknown } }};
+    const unknown_body: mir.ExecutableBody = .{ .terminators = &unknown_terminators };
+    try std.testing.expect(!canEmitBody(&unknown_body));
+}

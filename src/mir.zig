@@ -7,6 +7,7 @@ const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const module_parser = @import("module_parser.zig");
+const mir_executable_body = @import("mir_executable_body.zig");
 const numeric = @import("numeric.zig");
 const ownership_facts = @import("ownership_facts.zig");
 const parser = @import("parser.zig");
@@ -730,6 +731,17 @@ pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInval
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
 pub const BodyId = mir_model.BodyId;
+pub const InstId = mir_model.InstId;
+pub const ExprId = mir_model.ExprId;
+pub const LocalId = mir_model.LocalId;
+pub const PlaceId = mir_model.PlaceId;
+pub const ExecutableParameter = mir_model.ExecutableParameter;
+pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
+pub const ExecutableExpression = mir_model.ExecutableExpression;
+pub const ExecutablePlace = mir_model.ExecutablePlace;
+pub const ExecutableStatement = mir_model.ExecutableStatement;
+pub const ExecutableTerminator = mir_model.ExecutableTerminator;
+pub const ExecutableBody = mir_model.ExecutableBody;
 pub const CallableKind = mir_model.CallableKind;
 pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const Function = mir_model.Function;
@@ -1139,7 +1151,15 @@ fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) erro
         errdefer cleanup_plan.deinit(allocator);
         function.cleanup_cfg = try buildCleanupCfg(allocator, module.*, function.*, cleanup_plan);
         function.ownership_cleanup_plan = cleanup_plan;
+        if (function.ownership_cleanup_plan.actions.len != 0 or cleanupCfgHasActions(function.cleanup_cfg)) {
+            function.executable_body.complete = false;
+        }
     }
+}
+
+fn cleanupCfgHasActions(cfg: CleanupCfg) bool {
+    for (cfg.edges) |edge| if (edge.actions.len != 0) return true;
+    return false;
 }
 
 fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8) !SymbolId {
@@ -2377,7 +2397,8 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     if (requires_operand_identity and !instruction.typed_left_operand_span_id.isValid()) return false;
     if (instruction.kind == .binary and requires_operand_identity and !instruction.typed_right_operand_span_id.isValid()) return false;
     if (instruction.typed_left_operand_span_id.isValid()) {
-        if (instruction.kind != .unary and instruction.kind != .binary) return false;
+        const is_cast = instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "cast");
+        if (instruction.kind != .unary and instruction.kind != .binary and !is_cast) return false;
         if (instruction.typed_left_operand_span_id.index() >= function.span_identities.len) return false;
         if (instruction.kind == .binary) {
             if (!instruction.typed_right_operand_span_id.isValid()) return false;
@@ -2460,7 +2481,8 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         if (instruction.typed_target_operand_span_id.index() >= function.span_identities.len) return false;
     } else if (instruction.typed_target_operand_span_id.isValid()) return false;
     if (instruction.typed_value_operand_span_id.isValid()) {
-        if (instruction.kind != .assign and instruction.kind != .return_value and instruction.kind != .local) return false;
+        if (instruction.kind != .assign and instruction.kind != .return_value and instruction.kind != .local and
+            instruction.kind != .assert_condition) return false;
         if (instruction.typed_value_operand_span_id.index() >= function.span_identities.len) return false;
     }
     const is_direct_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.direct_call_argument));
@@ -3395,12 +3417,14 @@ pub const LoweringAdmissionError = error{
     InvalidMirFloatFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
+    InvalidMirExecutableBody,
 };
 
 /// Backends consume this single admission seam before lowering.  Conservative
 /// facts such as pointer provenance may still be `unknown`, but codegen-owned
 /// type facts must not use the `.unknown` ValueType placeholder.
 pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
+    for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
     try validateBoolFactsForLowering(module);
@@ -3994,6 +4018,12 @@ const MutableBlock = struct {
     instructions: std.ArrayList(Instruction) = .empty,
     successors: std.ArrayList(usize) = .empty,
     terminator: Terminator = .fallthrough,
+};
+
+const ExecutableBooleanBranch = struct {
+    dispatch_block: usize,
+    true_block: usize,
+    false_block: usize,
 };
 
 // OPT (annex E) — a range fact proven true on every path reaching the current program point,
@@ -5993,6 +6023,17 @@ const FunctionBuilder = struct {
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
     field_path_allocations: std.ArrayList([]const u8),
     elided_bounds: std.ArrayList(SourcePoint),
+    executable_parameters: std.ArrayList(ExecutableParameter),
+    executable_locals: std.ArrayList(ExecutableLocalIdentity),
+    executable_symbols: std.ArrayList(SymbolIdentity),
+    executable_expressions: std.ArrayList(ExecutableExpression),
+    executable_places: std.ArrayList(ExecutablePlace),
+    executable_statements: std.ArrayList(ExecutableStatement),
+    executable_terminators: std.ArrayList(ExecutableTerminator),
+    executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
+    executable_local_ids: std.StringHashMap(LocalId),
+    executable_symbol_ids: std.StringHashMap(SymbolId),
+    executable_supported: bool = true,
     // OPT (annex E) — guard/assert-proven facts live for check elision (see ProvenFact).
     proven_facts: std.ArrayList(ProvenFact) = .empty,
     // OPT (annex E) — identifiers whose address is taken ANYWHERE in the function body (a
@@ -6109,6 +6150,17 @@ const FunctionBuilder = struct {
             .live_pointer_provenance = .empty,
             .field_path_allocations = .empty,
             .elided_bounds = .empty,
+            .executable_parameters = .empty,
+            .executable_locals = .empty,
+            .executable_symbols = .empty,
+            .executable_expressions = .empty,
+            .executable_places = .empty,
+            .executable_statements = .empty,
+            .executable_terminators = .empty,
+            .executable_boolean_branches = .empty,
+            .executable_local_ids = std.StringHashMap(LocalId).init(allocator),
+            .executable_symbol_ids = std.StringHashMap(SymbolId).init(allocator),
+            .executable_supported = true,
             .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -6132,6 +6184,15 @@ const FunctionBuilder = struct {
         };
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
+            const executable_local = try builder.internExecutableLocal(param.name.text);
+            const parameter_source = builder.sourcePoint(param.name.span);
+            try builder.executable_parameters.append(allocator, .{
+                .local = executable_local,
+                .ty = param_ty,
+                .type_id = try builder.internTypeId(param_ty),
+                .source = parameter_source,
+                .span_id = try builder.internSpanId(parameter_source),
+            });
             try builder.addInstr(.param, param.name.text, param_ty, param.name.span);
             try builder.local_types.put(param.name.text, param_ty);
             try builder.local_type_exprs.put(param.name.text, param.ty);
@@ -6195,6 +6256,17 @@ const FunctionBuilder = struct {
             .live_pointer_provenance = .empty,
             .field_path_allocations = .empty,
             .elided_bounds = .empty,
+            .executable_parameters = .empty,
+            .executable_locals = .empty,
+            .executable_symbols = .empty,
+            .executable_expressions = .empty,
+            .executable_places = .empty,
+            .executable_statements = .empty,
+            .executable_terminators = .empty,
+            .executable_boolean_branches = .empty,
+            .executable_local_ids = std.StringHashMap(LocalId).init(allocator),
+            .executable_symbol_ids = std.StringHashMap(SymbolId).init(allocator),
+            .executable_supported = false,
             .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -6257,6 +6329,16 @@ const FunctionBuilder = struct {
         self.freeFieldPathAllocations();
         self.field_path_allocations.deinit(self.allocator);
         self.elided_bounds.deinit(self.allocator);
+        self.executable_parameters.deinit(self.allocator);
+        self.executable_locals.deinit(self.allocator);
+        self.executable_symbols.deinit(self.allocator);
+        self.executable_expressions.deinit(self.allocator);
+        self.executable_places.deinit(self.allocator);
+        self.executable_statements.deinit(self.allocator);
+        self.executable_terminators.deinit(self.allocator);
+        self.executable_boolean_branches.deinit(self.allocator);
+        self.executable_local_ids.deinit();
+        self.executable_symbol_ids.deinit();
         self.proven_facts.deinit(self.allocator);
         self.address_taken.deinit();
         self.local_types.deinit();
@@ -6364,6 +6446,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(representation_facts);
         const elided_bounds = try self.elided_bounds.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(elided_bounds);
+        var executable_body = try self.finishExecutableBody(trap_edges);
+        errdefer executable_body.deinit(self.allocator);
 
         self.blocks.deinit(self.allocator);
         self.blocks = .empty;
@@ -6443,6 +6527,7 @@ const FunctionBuilder = struct {
             .value_identities = value_identities,
             .target_owner_identities = target_owner_identities,
             .ownership_events = ownership_events,
+            .executable_body = executable_body,
             .generated_type_expr_nodes = generated_type_expr_nodes,
             .generated_type_expr_args = generated_type_expr_args,
             .pointer_provenance_facts = pointer_provenance_facts,
@@ -6451,12 +6536,471 @@ const FunctionBuilder = struct {
         };
     }
 
+    fn finishExecutableBody(self: *FunctionBuilder, trap_edges: []const TrapEdge) !ExecutableBody {
+        var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0 and trap_edges.len == 0;
+        for (self.executable_parameters.items) |*parameter| {
+            parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
+            parameter.type_id = self.type_ids.get(parameter.ty.name()) orelse .invalid;
+            if (!parameter.span_id.isValid() or !parameter.type_id.isValid()) complete = false;
+        }
+        for (self.executable_expressions.items) |*expression| {
+            expression.span_id = self.span_ids.get(expression.source) orelse .invalid;
+            expression.type_id = self.type_ids.get(expression.result_ty.name()) orelse .invalid;
+            switch (expression.operation) {
+                .direct_call => |call| {
+                    const callee_span_id: SpanId = self.span_ids.get(call.callee_source) orelse SpanId.invalid;
+                    expression.operation.direct_call.callee_span_id = callee_span_id;
+                    if (!callee_span_id.isValid()) complete = false;
+                },
+                .builtin_call => |*call| {
+                    call.callee_span_id = self.span_ids.get(call.callee_source) orelse SpanId.invalid;
+                    if (!call.callee_span_id.isValid()) complete = false;
+                },
+                else => {},
+            }
+            if (!expression.span_id.isValid() or !expression.type_id.isValid() or !executableExpressionComplete(self, expression.*)) complete = false;
+        }
+        for (self.executable_places.items) |*place| {
+            place.span_id = self.span_ids.get(place.source) orelse .invalid;
+            if (!place.span_id.isValid() or place.projection_count >= mir_model.max_executable_projections) complete = false;
+            for (place.projections[0..@min(place.projection_count, mir_model.max_executable_projections)]) |projection| switch (projection) {
+                .field, .index, .deref => complete = false,
+            };
+        }
+        for (self.executable_statements.items) |*statement| {
+            statement.span_id = self.span_ids.get(statement.source) orelse .invalid;
+            if (!statement.span_id.isValid()) complete = false;
+            switch (statement.operation) {
+                .local_init => |*local| {
+                    local.type_id = self.type_ids.get(local.ty.name()) orelse .invalid;
+                    if (!local.type_id.isValid()) complete = false;
+                    if (local.value) |value_id| {
+                        const value = self.executable_expressions.items[value_id.index()];
+                        if (!sameValueType(value.result_ty, local.ty)) complete = false;
+                    }
+                },
+                .return_ => |maybe_value| if (maybe_value) |value_id| {
+                    const value = self.executable_expressions.items[value_id.index()];
+                    if (!sameValueType(value.result_ty, self.return_ty)) complete = false;
+                } else if (self.return_ty != .void) {
+                    complete = false;
+                },
+                .guard => |guard| if (guard.kind == .assert_) {
+                    complete = false;
+                },
+                .unsupported, .defer_cleanup => complete = false,
+                else => {},
+            }
+        }
+
+        for (self.blocks.items) |block| {
+            const operation: @FieldType(ExecutableTerminator, "operation") = switch (block.terminator) {
+                .fallthrough => fallthrough: {
+                    if (block.successors.items.len == 0 and self.return_ty == .void) break :fallthrough .return_;
+                    complete = false;
+                    break :fallthrough .fallthrough;
+                },
+                .jump => |target| .{ .jump = BlockId.fromIndex(target) },
+                .branch => |branch| branch_op: {
+                    const condition = executableGuardForBlock(self.executable_statements.items, BlockId.fromIndex(block.id)) orelse {
+                        complete = false;
+                        break :branch_op .{ .branch = .{ .condition = .invalid, .true_block = BlockId.fromIndex(branch.true_block), .false_block = BlockId.fromIndex(branch.false_block) } };
+                    };
+                    break :branch_op .{ .branch = .{ .condition = condition, .true_block = BlockId.fromIndex(branch.true_block), .false_block = BlockId.fromIndex(branch.false_block) } };
+                },
+                .switch_ => switch_op: {
+                    const subject = executableGuardForBlock(self.executable_statements.items, BlockId.fromIndex(block.id)) orelse {
+                        complete = false;
+                        break :switch_op .{ .switch_ = .{ .subject = .invalid } };
+                    };
+                    if (self.executableBooleanBranch(block)) |branch| {
+                        break :switch_op .{ .branch = .{
+                            .condition = subject,
+                            .true_block = BlockId.fromIndex(branch.true_block),
+                            .false_block = BlockId.fromIndex(branch.false_block),
+                        } };
+                    }
+                    // General switch arm patterns need a typed case table.
+                    complete = false;
+                    break :switch_op .{ .switch_ = .{ .subject = subject } };
+                },
+                .return_ => .return_,
+                .trap_ => |kind| .{ .trap_ = kind },
+                .unreachable_ => .unreachable_,
+            };
+            try self.executable_terminators.append(self.allocator, .{ .block_id = BlockId.fromIndex(block.id), .operation = operation });
+        }
+        self.executable_boolean_branches.deinit(self.allocator);
+        self.executable_boolean_branches = .empty;
+
+        const parameters = try self.executable_parameters.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(parameters);
+        const locals = try self.executable_locals.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(locals);
+        const symbols = try self.executable_symbols.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(symbols);
+        const expressions = try self.executable_expressions.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(expressions);
+        const places = try self.executable_places.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(places);
+        const statements = try self.executable_statements.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(statements);
+        const terminators = try self.executable_terminators.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(terminators);
+        self.executable_local_ids.deinit();
+        self.executable_local_ids = std.StringHashMap(LocalId).init(self.allocator);
+        self.executable_symbol_ids.deinit();
+        self.executable_symbol_ids = std.StringHashMap(SymbolId).init(self.allocator);
+        return .{
+            .complete = complete,
+            .parameters = parameters,
+            .locals = locals,
+            .symbols = symbols,
+            .expressions = expressions,
+            .places = places,
+            .statements = statements,
+            .terminators = terminators,
+        };
+    }
+
+    fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
+        if (!executableTypeIdentityUnambiguous(expression.result_ty)) return false;
+        return switch (expression.operation) {
+            .unsupported, .cast, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => false,
+            .literal => |literal| switch (literal) {
+                .float, .string, .character, .uninit, .enum_value => false,
+                else => true,
+            },
+            .binary => |binary| binary.op != .logical_and and binary.op != .logical_or,
+            .direct_call => |call| direct: {
+                if (!call.callee.isValid() or call.callee.index() >= self.executable_symbols.items.len) break :direct false;
+                const spelling = self.executable_symbols.items[call.callee.index()].spelling;
+                const summary = self.summaries.get(spelling) orelse break :direct false;
+                break :direct !summary.is_variadic;
+            },
+            .builtin_call => false,
+            else => true,
+        };
+    }
+
+    fn executableTypeIdentityUnambiguous(ty: ValueType) bool {
+        return switch (ty) {
+            .cstr, .pointer, .nullable_pointer, .nullable_dyn_trait, .nullable_value, .slice, .array, .result => false,
+            else => true,
+        };
+    }
+
+    fn executableGuardForBlock(statements: []const ExecutableStatement, block_id: BlockId) ?ExprId {
+        for (statements) |statement| {
+            if (!statement.block_id.eql(block_id)) continue;
+            switch (statement.operation) {
+                .guard => |guard| if (guard.kind != .assert_) return guard.condition,
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    fn executableBooleanBranch(self: *const FunctionBuilder, dispatch: MutableBlock) ?struct { true_block: usize, false_block: usize } {
+        for (self.executable_boolean_branches.items) |branch| {
+            if (branch.dispatch_block == dispatch.id) return .{
+                .true_block = branch.true_block,
+                .false_block = branch.false_block,
+            };
+        }
+        return null;
+    }
+
     fn buildBody(self: *FunctionBuilder, body: ast.Block) anyerror!void {
         try self.collectBodyTypeArtifactBlock(body);
         // OPT (annex E) — collect address-taken locals up front so no fact is ever formed about a
         // name a hidden alias could mutate (see `address_taken`). Only needed under `--optimize`.
         if (self.optimize) try self.collectAddressTakenBlock(body);
         _ = try self.buildBlock(body);
+    }
+
+    fn internExecutableLocal(self: *FunctionBuilder, spelling: []const u8) !LocalId {
+        const entry = try self.executable_local_ids.getOrPut(spelling);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = LocalId.fromIndex(self.executable_locals.items.len);
+            try self.executable_locals.append(self.allocator, .{ .id = entry.value_ptr.*, .spelling = spelling });
+        } else {
+            // The legacy function builder resolves locals by spelling and has
+            // no lexical generation table. Never claim the syntax-free body is
+            // complete when a declaration shadows/redeclares an existing
+            // spelling; a future scoped LocalId producer can reopen this case.
+            self.executable_supported = false;
+        }
+        return entry.value_ptr.*;
+    }
+
+    fn internExecutableSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
+        const entry = try self.executable_symbol_ids.getOrPut(spelling);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = SymbolId.fromIndex(self.executable_symbols.items.len);
+            try self.executable_symbols.append(self.allocator, .{ .id = entry.value_ptr.*, .spelling = spelling });
+        }
+        return entry.value_ptr.*;
+    }
+
+    fn ensureExecutableExpr(self: *FunctionBuilder, input: ast.Expr) !ExprId {
+        var expr = input;
+        while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
+            .grouped => |inner| inner.*,
+            .move_expr => |inner| inner.*,
+            else => unreachable,
+        };
+        const source = self.sourcePoint(expr.span);
+        // Recursively materialize operands first. ExprId order is therefore
+        // the language evaluation order, rather than an AST tree a backend is
+        // free to visit in a different order.
+        const operation: ExecutableExpression.Operation = switch (expr.kind) {
+            .ident => |ident| if (self.executable_local_ids.get(ident.text)) |local|
+                .{ .local = local }
+            else
+                .{ .symbol = try self.internExecutableSymbol(ident.text) },
+            .int_literal => |literal| integer: {
+                const magnitude = numeric.parseIntegerLiteral(literal) orelse {
+                    self.executable_supported = false;
+                    break :integer .unsupported;
+                };
+                break :integer .{ .literal = .{ .integer = magnitude } };
+            },
+            .float_literal => |literal| .{ .literal = .{ .float = literal } },
+            .string_literal => |literal| .{ .literal = .{ .string = literal } },
+            .char_literal => |literal| .{ .literal = .{ .character = literal } },
+            .bool_literal => |literal| .{ .literal = .{ .boolean = literal } },
+            .null_literal => .{ .literal = .null },
+            .uninit_literal => .{ .literal = .uninit },
+            .void_literal => .{ .literal = .void },
+            .enum_literal => |literal| .{ .literal = .{ .enum_value = literal.text } },
+            .unary => |node| .{ .unary = .{
+                .op = executableUnaryOp(node.op),
+                .operand = try self.ensureExecutableExpr(node.expr.*),
+            } },
+            .binary => |node| .{ .binary = .{
+                .op = executableBinaryOp(node.op),
+                .left = try self.ensureExecutableExpr(node.left.*),
+                .right = try self.ensureExecutableExpr(node.right.*),
+            } },
+            .cast => |node| .{ .cast = .{ .operand = try self.ensureExecutableExpr(node.value.*) } },
+            .address_of => |inner| .{ .address_of = try self.ensureExecutableExpr(inner.*) },
+            .borrow_expr => |node| .{ .address_of = try self.ensureExecutableExpr(node.value.*) },
+            .deref => |inner| .{ .deref = try self.ensureExecutableExpr(inner.*) },
+            .index => |node| .{ .index = .{
+                .base = try self.ensureExecutableExpr(node.base.*),
+                .index = try self.ensureExecutableExpr(node.index.*),
+            } },
+            .slice => |node| .{ .range_slice = .{
+                .base = try self.ensureExecutableExpr(node.base.*),
+                .start = try self.ensureExecutableExpr(node.start.*),
+                .end = try self.ensureExecutableExpr(node.end.*),
+            } },
+            .member => |node| if (std.mem.eql(u8, node.name.text, "len"))
+                .{ .slice_length = try self.ensureExecutableExpr(node.base.*) }
+            else if (self.memberFieldIndex(node)) |field_index|
+                .{ .member = .{ .base = try self.ensureExecutableExpr(node.base.*), .field_index = field_index } }
+            else
+                .unsupported,
+            .call => |node| call: {
+                if (node.args.len > mir_model.max_executable_operands) break :call .unsupported;
+                if (try self.executableBuiltinCallKind(node)) |kind| {
+                    const callee_source = self.sourcePoint(node.callee.*.span);
+                    var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
+                        .kind = kind,
+                        .callee_source = callee_source,
+                        .callee_span_id = try self.internSpanId(callee_source),
+                        .argument_count = node.args.len,
+                    };
+                    for (node.args, 0..) |argument, index| call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                    break :call .{ .builtin_call = call_value };
+                }
+                if (directCalleeName(node.callee.*)) |callee_name| {
+                    const callee_source = self.sourcePoint(node.callee.*.span);
+                    var call_value: @FieldType(ExecutableExpression.Operation, "direct_call") = .{
+                        .callee = try self.internExecutableSymbol(callee_name),
+                        .callee_source = callee_source,
+                        .callee_span_id = try self.internSpanId(callee_source),
+                        .argument_count = node.args.len,
+                    };
+                    for (node.args, 0..) |argument, index| call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                    break :call .{ .direct_call = call_value };
+                }
+                var call_value: @FieldType(ExecutableExpression.Operation, "indirect_call") = .{
+                    .callee = try self.ensureExecutableExpr(node.callee.*),
+                    .argument_count = node.args.len,
+                };
+                for (node.args, 0..) |argument, index| call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                break :call .{ .indirect_call = call_value };
+            },
+            .array_literal => |items| array: {
+                if (items.len > mir_model.max_executable_operands) break :array .unsupported;
+                var aggregate: @FieldType(ExecutableExpression.Operation, "array") = .{ .operand_count = items.len };
+                for (items, 0..) |item, index| aggregate.operands[index] = try self.ensureExecutableExpr(item);
+                break :array .{ .array = aggregate };
+            },
+            // Field spelling/layout is not yet in the executable type table;
+            // keep struct construction fail-closed rather than making a
+            // backend rediscover field names from syntax.
+            .struct_literal, .try_expr, .block, .unreachable_expr, .await_expr => .unsupported,
+            .grouped, .move_expr => unreachable,
+        };
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = self.exprType(expr),
+            .type_id = try self.internTypeId(self.exprType(expr)),
+            .operation = operation,
+        });
+        return id;
+    }
+
+    fn executableUnaryOp(op: ast.UnaryOp) mir_model.ExecutableUnaryOp {
+        return switch (op) {
+            .neg => .neg,
+            .bit_not => .bit_not,
+            .logical_not => .logical_not,
+        };
+    }
+
+    fn executableBinaryOp(op: ast.BinaryOp) mir_model.ExecutableBinaryOp {
+        return switch (op) {
+            .logical_or => .logical_or,
+            .logical_and => .logical_and,
+            .eq => .eq,
+            .ne => .ne,
+            .lt => .lt,
+            .le => .le,
+            .gt => .gt,
+            .ge => .ge,
+            .bit_or => .bit_or,
+            .bit_xor => .bit_xor,
+            .bit_and => .bit_and,
+            .shl => .shl,
+            .shr => .shr,
+            .add => .add,
+            .sub => .sub,
+            .mul => .mul,
+            .div => .div,
+            .mod => .mod,
+        };
+    }
+
+    fn executableBuiltinCallKind(self: *FunctionBuilder, call: anytype) !?CallTargetKind {
+        if (self.constGetCallTarget(call) != null) return .const_get;
+        if (reduceCallKind(call.callee.*)) |kind| return switch (kind) {
+            .sum_checked => .reduce_sum_checked,
+            .sum_left => .reduce_sum_left,
+            .sum_fast => .reduce_sum_fast,
+        };
+        if (self.wrappingCallTarget(call)) |target| return target.kind;
+        if (self.uncheckedCallTarget(call)) |target| return target.kind;
+        if (self.enumRawCallTarget(call) != null) return .enum_raw;
+        if (try self.domainCallTarget(call)) |target| return target.kind;
+        if (self.dmaCallTarget(call)) |target| return target.kind;
+        if (self.rawManyOffsetCallTarget(call) != null) return .raw_many_offset;
+        if (try self.mmioMapCallTarget(call)) |target| return target.kind;
+        if (self.mmioCallTarget(call)) |target| return target.kind;
+        if (self.atomicInitCallTarget(call) != null) return .atomic_init;
+        if (self.atomicCallTargetKind(call.callee.*)) |kind| return kind;
+        if (self.maybeUninitCallTargetKind(call.callee.*)) |kind| return kind;
+        if (self.bitcastCallValueType(call) != null) return .bitcast;
+        if (self.physCallValueType(call) != null) return .phys;
+        if (self.rawCallTarget(call)) |target| return target.kind;
+        if (try self.vaCallTarget(call)) |target| return target.kind;
+        if (self.discardCallTargetKind(call)) |kind| return kind;
+        if (explicitTrapCallTargetKind(call)) |kind| return kind;
+        if (self.cpuPauseCallValueType(call) != null) return .cpu_pause;
+        if (self.fenceCallTargetKind(call.callee.*)) |kind| return kind;
+        if (self.conversionCallFactInfo(call)) |target| return target.kind;
+        if (self.reflectionCallTarget(call)) |target| return target.kind;
+        if (self.byteViewCallTarget(call)) |target| return target.kind;
+        if (try self.semanticEscapeCallTarget(call)) |target| return target.kind;
+        return null;
+    }
+
+    /// Literal expressions are target-typed by their containing declaration or
+    /// return. Preserve that checked semantic type in executable MIR instead
+    /// of leaving a backend to reinterpret `comptime_int` source spelling.
+    fn contextualizeExecutableLiteral(self: *FunctionBuilder, id: ExprId, target_ty: ValueType) void {
+        if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return;
+        const expression = &self.executable_expressions.items[id.index()];
+        switch (expression.operation) {
+            .literal => |literal| switch (literal) {
+                .integer => if (std.meta.activeTag(target_ty) == .integer or std.meta.activeTag(target_ty) == .address) {
+                    expression.result_ty = target_ty;
+                },
+                .float => {
+                    if (std.meta.activeTag(target_ty) == .float) expression.result_ty = target_ty;
+                },
+                .boolean => {
+                    if (std.meta.activeTag(target_ty) == .bool) expression.result_ty = target_ty;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    fn appendExecutableStatement(self: *FunctionBuilder, source: SourcePoint, operation: ExecutableStatement.Operation) !void {
+        try self.executable_statements.append(self.allocator, .{
+            .id = InstId.fromIndex(self.executable_statements.items.len),
+            .block_id = BlockId.fromIndex(self.current),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .operation = operation,
+        });
+    }
+
+    fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) !PlaceId {
+        var place: ExecutablePlace = .{
+            .id = PlaceId.fromIndex(self.executable_places.items.len),
+            .source = self.sourcePoint(expr.span),
+            .span_id = try self.internSpanId(self.sourcePoint(expr.span)),
+            .root = undefined,
+        };
+        if (!try self.fillExecutablePlace(&place, expr)) {
+            // Invalid root uses a dedicated synthetic symbol and the verifier
+            // keeps this body incomplete; no backend may render the place.
+            place.root = .{ .symbol = try self.internExecutableSymbol("<unsupported-place>") };
+            place.projection_count = mir_model.max_executable_projections;
+        }
+        try self.executable_places.append(self.allocator, place);
+        return place.id;
+    }
+
+    fn fillExecutablePlace(self: *FunctionBuilder, place: *ExecutablePlace, expr: ast.Expr) !bool {
+        return switch (expr.kind) {
+            .grouped => |inner| try self.fillExecutablePlace(place, inner.*),
+            .ident => |ident| root: {
+                place.root = if (self.executable_local_ids.get(ident.text)) |local| .{ .local = local } else .{ .symbol = try self.internExecutableSymbol(ident.text) };
+                break :root true;
+            },
+            .member => |node| projection: {
+                if (!try self.fillExecutablePlace(place, node.base.*) or place.projection_count >= mir_model.max_executable_projections) break :projection false;
+                const field_index = self.memberFieldIndex(node) orelse break :projection false;
+                place.projections[place.projection_count] = .{ .field = field_index };
+                place.projection_count += 1;
+                break :projection true;
+            },
+            .index => |node| projection: {
+                if (!try self.fillExecutablePlace(place, node.base.*) or place.projection_count >= mir_model.max_executable_projections) break :projection false;
+                place.projections[place.projection_count] = .{ .index = try self.ensureExecutableExpr(node.index.*) };
+                place.projection_count += 1;
+                break :projection true;
+            },
+            .deref => |inner| projection: {
+                if (!try self.fillExecutablePlace(place, inner.*) or place.projection_count >= mir_model.max_executable_projections) break :projection false;
+                place.projections[place.projection_count] = .deref;
+                place.projection_count += 1;
+                break :projection true;
+            },
+            else => false,
+        };
     }
 
     fn addBodyTypeArtifactFact(self: *FunctionBuilder, ty: ast.TypeExpr) !void {
@@ -6708,6 +7252,15 @@ const FunctionBuilder = struct {
                     }
                 }
                 for (local.names) |name| {
+                    const executable_local = try self.internExecutableLocal(name.text);
+                    const executable_initializer = if (local.names.len == 1) if (local.init) |initializer| try self.ensureExecutableExpr(initializer) else null else null;
+                    if (executable_initializer) |initializer| self.contextualizeExecutableLiteral(initializer, ty);
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
+                        .local = executable_local,
+                        .ty = ty,
+                        .value = executable_initializer,
+                        .mutable = mutable,
+                    } });
                     try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
                     if (local.names.len == 1) if (local.init) |initializer| {
                         self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
@@ -6768,6 +7321,10 @@ const FunctionBuilder = struct {
             .assignment => |node| {
                 const assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
+                    .place = try self.appendExecutablePlace(node.target),
+                    .value = try self.ensureExecutableExpr(node.value),
+                } });
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
                 const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 assignment_instruction.typed_target_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.target).span));
@@ -6831,6 +7388,7 @@ const FunctionBuilder = struct {
                 return false;
             },
             .expr => |expr| {
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .eval = try self.ensureExecutableExpr(expr) });
                 try self.addResultExpressionStatementCheck(expr);
                 try self.buildExpr(expr);
                 if (exprTerminates(expr)) {
@@ -6840,6 +7398,7 @@ const FunctionBuilder = struct {
                 return false;
             },
             .assert => |expr| {
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .guard = .{ .kind = .assert_, .condition = try self.ensureExecutableExpr(expr) } });
                 try self.addInstr(.assert_condition, "condition", .bool, stmt.span);
                 try self.appendTargetTypeFact(.assert_condition, ast_query.simpleNameType("bool", expr.span), .bool, expr.span);
                 try self.addConversionCheck(.bool, expr, .condition, expr.span);
@@ -6851,6 +7410,9 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"return" => |maybe| {
+                const executable_return = if (maybe) |expr| try self.ensureExecutableExpr(expr) else null;
+                if (executable_return) |value| self.contextualizeExecutableLiteral(value, self.return_ty);
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
                 if (maybe) |expr| {
                     if (self.addressOriginIsLocal(expr)) {
                         try self.addInstr(.usage_check, "local_address_escape", .unknown, expr.span);
@@ -6880,6 +7442,7 @@ const FunctionBuilder = struct {
                 return true;
             },
             .@"break" => {
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .control_transfer = .break_ });
                 try self.addInstr(.control_transfer, "break", .void, stmt.span);
                 if (self.break_targets.items.len > 0) {
                     const target = self.break_targets.items[self.break_targets.items.len - 1];
@@ -6891,6 +7454,7 @@ const FunctionBuilder = struct {
                 return true;
             },
             .@"continue" => {
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .control_transfer = .continue_ });
                 try self.addInstr(.control_transfer, "continue", .void, stmt.span);
                 if (self.continue_targets.items.len > 0) {
                     const target = self.continue_targets.items[self.continue_targets.items.len - 1];
@@ -6902,6 +7466,7 @@ const FunctionBuilder = struct {
                 return true;
             },
             .asm_stmt => {
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .unsupported);
                 if (!self.active_unsafe) try self.addInstr(.unsafe_check, "asm.opaque", .unknown, stmt.span);
                 try self.addInstr(.asm_effect, "opaque", .value, stmt.span);
                 if (self.naked) {
@@ -6911,6 +7476,7 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"defer" => |expr| {
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .defer_cleanup);
                 try self.addInstr(.defer_cleanup, "cleanup", .void, stmt.span);
                 try self.addDeferCleanupExprFact(expr, stmt.span);
                 try self.addResultDeferCheck(expr);
@@ -6964,6 +7530,7 @@ const FunctionBuilder = struct {
         if (self.ifLetSubjectTypeExpr(node.value)) |subject_type_expr| {
             try self.appendTargetTypeFact(.if_let_subject, subject_type_expr, valueTypeFromTypeAlias(subject_type_expr, self.enums, self.structs, self.packed_bits, self.aliases), node.value.span);
         }
+        try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .if_, .condition = try self.ensureExecutableExpr(node.value) } });
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
 
@@ -7153,15 +7720,25 @@ const FunctionBuilder = struct {
         if (subject_type_expr) |ty| {
             try self.appendTargetTypeFact(.switch_subject, ty, valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases), node.subject.span);
         } else return error.InvalidMirTargetTypeFacts;
+        try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = try self.ensureExecutableExpr(node.subject) } });
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
         try self.addSwitchPatternChecks(node);
 
         const dispatch_id = self.current;
         const after_id = try self.addBlock("switch_after");
+        var executable_true_arm: ?usize = null;
+        var executable_false_arm: ?usize = null;
         for (node.arms) |arm| {
             const arm_id = try self.addBlock("switch_arm");
             try self.addSuccessor(dispatch_id, arm_id);
+            if (arm.patterns.len == 1) {
+                if (patternBoolValue(arm.patterns[0])) |value| {
+                    if (value) executable_true_arm = arm_id else executable_false_arm = arm_id;
+                }
+            } else if (arm.patterns.len == 0) {
+                executable_false_arm = arm_id;
+            }
             self.current = arm_id;
             // OPT (annex E) — a plain `if (cond) {…}` is desugared to `switch cond { true => …,
             // false => … }`, so the `true` arm runs only when `cond` held: record its facts for
@@ -7242,6 +7819,13 @@ const FunctionBuilder = struct {
             self.proven_facts.items.len = facts_save;
         }
         self.blocks.items[dispatch_id].terminator = .switch_;
+        if (executable_true_arm != null and executable_false_arm != null) {
+            try self.executable_boolean_branches.append(self.allocator, .{
+                .dispatch_block = dispatch_id,
+                .true_block = executable_true_arm.?,
+                .false_block = executable_false_arm.?,
+            });
+        }
         self.current = after_id;
         return false;
     }
@@ -7769,6 +8353,7 @@ const FunctionBuilder = struct {
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
         var for_binding_ty_expr: ?ast.TypeExpr = null;
         if (node.iterable) |iterable| {
+            if (node.kind == .@"while") try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .while_, .condition = try self.ensureExecutableExpr(iterable) } });
             if (node.kind == .@"while") {
                 try self.appendTargetTypeFact(.loop_condition, ast_query.simpleNameType("bool", iterable.span), .bool, iterable.span);
                 try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
@@ -11924,6 +12509,16 @@ const FunctionBuilder = struct {
                 else => false,
             },
             else => false,
+        };
+    }
+
+    fn patternBoolValue(pattern: ast.Pattern) ?bool {
+        return switch (pattern.kind) {
+            .literal => |expr| switch (unwrapGrouped(expr).kind) {
+                .bool_literal => |value| value,
+                else => null,
+            },
+            else => null,
         };
     }
 
