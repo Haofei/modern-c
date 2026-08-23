@@ -21,7 +21,7 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
     if (body.complete) return "complete";
     if (body.expressions.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return "empty_body";
     for (body.expressions) |expression_value| switch (expression_value.operation) {
-        .unsupported => return "unsupported_expression",
+        .unsupported => return if (body.incomplete_reason == .none) "unsupported_expression" else @tagName(body.incomplete_reason),
         .deref => return "unlowered_deref",
         .index => return "unlowered_index",
         .range_slice => return "unlowered_range_slice",
@@ -80,6 +80,7 @@ pub fn symbol(body: *const mir.ExecutableBody, id: mir.SymbolId) ?mir.SymbolIden
 
 pub fn verify(function: *const mir.Function) !void {
     const body = &function.executable_body;
+    if (body.complete and body.incomplete_reason != .none) return error.InvalidIncompleteReason;
     if (!body.complete and body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
@@ -216,11 +217,18 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .address_of => |address| {
             const target = place(body, address.place) orelse return error.InvalidPlaceReference;
             if (body.complete) {
-                if (!isSingleParameterDerefPlace(body, target.*, false) or !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
-                const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
-                try verifySpan(function, address.representation_span_id, source);
-                if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
-                    ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1) return error.InvalidMemoryAccessTrap;
+                if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
+                if (target.projection_count == 0) {
+                    if (!directAddressablePlace(body, target.*) or address.representation_source != null or
+                        address.representation_span_id.isValid() or ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                        return error.InvalidMemoryAccessTrap;
+                } else {
+                    if (!isSingleParameterDerefPlace(body, target.*, false) or !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
+                    const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
+                    try verifySpan(function, address.representation_span_id, source);
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                        ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1) return error.InvalidMemoryAccessTrap;
+                }
             }
         },
         .deref, .slice_length => |id| try verifyOperand(body, value, id),
@@ -567,6 +575,29 @@ fn verifyMemoryAccess(
 fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) !void {
     if (target.projection_count == 0) return;
     if (!isParameterScalarAccessPlace(body, target, false)) return error.InvalidPlaceType;
+}
+
+fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) bool {
+    const shape = switch (result_ty) {
+        .pointer => |value| value,
+        else => return false,
+    };
+    return shape.kind == .single and std.mem.eql(u8, shape.child, place_ty.name());
+}
+
+fn directAddressablePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
+    if (target.projection_count != 0 or !sameValueType(target.root_ty, target.ty)) return false;
+    return switch (target.root) {
+        .local => |id| local: {
+            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
+            for (body.statements) |current_statement| switch (current_statement.operation) {
+                .local_init => |value| if (value.local.eql(id)) break :local true,
+                else => {},
+            };
+            break :local false;
+        },
+        .symbol => |id| if (symbol(body, id)) |identity| identity.kind == .global else false,
+    };
 }
 
 fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {

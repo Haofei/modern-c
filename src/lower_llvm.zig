@@ -5401,7 +5401,10 @@ const LlvmEmitter = struct {
         for (fn_mir.executable_body.places) |place| {
             switch (place.root) {
                 .local => {},
-                .symbol => return false,
+                .symbol => |id| {
+                    const identity = mir_executable_body.symbol(&fn_mir.executable_body, id) orelse return false;
+                    if (identity.kind != .global or !self.global_types.contains(identity.spelling)) return false;
+                },
             }
             // The syntax-free executable-MIR renderer owns projection
             // admission.  Keep this integration check limited to roots that

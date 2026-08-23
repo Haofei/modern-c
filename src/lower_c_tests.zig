@@ -9925,6 +9925,7 @@ test "lower-c emits global address direct-call args from MIR without body fallba
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_call_arg.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t use_global_address_arg(void)");
+    try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "return consume_ptr(&shared_counter);");
 }
 
@@ -9941,6 +9942,7 @@ test "lower-c emits global address returns from MIR without body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t * returned_global_pointer(void)");
+    try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "return &shared_counter;");
 }
 

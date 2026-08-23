@@ -104,6 +104,7 @@ pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
 pub const ExecutableCastKind = mir_model.ExecutableCastKind;
+pub const ExecutableIncompleteReason = mir_model.ExecutableIncompleteReason;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
 pub const FfiParamContract = mir_model.FfiParamContract;
 
@@ -6084,6 +6085,7 @@ const FunctionBuilder = struct {
     executable_local_ids: std.StringHashMap(LocalId),
     executable_symbol_ids: std.StringHashMap(SymbolId),
     executable_supported: bool = true,
+    executable_incomplete_reason: mir_model.ExecutableIncompleteReason = .none,
     // OPT (annex E) — guard/assert-proven facts live for check elision (see ProvenFact).
     proven_facts: std.ArrayList(ProvenFact) = .empty,
     // OPT (annex E) — identifiers whose address is taken ANYWHERE in the function body (a
@@ -6742,6 +6744,7 @@ const FunctionBuilder = struct {
         self.executable_symbol_ids = std.StringHashMap(SymbolId).init(self.allocator);
         return .{
             .complete = complete,
+            .incomplete_reason = self.executable_incomplete_reason,
             .return_type_id = self.type_ids.get(TypeKey.fromValueType(self.return_ty)) orelse .invalid,
             .parameters = parameters,
             .locals = locals,
@@ -6760,9 +6763,15 @@ const FunctionBuilder = struct {
             .unsupported, .deref, .index, .range_slice, .array => false,
             .member => |operation| self.executableMemberComplete(expression, operation),
             .struct_ => |operation| self.executableStructConstructionComplete(expression, operation),
-            .address_of => |address| address.place.isValid() and address.place.index() < self.executable_places.items.len and
-                self.executableAddressOfComplete(expression.result_ty, self.executable_places.items[address.place.index()]) and
-                address.representation_source != null and address.representation_span_id.isValid(),
+            .address_of => |address| address_complete: {
+                if (!address.place.isValid() or address.place.index() >= self.executable_places.items.len) break :address_complete false;
+                const target = self.executable_places.items[address.place.index()];
+                if (!self.executableAddressOfComplete(expression.result_ty, target)) break :address_complete false;
+                break :address_complete if (target.projection_count == 0)
+                    address.representation_source == null and !address.representation_span_id.isValid()
+                else
+                    address.representation_source != null and address.representation_span_id.isValid();
+            },
             .load => |load| load_complete: {
                 if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len or
                     !self.executableMemoryAccessComplete(self.executable_places.items[load.place.index()], expression.result_ty, load.access, false)) break :load_complete false;
@@ -6787,6 +6796,15 @@ const FunctionBuilder = struct {
             .builtin_call => |call| self.executableBuiltinComplete(expression, call),
             else => true,
         };
+    }
+
+    fn unsupportedExecutableExpression(
+        self: *FunctionBuilder,
+        reason: mir_model.ExecutableIncompleteReason,
+    ) ExecutableExpression.Operation {
+        if (self.executable_incomplete_reason == .none) self.executable_incomplete_reason = reason;
+        self.executable_supported = false;
+        return .unsupported;
     }
 
     fn executableStructConstructionComplete(
@@ -6880,7 +6898,29 @@ const FunctionBuilder = struct {
     }
 
     fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
-        return self.executablePlaceComplete(place) and place.projection_count == 1 and sameValueType(result_ty, place.root_ty);
+        if (!self.executablePlaceComplete(place) or !executableAddressResultMatchesPlace(result_ty, place.ty)) return false;
+        if (place.projection_count == 1) return sameValueType(result_ty, place.root_ty);
+        if (place.projection_count != 0) return false;
+        return switch (place.root) {
+            .local => |id| local: {
+                for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local false;
+                for (self.executable_statements.items) |statement| switch (statement.operation) {
+                    .local_init => |value| if (value.local.eql(id)) break :local true,
+                    else => {},
+                };
+                break :local false;
+            },
+            .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
+                self.executable_symbols.items[id.index()].kind == .global,
+        };
+    }
+
+    fn executableAddressResultMatchesPlace(result_ty: ValueType, place_ty: ValueType) bool {
+        const shape = switch (result_ty) {
+            .pointer => |value| value,
+            else => return false,
+        };
+        return shape.kind == .single and std.mem.eql(u8, shape.child, place_ty.name());
     }
 
     fn executableMemoryAccessComplete(
@@ -7095,23 +7135,20 @@ const FunctionBuilder = struct {
                 .{ .symbol = try self.internExecutableFunctionSymbol(ident.text) },
             .int_literal => |literal| integer: {
                 const magnitude = numeric.parseIntegerLiteral(literal) orelse {
-                    self.executable_supported = false;
-                    break :integer .unsupported;
+                    break :integer self.unsupportedExecutableExpression(.unsupported_integer_literal);
                 };
                 break :integer .{ .literal = .{ .integer = magnitude } };
             },
             .float_literal => |literal| float_literal: {
                 const value = try self.canonicalExecutableFloat(literal, result_ty) orelse {
-                    self.executable_supported = false;
-                    break :float_literal .unsupported;
+                    break :float_literal self.unsupportedExecutableExpression(.unsupported_float_literal);
                 };
                 break :float_literal .{ .literal = .{ .float = value } };
             },
             .string_literal => |literal| .{ .literal = .{ .string = literal } },
             .char_literal => |literal| character: {
                 const magnitude = numeric.parseCharLiteral(literal) orelse {
-                    self.executable_supported = false;
-                    break :character .unsupported;
+                    break :character self.unsupportedExecutableExpression(.unsupported_character_literal);
                 };
                 break :character .{ .literal = .{ .integer = magnitude } };
             },
@@ -7161,20 +7198,23 @@ const FunctionBuilder = struct {
                 const operand = try self.ensureExecutableExpr(node.value.*);
                 const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
                 const kind = mir_model.ExecutableCastKind.classify(operand_ty, result_ty) orelse {
-                    self.executable_supported = false;
-                    break :cast .unsupported;
+                    break :cast self.unsupportedExecutableExpression(.unsupported_cast);
                 };
                 break :cast .{ .cast = .{ .operand = operand, .kind = kind } };
             },
             .address_of => |inner| address: {
-                const guard_source = self.executableDerefOperandSource(inner.*) orelse break :address .unsupported;
+                const place_id = try self.appendExecutablePlace(inner.*);
+                const place = self.executable_places.items[place_id.index()];
+                if (place.projection_count == 0) break :address .{ .address_of = .{ .place = place_id } };
+                const guard_source = self.executableDerefOperandSource(inner.*) orelse
+                    break :address self.unsupportedExecutableExpression(.unsupported_address);
                 break :address .{ .address_of = .{
-                    .place = try self.appendExecutablePlace(inner.*),
+                    .place = place_id,
                     .representation_source = guard_source,
                     .representation_span_id = try self.internSpanId(guard_source),
                 } };
             },
-            .borrow_expr => .unsupported,
+            .borrow_expr => self.unsupportedExecutableExpression(.unsupported_borrow),
             .deref => |inner| .{ .load = .{
                 .place = try self.appendExecutablePlace(expr),
                 .access = self.executableMemoryAccess(expr, result_ty),
@@ -7193,7 +7233,8 @@ const FunctionBuilder = struct {
             .member => |node| if (std.mem.eql(u8, node.name.text, "len"))
                 .{ .slice_length = try self.ensureExecutableExpr(node.base.*) }
             else member: {
-                const field_index = self.memberFieldIndex(node) orelse break :member .unsupported;
+                const field_index = self.memberFieldIndex(node) orelse
+                    break :member self.unsupportedExecutableExpression(.unsupported_member);
                 const base_ty = self.exprType(node.base.*);
                 const pointer_shape = switch (base_ty) {
                     .pointer => |shape| shape,
@@ -7202,13 +7243,16 @@ const FunctionBuilder = struct {
                 const struct_name = switch (base_ty) {
                     .struct_ => |name| name,
                     .pointer => |shape| shape.child,
-                    else => break :member .unsupported,
+                    else => break :member self.unsupportedExecutableExpression(.unsupported_member),
                 };
-                const summary = self.structs.get(struct_name) orelse break :member .unsupported;
+                const summary = self.structs.get(struct_name) orelse
+                    break :member self.unsupportedExecutableExpression(.unsupported_member);
                 if (field_index >= summary.fields.len or
-                    !try self.internExecutableAggregateType(.{ .struct_ = struct_name }, .declared_struct, summary.fields)) break :member .unsupported;
+                    !try self.internExecutableAggregateType(.{ .struct_ = struct_name }, .declared_struct, summary.fields))
+                    break :member self.unsupportedExecutableExpression(.unsupported_member);
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
-                if (!sameValueType(result_ty, field_ty)) break :member .unsupported;
+                if (!sameValueType(result_ty, field_ty))
+                    break :member self.unsupportedExecutableExpression(.unsupported_member);
                 if (pointer_shape) |shape| {
                     // Pointer member access is a memory operation, not a pure
                     // aggregate projection.  This first slice admits a direct
@@ -7216,7 +7260,8 @@ const FunctionBuilder = struct {
                     // representation needs no second trap.  Pointer-valued
                     // fields stay closed until MIR can own both trap edges.
                     if (shape.kind != .single or representationCheckKind(result_ty) != null or
-                        mir_model.ExecutableMemoryAccess.scalarAlignment(result_ty) == null) break :member .unsupported;
+                        mir_model.ExecutableMemoryAccess.scalarAlignment(result_ty) == null)
+                        break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
                     break :member .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
@@ -7231,7 +7276,8 @@ const FunctionBuilder = struct {
                 } };
             },
             .call => |node| call: {
-                if (node.args.len > mir_model.max_executable_operands) break :call .unsupported;
+                if (node.args.len > mir_model.max_executable_operands)
+                    break :call self.unsupportedExecutableExpression(.unsupported_call);
                 // Reflection is a compile-time semantic operation.  Legalize it
                 // before the generic builtin path so executable MIR owns the
                 // selected value and codegen only renders an ordinary scalar
@@ -7239,7 +7285,8 @@ const FunctionBuilder = struct {
                 // it must never degrade into a runtime call or backend-side AST
                 // inference.
                 if (reflectionCallTargetKind(node) != null) {
-                    const value = self.executableReflectionConstant(expr) orelse break :call .unsupported;
+                    const value = self.executableReflectionConstant(expr) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
                     result_ty = .{ .integer = "usize" };
                     break :call .{ .literal = .{ .integer = value } };
                 }
@@ -7286,7 +7333,8 @@ const FunctionBuilder = struct {
                 break :call .{ .indirect_call = call_value };
             },
             .array_literal => |items| array: {
-                if (items.len > mir_model.max_executable_operands) break :array .unsupported;
+                if (items.len > mir_model.max_executable_operands)
+                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 var aggregate: @FieldType(ExecutableExpression.Operation, "array") = .{ .operand_count = items.len };
                 for (items, 0..) |item, index| aggregate.operands[index] = try self.ensureExecutableExpr(item);
                 break :array .{ .array = aggregate };
@@ -7294,16 +7342,18 @@ const FunctionBuilder = struct {
             .struct_literal => |fields| aggregate: {
                 const struct_name = switch (result_ty) {
                     .struct_ => |name| name,
-                    else => break :aggregate .unsupported,
+                    else => break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal),
                 };
-                const summary = self.structs.get(struct_name) orelse break :aggregate .unsupported;
+                const summary = self.structs.get(struct_name) orelse
+                    break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                 const construction: AggregateConstructionKind = if (summary.is_c_union) .c_union else .declared_struct;
                 // Union and packed-bit construction have storage semantics,
                 // not ordinary field insertion semantics. Keep those closed
                 // until their canonical executable operations exist.
                 if (construction != .declared_struct or fields.len == 0 or fields.len != summary.fields.len or fields.len > mir_model.max_executable_operands)
-                    break :aggregate .unsupported;
-                if (!try self.internExecutableAggregateType(result_ty, construction, summary.fields)) break :aggregate .unsupported;
+                    break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                if (!try self.internExecutableAggregateType(result_ty, construction, summary.fields))
+                    break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
 
                 var value: @FieldType(ExecutableExpression.Operation, "struct_") = .{
                     .operand_count = fields.len,
@@ -7311,17 +7361,23 @@ const FunctionBuilder = struct {
                 };
                 var seen = [_]bool{false} ** mir_model.max_executable_operands;
                 for (fields, 0..) |field, source_index| {
-                    const field_index = self.structFieldIndex(struct_name, field.name.text) orelse break :aggregate .unsupported;
-                    if (field_index >= summary.fields.len or seen[field_index]) break :aggregate .unsupported;
+                    const field_index = self.structFieldIndex(struct_name, field.name.text) orelse
+                        break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                    if (field_index >= summary.fields.len or seen[field_index])
+                        break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                     seen[field_index] = true;
                     value.field_indices[source_index] = field_index;
                     const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                     value.operands[source_index] = try self.ensureExecutableExprAs(field.value, field_ty);
                 }
-                for (seen[0..fields.len]) |present| if (!present) break :aggregate .unsupported;
+                for (seen[0..fields.len]) |present| if (!present)
+                    break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                 break :aggregate .{ .struct_ = value };
             },
-            .try_expr, .block, .unreachable_expr, .await_expr => .unsupported,
+            .try_expr => self.unsupportedExecutableExpression(.unsupported_try),
+            .block => self.unsupportedExecutableExpression(.unsupported_block_expression),
+            .unreachable_expr => self.unsupportedExecutableExpression(.unsupported_unreachable_expression),
+            .await_expr => self.unsupportedExecutableExpression(.unsupported_await),
             .grouped, .move_expr => unreachable,
         };
         const id = ExprId.fromIndex(self.executable_expressions.items.len);

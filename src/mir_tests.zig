@@ -56,6 +56,66 @@ test "executable MIR owns address representation cast" {
     try mir.validateLoweringAdmission(module_mir);
     const expression = function.executable_body.expressions[function.executable_body.expressions.len - 1];
     try std.testing.expectEqual(mir.ExecutableCastKind.address_to_integer, expression.operation.cast.kind);
+
+    const mutable_function = functionByNameMut(&module_mir, "address_value") orelse return error.TestUnexpectedResult;
+    mutable_function.executable_body.incomplete_reason = .unsupported_cast;
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
+test "executable MIR reports a stable unsupported expression reason" {
+    const source =
+        \\fn borrow_value(value: *u32) -> u32 {
+        \\    let view: *const u32 = borrow value.*;
+        \\    return view.*;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_executable_incomplete_reason.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const module = try source_parser.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+
+    const function = functionByName(module_mir, "borrow_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!function.executable_body.complete);
+    try std.testing.expectEqual(mir.ExecutableIncompleteReason.unsupported_borrow, function.executable_body.incomplete_reason);
+    try std.testing.expectEqualStrings("unsupported_borrow", mir_executable_body.incompleteReason(&function));
+}
+
+test "executable MIR owns direct global address place without a trap" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn global_address() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_global_address.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByName(module_mir, "global_address") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 0), function.executable_body.trap_edges.len);
+    const expression = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    const address = switch (expression.operation) {
+        .address_of => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const place = mir_executable_body.place(&function.executable_body, address.place) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), place.projection_count);
+    try std.testing.expect(place.root == .symbol);
+    try std.testing.expect(address.representation_source == null);
+    try std.testing.expect(!address.representation_span_id.isValid());
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "global_address") orelse return error.TestUnexpectedResult;
+    mutable_function.executable_body.expressions[mutable_function.executable_body.expressions.len - 1].operation.address_of.representation_span_id = .fromIndex(0);
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 
 test "executable MIR owns declared struct literal field order and types" {

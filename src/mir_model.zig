@@ -809,8 +809,31 @@ pub const ExecutableTerminator = struct {
     },
 };
 
+/// Stable producer-owned reason for an expression that has not yet crossed
+/// the canonical executable-MIR boundary. This is migration telemetry, not
+/// source syntax: codegen never branches on it and complete bodies must carry
+/// `.none`.
+pub const ExecutableIncompleteReason = enum {
+    none,
+    unsupported_integer_literal,
+    unsupported_float_literal,
+    unsupported_character_literal,
+    unsupported_cast,
+    unsupported_address,
+    unsupported_borrow,
+    unsupported_member,
+    unsupported_call,
+    unsupported_array_literal,
+    unsupported_struct_literal,
+    unsupported_try,
+    unsupported_block_expression,
+    unsupported_unreachable_expression,
+    unsupported_await,
+};
+
 pub const ExecutableBody = struct {
     complete: bool = true,
+    incomplete_reason: ExecutableIncompleteReason = .none,
     return_type_id: TypeId = .invalid,
     parameters: []ExecutableParameter = &.{},
     locals: []ExecutableLocalIdentity = &.{},

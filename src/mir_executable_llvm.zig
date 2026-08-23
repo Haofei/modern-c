@@ -689,6 +689,9 @@ const Renderer = struct {
     }
 
     fn emitAddressOf(self: *Renderer, expression: mir.ExecutableExpression, address: anytype) RenderError!Value {
+        if (directAddressOfSupported(self.body, expression, address)) {
+            return .{ .ty = "ptr", .spelling = try self.emitPlace(address.place, "ptr") };
+        }
         if (!addressOfParameterDerefSupported(self.body, expression, address)) return error.InvalidBody;
         return .{ .ty = "ptr", .spelling = try self.emitGuardedParameterDerefPointer(expression, address.place) };
     }
@@ -869,7 +872,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
         .builtin_call => |call| builtinSupported(body, expression, call),
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
-        .address_of => |address| addressOfParameterDerefSupported(body, expression, address),
+        .address_of => |address| directAddressOfSupported(body, expression, address) or
+            addressOfParameterDerefSupported(body, expression, address),
         .deref => |id| expressionValid(body, id) and switch (body.expressions[id.index()].result_ty) {
             .pointer => true,
             else => false,
@@ -1191,6 +1195,27 @@ fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression:
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn directAddressOfSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    if (place.projection_count != 0 or !sameValueType(place.root_ty, place.ty) or
+        !addressResultMatchesPlace(expression.result_ty, place.ty) or
+        address.representation_source != null or address.representation_span_id.isValid() or
+        ownedExpressionTrapCount(body, expression.id) != 0) return false;
+    return switch (place.root) {
+        .local => |id| localAddressable(body, id) and parameterIdentity(body, id) == null,
+        .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
+    };
+}
+
+fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) bool {
+    const shape = switch (result_ty) {
+        .pointer => |value| value,
+        else => return false,
+    };
+    return shape.kind == .single and std.mem.eql(u8, shape.child, place_ty.name());
+}
+
 fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement, store: anytype) bool {
     if (!memoryAccessSupported(body, store.place, store.ty, store.access, true) or !expressionValid(body, store.value)) return false;
     const place = body.places[store.place.index()];
@@ -1231,6 +1256,14 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
 
 fn representationTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return representationTrapEdge(body, expression) != null;
+}
+
+fn ownedExpressionTrapCount(body: *const mir.ExecutableBody, expression_id: mir.ExprId) usize {
+    var count: usize = 0;
+    for (body.trap_edges) |edge| if (edge.owner.expressionId()) |owner| {
+        if (owner.eql(expression_id)) count += 1;
+    };
+    return count;
 }
 
 fn representationTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {

@@ -10970,6 +10970,7 @@ test "LLVM emits global address direct-call args from MIR without body fallback"
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_address_call_arg.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_global_address_arg");
+    try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "call i32 @consume_ptr(ptr @shared_counter)");
 }
 
@@ -10986,6 +10987,7 @@ test "LLVM emits global address returns from MIR without body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_address_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal ptr @returned_global_pointer");
+    try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "ret ptr @shared_counter");
 }
 

@@ -554,9 +554,37 @@ fn addressOfSupported(
     address: @FieldType(mir.ExecutableExpression.Operation, "address_of"),
 ) bool {
     const place = placeById(body, address.place) orelse return false;
+    if (!addressResultMatchesPlace(expression.result_ty, place.ty)) return false;
+    if (place.projection_count == 0) {
+        return directAddressablePlaceSupported(body, place.*) and address.representation_source == null and
+            !address.representation_span_id.isValid() and ownedTrapEdgeCount(body, expression.id) == 0;
+    }
     return singleParameterScalarDerefPlaceSupported(body, place.*) and
         mir.TypeKey.eql(mir.TypeKey.fromValueType(expression.result_ty), mir.TypeKey.fromValueType(place.root_ty)) and
         representationOperationHasExactTrapEdge(body, expression);
+}
+
+fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) bool {
+    const shape = switch (result_ty) {
+        .pointer => |value| value,
+        else => return false,
+    };
+    return shape.kind == .single and std.mem.eql(u8, shape.child, place_ty.name());
+}
+
+fn directAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.projection_count != 0 or !sameValueType(place.root_ty, place.ty)) return false;
+    return switch (place.root) {
+        .local => |id| local: {
+            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
+            for (body.statements) |statement| switch (statement.operation) {
+                .local_init => |value| if (value.local.eql(id)) break :local true,
+                else => {},
+            };
+            break :local false;
+        },
+        .symbol => |id| if (symbolById(body, id)) |identity| identity.kind == .global else false,
+    };
 }
 
 fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
