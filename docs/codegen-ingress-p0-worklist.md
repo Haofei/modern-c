@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 798 C and 872 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 796 C and 872 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,7 +27,7 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **898/1696 admitted (52.9%)**, 798 fallback, and
+The 522-root sweep found C **900/1696 admitted (53.1%)**, 796 fallback, and
 LLVM **890/1762 admitted (50.5%)**, 872 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
@@ -63,8 +63,15 @@ coercion to every return reduced legacy-plan admission and was rejected by the
 broad census. The bounded version adds 2 C and 1 LLVM admissions without a
 strict-corpus regression.
 
-The census also ranks the canonical stopping layer. For C the remaining 798
-fallbacks are 748 `producer_incomplete`, 48 `renderer_unsupported`, and 2
+Pointer comparisons now target-type `null` with the other operand's structural
+pointer identity. This removes the parser's synthetic `null` shape before
+verification, so the generic renderer compares two identical typed pointer
+operands. It removes 2 further C fallbacks; the focused LLVM unit path is also
+canonical, while the broad LLVM total is unchanged because the surrounding
+roots remain unsupported before those records are published.
+
+The census also ranks the canonical stopping layer. For C the remaining 796
+fallbacks are 748 `producer_incomplete`, 46 `renderer_unsupported`, and 2
 `ready`; LLVM is 788/69/11/4. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
 The leading C reasons are `producer_invariant` (149), `noncanonical_literal`

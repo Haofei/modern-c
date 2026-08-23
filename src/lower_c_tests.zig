@@ -12127,10 +12127,12 @@ test "lower-c admits address-typed scalar deref returns from MIR" {
 }
 
 test "lower-c checks pointer comparison operands from canonical MIR" {
-    // Both operands carry explicit nonnull representation wrappers before the
-    // ordinary comparison consumes them.
+    // Nonnull operands carry explicit representation wrappers. A contextual
+    // null literal shares the pointer's structural MIR type, so no backend
+    // syntax rule is needed for pointer-vs-null comparison.
     const source =
         \\fn ptr_eq(a: *u32, b: *u32) -> bool { return a == b; }
+        \\fn ptr_present(a: *u32) -> bool { return a != null; }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "cmp.mc", source);
     defer reporter.deinit();
@@ -12149,6 +12151,10 @@ test "lower-c checks pointer comparison operands from canonical MIR" {
     try expectContains(output.items, "if (mc_exec_tmp_");
     try expectContains(output.items, " == mc_exec_tmp_");
     try expectContains(output.items, "return mc_exec_tmp_");
+    const present = try cFunctionBody(output.items, "static bool ptr_present(");
+    try expectContains(present, "/* canonical executable MIR */");
+    try expectContains(present, "!= mc_exec_tmp_");
+    try expectContains(present, "NULL");
 }
 
 test "lower-c admits single nested-call argument returns in evaluation order" {

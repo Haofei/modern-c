@@ -7166,6 +7166,14 @@ const FunctionBuilder = struct {
         if (expr.kind == .char_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
             result_ty = expected;
         };
+        // `null` is contextual in pointer comparisons and nullable-pointer
+        // construction. Preserve the checked operand type so renderers receive
+        // one structural pointer identity instead of comparing `*T` with the
+        // parser's synthetic `null` pointer shape.
+        if (expr.kind == .null_literal) if (expected_ty) |expected| switch (expected) {
+            .pointer, .nullable_pointer => result_ty = expected,
+            else => {},
+        };
         if (expr.kind == .address_of or expr.kind == .borrow_expr) if (expected_ty) |expected| switch (expected) {
             .pointer => result_ty = expected,
             else => {},

@@ -72,6 +72,34 @@ test "executable MIR owns implicit pointer return conversions" {
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 
+test "executable MIR target-types null in pointer comparisons" {
+    const source =
+        \\fn present(p: *mut u32) -> bool { return p != null; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_pointer_null.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByName(module_mir, "present") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    const comparison = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    const binary = switch (comparison.operation) {
+        .binary => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const left = function.executable_body.expressions[binary.left.index()];
+    const right = function.executable_body.expressions[binary.right.index()];
+    try std.testing.expect(mir.TypeKey.eql(mir.TypeKey.fromValueType(left.result_ty), mir.TypeKey.fromValueType(right.result_ty)));
+    try std.testing.expect(right.operation == .literal and right.operation.literal == .null);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "present") orelse return error.TestUnexpectedResult;
+    const mutable_comparison = mutable_function.executable_body.expressions[mutable_function.executable_body.expressions.len - 1].operation.binary;
+    mutable_function.executable_body.expressions[mutable_comparison.right.index()].result_ty = .{ .nullable_pointer = .{ .kind = .single, .mutability = .none, .child = "null" } };
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
 test "executable MIR owns address representation cast" {
     const source =
         \\fn address_value(value: PAddr) -> usize {

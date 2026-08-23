@@ -10848,9 +10848,11 @@ test "LLVM admits address-typed scalar deref returns from MIR" {
 }
 
 test "LLVM checks pointer comparison operands from canonical MIR" {
-    // Each nonnull parameter is validated before the ordinary comparison.
+    // Each nonnull parameter is validated before the ordinary comparison; a
+    // contextual null literal is emitted from the same typed pointer operand.
     const source =
         \\fn ptr_eq(a: *u32, b: *u32) -> bool { return a == b; }
+        \\fn ptr_present(a: *u32) -> bool { return a != null; }
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -10862,6 +10864,9 @@ test "LLVM checks pointer comparison operands from canonical MIR" {
     try expectContains(body, "icmp eq ptr %mc_arg_1, null");
     try expectContains(body, "icmp eq ptr %mc_arg_0, %mc_arg_1");
     try expectContains(body, "mc_trap_InvalidRepresentation");
+    const present = try llvmFunctionBody(output.items, "define internal i1 @ptr_present");
+    try expectContains(present, "; canonical executable MIR");
+    try expectContains(present, "icmp ne ptr %mc_arg_0, null");
 }
 
 test "LLVM admits single nested-call argument returns inline" {

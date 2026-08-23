@@ -332,6 +332,12 @@ cutover leaves the strict corpus at 160/160 per backend and moves the 522-root
 broad census to C **898/1696 (52.9%)** and LLVM **890/1762 (50.5%)**, with
 798/872 fallbacks.
 
+The next bounded operand slice target-types `null` in pointer comparisons with
+the other operand's structural pointer identity. C no longer needs its AST
+fallback for `p != null`; the LLVM unit path is likewise canonical. The broad
+census is now C **900/1696 (53.1%)** and LLVM **890/1762 (50.5%)**, with
+796/872 fallbacks.
+
 The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced
 `usize` index, exact raw-many pointer type, evaluation order, and an
