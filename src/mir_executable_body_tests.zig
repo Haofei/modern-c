@@ -482,6 +482,15 @@ test "raw pointer construction owns its nonnull trap and unsafe authority" {
     try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
     function.executable_body.expressions[index].operation.builtin_call.representation_span_id = saved_span;
 
+    const argument_id = function.executable_body.expressions[index].operation.builtin_call.arguments[0];
+    const argument = function.executable_body.expressions[argument_id.index()];
+    const saved_representation_source = function.executable_body.expressions[index].operation.builtin_call.representation_source;
+    function.executable_body.expressions[index].operation.builtin_call.representation_source = argument.source;
+    function.executable_body.expressions[index].operation.builtin_call.representation_span_id = argument.span_id;
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
+    function.executable_body.expressions[index].operation.builtin_call.representation_source = saved_representation_source;
+    function.executable_body.expressions[index].operation.builtin_call.representation_span_id = saved_span;
+
     const saved_source = function.executable_body.trap_edges[0].source;
     function.executable_body.trap_edges[0].source = .checked_arithmetic;
     try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));

@@ -6971,7 +6971,9 @@ const FunctionBuilder = struct {
         }
         if (!mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
         return if (call.kind == .raw_ptr)
-            call.representation_source != null and call.representation_span_id.isValid()
+            call.representation_source != null and
+                sourcePointEquivalent(call.representation_source.?, expression.source) and
+                call.representation_span_id.eql(expression.span_id)
         else
             call.representation_source == null and !call.representation_span_id.isValid();
     }

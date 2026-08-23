@@ -246,6 +246,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 if (call.kind == .raw_ptr) {
                     const source = call.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, call.representation_span_id, source);
+                    if (!sameSource(source, value.source) or !call.representation_span_id.eql(value.span_id))
+                        return error.InvalidMemoryAccessTrap;
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
