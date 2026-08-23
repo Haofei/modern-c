@@ -6739,9 +6739,23 @@ const FunctionBuilder = struct {
                 const summary = self.summaries.get(spelling) orelse break :direct false;
                 break :direct !summary.is_variadic;
             },
-            .builtin_call => false,
+            .builtin_call => |call| self.executableBuiltinComplete(expression, call),
             else => true,
         };
+    }
+
+    fn executableBuiltinComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        call: @FieldType(ExecutableExpression.Operation, "builtin_call"),
+    ) bool {
+        if (call.argument_count > mir_model.max_executable_operands) return false;
+        var operand_types: [mir_model.max_executable_operands]ValueType = undefined;
+        for (call.arguments[0..call.argument_count], 0..) |argument, index| {
+            if (!argument.isValid() or argument.index() >= self.executable_expressions.items.len) return false;
+            operand_types[index] = self.executable_expressions.items[argument.index()].result_ty;
+        }
+        return mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count]);
     }
 
     fn executableTrapProjectionComplete(self: *const FunctionBuilder, legacy_edges: []const TrapEdge) bool {
@@ -6922,7 +6936,10 @@ const FunctionBuilder = struct {
                         .callee_span_id = try self.internSpanId(callee_source),
                         .argument_count = node.args.len,
                     };
-                    for (node.args, 0..) |argument, index| call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                    for (node.args, 0..) |argument, index| {
+                        call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                        if (kind == .wrapping_add) self.contextualizeExecutableLiteral(call_value.arguments[index], result_ty);
+                    }
                     break :call .{ .builtin_call = call_value };
                 }
                 if (directCalleeName(node.callee.*)) |callee_name| {
@@ -6998,6 +7015,13 @@ const FunctionBuilder = struct {
         const alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse 0;
         if (alignment == 0) self.executable_supported = false;
         const root = executablePlaceRootIdent(place_expr);
+        if (root) |name| {
+            // This first memory slice intentionally admits only straight-line
+            // global access.  Branch/loop cleanup and access scheduling stay
+            // on the existing verified path until the executable CFG owns the
+            // complete effect ordering contract for those regions.
+            if (self.globals.contains(name) and self.current != 0) self.executable_supported = false;
+        }
         const kind: mir_model.ExecutableMemoryAccessKind = if (root) |name|
             if (self.globals.contains(name) and self.mutable_globals.contains(name)) .race_unordered else .plain
         else

@@ -238,7 +238,7 @@ const Renderer = struct {
             .unary => |unary| try self.emitUnary(ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
             .direct_call => |call| try self.emitDirectCall(ty, call),
-            .builtin_call => return error.Unsupported,
+            .builtin_call => |call| try self.emitBuiltinCall(expression, call),
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
             .deref => |operand| blk: {
                 const pointer = try self.emitExpression(operand);
@@ -383,6 +383,40 @@ const Renderer = struct {
         return self.emitCall(ty, callee.spelling, call.arguments[0..call.argument_count]);
     }
 
+    fn emitBuiltinCall(self: *Renderer, expression: mir.ExecutableExpression, call: anytype) RenderError!Value {
+        if (!builtinSupported(self.body, expression, call)) return error.InvalidBody;
+        var operands: [mir.max_executable_operands]Value = undefined;
+        for (call.arguments[0..call.argument_count], 0..) |id, index| operands[index] = try self.emitExpression(id);
+        const result_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
+        return switch (call.kind) {
+            .phys => {
+                const operand = operands[0];
+                if (!std.mem.eql(u8, operand.ty, result_ty)) return error.Unsupported;
+                return .{ .ty = result_ty, .spelling = operand.spelling };
+            },
+            .wrapping_add => {
+                const left = operands[0];
+                const right = operands[1];
+                if (!std.mem.eql(u8, left.ty, result_ty) or !std.mem.eql(u8, right.ty, result_ty)) return error.InvalidBody;
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = add {s} {s}, {s}\n", .{ result, result_ty, left.spelling, right.spelling });
+                return .{ .ty = result_ty, .spelling = result };
+            },
+            .conversion_from => {
+                const operand = operands[0];
+                const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
+                if (std.mem.eql(u8, operand.ty, result_ty)) return .{ .ty = result_ty, .spelling = operand.spelling };
+                const source = mir.ExecutableCastKind.integerInfo(source_ty) orelse return error.InvalidBody;
+                const target = mir.ExecutableCastKind.integerInfo(expression.result_ty) orelse return error.InvalidBody;
+                if (source.signed != target.signed or target.bits <= source.bits) return error.InvalidBody;
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, if (source.signed) "sext" else "zext", operand.ty, operand.spelling, result_ty });
+                return .{ .ty = result_ty, .spelling = result };
+            },
+            else => return error.Unsupported,
+        };
+    }
+
     fn emitCall(self: *Renderer, ty: []const u8, callee: []const u8, arguments: []const mir.ExprId) RenderError!Value {
         var rendered: std.ArrayList(u8) = .empty;
         defer rendered.deinit(self.allocator);
@@ -495,7 +529,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .unary => |unary| unarySupported(body, expression.result_ty, unary),
         .binary => |binary| binarySupported(body, expression, binary),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
-        .builtin_call => false,
+        .builtin_call => |call| builtinSupported(body, expression, call),
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
         .address_of => |id| placeValid(body, id) and body.places[id.index()].projection_count == 0,
         .deref => |id| expressionValid(body, id) and switch (body.expressions[id.index()].result_ty) {
@@ -509,6 +543,20 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .cast => |cast| castSupported(body, expression, cast),
         .index, .range_slice, .member, .array, .struct_, .unsupported => false,
     };
+}
+
+fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
+    switch (call.kind) {
+        .phys, .wrapping_add, .conversion_from => {},
+        else => return false,
+    }
+    if (call.argument_count > mir.max_executable_operands) return false;
+    var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
+    for (call.arguments[0..call.argument_count], 0..) |id, index| {
+        if (!expressionValid(body, id)) return false;
+        operand_types[index] = body.expressions[id.index()].result_ty;
+    }
+    return mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count]);
 }
 
 fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, cast: anytype) bool {
@@ -1225,4 +1273,93 @@ test "mechanical renderer rejects mutated restricted cast facts" {
     expressions[1] = cast_expression;
     body.parameters = @constCast(&signed_parameters);
     try std.testing.expect(!supports(&body, signed_target_ty));
+}
+
+fn renderBuiltinForTest(allocator: std.mem.Allocator, kind: mir.CallTargetKind, operand_types: []const mir.ValueType, result_ty: mir.ValueType) RenderError![]u8 {
+    if (operand_types.len > mir.max_executable_operands) return error.Unsupported;
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    var parameters: [mir.max_executable_operands]mir.ExecutableParameter = undefined;
+    var expressions: [mir.max_executable_operands + 1]mir.ExecutableExpression = undefined;
+    var arguments = [_]mir.ExprId{mir.ExprId.invalid} ** mir.max_executable_operands;
+    for (operand_types, 0..) |operand_ty, index| {
+        const local = mir.LocalId.fromIndex(index);
+        const expression = mir.ExprId.fromIndex(index);
+        parameters[index] = .{ .local = local, .ty = operand_ty, .source = source };
+        expressions[index] = .{
+            .id = expression,
+            .block_id = mir.BlockId.fromIndex(0),
+            .owner_statement = mir.InstId.fromIndex(0),
+            .source = source,
+            .result_ty = operand_ty,
+            .operation = .{ .local = local },
+        };
+        arguments[index] = expression;
+    }
+    const result_id = mir.ExprId.fromIndex(operand_types.len);
+    expressions[operand_types.len] = .{
+        .id = result_id,
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .source = source,
+        .result_ty = result_ty,
+        .operation = .{ .builtin_call = .{
+            .kind = kind,
+            .callee_source = source,
+            .arguments = arguments,
+            .argument_count = operand_types.len,
+        } },
+    };
+    const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = result_id } }};
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = parameters[0..operand_types.len],
+        .expressions = expressions[0 .. operand_types.len + 1],
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+    return render(allocator, &body, result_ty);
+}
+
+test "mechanical renderer emits selected canonical builtins" {
+    const unsigned_source = [_]mir.ValueType{.{ .integer = "u8" }};
+    const signed_source = [_]mir.ValueType{.{ .integer = "i8" }};
+    const same_width_source = [_]mir.ValueType{.{ .integer = "u64" }};
+    const wrapping_operands = [_]mir.ValueType{ .{ .integer = "u32" }, .{ .integer = "u32" } };
+
+    const phys = try renderBuiltinForTest(std.testing.allocator, .phys, &same_width_source, .{ .address = .paddr });
+    defer std.testing.allocator.free(phys);
+    try std.testing.expect(std.mem.indexOf(u8, phys, "ret i64 %mc_arg_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, phys, " = trunc ") == null);
+
+    const wrapping = try renderBuiltinForTest(std.testing.allocator, .wrapping_add, &wrapping_operands, .{ .integer = "u32" });
+    defer std.testing.allocator.free(wrapping);
+    try std.testing.expect(std.mem.indexOf(u8, wrapping, " = add i32 %mc_arg_0, %mc_arg_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapping, " nsw ") == null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapping, " nuw ") == null);
+
+    const unsigned_conversion = try renderBuiltinForTest(std.testing.allocator, .conversion_from, &unsigned_source, .{ .integer = "u32" });
+    defer std.testing.allocator.free(unsigned_conversion);
+    try std.testing.expect(std.mem.indexOf(u8, unsigned_conversion, "zext i8 %mc_arg_0 to i32") != null);
+
+    const signed_conversion = try renderBuiltinForTest(std.testing.allocator, .conversion_from, &signed_source, .{ .integer = "i32" });
+    defer std.testing.allocator.free(signed_conversion);
+    try std.testing.expect(std.mem.indexOf(u8, signed_conversion, "sext i8 %mc_arg_0 to i32") != null);
+
+    const same_width_conversion = try renderBuiltinForTest(std.testing.allocator, .conversion_from, &same_width_source, .{ .integer = "usize" });
+    defer std.testing.allocator.free(same_width_conversion);
+    try std.testing.expect(std.mem.indexOf(u8, same_width_conversion, "ret i64 %mc_arg_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, same_width_conversion, " = zext ") == null);
+}
+
+test "mechanical renderer rejects mutated selected builtin types and kinds" {
+    const signed_phys = [_]mir.ValueType{.{ .integer = "i64" }};
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .phys, &signed_phys, .{ .address = .paddr }));
+
+    const wrapping_operands = [_]mir.ValueType{ .{ .integer = "u32" }, .{ .integer = "u32" } };
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .wrapping_add, &wrapping_operands, .{ .integer = "i32" }));
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .conversion_from, &wrapping_operands, .{ .integer = "u32" }));
+
+    const narrowing_source = [_]mir.ValueType{.{ .integer = "u32" }};
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .conversion_from, &narrowing_source, .{ .integer = "u8" }));
+    try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .cpu_pause, &narrowing_source, .{ .integer = "u32" }));
 }

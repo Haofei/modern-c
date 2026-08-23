@@ -459,6 +459,36 @@ pub const ExecutableCastKind = enum {
     }
 };
 
+pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, operands: []const ValueType) bool {
+    return switch (kind) {
+        .phys => operands.len == 1 and switch (result) {
+            .address => |class| class == .paddr and unsignedIntegerAtLeast(operands[0], 64),
+            else => false,
+        },
+        .wrapping_add => wrapping: {
+            if (operands.len != 2) break :wrapping false;
+            const info = ExecutableCastKind.integerInfo(result) orelse break :wrapping false;
+            break :wrapping !info.signed and
+                TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[0])) and
+                TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[1]));
+        },
+        .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
+        else => false,
+    };
+}
+
+fn unsignedIntegerAtLeast(ty: ValueType, minimum_bits: u16) bool {
+    const info = ExecutableCastKind.integerInfo(ty) orelse return false;
+    return !info.signed and info.bits >= minimum_bits;
+}
+
+fn valuePreservingIntegerConversion(source: ValueType, target: ValueType) bool {
+    if (TypeKey.eql(TypeKey.fromValueType(source), TypeKey.fromValueType(target))) return true;
+    const source_info = ExecutableCastKind.integerInfo(source) orelse return false;
+    const target_info = ExecutableCastKind.integerInfo(target) orelse return false;
+    return source_info.signed == target_info.signed and target_info.bits >= source_info.bits;
+}
+
 pub const ExecutableMemoryAccessKind = enum {
     plain,
     race_unordered,

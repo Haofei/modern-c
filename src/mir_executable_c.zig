@@ -262,7 +262,7 @@ fn emitExpressionOperation(
             try out.append(allocator, ')');
             try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
         },
-        .builtin_call => return error.UnsupportedOperation,
+        .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression.result_ty, call, depth),
         .address_of => |operand| {
             try out.appendSlice(allocator, "(&(");
             try emitExpression(allocator, out, body, operand, depth + 1);
@@ -361,8 +361,65 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .indirect_call => |call| call.argument_count <= call.arguments.len and expressionById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .slice_length => |base| expressionById(body, base) != null,
-        .builtin_call, .address_of, .deref, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
+        .builtin_call => |call| builtinCallSupported(body, expression, call),
+        .address_of, .deref, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
     };
+}
+
+fn builtinCallSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+) bool {
+    switch (call.kind) {
+        .phys, .wrapping_add, .conversion_from => {},
+        else => return false,
+    }
+    if (call.argument_count > mir.max_executable_operands) return false;
+    var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
+    for (call.arguments[0..call.argument_count], 0..) |argument, index| {
+        const operand = expressionById(body, argument) orelse return false;
+        operand_types[index] = operand.result_ty;
+    }
+    return mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count]);
+}
+
+fn emitBuiltinCall(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    result_ty: mir.ValueType,
+    call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    switch (call.kind) {
+        .phys => {
+            try out.appendSlice(allocator, "((uintptr_t)(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .conversion_from => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .wrapping_add => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, ")((");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ") + (");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
+            try out.appendSlice(allocator, ")))");
+        },
+        else => return error.UnsupportedOperation,
+    }
 }
 
 fn castSupported(
@@ -1264,5 +1321,132 @@ test "executable C renderer rejects restricted cast fact drift" {
     expressions[1].result_ty = u32_ty;
 
     expressions[1].operation.cast.operand = mir.ExprId.invalid;
+    try std.testing.expect(!canEmitBody(&body));
+}
+
+test "executable C renderer emits selected typed builtins in operand order" {
+    const phys_local = mir.LocalId.fromIndex(0);
+    const wrap_left_local = mir.LocalId.fromIndex(1);
+    const wrap_right_local = mir.LocalId.fromIndex(2);
+    const conversion_local = mir.LocalId.fromIndex(3);
+    const phys_operand = mir.ExprId.fromIndex(0);
+    const phys_result = mir.ExprId.fromIndex(1);
+    const wrap_left = mir.ExprId.fromIndex(2);
+    const wrap_right = mir.ExprId.fromIndex(3);
+    const wrap_result = mir.ExprId.fromIndex(4);
+    const conversion_operand = mir.ExprId.fromIndex(5);
+    const conversion_result = mir.ExprId.fromIndex(6);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const u8_ty: mir.ValueType = .{ .integer = "u8" };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    const u64_ty: mir.ValueType = .{ .integer = "u64" };
+    const paddr_ty: mir.ValueType = .{ .address = .paddr };
+    var parameters = [_]mir.ExecutableParameter{
+        .{ .local = phys_local, .ty = u64_ty, .source = source },
+        .{ .local = wrap_left_local, .ty = u32_ty, .source = source },
+        .{ .local = wrap_right_local, .ty = u32_ty, .source = source },
+        .{ .local = conversion_local, .ty = u8_ty, .source = source },
+    };
+    var locals = [_]mir.ExecutableLocalIdentity{
+        .{ .id = phys_local, .spelling = "physical_bits" },
+        .{ .id = wrap_left_local, .spelling = "wrap_left" },
+        .{ .id = wrap_right_local, .spelling = "wrap_right" },
+        .{ .id = conversion_local, .spelling = "small" },
+    };
+    var phys_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .phys, .callee_source = source, .argument_count = 1 };
+    phys_call.arguments[0] = phys_operand;
+    var wrapping_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .wrapping_add, .callee_source = source, .argument_count = 2 };
+    wrapping_call.arguments[0] = wrap_left;
+    wrapping_call.arguments[1] = wrap_right;
+    var conversion_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .callee_source = source, .argument_count = 1 };
+    conversion_call.arguments[0] = conversion_operand;
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = phys_operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u64_ty, .operation = .{ .local = phys_local } },
+        .{ .id = phys_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = paddr_ty, .operation = .{ .builtin_call = phys_call } },
+        .{ .id = wrap_left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = wrap_left_local } },
+        .{ .id = wrap_right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = wrap_right_local } },
+        .{ .id = wrap_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = wrapping_call } },
+        .{ .id = conversion_operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = conversion_local } },
+        .{ .id = conversion_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = conversion_call } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = conversion_result } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    const phys_operand_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = physical_bits;") orelse return error.TestUnexpectedResult;
+    const phys_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_1 = ((uintptr_t)(mc_exec_tmp_0));") orelse return error.TestUnexpectedResult;
+    const wrap_left_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_2 = wrap_left;") orelse return error.TestUnexpectedResult;
+    const wrap_right_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_3 = wrap_right;") orelse return error.TestUnexpectedResult;
+    const wrap_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_4 = ((uint32_t)((uint32_t)(mc_exec_tmp_2) + (uint32_t)(mc_exec_tmp_3)));") orelse return error.TestUnexpectedResult;
+    const conversion_operand_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_5 = small;") orelse return error.TestUnexpectedResult;
+    const conversion_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_6 = ((uint32_t)(mc_exec_tmp_5));") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(phys_operand_pos < phys_pos and phys_pos < wrap_left_pos);
+    try std.testing.expect(wrap_left_pos < wrap_right_pos and wrap_right_pos < wrap_pos);
+    try std.testing.expect(wrap_pos < conversion_operand_pos and conversion_operand_pos < conversion_pos);
+}
+
+test "executable C renderer rejects selected builtin fact mutations" {
+    const local = mir.LocalId.fromIndex(0);
+    const operand = mir.ExprId.fromIndex(0);
+    const result = mir.ExprId.fromIndex(1);
+    const statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const u8_ty: mir.ValueType = .{ .integer = "u8" };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty, .source = source }};
+    var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
+    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .callee_source = source, .argument_count = 1 };
+    call.arguments[0] = operand;
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    expressions[1].operation.builtin_call.kind = .phys;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].result_ty = .{ .address = .paddr };
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].result_ty = u32_ty;
+    expressions[1].operation.builtin_call.kind = .conversion_from;
+
+    expressions[1].operation.builtin_call.argument_count = 0;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].operation.builtin_call.argument_count = 1;
+
+    expressions[1].result_ty = .{ .integer = "i32" };
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[1].result_ty = u32_ty;
+
+    expressions[1].operation.builtin_call.kind = .wrapping_add;
+    expressions[1].operation.builtin_call.argument_count = 2;
+    expressions[1].operation.builtin_call.arguments[1] = operand;
+    expressions[1].result_ty = u8_ty;
+    try std.testing.expect(canEmitBody(&body));
+    expressions[1].result_ty = u32_ty;
+    try std.testing.expect(!canEmitBody(&body));
+
+    expressions[1].operation.builtin_call.kind = .conversion_from_mod;
     try std.testing.expect(!canEmitBody(&body));
 }

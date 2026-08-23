@@ -133,6 +133,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .builtin_call => |call| {
             try verifySpan(function, call.callee_span_id, call.callee_source);
             try verifyArguments(body, value, call.arguments, call.argument_count);
+            var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
+            for (call.arguments[0..call.argument_count], 0..) |argument, index| {
+                operand_types[index] = (expression(body, argument) orelse return error.InvalidExpressionReference).result_ty;
+            }
+            if (body.complete and !mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return error.InvalidBuiltinCall;
         },
         .indirect_call => |call| {
             try verifyOperand(body, value, call.callee);
@@ -311,7 +316,16 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .builtin_call, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => return true,
+        .unsupported, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => return true,
+        .builtin_call => |call| {
+            if (call.argument_count > mir.max_executable_operands) return true;
+            var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
+            for (call.arguments[0..call.argument_count], 0..) |argument, index| {
+                const operand = expression(body, argument) orelse return true;
+                operand_types[index] = operand.result_ty;
+            }
+            if (!mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return true;
+        },
         .literal => |literal| switch (literal) {
             .uninit, .enum_value => return true,
             else => {},
