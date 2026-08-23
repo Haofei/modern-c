@@ -194,6 +194,29 @@ pub const DirectCall = struct {
 pub const Return = struct {
     location: Location,
     value: ?Operand,
+    projection: ?ReturnProjection = null,
+};
+
+/// A source-free projection consumed directly by a return.  Field identity is
+/// the resolved declaration ordinal, while builtins use the closed MIR enum;
+/// neither form retains member spelling.
+pub const FieldProjection = struct {
+    base: Operand,
+    field_index: usize,
+    result: TypeRef,
+    location: Location,
+};
+
+pub const BuiltinMemberProjection = struct {
+    base: Operand,
+    member: mir.Instruction.BuiltinMember,
+    result: TypeRef,
+    location: Location,
+};
+
+pub const ReturnProjection = union(enum) {
+    field: FieldProjection,
+    builtin_member: BuiltinMemberProjection,
 };
 
 pub const AccessBodyPlan = struct {
@@ -209,6 +232,154 @@ pub const AccessBodyPlan = struct {
         self.* = undefined;
     }
 };
+
+/// The syntax-free terminal operation for a strict structural-access body.
+///
+/// Local declarations and their typed initializers remain source ordered in
+/// `AccessBodyPlan.statements`.  This terminal tells a backend which access
+/// value is returned, or which access place is stored before a void return.
+/// Consequently all address/index/slice families share one emitter contract;
+/// adding a source spelling cannot create a new admission path.
+pub const StructuralOperation = union(enum) {
+    return_access: struct {
+        access_index: usize,
+        location: Location,
+    },
+    store_access_then_return: struct {
+        store: Store,
+        return_location: Location,
+    },
+    store_access_then_return_access: struct {
+        store: Store,
+        value: union(enum) {
+            access_result: usize,
+            field: FieldProjection,
+        },
+        return_location: Location,
+    },
+    store_access_then_return_operand: struct {
+        store: Store,
+        value: Operand,
+        return_location: Location,
+    },
+    range_slice_local_then_return_builtin: struct {
+        local: LocalInit,
+        range_access_index: usize,
+        member: BuiltinMemberProjection,
+        return_location: Location,
+    },
+};
+
+/// Resolve the terminal effect of a strict access body without inspecting
+/// syntax or names. Exactly one return is required. Its value is selected by
+/// typed access identity, field ordinal, named ValueId, or closed builtin
+/// member metadata. All other statements are source-ordered witnesses already
+/// validated by `buildAccessBody`.
+pub fn buildStructuralOperation(body: AccessBodyPlan) ?StructuralOperation {
+    var returned: ?Return = null;
+    var stored: ?Store = null;
+    var range_event: ?AccessEvent = null;
+    for (body.statements) |statement| switch (statement) {
+        .local_init => {},
+        .range_slice => |value| {
+            if (range_event != null) return null;
+            range_event = value;
+        },
+        .deref_store, .index_store => |value| {
+            if (stored != null) return null;
+            stored = value;
+        },
+        .return_value => |value| {
+            if (returned != null) return null;
+            returned = value;
+        },
+        .address_of, .deref_load, .index, .direct_call => {},
+    };
+    const result = returned orelse return null;
+    if (stored) |store| {
+        if (store.target_access_index >= body.accesses.len) return null;
+        switch (body.accesses[store.target_access_index]) {
+            .deref, .index => {},
+            else => return null,
+        }
+        if (result.projection) |projection| return switch (projection) {
+            .field => |field| if (result.value != null and sameLocation(result.value.?.location, field.location)) .{ .store_access_then_return_access = .{
+                .store = store,
+                .value = .{ .field = field },
+                .return_location = result.location,
+            } } else null,
+            .builtin_member => null,
+        };
+        if (result.value) |value| {
+            if (uniqueAccessIndexForLocation(body.accesses, value.location)) |access_index| {
+                return .{ .store_access_then_return_access = .{
+                    .store = store,
+                    .value = .{ .access_result = access_index },
+                    .return_location = result.location,
+                } };
+            }
+            if (!namedOperand(value) or value.integer_value != null) return null;
+            return .{ .store_access_then_return_operand = .{
+                .store = store,
+                .value = value,
+                .return_location = result.location,
+            } };
+        }
+        return .{ .store_access_then_return = .{
+            .store = store,
+            .return_location = result.location,
+        } };
+    }
+    if (result.projection) |projection| switch (projection) {
+        .builtin_member => |member| {
+            if (member.member != .slice_length or result.value == null) return null;
+            const range = range_event orelse return null;
+            const access_index = range.access_index;
+            const initialized = uniqueLocalForAccess(body.statements, access_index) orelse return null;
+            const member_base_id = member.base.value_id orelse return null;
+            if (body.accesses.len != 1 or access_index >= body.accesses.len or
+                !member_base_id.eql(initialized.value_id) or
+                !std.mem.eql(u8, member.base.name orelse return null, initialized.name) or
+                !sameLocation(result.value.?.location, member.location)) return null;
+            switch (body.accesses[access_index]) {
+                .range_slice => {},
+                else => return null,
+            }
+            return .{ .range_slice_local_then_return_builtin = .{
+                .local = initialized,
+                .range_access_index = access_index,
+                .member = member,
+                .return_location = result.location,
+            } };
+        },
+        .field => return null,
+    };
+    const value = result.value orelse return null;
+    const access_index = uniqueAccessIndexForLocation(body.accesses, value.location) orelse return null;
+    return .{ .return_access = .{
+        .access_index = access_index,
+        .location = result.location,
+    } };
+}
+
+fn sameLocation(left: Location, right: Location) bool {
+    return left.span_id.eql(right.span_id) and sourceEquivalent(left.source, right.source);
+}
+
+fn uniqueLocalForAccess(statements: []const AccessBodyStatement, access_index: usize) ?LocalInit {
+    var found: ?LocalInit = null;
+    for (statements) |statement| switch (statement) {
+        .local_init => |local| switch (local.value) {
+            .access_result => |index| if (index == access_index) {
+                if (found != null) return null;
+                found = local;
+            },
+            else => {},
+        },
+        else => {},
+    };
+    return found;
+}
 
 /// Backend-neutral admission for one scalar slice load/store.  Backends own
 /// only representation spelling; the operation, base, index, value and scalar
@@ -711,7 +882,8 @@ fn appendIndexEvent(allocator: std.mem.Allocator, statements: *std.ArrayList(Acc
 }
 
 fn appendReturn(allocator: std.mem.Allocator, statements: *std.ArrayList(AccessBodyStatement), function: *const mir.Function, instruction: mir.Instruction) !void {
-    const value: ?Operand = if (instruction.typed_value_operand_span_id.isValid())
+    const value_span_id = instruction.typed_value_operand_span_id;
+    const value: ?Operand = if (value_span_id.isValid())
         operandForSpan(function, instruction.typed_value_operand_span_id, instruction.result_ty) orelse
             accessResultOperand(function, instruction.typed_value_operand_span_id, null) orelse return error.InvalidAccessBody
     else if (instruction.result_ty == .void)
@@ -721,7 +893,43 @@ fn appendReturn(allocator: std.mem.Allocator, statements: *std.ArrayList(AccessB
     try statements.append(allocator, .{ .return_value = .{
         .location = locationForSpan(function, instruction.typed_span_id) orelse return error.InvalidAccessBody,
         .value = value,
+        .projection = if (value_span_id.isValid()) returnProjectionForSpan(function, value_span_id, instruction.result_ty) catch return error.InvalidAccessBody else null,
     } });
+}
+
+const ReturnProjectionError = error{MalformedProjection};
+
+/// Recover a return projection only from the MIR expression edge.  A plain
+/// operand has no base edge and returns null; once a base edge exists, missing
+/// or ambiguous field/builtin metadata is malformed rather than a fallback.
+fn returnProjectionForSpan(function: *const mir.Function, span_id: mir.SpanId, expected_ty: mir.ValueType) ReturnProjectionError!?ReturnProjection {
+    const expression = expressionAtSpan(function.blocks[0], span_id) orelse return null;
+    if (expression.member_field_index == null and expression.builtin_member == null) {
+        if (expression.typed_base_operand_span_id.isValid()) return error.MalformedProjection;
+        return null;
+    }
+    if (!expression.typed_base_operand_span_id.isValid()) {
+        return error.MalformedProjection;
+    }
+    if ((expression.member_field_index == null) == (expression.builtin_member == null)) return error.MalformedProjection;
+    const base_ty = expressionResultType(function, expression.typed_base_operand_span_id) orelse return error.MalformedProjection;
+    const base = operandForSpan(function, expression.typed_base_operand_span_id, base_ty) orelse return error.MalformedProjection;
+    const result = typeRefForTargetType(function, span_id, expected_ty) orelse return error.MalformedProjection;
+    const location = locationForSpan(function, span_id) orelse return error.MalformedProjection;
+    if (expression.member_field_index) |field_index| return .{ .field = .{
+        .base = base,
+        .field_index = field_index,
+        .result = result,
+        .location = location,
+    } };
+    const member = expression.builtin_member orelse return error.MalformedProjection;
+    if (member != .slice_length or !isSlice(base.type_ref.value_ty) or !isUsize(expected_ty)) return error.MalformedProjection;
+    return .{ .builtin_member = .{
+        .base = base,
+        .member = member,
+        .result = result,
+        .location = location,
+    } };
 }
 
 fn accessResultOperand(function: *const mir.Function, span_id: mir.SpanId, expected_ty: ?mir.ValueType) ?Operand {
@@ -771,6 +979,17 @@ fn accessIndexForSpan(accesses: []const Access, span_id: mir.SpanId) ?usize {
     for (accesses, 0..) |access, index| {
         if (!accessLocation(access).span_id.eql(span_id)) continue;
         if (found != null) return null;
+        found = index;
+    }
+    return found;
+}
+
+fn uniqueAccessIndexForLocation(accesses: []const Access, location: Location) ?usize {
+    var found: ?usize = null;
+    for (accesses, 0..) |access, index| {
+        const candidate = accessLocation(access);
+        if (!candidate.span_id.eql(location.span_id)) continue;
+        if (!sourceEquivalent(candidate.source, location.source) or found != null) return null;
         found = index;
     }
     return found;

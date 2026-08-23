@@ -123,7 +123,7 @@ fn buildIfLet(function: *const mir.Function, dispatch: mir.Block, branch: anytyp
     // A non-null fallback parameter has its usual MIR representation check,
     // which contributes one dedicated trap block. No other extra CFG is
     // admitted by this bounded plan.
-    if ((function.blocks.len != 3 and function.blocks.len != 4) or dispatch.successors.len != 2) return null;
+    if ((function.blocks.len < 3 or function.blocks.len > 5) or dispatch.successors.len != 2) return null;
     if (branch.true_block >= function.blocks.len or branch.false_block >= function.blocks.len) return null;
     if (dispatch.successors[0] != branch.true_block or dispatch.successors[1] != branch.false_block) return null;
     const nonnull = function.blocks[branch.true_block];
@@ -145,6 +145,11 @@ fn buildIfLet(function: *const mir.Function, dispatch: mir.Block, branch: anytyp
         ArmReturn{ .operand = .{ .binding = binding }, .return_location = returnLocation(function, nonnull) orelse return null };
     const else_return = zeroReturn(function, null_block) orelse parameterReturn(function, null_block);
     if (else_return == null) return null;
+    const parameter_fallback = std.meta.activeTag(else_return.?.operand) == .parameter;
+    if (parameter_fallback) {
+        if (function.blocks.len != 4 and function.blocks.len != 5) return null;
+        if (function.blocks.len == 5 and !hasSingleEmptyAfterBlock(function, dispatch, nonnull, null_block)) return null;
+    } else if (function.blocks.len != 3) return null;
     return .{
         .form = .if_let,
         .dispatch_block = dispatch.typed_id,
@@ -156,6 +161,20 @@ fn buildIfLet(function: *const mir.Function, dispatch: mir.Block, branch: anytyp
         .then_return = then_return,
         .else_return = else_return.?,
     };
+}
+
+fn hasSingleEmptyAfterBlock(function: *const mir.Function, dispatch: mir.Block, nonnull: mir.Block, null_block: mir.Block) bool {
+    var after_count: usize = 0;
+    for (function.blocks) |block| {
+        if (block.id == dispatch.id or block.id == nonnull.id or block.id == null_block.id) continue;
+        if (block.terminator == .fallthrough and block.instructions.len == 0 and block.successors.len == 0) {
+            after_count += 1;
+            continue;
+        }
+        if (block.terminator == .trap_) continue;
+        return false;
+    }
+    return after_count == 1;
 }
 
 fn buildSwitch(function: *const mir.Function, dispatch: mir.Block) ?Plan {
@@ -210,6 +229,8 @@ fn buildSwitch(function: *const mir.Function, dispatch: mir.Block) ?Plan {
     const bound = binding orelse return null;
     const then = nonnull orelse return null;
     const null_arm = null_block orelse return null;
+    const fallback = otherwise orelse return null;
+    if ((function.blocks.len == 5) != (std.meta.activeTag(fallback.operand) == .parameter)) return null;
     return .{
         .form = .switch_,
         .dispatch_block = dispatch.typed_id,
@@ -219,7 +240,7 @@ fn buildSwitch(function: *const mir.Function, dispatch: mir.Block) ?Plan {
         .subject_type = subject_type,
         .binding = bound,
         .then_return = then_return orelse return null,
-        .else_return = otherwise orelse return null,
+        .else_return = fallback,
     };
 }
 
@@ -464,8 +485,13 @@ fn representationFactMatches(function: *const mir.Function, fact: mir.Representa
     if (fact.typed_result_ty.index() >= function.type_identities.len or fact.typed_span_id.index() >= function.span_identities.len) return false;
     const type_identity = function.type_identities[fact.typed_result_ty.index()];
     const span_identity = function.span_identities[fact.typed_span_id.index()];
+    // The SpanId is the semantic identity. Some syntax transforms preserve a
+    // legacy fact's raw source point without its FileId while the canonical
+    // span table has already attached the per-file identity. Re-comparing the
+    // duplicated raw coordinates rejects that valid production pipeline and
+    // reintroduces the combined-source coupling this plan is meant to remove.
     return type_identity.id.eql(fact.typed_result_ty) and std.mem.eql(u8, type_identity.spelling, fact.result_ty.name()) and
-        span_identity.id.eql(fact.typed_span_id) and sourceEquivalent(span_identity.source, fact.source);
+        span_identity.id.eql(fact.typed_span_id);
 }
 
 fn armMarker(block: mir.Block) ?mir.Instruction {
@@ -553,8 +579,8 @@ fn typeRef(function: *const mir.Function, fact: mir.TargetTypeFact) ?TypeRef {
     const type_identity = function.type_identities[fact.typed_result_ty.index()];
     if (!type_identity.id.eql(fact.typed_result_ty) or !std.mem.eql(u8, type_identity.spelling, fact.result_ty.name())) return null;
     const span = function.span_identities[fact.typed_span_id.index()];
-    if (!span.id.eql(fact.typed_span_id) or !sourceEquivalent(span.source, fact.source)) return null;
-    return .{ .id = fact.typed_result_ty, .value_ty = fact.result_ty, .location = .{ .span_id = fact.typed_span_id, .source = fact.source } };
+    if (!span.id.eql(fact.typed_span_id)) return null;
+    return .{ .id = fact.typed_result_ty, .value_ty = fact.result_ty, .location = .{ .span_id = fact.typed_span_id, .source = span.source } };
 }
 
 fn uniqueInstruction(block: mir.Block, kind: mir.Instruction.Kind) ?mir.Instruction {
@@ -640,8 +666,4 @@ fn nullableSubjectMatchesBinding(subject: mir.ValueType, binding: mir.ValueType)
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
     return std.meta.activeTag(left) == std.meta.activeTag(right) and std.mem.eql(u8, left.name(), right.name());
-}
-
-fn sourceEquivalent(a: mir.SourcePoint, b: mir.SourcePoint) bool {
-    return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len and a.file_id == b.file_id;
 }

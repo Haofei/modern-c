@@ -1,14 +1,17 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the per-file module cutover and structural body-plan batch.
+2026-08-22 after the per-file module cutover and strict-corpus body-plan cutover.
 
 ## TL;DR
 
-- **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **145/160 C** and **140/160 LLVM**
-  functions. The remaining 15 C / 20 LLVM bodies are explicitly listed by the
-  census; broad report mode remains best-effort and is not a gate.
+- **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
+  **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
+  unsupported bodies. The ratchet is locked at 100%. This is a qualification
+  checkpoint, not the deletion boundary: the 520-root broad census still finds
+  **1164/1804 C** and **1206/1870 LLVM** distinct functions using the AST body.
+  P0 therefore remains incomplete until the executable MIR body is general
+  enough for that corpus and the artifact/branch is physically deleted.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
   representation, ABI and closed effect flags are created from checked
   declarations before body MIR lowering. MIR adopts that table, and

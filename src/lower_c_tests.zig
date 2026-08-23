@@ -198,6 +198,7 @@ test "lower-c emits strict nullable control plans from MIR without body fallback
     const switched = try cFunctionBody(output.items, "static uint32_t nullable_switch(uint8_t * maybe)");
     try expectContains(switched, "= maybe;");
     try expectContains(switched, "if (mc_tmp");
+    try expectContains(switched, "uint8_t * p = mc_tmp");
     try expectContains(switched, "return 0;");
 
     const seeded = try cFunctionBody(output.items, "static uint32_t nullable_switch_call_seed(void)");
@@ -535,6 +536,73 @@ test "lower-c emits access slice plans without body fallback" {
     defer temp.cleanup();
     try temp.dir.writeFile(std.testing.io, .{ .sub_path = "access_slice.c", .data = output.items });
     const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "access_slice.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{ "clang", "-fsyntax-only", generated_c } });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+}
+
+test "lower-c emits local address update from MIR without body fallback" {
+    const source =
+        \\fn update(seed: u32) -> u32 {
+        \\    var value: u32 = seed;
+        \\    let pointer: *mut u32 = &value;
+        \\    *pointer = value + 1;
+        \\    return value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_address_update.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t update(uint32_t seed)");
+    try expectContains(body, "uint32_t value = seed;");
+    try expectContains(body, "uint32_t * mc_tmp0 = &value;");
+    try expectContains(body, "*mc_tmp0 = mc_checked_add_u32(value, 1);");
+    try expectContains(body, "return value;");
+}
+
+test "lower-c emits the structural access tail from MIR without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\global pair: Pair = .{ .left = 1, .right = 2 };
+        \\global shared: u32 = 7;
+        \\global shared_ptr: *mut u32 = &shared;
+        \\fn address_global_field(value: u32) -> u32 { let p: *mut u32 = &pair.right; *p = value; return pair.right; }
+        \\fn address_array_element(value: u32) -> u32 { var xs: [2]u32 = .{ 3, 4 }; let p: *mut u32 = &xs[1]; *p = value; return xs[1]; }
+        \\fn address_field(value: u32) -> u32 { var pair_local: Pair = .{ .left = 5, .right = 6 }; let p: *mut u32 = &pair_local.right; *p = value; return pair_local.right; }
+        \\fn write_through_global_pointer(value: u32) -> u32 { *shared_ptr = value; return shared; }
+        \\fn slice_from_slice(xs: []const u8, lo: usize, hi: usize) -> usize { let s: []const u8 = xs[lo..hi]; return s.len; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_structural_access_tail.mc", source, &output);
+
+    const global_field = try cFunctionBody(output.items, "static uint32_t address_global_field(uint32_t value)");
+    try expectContains(global_field, "mc_race_store_u32");
+    try expectContains(global_field, "mc_race_load_u32(&(pair.right))");
+
+    const array_element = try cFunctionBody(output.items, "static uint32_t address_array_element(uint32_t value)");
+    try expectContains(array_element, "mc_race_store_u32");
+    try expectContains(array_element, "mc_race_load_u32(&(xs.elems[mc_check_index_usize(1, 2)]))");
+
+    const local_field = try cFunctionBody(output.items, "static uint32_t address_field(uint32_t value)");
+    try expectContains(local_field, "mc_race_store_u32");
+    try expectContains(local_field, "mc_race_load_u32(&(pair_local.right))");
+
+    const global_pointer = try cFunctionBody(output.items, "static uint32_t write_through_global_pointer(uint32_t value)");
+    try expectContains(global_pointer, "mc_race_store_u32");
+    try expectContains(global_pointer, "shared");
+
+    const slice = try cFunctionBody(output.items, "static uintptr_t slice_from_slice(");
+    try expectContains(slice, "mc_trap_Bounds();");
+    try expectContains(slice, "return mc_tmp");
+
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "structural_access_tail.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "structural_access_tail.c", std.testing.allocator);
     defer std.testing.allocator.free(generated_c);
     const clang = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{ "clang", "-fsyntax-only", generated_c } });
     defer std.testing.allocator.free(clang.stdout);

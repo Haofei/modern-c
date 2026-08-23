@@ -114,6 +114,215 @@ test "access body plan covers the bounded address and slice bucket" {
     }
 }
 
+test "structural operation closes the remaining strict access families" {
+    var module = try buildBodyFixture();
+    defer module.deinit();
+    const returned = [_][]const u8{
+        "address_global_field",
+        "address_array_element",
+        "local_address",
+        "slice_from_array",
+        "slice_from_slice",
+        "inferred_slice_call_base_arg",
+        "inferred_array_call_base",
+        "address_field",
+    };
+    for (returned) |name| {
+        var body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, name).?) orelse return error.TestUnexpectedResult;
+        defer body.deinit(std.testing.allocator);
+        switch (plan.buildStructuralOperation(body) orelse return error.TestUnexpectedResult) {
+            .return_access => |operation| {
+                try std.testing.expect(operation.access_index < body.accesses.len);
+                try std.testing.expect(operation.location.span_id.isValid());
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    var stored = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "write_through_global_pointer").?) orelse return error.TestUnexpectedResult;
+    defer stored.deinit(std.testing.allocator);
+    switch (plan.buildStructuralOperation(stored) orelse return error.TestUnexpectedResult) {
+        .store_access_then_return => |operation| {
+            try std.testing.expect(operation.store.target_access_index < stored.accesses.len);
+            try std.testing.expect(operation.return_location.span_id.isValid());
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "structural operation admission is independent of source names" {
+    var module = try buildRenamedBodyFixture();
+    defer module.deinit();
+    for ([_][]const u8{
+        "probe_crate",
+        "probe_slot",
+        "probe_local",
+        "window_of",
+        "subwindow",
+        "materialized_slice",
+        "materialized_array",
+        "field_probe",
+    }) |name| {
+        var body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, name).?) orelse return error.TestUnexpectedResult;
+        defer body.deinit(std.testing.allocator);
+        try std.testing.expect((plan.buildStructuralOperation(body) orelse return error.TestUnexpectedResult) == .return_access);
+    }
+    var stored = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "mutate_root").?) orelse return error.TestUnexpectedResult;
+    defer stored.deinit(std.testing.allocator);
+    try std.testing.expect((plan.buildStructuralOperation(stored) orelse return error.TestUnexpectedResult) == .store_access_then_return);
+}
+
+test "structural operation fails closed for stale result and duplicate stores" {
+    var module = try buildBodyFixture();
+    defer module.deinit();
+    var returned = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "address_field").?) orelse return error.TestUnexpectedResult;
+    defer returned.deinit(std.testing.allocator);
+    for (returned.statements) |*statement| switch (statement.*) {
+        .return_value => |*value| {
+            value.value.?.location.span_id = .invalid;
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(plan.buildStructuralOperation(returned) == null);
+
+    var stored = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "write_through_global_pointer").?) orelse return error.TestUnexpectedResult;
+    defer stored.deinit(std.testing.allocator);
+    var first_store: ?plan.Store = null;
+    for (stored.statements) |statement| switch (statement) {
+        .deref_store => |value| first_store = value,
+        else => {},
+    };
+    const store = first_store orelse return error.TestUnexpectedResult;
+    for (stored.statements) |*statement| switch (statement.*) {
+        .deref_load => {
+            statement.* = .{ .deref_store = store };
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(plan.buildStructuralOperation(stored) == null);
+}
+
+test "structural operation represents the real strict access tail" {
+    var module = try buildSourceModule("real_access_tail.mc", real_access_tail_source);
+    defer module.deinit();
+
+    for ([_]struct { name: []const u8, field_index: ?usize }{
+        .{ .name = "address_global_field", .field_index = 1 },
+        .{ .name = "address_array_element", .field_index = null },
+        .{ .name = "address_field", .field_index = 1 },
+    }) |expected| {
+        var body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, expected.name).?) orelse return error.TestUnexpectedResult;
+        defer body.deinit(std.testing.allocator);
+        switch (plan.buildStructuralOperation(body) orelse return error.TestUnexpectedResult) {
+            .store_access_then_return_access => |operation| {
+                try std.testing.expect(operation.store.target_access_index < body.accesses.len);
+                switch (operation.value) {
+                    .access_result => |index| {
+                        try std.testing.expect(expected.field_index == null);
+                        try std.testing.expect(index < body.accesses.len);
+                    },
+                    .field => |field| {
+                        try std.testing.expectEqual(expected.field_index orelse return error.TestUnexpectedResult, field.field_index);
+                        try std.testing.expect(field.base.value_id != null);
+                        try std.testing.expect(field.result.id.isValid());
+                    },
+                }
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    var global_body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "write_through_global_pointer").?) orelse return error.TestUnexpectedResult;
+    defer global_body.deinit(std.testing.allocator);
+    switch (plan.buildStructuralOperation(global_body) orelse return error.TestUnexpectedResult) {
+        .store_access_then_return_operand => |operation| {
+            try std.testing.expectEqualStrings("shared", operation.value.name orelse return error.TestUnexpectedResult);
+            try std.testing.expect(operation.value.value_id != null);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var slice_body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "slice_from_slice").?) orelse return error.TestUnexpectedResult;
+    defer slice_body.deinit(std.testing.allocator);
+    switch (plan.buildStructuralOperation(slice_body) orelse return error.TestUnexpectedResult) {
+        .range_slice_local_then_return_builtin => |operation| {
+            try std.testing.expectEqualStrings("s", operation.local.name);
+            switch (operation.local.value) {
+                .access_result => |index| try std.testing.expectEqual(operation.range_access_index, index),
+                else => return error.TestUnexpectedResult,
+            }
+            try std.testing.expectEqual(mir.Instruction.BuiltinMember.slice_length, operation.member.member);
+            try std.testing.expect(operation.member.base.value_id.?.eql(operation.local.value_id));
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "structural operation real tail remains independent of source names" {
+    var module = try buildSourceModule("renamed_access_tail.mc", renamed_access_tail_source);
+    defer module.deinit();
+    for ([_][]const u8{ "change_crate", "change_slot", "change_box" }) |name| {
+        var body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, name).?) orelse return error.TestUnexpectedResult;
+        defer body.deinit(std.testing.allocator);
+        try std.testing.expect((plan.buildStructuralOperation(body) orelse return error.TestUnexpectedResult) == .store_access_then_return_access);
+    }
+    var global_body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "replace_root").?) orelse return error.TestUnexpectedResult;
+    defer global_body.deinit(std.testing.allocator);
+    try std.testing.expect((plan.buildStructuralOperation(global_body) orelse return error.TestUnexpectedResult) == .store_access_then_return_operand);
+    var slice_body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "window_size").?) orelse return error.TestUnexpectedResult;
+    defer slice_body.deinit(std.testing.allocator);
+    try std.testing.expect((plan.buildStructuralOperation(slice_body) orelse return error.TestUnexpectedResult) == .range_slice_local_then_return_builtin);
+}
+
+test "structural operation real tail fails closed on stale projection facts" {
+    var field_module = try buildSourceModule("stale_field_tail.mc", real_access_tail_source);
+    defer field_module.deinit();
+    const field_function = functionByName(&field_module, "address_global_field").?;
+    var cleared_field = false;
+    for (field_function.blocks[0].instructions) |*instruction| {
+        if (instruction.kind == .expr and instruction.member_field_index != null and instruction.typed_span_id.eql(returnOperandSpan(field_function) orelse continue)) {
+            instruction.member_field_index = null;
+            cleared_field = true;
+            break;
+        }
+    }
+    try std.testing.expect(cleared_field);
+    try std.testing.expect((try plan.buildAccessBody(std.testing.allocator, field_function)) == null);
+
+    var builtin_module = try buildSourceModule("stale_builtin_tail.mc", real_access_tail_source);
+    defer builtin_module.deinit();
+    const builtin_function = functionByName(&builtin_module, "slice_from_slice").?;
+    var cleared_builtin = false;
+    for (builtin_function.blocks[0].instructions) |*instruction| {
+        if (instruction.builtin_member == .slice_length) {
+            instruction.builtin_member = null;
+            cleared_builtin = true;
+            break;
+        }
+    }
+    try std.testing.expect(cleared_builtin);
+    try std.testing.expect((try plan.buildAccessBody(std.testing.allocator, builtin_function)) == null);
+
+    var identity_module = try buildSourceModule("stale_identity_tail.mc", real_access_tail_source);
+    defer identity_module.deinit();
+    const identity_function = functionByName(&identity_module, "write_through_global_pointer").?;
+    const return_span = returnOperandSpan(identity_function) orelse return error.TestUnexpectedResult;
+    var cleared_identity = false;
+    for (identity_function.blocks[0].instructions) |*instruction| {
+        if (instruction.kind == .expr and instruction.typed_span_id.eql(return_span)) {
+            instruction.typed_value_id = null;
+            cleared_identity = true;
+            break;
+        }
+    }
+    try std.testing.expect(cleared_identity);
+    var identity_body = try plan.buildAccessBody(std.testing.allocator, identity_function) orelse return error.TestUnexpectedResult;
+    defer identity_body.deinit(std.testing.allocator);
+    try std.testing.expect(plan.buildStructuralOperation(identity_body) == null);
+}
+
 test "access body initializer and address place carry typed operations" {
     var module = try buildBodyFixture();
     defer module.deinit();
@@ -303,6 +512,37 @@ fn buildBodyFixture() !mir.Module {
     return mir.buildFromDecls(std.testing.allocator, parsed.decls);
 }
 
+fn buildRenamedBodyFixture() !mir.Module {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "renamed_access_body_plan.mc", renamed_body_fixture_source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(renamed_body_fixture_source, &reporter);
+    const parsed = try p.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    return mir.buildFromDecls(std.testing.allocator, parsed.decls);
+}
+
+fn buildSourceModule(path: []const u8, source: []const u8) !mir.Module {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, path, source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const parsed = try p.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    return mir.buildFromDecls(std.testing.allocator, parsed.decls);
+}
+
+fn returnOperandSpan(function: *const mir.Function) ?mir.SpanId {
+    for (function.blocks[0].instructions) |instruction| {
+        if (instruction.kind == .return_value) return instruction.typed_value_operand_span_id;
+    }
+    return null;
+}
+
 fn functionByName(module: *mir.Module, name: []const u8) ?*mir.Function {
     for (module.functions) |*function| if (std.mem.eql(u8, function.name, name)) return function;
     return null;
@@ -337,4 +577,46 @@ const body_fixture_source =
     \\fn inferred_array_call_base() -> u32 { let values = make_array(); return values[0]; }
     \\fn address_field() -> u32 { var holder: Holder = .{ .value = 4 }; let pointer = &holder.value; return pointer.*; }
     \\fn write_through_global_pointer(value: u32) -> void { let pointer: *mut u32 = &shared_value; pointer.* = value; return; }
+;
+
+const renamed_body_fixture_source =
+    \\struct Crate { payload: u32 }
+    \\global root_crate: Crate = .{ .payload = 8 };
+    \\global root_word: u32 = 0;
+    \\extern fn fetch_view() -> []const u32;
+    \\extern fn fetch_words() -> [2]u32;
+    \\
+    \\fn probe_crate() -> u32 { let cursor = &root_crate.payload; return cursor.*; }
+    \\fn probe_slot() -> u32 { var table: [2]u32 = .{ 8, 9 }; let cursor = &table[0]; return cursor.*; }
+    \\fn probe_local() -> u32 { var cell: u32 = 8; let cursor = &cell; return cursor.*; }
+    \\fn window_of(items: [4]u32, limit: usize) -> []const u32 { return items[0..limit]; }
+    \\fn subwindow(items: []const u32, limit: usize) -> []const u32 { return items[0..limit]; }
+    \\fn materialized_slice(at: usize) -> u32 { let produced = fetch_view(); return produced[at]; }
+    \\fn materialized_array() -> u32 { let produced = fetch_words(); return produced[0]; }
+    \\fn field_probe() -> u32 { var box: Crate = .{ .payload = 9 }; let cursor = &box.payload; return cursor.*; }
+    \\fn mutate_root(next: u32) -> void { let cursor: *mut u32 = &root_word; cursor.* = next; return; }
+;
+
+const real_access_tail_source =
+    \\struct Pair { left: u32, right: u32 }
+    \\global pair: Pair = .{ .left = 1, .right = 2 };
+    \\global shared: u32 = 7;
+    \\global shared_ptr: *mut u32 = &shared;
+    \\fn address_global_field(value: u32) -> u32 { let p: *mut u32 = &pair.right; *p = value; return pair.right; }
+    \\fn address_array_element(value: u32) -> u32 { var xs: [2]u32 = .{ 3, 4 }; let p: *mut u32 = &xs[1]; *p = value; return xs[1]; }
+    \\fn address_field(value: u32) -> u32 { var pair_local: Pair = .{ .left = 5, .right = 6 }; let p: *mut u32 = &pair_local.right; *p = value; return pair_local.right; }
+    \\fn write_through_global_pointer(value: u32) -> u32 { *shared_ptr = value; return shared; }
+    \\fn slice_from_slice(xs: []const u8, lo: usize, hi: usize) -> usize { let s: []const u8 = xs[lo..hi]; return s.len; }
+;
+
+const renamed_access_tail_source =
+    \\struct Crate { first: u32, payload: u32 }
+    \\global root_crate: Crate = .{ .first = 10, .payload = 20 };
+    \\global root_word: u32 = 9;
+    \\global root_cursor: *mut u32 = &root_word;
+    \\fn change_crate(next: u32) -> u32 { let cursor: *mut u32 = &root_crate.payload; *cursor = next; return root_crate.payload; }
+    \\fn change_slot(next: u32) -> u32 { var table: [2]u32 = .{ 8, 9 }; let cursor: *mut u32 = &table[1]; *cursor = next; return table[1]; }
+    \\fn change_box(next: u32) -> u32 { var box: Crate = .{ .first = 3, .payload = 4 }; let cursor: *mut u32 = &box.payload; *cursor = next; return box.payload; }
+    \\fn replace_root(next: u32) -> u32 { *root_cursor = next; return root_word; }
+    \\fn window_size(items: []const u8, begin: usize, finish: usize) -> usize { let window: []const u8 = items[begin..finish]; return window.len; }
 ;

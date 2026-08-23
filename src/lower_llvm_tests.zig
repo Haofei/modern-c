@@ -10,6 +10,27 @@ const mir = @import("mir.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM shared structural body plans cover nested, aggregate, workflow, and hoisted-loop families" {
+    const Case = struct { name: []const u8, path: []const u8, function_header: []const u8, needle: []const u8 };
+    const cases = [_]Case{
+        .{ .name = "llvm_plan_nested.mc", .path = "tests/llvm/bool_switch.mc", .function_header = "define internal i32 @classify", .needle = "icmp ugt i32 %x, 10" },
+        .{ .name = "llvm_plan_aggregate_assignment.mc", .path = "tests/llvm/aggregate_assignments.mc", .function_header = "define internal i32 @aggregate_call_after_assignment", .needle = "@llvm.uadd.with.overflow.i32" },
+        .{ .name = "llvm_plan_aggregate_calls.mc", .path = "tests/llvm/aggregate_rvalues.mc", .function_header = "define internal { [4 x i32], { ptr, i64 } } @make_bag", .needle = "insertvalue { [4 x i32], { ptr, i64 } }" },
+        .{ .name = "llvm_plan_local_vtable.mc", .path = "tests/llvm/fn_pointers.mc", .function_header = "define internal i32 @local_vtable_call", .needle = "call i32 @dispatch" },
+        .{ .name = "llvm_plan_closure.mc", .path = "tests/llvm/void_indirect_calls.mc", .function_header = "define internal void @call_closure", .needle = "insertvalue { ptr, ptr }" },
+        .{ .name = "llvm_plan_alloca_hoist.mc", .path = "tests/llvm/alloca_hoist_in_loop.mc", .function_header = "define signext i32 @alloca_hoist_run", .needle = "alloca [256 x i8]" },
+    };
+    for (cases) |case| {
+        const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, case.path, std.testing.allocator, .limited(1024 * 1024));
+        defer std.testing.allocator.free(source);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try appendLlvmTestNoFunctionBodyFallback(case.name, source, &output);
+        const body = try llvmFunctionBody(output.items, case.function_header);
+        try expectContains(body, case.needle);
+    }
+}
+
 test "LLVM nullable initialization and race lowering follow representation" {
     const source =
         \\struct Point { x: u32, y: u32 }
@@ -14032,6 +14053,90 @@ test "LLVM access-plan slice bucket lowers without function body fallback" {
     const direct_body = try llvmFunctionBody(output.items, "define internal i8 @direct_call_slice");
     try expectContains(direct_body, "call { ptr, i64 } @make_slice()");
     try expectContains(direct_body, "load atomic i8, ptr %");
+}
+
+test "LLVM structural access plan materializes locals and addresses without body fallback" {
+    const source =
+        \\struct Holder { value: u32 }
+        \\global shared_holder: Holder = .{ .value = 9 };
+        \\global shared_value: u32 = 3;
+        \\extern fn make_slice(seed: u8) -> []const u8;
+        \\extern fn make_array() -> [4]u8;
+        \\extern fn next_byte() -> u8;
+        \\extern fn next_index() -> usize;
+        \\fn global_field_address() -> u32 { let pointer = &shared_holder.value; return pointer.*; }
+        \\fn local_array_address() -> u32 { var values: [2]u32 = .{ 4, 5 }; let pointer = &values[0]; return pointer.*; }
+        \\fn array_window(n: usize) -> u8 { var values: [4]u8 = .{ 1, 2, 3, 4 }; let window: []mut u8 = values[0..n]; return window[0]; }
+        \\fn materialized_slice() -> u8 { let values = make_slice(next_byte()); return values[next_index()]; }
+        \\fn materialized_array() -> u8 { let values = make_array(); return values[next_index()]; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_structural_access_plan.mc", source, &output);
+
+    const global_field = try llvmFunctionBody(output.items, "define internal i32 @global_field_address");
+    try expectContains(global_field, "getelementptr { i32 }, ptr @shared_holder");
+    try expectContains(global_field, "load atomic i32");
+
+    const local_array = try llvmFunctionBody(output.items, "define internal i32 @local_array_address");
+    try expectContains(local_array, "alloca [2 x i32]");
+    try expectContains(local_array, "getelementptr [2 x i32]");
+
+    const window = try llvmFunctionBody(output.items, "define internal i8 @array_window");
+    try expectContains(window, "call void @mc_trap_Bounds()");
+    try expectContains(window, "load atomic i8");
+
+    const slice = try llvmFunctionBody(output.items, "define internal i8 @materialized_slice");
+    try expectContains(slice, "call i8 @next_byte()");
+    try expectContains(slice, "call { ptr, i64 } @make_slice(i8");
+    try expectContains(slice, "load atomic i8");
+
+    const array = try llvmFunctionBody(output.items, "define internal i8 @materialized_array");
+    try expectContains(array, "call [4 x i8] @make_array()");
+    try expectContains(array, "load i8");
+}
+
+test "LLVM structural access plan lowers store-return and range builtin terminals without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\global pair: Pair = .{ .left = 1, .right = 2 };
+        \\global shared: u32 = 7;
+        \\global shared_ptr: *mut u32 = &shared;
+        \\fn address_global_field(value: u32) -> u32 { let p: *mut u32 = &pair.right; *p = value; return pair.right; }
+        \\fn address_array_element(value: u32) -> u32 { var xs: [2]u32 = .{ 3, 4 }; let p: *mut u32 = &xs[1]; *p = value; return xs[1]; }
+        \\fn address_field(value: u32) -> u32 { var item: Pair = .{ .left = 5, .right = 6 }; let p: *mut u32 = &item.right; *p = value; return item.right; }
+        \\fn write_through_global_pointer(value: u32) -> u32 { *shared_ptr = value; return shared; }
+        \\fn slice_from_slice(xs: []const u8, lo: usize, hi: usize) -> usize { let window: []const u8 = xs[lo..hi]; return window.len; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_structural_access_terminals.mc", source, &output);
+
+    const global_field = try llvmFunctionBody(output.items, "define internal i32 @address_global_field");
+    try expectContains(global_field, "store atomic i32 %value");
+    try expectContains(global_field, "getelementptr { i32, i32 }, ptr @pair, i64 0, i32 1");
+    try expectContains(global_field, "load atomic i32");
+
+    const array_element = try llvmFunctionBody(output.items, "define internal i32 @address_array_element");
+    try expectContains(array_element, "alloca [2 x i32]");
+    try expectContains(array_element, "store atomic i32 %value");
+    try expectContains(array_element, "load i32");
+
+    const field = try llvmFunctionBody(output.items, "define internal i32 @address_field");
+    try expectContains(field, "alloca { i32, i32 }");
+    try expectContains(field, "store atomic i32 %value");
+    try expectContains(field, "load i32");
+
+    const global_pointer = try llvmFunctionBody(output.items, "define internal i32 @write_through_global_pointer");
+    try expectContains(global_pointer, "load atomic ptr, ptr @shared_ptr");
+    try expectContains(global_pointer, "store atomic i32 %value");
+    try expectContains(global_pointer, "load atomic i32, ptr @shared");
+
+    const range = try llvmFunctionBody(output.items, "define internal i64 @slice_from_slice");
+    try expectContains(range, "call void @mc_trap_Bounds()");
+    try expectContains(range, "alloca { ptr, i64 }");
+    try expectContains(range, "extractvalue { ptr, i64 }");
+    try expectContains(range, "ret i64");
 }
 
 test "LLVM local-address access tag lowers checked update without function body fallback" {

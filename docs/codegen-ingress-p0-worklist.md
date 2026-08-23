@@ -10,33 +10,44 @@ head-of-distribution, not by blind shape enumeration.
 
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
-which function shapes still fall back. The strict ratchet corpus currently
-admits **90.6% of C functions (145/160)** and **87.5% of LLVM functions
-(140/160)**; the rest still ingest the AST body.
+which function shapes still fall back. The strict ratchet corpus now admits
+**100% of C functions (160/160)** and **100% of LLVM functions (160/160)** with
+zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
+that boundary.
 
-### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
+The strict corpus is not the P0 completion definition. A 2026-08-22 broad sweep
+over all 520 `tests/**/*.mc` roots de-duplicated to 1804 C and 1870 LLVM
+functions. It still found 1164 C and 1206 LLVM AST-body fallbacks (64.5% for
+both backends). Those figures establish that final deletion now requires a
+general syntax-free executable MIR body and mechanical backend renderers; more
+strict-corpus recognizers are no longer an honest completion strategy.
 
-1611 distinct functions, **439 admitted (27.3%)**, 1172 fallback. The current
-strict ratchet corpus below includes the typed binary slice and is the blocking
-measurement. Remaining broad-snapshot fallbacks ranked by family
-(term / ret / blocks / traps):
+### Last completed broad census snapshot (2026-08-22)
+
+The 520-root sweep found C **640/1804 admitted (35.5%)**, 1164 fallback, and
+LLVM **664/1870 admitted (35.5%)**, 1206 fallback. There were no unsupported
+bodies because the transitional AST ingress is still present. Remaining C
+fallbacks ranked by family (LLVM has the same distribution within a few
+functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
 | 195 | 17% | return `<ident>` 1 blk 0 trap | region_holds, nested | remaining local-computed / multi-statement forms |
-| 140 | 12% | return `<ident>` 2 blk 1 trap | frame_base, slice_of_struct | same + a bounds/repr trap |
-| 82 | 7% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
-| 74 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
-| 43 | 4% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
-| 36 | 3% | return binary 1 blk 0 trap | sat_mul, ordered_bitwise_return, bool_and | ordering-sensitive (`next()&next()`) or short-circuit (`&&`) or sat-domain |
-| 30+ | — | switch/branch/loop 5+ blk | pa_align_down, loop_condition | control-flow families → large |
+| 113 | 10% | return `<ident>` 2 blk 1 trap | frame_base, slice_of_struct | same + a bounds/repr trap |
+| 73 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 53 | 5% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
+| 52 | 4% | switch return `<ident>` 5+ blk | pa_align_down, pr_contains | general CFG + value graph |
+| 48 | 4% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
+| 46 | 4% | fallthrough void 2 blk 1 trap | array/field address stores | statement/place graph + check edge |
+| 33 | 3% | return binary 1 blk 0 trap | sat_mul, ordered_bitwise_return | ordering-sensitive or domain-specific binary |
+| 33 | 3% | branch return `<ident>` 5+ blk | loop_condition, break_labeled | general CFG + loop control |
 
-Every remaining bucket is now either **large** (a new emission primitive for the
-local/multi-statement `<ident>` returns, ~36% of fallbacks; or statement-level
-builtin/void lowering) or **medium-with-risk** (widening compare/binary operands
-to carry checked-arith or atomic-load sub-expressions — real evaluation-order and
-trap-counting hazards, the same class that produced two miscompiles this session).
-The clean recognizer-only wins are exhausted.
+Every remaining bucket is now either **large** (general local/multi-statement
+value graphs, statement-level builtin/void lowering, or CFG rendering) or
+**medium-with-risk** (checked/atomic/domain operands with observable evaluation
+order and trap counts). The clean recognizer-only wins are exhausted. The next
+unit of progress is the shared executable MIR body, not another source-shaped
+recognizer.
 
 ## The fidelity-safe admission method (established, must be preserved)
 
@@ -69,8 +80,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 145 | 15 | 0 | 9062 |
-| LLVM | 160 | 140 | 20 | 0 | 8750 |
+| C | 160 | 160 | 0 | 0 | 10000 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -124,19 +135,11 @@ typed-unary operand-descendant bugs before commit.
 
 ### Remaining strict-corpus families
 
-The remaining C fallbacks are the access/address families, single-trap global
-accesses, nullable branch/switch variants and `unwrap_or`. LLVM has the same
-semantic tail plus parity gaps for the already shared aggregate-sequence,
-workflow, stack-allocation and nested-conditional plans. The immediate order is:
-
-1. wire existing shared plans into LLVM (no new semantic representation);
-2. generalize nullable-control plans over the remaining CFG shapes;
-3. finish typed local/global address and slice access rendering;
-4. rerun the strict census at zero fallback, then delete
-   `FunctionBodyFallbackArtifact` and all request/backend fallback plumbing.
-
-Zero census fallback is necessary but not sufficient: P0 completes only after
-the AST artifact type and legacy branches are physically deleted.
+None. Nullable control, access/address, slice terminals, aggregate sequence,
+workflow, stack allocation and nested conditional parity are admitted by both
+backends. Zero strict fallback is necessary but not sufficient: P0 completes
+only after the broad language corpus no longer needs the AST artifact and the
+artifact type plus legacy branches are physically deleted.
 
 ### Broader remaining families, by tractability
 
