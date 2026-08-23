@@ -498,6 +498,52 @@ test "raw pointer construction owns its nonnull trap and unsafe authority" {
     try executable.verify(function);
 }
 
+test "nonnull pointer values own value-preserving representation checks" {
+    const source =
+        \\fn keep(pointer: *const u32) -> *const u32 {
+        \\    return pointer;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_pointer_check.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    var check_index: ?usize = null;
+    for (function.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .representation_check => |check| {
+            check_index = index;
+            try std.testing.expect(check.operand.index() < expression.id.index());
+            try std.testing.expectEqual(mir.ExecutableRepresentationCheckKind.nonnull_pointer, check.kind);
+        },
+        else => {},
+    };
+    const index = check_index orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+
+    const saved_owner = function.executable_body.trap_edges[0].owner;
+    function.executable_body.trap_edges[0].owner = .{
+        .expression = function.executable_body.expressions[index].operation.representation_check.operand,
+    };
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
+    function.executable_body.trap_edges[0].owner = saved_owner;
+
+    const saved_ty = function.executable_body.expressions[index].result_ty;
+    function.executable_body.expressions[index].result_ty = .bool;
+    try std.testing.expectError(error.InvalidTypeReference, executable.verify(function));
+    function.executable_body.expressions[index].result_ty = saved_ty;
+    try executable.verify(function);
+}
+
 test "fences are explicit typed void effects" {
     const source =
         \\fn sync() -> void {

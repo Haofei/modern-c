@@ -292,6 +292,7 @@ fn emitExpressionOperation(
             try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
         },
         .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression.result_ty, call, depth),
+        .representation_check => |check| try emitExpression(allocator, out, body, check.operand, depth + 1),
         .address_of => |address| try emitPlaceAddress(allocator, out, body, address.place),
         .deref => |operand| {
             try out.appendSlice(allocator, "(*(");
@@ -424,6 +425,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .unary => |unary| expressionById(body, unary.operand) != null,
         .binary => |binary| binarySupported(body, expression, binary),
         .cast => |cast| castSupported(body, expression, cast),
+        .representation_check => |check| representationCheckSupported(body, expression, check),
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .indirect_call => |call| call.argument_count <= call.arguments.len and expressionById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .slice_length => |base| expressionById(body, base) != null,
@@ -433,6 +435,14 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .deref, .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, check: anytype) bool {
+    const operand = expressionById(body, check.operand) orelse return false;
+    return check.operand.index() < expression.id.index() and operand.block_id.eql(expression.block_id) and
+        operand.owner_statement.eql(expression.owner_statement) and expression.type_id.eql(operand.type_id) and
+        mir.ExecutableRepresentationCheckKind.typesValid(check.kind, expression.result_ty, operand.result_ty) and
+        representationOperationHasExactTrapEdge(body, expression);
 }
 
 fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
@@ -813,7 +823,7 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
 fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return switch (expression.operation) {
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
-        .load, .address_of, .builtin_call => representationOperationHasExactTrapEdge(body, expression),
+        .load, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         else => false,
     };
 }
@@ -839,6 +849,7 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
             if (call.kind != .raw_ptr) return false;
             break :blk .{ .source = call.representation_source, .span_id = call.representation_span_id };
         },
+        .representation_check => .{ .source = expression.source, .span_id = expression.span_id },
         else => return false,
     };
     if (metadata.source == null or !metadata.span_id.isValid() or ownedTrapEdgeCount(body, expression.id) != 1) return false;
@@ -948,7 +959,7 @@ fn prepareStatementExpressions(
         if (expressionNeedsTemporary(expression)) try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
-        if (builtinResultRepresentationSource(expression)) |guard_source| {
+        if (resultRepresentationSource(expression)) |guard_source| {
             try writeSourceLineDirective(allocator, out, source_path, guard_source);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw});
@@ -969,9 +980,10 @@ fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuar
     };
 }
 
-fn builtinResultRepresentationSource(expression: mir.ExecutableExpression) ?mir.SourcePoint {
+fn resultRepresentationSource(expression: mir.ExecutableExpression) ?mir.SourcePoint {
     return switch (expression.operation) {
         .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_source else null,
+        .representation_check => expression.source,
         else => null,
     };
 }

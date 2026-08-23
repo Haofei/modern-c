@@ -6799,8 +6799,32 @@ const FunctionBuilder = struct {
                 break :direct !summary.is_variadic;
             },
             .builtin_call => |call| self.executableBuiltinComplete(expression, call),
+            .representation_check => |check| self.executableRepresentationCheckComplete(expression, check),
             else => true,
         };
+    }
+
+    fn executableRepresentationCheckComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        check: @FieldType(ExecutableExpression.Operation, "representation_check"),
+    ) bool {
+        if (!check.operand.isValid() or check.operand.index() >= expression.id.index() or
+            check.operand.index() >= self.executable_expressions.items.len) return false;
+        const operand = self.executable_expressions.items[check.operand.index()];
+        if (!operand.block_id.eql(expression.block_id) or !operand.owner_statement.eql(expression.owner_statement) or
+            !mir_model.ExecutableRepresentationCheckKind.typesValid(check.kind, expression.result_ty, operand.result_ty) or
+            !expression.type_id.eql(operand.type_id)) return false;
+        var owned: usize = 0;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .expression => |id| if (id.eql(expression.id)) {
+                if (edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+                    !edge.from_block.eql(expression.block_id)) return false;
+                owned += 1;
+            },
+            .statement => {},
+        };
+        return owned == 1;
     }
 
     fn unsupportedExecutableExpression(
@@ -7430,17 +7454,46 @@ const FunctionBuilder = struct {
             .grouped, .move_expr => unreachable,
         };
         const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        const span_id = try self.internSpanId(source);
+        const type_id = try self.internTypeId(result_ty);
         try self.executable_expressions.append(self.allocator, .{
             .id = id,
             .block_id = BlockId.fromIndex(self.current),
             .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
             .source = source,
-            .span_id = try self.internSpanId(source),
+            .span_id = span_id,
             .result_ty = result_ty,
-            .type_id = try self.internTypeId(result_ty),
+            .type_id = type_id,
             .operation = operation,
         });
-        return id;
+        const needs_nonnull_check = switch (operation) {
+            .local => switch (expr.kind) {
+                .ident => |ident| switch (result_ty) {
+                    .pointer => |shape| shape.kind == .single and
+                        !self.proven_nonnull_bindings.contains(ident.text),
+                    else => false,
+                },
+                else => false,
+            },
+            else => false,
+        };
+        if (!needs_nonnull_check) return id;
+
+        const checked_id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = checked_id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = span_id,
+            .result_ty = result_ty,
+            .type_id = type_id,
+            .operation = .{ .representation_check = .{
+                .operand = id,
+                .kind = .nonnull_pointer,
+            } },
+        });
+        return checked_id;
     }
 
     fn internExecutableAggregateType(
@@ -11821,6 +11874,19 @@ const FunctionBuilder = struct {
             index -= 1;
             const expression = self.executable_expressions.items[index];
             if (!expression.block_id.eql(BlockId.fromIndex(self.current))) continue;
+            if (expression.operation == .representation_check and expression.span_id.eql(span_id)) {
+                const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+                if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
+                    legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+                try self.executable_trap_edges.append(self.allocator, .{
+                    .owner = .{ .expression = expression.id },
+                    .from_block = BlockId.fromIndex(legacy.from_block),
+                    .trap_block = BlockId.fromIndex(legacy.trap_block),
+                    .kind = legacy.kind,
+                    .source = legacy.source,
+                });
+                return;
+            }
             if (expression.operation == .builtin_call) {
                 const call = expression.operation.builtin_call;
                 if (call.kind != .raw_ptr or !call.representation_span_id.eql(span_id)) continue;

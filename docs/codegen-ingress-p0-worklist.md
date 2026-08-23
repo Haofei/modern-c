@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 828 C and 893 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 800 C and 873 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **868/1696 admitted (51.2%)**, 828 fallback, and
-LLVM **869/1762 admitted (49.3%)**, 893 fallback. There were no unsupported
+The 522-root sweep found C **896/1696 admitted (52.8%)**, 800 fallback, and
+LLVM **889/1762 admitted (50.5%)**, 873 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
@@ -45,13 +45,24 @@ lexical unsafe authority, non-null pointer result and exact
 effect slices admitted 39 additional C functions and 36 LLVM functions.
 `raw_many_offset` and `phys(...)` remain canonical as described below.
 
-The census also ranks the canonical stopping layer. For C the remaining 828
-fallbacks are 784 `producer_incomplete`, 41 `renderer_unsupported`, 1
-`ingress_mismatch`, and 2 `ready`; LLVM is 822/57/11/3. Producer-incomplete
+The latest producer slice adds a value-preserving
+`representation_check(ExprId)` operation for non-null single pointers. The
+wrapper, rather than a source-shaped local/load recognizer, owns the exact trap
+edge and therefore applies uniformly to returns, local initializers, call
+arguments and comparison operands. C and LLVM each evaluate the operand once,
+guard it, and expose the unchanged value. This admitted a further 28 C and 20
+LLVM functions while reducing the broad `trap_projection` producer bucket by
+53 C and 51 LLVM records.
+
+The census also ranks the canonical stopping layer. For C the remaining 800
+fallbacks are 749 `producer_incomplete`, 48 `renderer_unsupported`, 1
+`ingress_mismatch`, and 2 `ready`; LLVM is 789/69/12/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `trap_projection` (163), `producer_invariant` (132),
-`noncanonical_literal` (116), `unsupported_member` (49), and `unlowered_index`
-(46); LLVM has 173/132/119/49/60 respectively. By-value struct member
+The leading C reasons are `producer_invariant` (150), `noncanonical_literal`
+(116), `trap_projection` (110), `unsupported_member` (49), and
+`unlowered_index` (46). LLVM has `producer_invariant` 150,
+`trap_projection` 122, `noncanonical_literal` 119, `unlowered_index` 60 and
+`unsupported_member` 49. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be
@@ -61,7 +72,7 @@ family (LLVM has the same distribution within a few functions):
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
 | 107 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
-| 94 | 11% | return `<ident>` 2 blk 1 trap | slice_of_struct, slice_of_array | same + a bounds/repr trap |
+| 84 | 10% | return `<ident>` 2 blk 1 trap | slice_of_struct, slice_of_array | remaining slice/enum representation and bounds traps |
 | 45 | 5% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
 | 46 | 5% | switch return `<ident>` 5+ blk | pa_align_down, SlotFuture__poll | general CFG + value graph |
 | 41 | 5% | return `<ident>` 3-4 blk 2+ trap | inferred_call_slice_element | same, more control flow |

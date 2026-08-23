@@ -311,6 +311,17 @@ that edge mechanically after materializing the pointer. The broad census moved
 to C 868/1696 and LLVM 869/1762 admitted, removing 39 and 36 fallbacks across
 the machine-effect slices.
 
+The next broad cut introduced a first-class, value-preserving
+`representation_check` executable expression. Its typed `ExprId` operand and
+exact trap owner replace backend/source-shape inference for a non-null single
+pointer, so the same operation covers returns, call arguments, local
+initializers and comparisons. Both renderers evaluate once, branch through the
+verified trap edge, then reuse the unchanged value. The 522-root census is now
+C **896/1696 (52.8%)** and LLVM **889/1762 (50.5%)**, with 800/873 fallbacks;
+this slice alone admitted 28 C and 20 LLVM functions and reduced
+`trap_projection` by 53/51 records. Further representation predicates belong
+as kinds on this operation, not as new AST recognizers.
+
 The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced
 `usize` index, exact raw-many pointer type, evaluation order, and an

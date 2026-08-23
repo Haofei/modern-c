@@ -38,7 +38,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
-                    .load, .address_of, .builtin_call => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .load, .address_of, .builtin_call, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     else => return false,
                 }
             },
@@ -277,6 +277,7 @@ const Renderer = struct {
             .binary => |binary| try self.emitBinary(expression, ty, binary),
             .direct_call => |call| try self.emitDirectCall(ty, call),
             .builtin_call => |call| try self.emitBuiltinCall(expression, call),
+            .representation_check => |check| try self.emitRepresentationCheck(expression, check),
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
             .deref => |operand| blk: {
                 const pointer = try self.emitExpression(operand);
@@ -300,6 +301,16 @@ const Renderer = struct {
         };
         self.values[id.index()] = result;
         return result;
+    }
+
+    fn emitRepresentationCheck(self: *Renderer, expression: mir.ExecutableExpression, check: anytype) RenderError!Value {
+        if (!representationCheckSupported(self.body, expression, check)) return error.InvalidBody;
+        const operand = try self.emitExpression(check.operand);
+        if (!std.mem.eql(u8, operand.ty, "ptr")) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(operand.spelling, edge, continuation);
+        return operand;
     }
 
     fn emitStruct(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
@@ -986,6 +997,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .binary => |binary| binarySupported(body, expression, binary),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
         .builtin_call => |call| builtinSupported(body, expression, call),
+        .representation_check => |check| representationCheckSupported(body, expression, check),
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfParameterDerefSupported(body, expression, address),
@@ -1002,6 +1014,15 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, check: anytype) bool {
+    if (!expressionValid(body, check.operand) or check.operand.index() >= expression.id.index()) return false;
+    const operand = body.expressions[check.operand.index()];
+    return operand.block_id.eql(expression.block_id) and operand.owner_statement.eql(expression.owner_statement) and
+        expression.type_id.eql(operand.type_id) and
+        mir.ExecutableRepresentationCheckKind.typesValid(check.kind, expression.result_ty, operand.result_ty) and
+        representationTrapEdgeIsExact(body, expression);
 }
 
 fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {

@@ -8559,7 +8559,8 @@ test "lower-c inferred local copies require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t copied_value = value") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t copied_value = mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_trap_InvalidRepresentation();") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -9963,7 +9964,12 @@ test "lower-c emits local global address returns from MIR without body fallback"
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_global_address_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t * local_global_pointer(void)");
-    try expectContains(body, "return &shared_counter;");
+    try expectNeedlesInOrder(body, &.{
+        "= &shared_counter;",
+        "uint32_t * gp = mc_exec_tmp_",
+        "if (mc_exec_tmp_",
+        "return mc_exec_tmp_",
+    });
 }
 
 test "lower-c emits conditional global address returns from MIR without body fallback" {
@@ -11975,12 +11981,9 @@ test "lower-c canonical executable MIR models explicit uninit as storage without
     }
 }
 
-test "lower-c admits bare pointer param return past its elided nonnull check, folded stays on fallback" {
-    // `return p` for a pointer param carries a nonnull representation-check trap
-    // the fallback elides to `return p;`. The fast path admits it (a bare param
-    // return never narrows, so it is sound with or without the check). A folded
-    // `let q = p; return q;` must stay on the fallback (keeps the `let`'s local
-    // + source map + inferred-local fail-closed).
+test "lower-c lowers pointer param representation checks through canonical MIR" {
+    // A value-preserving MIR wrapper owns the nonnull check. It applies in a
+    // direct return and in a local initializer without backend AST inference.
     const source =
         \\fn ret_ptr(p: *mut u32) -> *mut u32 { return p; }
         \\fn folded(p: *mut u32) -> *mut u32 { let q: *mut u32 = p; return q; }
@@ -11998,9 +12001,10 @@ test "lower-c admits bare pointer param return past its elided nonnull check, fo
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return p;");
-    // Folded case: fallback materializes the local rather than folding it away.
-    try expectContains(output.items, "uint32_t * q = p;");
+    try expectContains(output.items, "/* canonical executable MIR */");
+    try expectContains(output.items, "if (mc_exec_tmp_");
+    try expectContains(output.items, "uint32_t * q = mc_exec_tmp_");
+    try expectContains(output.items, "return mc_exec_tmp_");
 }
 
 test "lower-c admits scalar deref returns from MIR; optional-pointee derefs stay on fallback" {
@@ -12092,9 +12096,9 @@ test "lower-c admits address-typed scalar deref returns from MIR" {
     try expectContains(body, "return mc_exec_tmp_");
 }
 
-test "lower-c admits pointer comparison returns from MIR past elided nonnull checks" {
-    // `a == b` on pointer params carries elided nonnull representation checks;
-    // the comparison renders as `(a == b)` with no trap.
+test "lower-c checks pointer comparison operands from canonical MIR" {
+    // Both operands carry explicit nonnull representation wrappers before the
+    // ordinary comparison consumes them.
     const source =
         \\fn ptr_eq(a: *u32, b: *u32) -> bool { return a == b; }
     ;
@@ -12111,7 +12115,10 @@ test "lower-c admits pointer comparison returns from MIR past elided nonnull che
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return (a == b);");
+    try expectContains(output.items, "/* canonical executable MIR */");
+    try expectContains(output.items, "if (mc_exec_tmp_");
+    try expectContains(output.items, " == mc_exec_tmp_");
+    try expectContains(output.items, "return mc_exec_tmp_");
 }
 
 test "lower-c admits single nested-call argument returns in evaluation order" {

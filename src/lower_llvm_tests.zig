@@ -3553,9 +3553,11 @@ test "LLVM preserves nullable pointer promotion locals from MIR without body fal
     try expectNotContains(assigned_body, "mc_trap_InvalidRepresentation");
 
     const call_body = try llvmFunctionBody(output.items, "define internal void @call_promotion");
-    try expectContains(call_body, "call void @consume_nullable(ptr %p)");
+    try expectContains(call_body, "; canonical executable MIR");
+    try expectContains(call_body, "icmp eq ptr %mc_arg_0, null");
+    try expectContains(call_body, "call void @consume_nullable(ptr %mc_arg_0)");
     try expectContains(call_body, "ret void");
-    try expectNotContains(call_body, "mc_trap_InvalidRepresentation");
+    try expectContains(call_body, "mc_trap_InvalidRepresentation");
 }
 
 test "LLVM emits nullable pointer try from MIR without body fallback" {
@@ -9201,7 +9203,10 @@ test "LLVM inferred local copies require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_copy_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%copied_value") != null);
+    const copies_body = try llvmFunctionBody(complete_output.items, "define internal i64 @copies");
+    try expectContains(copies_body, "; canonical executable MIR");
+    try expectContains(copies_body, "alloca i64");
+    try expectContains(copies_body, "icmp eq ptr %mc_arg_1, null");
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -9234,8 +9239,10 @@ test "LLVM inferred local casts require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_cast_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%narrowed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%view") != null);
+    const casts_body = try llvmFunctionBody(complete_output.items, "define internal i32 @casts");
+    try expectContains(casts_body, "; canonical executable MIR");
+    try expectContains(casts_body, "trunc i64 %mc_arg_0 to i32");
+    try expectContains(casts_body, "icmp eq ptr %mc_arg_1, null");
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -9918,7 +9925,10 @@ test "LLVM inferred local raw result calls require MIR types" {
     const raw_load = try llvmFunctionBody(complete_output.items, "define internal i32 @inferred_raw_load");
     try expectContains(raw_load, "; canonical executable MIR");
     try expectContains(raw_load, "load volatile i32, ptr");
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%pointer") != null);
+    const raw_pointer = try llvmFunctionBody(complete_output.items, "define internal ptr @inferred_raw_ptr");
+    try expectContains(raw_pointer, "; canonical executable MIR");
+    try expectContains(raw_pointer, "inttoptr i64");
+    try expectContains(raw_pointer, "mc_trap_InvalidRepresentation");
 
     for ([_][]const u8{ "inferred_raw_load", "inferred_raw_ptr" }) |name| {
         var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -10761,10 +10771,8 @@ test "LLVM admits direct-return checked arithmetic in normal emit without losing
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
-test "LLVM admits bare pointer param return past its elided nonnull check" {
-    // `return p` for a pointer param renders `ret ptr %p`; the nonnull
-    // representation check is statically elided (a bare param return never
-    // narrows), so the fast path admits it — matching the fallback with no trap.
+test "LLVM lowers bare pointer parameter checks through canonical MIR" {
+    // The canonical value wrapper validates the ABI value before returning it.
     const source =
         \\fn ret_ptr(p: *mut u32) -> *mut u32 { return p; }
     ;
@@ -10773,9 +10781,10 @@ test "LLVM admits bare pointer param return past its elided nonnull check" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_bare_ptr_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal ptr @ret_ptr");
-    try expectContains(body, "ret ptr %p");
-    // No trap block emitted, and fast-path (no param dbg.value).
-    try std.testing.expect(std.mem.indexOf(u8, body, "mc_trap_") == null);
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "icmp eq ptr %mc_arg_0, null");
+    try expectContains(body, "ret ptr %mc_arg_0");
+    try expectContains(body, "mc_trap_InvalidRepresentation");
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
@@ -10817,8 +10826,8 @@ test "LLVM admits address-typed scalar deref returns from MIR" {
     try expectContains(body, "ret i64 %");
 }
 
-test "LLVM admits pointer comparison returns from MIR past elided nonnull checks" {
-    // `a == b` on pointer params: `icmp eq ptr %a, %b`.
+test "LLVM checks pointer comparison operands from canonical MIR" {
+    // Each nonnull parameter is validated before the ordinary comparison.
     const source =
         \\fn ptr_eq(a: *u32, b: *u32) -> bool { return a == b; }
     ;
@@ -10827,8 +10836,11 @@ test "LLVM admits pointer comparison returns from MIR past elided nonnull checks
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_ptr_cmp.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i1 @ptr_eq");
-    try expectContains(body, "icmp eq ptr %a, %b");
-    try std.testing.expect(std.mem.indexOf(u8, body, "mc_trap_") == null);
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "icmp eq ptr %mc_arg_0, null");
+    try expectContains(body, "icmp eq ptr %mc_arg_1, null");
+    try expectContains(body, "icmp eq ptr %mc_arg_0, %mc_arg_1");
+    try expectContains(body, "mc_trap_InvalidRepresentation");
 }
 
 test "LLVM admits single nested-call argument returns inline" {
@@ -11043,7 +11055,10 @@ test "LLVM emits local global address returns from MIR without body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_global_address_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal ptr @local_global_pointer");
-    try expectContains(body, "ret ptr @shared_counter");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "store ptr @shared_counter");
+    try expectContains(body, "icmp eq ptr");
+    try expectContains(body, "ret ptr %mc_expr_tmp_");
 }
 
 test "LLVM emits conditional global address returns from MIR without body fallback" {

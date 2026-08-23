@@ -631,6 +631,23 @@ pub const ExecutableMemoryAccessKind = enum {
     race_unordered,
 };
 
+/// A value-preserving runtime representation predicate. The wrapper owns its
+/// exceptional edge; renderers expose the unchanged value only after the
+/// predicate succeeds.
+pub const ExecutableRepresentationCheckKind = enum {
+    nonnull_pointer,
+
+    pub fn typesValid(kind: ExecutableRepresentationCheckKind, result: ValueType, operand: ValueType) bool {
+        if (!TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operand))) return false;
+        return switch (kind) {
+            .nonnull_pointer => switch (result) {
+                .pointer => |shape| shape.kind == .single,
+                else => false,
+            },
+        };
+    }
+};
+
 pub const ExecutableMemoryAccess = struct {
     kind: ExecutableMemoryAccessKind,
     alignment: u16,
@@ -714,6 +731,10 @@ pub const ExecutableExpression = struct {
             arithmetic: ExecutableArithmeticSemantics = .ordinary,
         },
         cast: struct { operand: ExprId, kind: ExecutableCastKind },
+        representation_check: struct {
+            operand: ExprId,
+            kind: ExecutableRepresentationCheckKind,
+        },
         direct_call: struct {
             callee: SymbolId,
             callee_source: SourcePoint,

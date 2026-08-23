@@ -227,6 +227,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             const expected = mir.ExecutableCastKind.classify(operand.result_ty, value.result_ty) orelse return error.InvalidCast;
             if (operation.kind != expected) return error.InvalidCast;
         },
+        .representation_check => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
+            if (body.complete and
+                (!mir.ExecutableRepresentationCheckKind.typesValid(operation.kind, value.result_ty, operand.result_ty) or
+                    !value.type_id.eql(operand.type_id) or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                    ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1))
+                return error.InvalidMemoryAccessTrap;
+        },
         .direct_call => |call| {
             try verifySymbol(body, call.callee);
             if (body.complete and body.symbols[call.callee.index()].kind != .function) return error.InvalidCalleeSymbol;
@@ -323,6 +333,12 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .builtin_call => |call| {
                         if (call.kind != .raw_ptr or call.representation_source == null or
                             !call.representation_span_id.isValid() or edge.kind != .InvalidRepresentation or
+                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                    },
+                    .representation_check => |check| {
+                        const operand = expression(body, check.operand) orelse return error.InvalidTrapEdge;
+                        if (!mir.ExecutableRepresentationCheckKind.typesValid(check.kind, owner.result_ty, operand.result_ty) or
+                            !owner.type_id.eql(operand.type_id) or edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     else => return error.InvalidTrapEdge,
