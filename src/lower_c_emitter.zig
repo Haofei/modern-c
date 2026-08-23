@@ -2943,6 +2943,7 @@ pub const CEmitter = struct {
                     std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
                 else => false,
             },
+            .nullable_pointer => |pointer| self.mirNullableControlPointerShapeMatches(pointer, resolved, true),
             else => false,
         };
     }

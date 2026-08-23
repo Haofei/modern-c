@@ -40,6 +40,38 @@ test "executable MIR classifies address representation casts" {
     try std.testing.expect(mir.ExecutableCastKind.classify(paddr, .{ .integer = "u32" }) == null);
 }
 
+test "executable MIR classifies representation-preserving pointer casts" {
+    const mutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
+    const const_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
+    const nullable_mutable_pointer: ValueType = .{ .nullable_pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
+    try std.testing.expectEqual(mir.ExecutableCastKind.pointer_to_nullable, mir.ExecutableCastKind.classify(mutable_pointer, nullable_mutable_pointer).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.pointer_const_narrow, mir.ExecutableCastKind.classify(mutable_pointer, const_pointer).?);
+    try std.testing.expect(mir.ExecutableCastKind.classify(const_pointer, mutable_pointer) == null);
+}
+
+test "executable MIR owns implicit pointer return conversions" {
+    const source =
+        \\fn promote(p: *mut u32) -> ?*mut u32 { return p; }
+        \\fn narrow(p: *mut u32) -> *const u32 { return p; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_pointer_cast.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const promote = functionByName(module_mir, "promote") orelse return error.TestUnexpectedResult;
+    const narrow = functionByName(module_mir, "narrow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(promote.executable_body.complete);
+    try std.testing.expect(narrow.executable_body.complete);
+    try std.testing.expectEqual(mir.ExecutableCastKind.pointer_to_nullable, promote.executable_body.expressions[promote.executable_body.expressions.len - 1].operation.cast.kind);
+    try std.testing.expectEqual(mir.ExecutableCastKind.pointer_const_narrow, narrow.executable_body.expressions[narrow.executable_body.expressions.len - 1].operation.cast.kind);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_promote = functionByNameMut(&module_mir, "promote") orelse return error.TestUnexpectedResult;
+    mutable_promote.executable_body.expressions[mutable_promote.executable_body.expressions.len - 1].operation.cast.kind = .identity;
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
 test "executable MIR owns address representation cast" {
     const source =
         \\fn address_value(value: PAddr) -> usize {

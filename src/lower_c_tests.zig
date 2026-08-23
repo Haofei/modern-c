@@ -12007,6 +12007,36 @@ test "lower-c lowers pointer param representation checks through canonical MIR" 
     try expectContains(output.items, "return mc_exec_tmp_");
 }
 
+test "lower-c applies pointer return coercions through canonical MIR" {
+    const source =
+        \\fn promote(p: *mut u32) -> ?*mut u32 { return p; }
+        \\fn narrow(p: *mut u32) -> *const u32 { return p; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "pointer_return_coercions.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    for ([_][]const u8{
+        "static uint32_t * promote(uint32_t * p)",
+        "static const uint32_t * narrow(uint32_t * p)",
+    }) |signature| {
+        const body = try cFunctionBody(output.items, signature);
+        try expectContains(body, "/* canonical executable MIR */");
+        const guard = std.mem.indexOf(u8, body, "== NULL") orelse return error.TestUnexpectedResult;
+        const returned = std.mem.indexOf(u8, body, "return mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(guard < returned);
+    }
+}
+
 test "lower-c admits scalar deref returns from MIR; optional-pointee derefs stay on fallback" {
     // `return p.*` for a plain scalar pointee lowers through the race-tolerant
     // load. An optional pointee (`?u32`) needs a tag+value load, so it must NOT

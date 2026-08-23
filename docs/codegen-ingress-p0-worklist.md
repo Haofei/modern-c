@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 800 C and 873 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 798 C and 872 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **896/1696 admitted (52.8%)**, 800 fallback, and
-LLVM **889/1762 admitted (50.5%)**, 873 fallback. There were no unsupported
+The 522-root sweep found C **898/1696 admitted (52.9%)**, 798 fallback, and
+LLVM **890/1762 admitted (50.5%)**, 872 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
@@ -54,14 +54,23 @@ guard it, and expose the unchanged value. This admitted a further 28 C and 20
 LLVM functions while reducing the broad `trap_projection` producer bucket by
 53 C and 51 LLVM records.
 
-The census also ranks the canonical stopping layer. For C the remaining 800
-fallbacks are 749 `producer_incomplete`, 48 `renderer_unsupported`, 1
-`ingress_mismatch`, and 2 `ready`; LLVM is 789/69/12/3. Producer-incomplete
+The latest bounded cast slice gives implicit non-null-to-nullable pointer
+promotion and mutable-to-const pointer narrowing explicit executable-MIR cast
+kinds. Both preserve the pointer representation; the non-null wrapper remains
+the sole owner of the exact `InvalidRepresentation` edge. Return production is
+intentionally limited to those two conversions: a trial that applied generic
+coercion to every return reduced legacy-plan admission and was rejected by the
+broad census. The bounded version adds 2 C and 1 LLVM admissions without a
+strict-corpus regression.
+
+The census also ranks the canonical stopping layer. For C the remaining 798
+fallbacks are 748 `producer_incomplete`, 48 `renderer_unsupported`, and 2
+`ready`; LLVM is 788/69/11/4. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (150), `noncanonical_literal`
-(116), `trap_projection` (110), `unsupported_member` (49), and
-`unlowered_index` (46). LLVM has `producer_invariant` 150,
-`trap_projection` 122, `noncanonical_literal` 119, `unlowered_index` 60 and
+The leading C reasons are `producer_invariant` (149), `noncanonical_literal`
+(116), `trap_projection` (111), `unsupported_member` (49), and
+`unlowered_index` (46). LLVM has `producer_invariant` 149,
+`trap_projection` 123, `noncanonical_literal` 119, `unlowered_index` 60 and
 `unsupported_member` 49. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.

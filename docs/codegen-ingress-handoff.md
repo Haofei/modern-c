@@ -322,6 +322,16 @@ this slice alone admitted 28 C and 20 LLVM functions and reduced
 `trap_projection` by 53/51 records. Further representation predicates belong
 as kinds on this operation, not as new AST recognizers.
 
+Implicit pointer return conversions now use first-class executable cast kinds:
+`pointer_to_nullable` and `pointer_const_narrow`. They preserve the pointer
+representation and consume the value already guarded by
+`representation_check`; neither backend invents another trap or source-shaped
+conversion rule. A deliberately broad trial of generic return coercion regressed
+legacy specialized-plan admission and was discarded. The bounded pointer-only
+cutover leaves the strict corpus at 160/160 per backend and moves the 522-root
+broad census to C **898/1696 (52.9%)** and LLVM **890/1762 (50.5%)**, with
+798/872 fallbacks.
+
 The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced
 `usize` index, exact raw-many pointer type, evaluation order, and an

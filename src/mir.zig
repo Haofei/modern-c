@@ -7118,6 +7118,24 @@ const FunctionBuilder = struct {
             self.executable_supported = false;
             return operand;
         };
+        return self.appendExecutableCast(input, operand, target_ty, kind);
+    }
+
+    /// Keep the established return producer for conversions whose canonical
+    /// renderers have not cut over yet. These two pointer coercions preserve
+    /// representation and are the deliberately bounded slice owned here.
+    fn ensureExecutablePointerReturnExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
+        const operand = try self.ensureExecutableExprAs(input, target_ty);
+        const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
+        if (sameValueType(operand_ty, target_ty)) return operand;
+        const kind = mir_model.ExecutableCastKind.classify(operand_ty, target_ty) orelse return operand;
+        return switch (kind) {
+            .pointer_to_nullable, .pointer_const_narrow => self.appendExecutableCast(input, operand, target_ty, kind),
+            else => operand,
+        };
+    }
+
+    fn appendExecutableCast(self: *FunctionBuilder, input: ast.Expr, operand: ExprId, target_ty: ValueType, kind: mir_model.ExecutableCastKind) !ExprId {
         const source = self.sourcePoint(input.span);
         const id = ExprId.fromIndex(self.executable_expressions.items.len);
         try self.executable_expressions.append(self.allocator, .{
@@ -8253,7 +8271,7 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"return" => |maybe| {
-                const executable_return = if (maybe) |expr| try self.ensureExecutableExprAs(expr, self.return_ty) else null;
+                const executable_return = if (maybe) |expr| try self.ensureExecutablePointerReturnExpr(expr, self.return_ty) else null;
                 if (executable_return) |value| self.contextualizeExecutableLiteral(value, self.return_ty);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
                 if (maybe) |expr| {

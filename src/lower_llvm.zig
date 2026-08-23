@@ -5355,7 +5355,7 @@ const LlvmEmitter = struct {
                 null,
             .domain_integer => |shape| self.mirStructuralType(.{ .integer = shape.child }),
             .float => |name| if (std.mem.eql(u8, name, "f32")) "float" else if (std.mem.eql(u8, name, "f64")) "double" else null,
-            .pointer => "ptr",
+            .pointer, .nullable_pointer, .cstr => "ptr",
             .slice => "{ ptr, i64 }",
             .address => "i64",
             .struct_, .closed_enum, .open_enum => |name| self.llvmType(simpleType(.{ .offset = 0, .len = 0, .line = 0, .column = 0 }, name)) catch null,

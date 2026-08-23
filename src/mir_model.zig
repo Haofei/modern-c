@@ -499,6 +499,8 @@ pub const ExecutableCastKind = enum {
     signed_widen,
     address_to_integer,
     integer_to_address,
+    pointer_to_nullable,
+    pointer_const_narrow,
 
     pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
         if (TypeKey.eql(TypeKey.fromValueType(source), TypeKey.fromValueType(target))) return .identity;
@@ -510,11 +512,24 @@ pub const ExecutableCastKind = enum {
             const source_integer = integerInfo(source) orelse return null;
             return if (!source_integer.signed and source_integer.bits == 64) .integer_to_address else null;
         }
+        if (source == .pointer and target == .nullable_pointer) {
+            return if (pointerQualificationCompatible(source.pointer, target.nullable_pointer)) .pointer_to_nullable else null;
+        }
+        if (source == .pointer and target == .pointer and
+            pointerQualificationCompatible(source.pointer, target.pointer) and
+            source.pointer.mutability != target.pointer.mutability)
+            return .pointer_const_narrow;
         const source_integer = integerInfo(source) orelse return null;
         const target_integer = integerInfo(target) orelse return null;
         if (!source_integer.signed and !target_integer.signed) return .unsigned_resize;
         if (source_integer.signed and target_integer.signed and target_integer.bits >= source_integer.bits) return .signed_widen;
         return null;
+    }
+
+    fn pointerQualificationCompatible(source: PointerShape, target: PointerShape) bool {
+        if (source.kind != target.kind or !std.mem.eql(u8, source.child, target.child)) return false;
+        return source.mutability == target.mutability or
+            (source.mutability == .mut and target.mutability == .@"const");
     }
 
     pub fn integerInfo(ty: ValueType) ?struct { signed: bool, bits: u16 } {

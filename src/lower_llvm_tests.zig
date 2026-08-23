@@ -10788,6 +10788,27 @@ test "LLVM lowers bare pointer parameter checks through canonical MIR" {
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
+test "LLVM applies pointer return coercions through canonical MIR" {
+    const source =
+        \\fn promote(p: *mut u32) -> ?*mut u32 { return p; }
+        \\fn narrow(p: *mut u32) -> *const u32 { return p; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_pointer_return_coercions.mc", source, &output);
+    for ([_][]const u8{
+        "define internal ptr @promote",
+        "define internal ptr @narrow",
+    }) |signature| {
+        const body = try llvmFunctionBody(output.items, signature);
+        try expectContains(body, "; canonical executable MIR");
+        const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+        const returned = std.mem.indexOf(u8, body, "ret ptr %mc_arg_0") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(guard < returned);
+    }
+}
+
 test "LLVM admits scalar deref returns from MIR; optional-pointee derefs stay on fallback" {
     // `return p.*` for a plain scalar pointee lowers to an unordered atomic load.
     // An optional pointee needs a tag+value load, so it must stay on the fallback.
