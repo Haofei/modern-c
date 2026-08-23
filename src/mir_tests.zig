@@ -450,12 +450,19 @@ test "CheckedProgram is a syntax-free callable and body table" {
         mir.TypeKey.fromValueType(read_callable.param_types[0]),
         mir.TypeKey.fromValueType(module_mir.functions[read_index].param_types[0]),
     ));
+    try std.testing.expect(read_callable.param_types.ptr != module_mir.functions[read_index].param_types.ptr);
 
     const wrong_param_types = [_]mir.ValueType{.{ .integer = "u64" }};
     const saved_param_types = module_mir.checked_callables[read_index].param_types;
     module_mir.checked_callables[read_index].param_types = &wrong_param_types;
     try std.testing.expect(!checked.matchesMir(module_mir));
     module_mir.checked_callables[read_index].param_types = saved_param_types;
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    const saved_mir_param_type = module_mir.functions[read_index].param_types[0];
+    module_mir.functions[read_index].param_types[0] = .{ .integer = "u64" };
+    try std.testing.expect(!checked.matchesMir(module_mir));
+    module_mir.functions[read_index].param_types[0] = saved_mir_param_type;
     try std.testing.expect(checked.matchesMir(module_mir));
 
     var dump: std.ArrayList(u8) = .empty;

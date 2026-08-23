@@ -1751,8 +1751,8 @@ pub const CheckedCallableFact = struct {
     kind: CallableKind,
     return_ty: ValueType,
     param_count: usize,
-    /// Borrowed from the matching MIR function signature. `Module.functions`
-    /// owns the backing allocation; the checked table must never free it.
+    /// Independently owned semantic signature. Keeping this separate from the
+    /// MIR function storage lets admission detect equal-arity type drift.
     param_types: []const ValueType = &.{},
     c_abi: bool,
     is_variadic: bool = false,
@@ -1818,7 +1818,12 @@ pub const Module = struct {
         }
         if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
         if (self.source_identities.len != 0) self.allocator.free(self.source_identities);
-        if (self.checked_callables.len != 0) self.allocator.free(self.checked_callables);
+        if (self.checked_callables.len != 0) {
+            for (self.checked_callables) |checked| {
+                if (checked.param_types.len != 0) self.allocator.free(checked.param_types);
+            }
+            self.allocator.free(self.checked_callables);
+        }
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);

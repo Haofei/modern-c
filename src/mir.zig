@@ -1010,7 +1010,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     // declarations before each body is lowered. MIR then adopts these facts;
     // it is no longer their source of truth.
     var checked_callables: std.ArrayList(CheckedCallableFact) = .empty;
-    errdefer checked_callables.deinit(allocator);
+    errdefer {
+        for (checked_callables.items) |checked| {
+            if (checked.param_types.len != 0) allocator.free(checked.param_types);
+        }
+        checked_callables.deinit(allocator);
+    }
 
     for (decl_items) |item| {
         const decl = declFromBuildItem(item);
@@ -1038,9 +1043,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         {
                             var function = try builder.finish();
                             errdefer freeFunction(allocator, function);
-                            checked.param_types = function.param_types;
+                            checked.param_types = try allocator.dupe(ValueType, function.param_types);
+                            var checked_param_types_unowned = true;
+                            errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
                             applyCheckedCallableFact(&function, checked);
                             try checked_callables.append(allocator, checked);
+                            checked_param_types_unowned = false;
                             try functions.append(allocator, function);
                         }
                     }
@@ -1067,9 +1075,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     {
                         var function = try builder.finish();
                         errdefer freeFunction(allocator, function);
-                        checked.param_types = function.param_types;
+                        checked.param_types = try allocator.dupe(ValueType, function.param_types);
+                        var checked_param_types_unowned = true;
+                        errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
                         applyCheckedCallableFact(&function, checked);
                         try checked_callables.append(allocator, checked);
+                        checked_param_types_unowned = false;
                         try functions.append(allocator, function);
                     }
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
@@ -1092,8 +1103,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     const ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params);
                     var ffi_contracts_unowned = true;
                     errdefer if (ffi_contracts_unowned and ffi_param_contracts.len != 0) allocator.free(ffi_param_contracts);
-                    checked.param_types = param_types;
+                    checked.param_types = try allocator.dupe(ValueType, param_types);
+                    var checked_param_types_unowned = true;
+                    errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
                     try checked_callables.append(allocator, checked);
+                    checked_param_types_unowned = false;
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
                         .typed_symbol_id = checked.symbol_id,
@@ -1144,7 +1158,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         allocator.free(functions_slice);
     }
     const checked_callables_slice = try checked_callables.toOwnedSlice(allocator);
-    errdefer allocator.free(checked_callables_slice);
+    errdefer {
+        for (checked_callables_slice) |checked| {
+            if (checked.param_types.len != 0) allocator.free(checked.param_types);
+        }
+        allocator.free(checked_callables_slice);
+    }
 
     var built_module: Module = .{
         .allocator = allocator,

@@ -87,8 +87,9 @@ keeps variadic default promotions on the legacy path, and normalizes target
 verifier also rejects parameter-count/type drift between the function signature
 and executable body. This closes the remaining 11 broad-corpus LLVM
 `ingress_mismatch` records without changing C admission.
-CheckedProgram now binds that same parameter-type vector with structural
-`TypeKey` equality, closing the equal-arity drift gap before backend admission.
+CheckedProgram now independently stores that parameter-type vector and compares
+it with structural `TypeKey` equality, closing the equal-arity drift gap before
+backend admission.
 LLVM also classifies domain integers through their child integer for C ABI
 extensions and rejects unsupported aggregate/unknown ABI classes rather than
 silently treating them as a valid no-extension scalar.
