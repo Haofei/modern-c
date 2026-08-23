@@ -36,12 +36,15 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .binary => |binary| {
                 if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
             },
+            .load, .address_of => if (!representationTrapEdgeIsExact(body, owner)) return false,
             else => return false,
         }
     }
     for (body.places) |place| {
-        if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections or !placeRootValid(body, place)) return false;
-        if (place.projection_count != 0) return false;
+        if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections) return false;
+        if (place.projection_count == 0) {
+            if (!placeRootValid(body, place)) return false;
+        } else if (!singleParameterDerefPlaceSupported(body, place)) return false;
     }
     for (body.statements) |statement| {
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
@@ -254,7 +257,7 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n", .{ value, base.spelling });
                 break :blk .{ .ty = "i64", .spelling = value };
             },
-            .address_of => |operand| try self.emitAddressOf(operand),
+            .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
             .index, .range_slice, .member, .array, .struct_, .unsupported => return error.Unsupported,
         };
@@ -566,7 +569,11 @@ const Renderer = struct {
     fn emitMemoryLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
         if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
         const value_ty = llvmType(expression.result_ty) orelse return error.Unsupported;
-        const pointer = try self.emitPlace(load.place, value_ty);
+        const place = self.body.places[load.place.index()];
+        const pointer = if (place.projection_count == 1)
+            try self.emitGuardedParameterDerefPointer(expression, load.place)
+        else
+            try self.emitPlace(load.place, value_ty);
         const global_bool = placeIsGlobal(self.body, load.place) and expression.result_ty == .bool;
         const storage_ty: []const u8 = if (global_bool) "i8" else value_ty;
         const loaded = try self.temp();
@@ -598,13 +605,14 @@ const Renderer = struct {
         }
     }
 
-    fn emitAddressOf(self: *Renderer, place_id: mir.PlaceId) RenderError!Value {
-        return .{ .ty = "ptr", .spelling = try self.emitPlace(place_id, "ptr") };
+    fn emitAddressOf(self: *Renderer, expression: mir.ExecutableExpression, address: anytype) RenderError!Value {
+        if (!addressOfParameterDerefSupported(self.body, expression, address)) return error.InvalidBody;
+        return .{ .ty = "ptr", .spelling = try self.emitGuardedParameterDerefPointer(expression, address.place) };
     }
 
     fn emitPlace(self: *Renderer, place_id: mir.PlaceId, value_ty: []const u8) RenderError![]const u8 {
         const place = &self.body.places[place_id.index()];
-        var pointer: []const u8 = switch (place.root) {
+        const pointer: []const u8 = switch (place.root) {
             .local => |local_id| blk: {
                 const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
                 if (!local.addressable) return error.Unsupported;
@@ -612,16 +620,32 @@ const Renderer = struct {
             },
             .symbol => |symbol_id| try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody}),
         };
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .deref => {
-                const next = try self.temp();
-                try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ next, pointer });
-                pointer = next;
-            },
-            .field, .index => return error.Unsupported,
-        };
+        if (place.projection_count != 0) return error.Unsupported;
         _ = value_ty;
         return pointer;
+    }
+
+    fn emitGuardedParameterDerefPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!singleParameterDerefPlaceSupported(self.body, place)) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const invalid = try self.temp();
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
+        try self.output.print(
+            self.allocator,
+            "  {s} = icmp eq ptr {s}, null\n" ++
+                "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                "{s}:\n",
+            .{ invalid, local.storage, invalid, edge.trap_block.raw, continuation, continuation },
+        );
+        return local.storage;
     }
 
     fn temp(self: *Renderer) RenderError![]const u8 {
@@ -650,7 +674,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         // A bare symbol has no memory access mode. Direct calls carry their
         // SymbolId separately; global value reads remain fail-closed.
         .symbol => false,
-        .load => |load| memoryAccessSupported(body, load.place, expression.result_ty, load.access, false),
+        .load => |load| memoryLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
             .integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
@@ -661,7 +685,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
         .builtin_call => |call| builtinSupported(body, expression, call),
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
-        .address_of => |id| placeValid(body, id) and body.places[id.index()].projection_count == 0,
+        .address_of => |address| addressOfParameterDerefSupported(body, expression, address),
         .deref => |id| expressionValid(body, id) and switch (body.expressions[id.index()].result_ty) {
             .pointer => true,
             else => false,
@@ -852,10 +876,62 @@ fn placeRootValid(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) b
     };
 }
 
+fn parameterIdentity(body: *const mir.ExecutableBody, id: mir.LocalId) ?mir.ExecutableParameter {
+    if (!id.isValid()) return null;
+    for (body.parameters) |parameter| if (parameter.local.eql(id)) return parameter;
+    return null;
+}
+
+fn singleParameterDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.projection_count != 1 or !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
+    switch (place.projections[0]) {
+        .deref => {},
+        .field, .index => return false,
+    }
+    const local_id = switch (place.root) {
+        .local => |id| id,
+        .symbol => return false,
+    };
+    const parameter = parameterIdentity(body, local_id) orelse return false;
+    if (!parameter.type_id.isValid() or !parameter.type_id.eql(place.root_type_id) or
+        !sameValueType(parameter.ty, place.root_ty) or mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        // A projected nullable pointer would need a different representation
+        // contract. Keep this first slice non-nullable and fail closed.
+        else => return false,
+    };
+    return pointer.kind == .single and std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
+fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
+    if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false)) return false;
+    const place = body.places[load.place.index()];
+    if (place.projection_count == 0) {
+        return load.representation_source == null and !load.representation_span_id.isValid();
+    }
+    return expression.type_id.isValid() and expression.type_id.eql(place.type_id) and
+        load.representation_source != null and load.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+}
+
+fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    return singleParameterDerefPlaceSupported(body, place) and
+        sameValueType(expression.result_ty, place.root_ty) and
+        expression.type_id.isValid() and expression.type_id.eql(place.root_type_id) and
+        address.representation_source != null and address.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+}
+
 fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool) bool {
     if (!placeValid(body, place_id) or mir.ExecutableMemoryAccess.scalarAlignment(ty) != access.alignment) return false;
     const place = body.places[place_id.index()];
-    if (place.projection_count != 0) return false;
+    if (place.projection_count != 0) {
+        // Projected stores are deliberately not part of this slice.
+        return !is_store and sameValueType(place.ty, ty) and access.kind == .race_unordered and singleParameterDerefPlaceSupported(body, place);
+    }
     return switch (place.root) {
         .local => |id| localAddressable(body, id) and access.kind == .plain,
         .symbol => |id| if (symbolIdentity(body, id)) |identity|
@@ -867,6 +943,26 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
         else
             false,
     };
+}
+
+fn representationTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    return representationTrapEdge(body, expression) != null;
+}
+
+fn representationTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        if (!edge.owner.eql(expression.id)) continue;
+        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .InvalidRepresentation or
+            edge.source != .representation_check) return null;
+        const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap_terminator.operation) {
+            .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
 }
 
 fn placeIsGlobal(body: *const mir.ExecutableBody, id: mir.PlaceId) bool {
@@ -1723,4 +1819,205 @@ test "mechanical renderer rejects mutated selected builtin types and kinds" {
     const narrowing_source = [_]mir.ValueType{.{ .integer = "u32" }};
     try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .conversion_from, &narrowing_source, .{ .integer = "u8" }));
     try std.testing.expectError(error.Unsupported, renderBuiltinForTest(std.testing.allocator, .cpu_pause, &narrowing_source, .{ .integer = "u32" }));
+}
+
+test "mechanical renderer guards single parameter deref before race-unordered load" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 12, .offset = 11, .len = 2 };
+    const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
+    const value_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{.{
+        .local = mir.LocalId.fromIndex(0),
+        .ty = pointer_ty,
+        .type_id = mir.TypeId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+    }};
+    var places = [_]mir.ExecutablePlace{.{
+        .id = mir.PlaceId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+        .root = .{ .local = mir.LocalId.fromIndex(0) },
+        .root_ty = pointer_ty,
+        .root_type_id = mir.TypeId.fromIndex(0),
+        .ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .projection_count = 1,
+    }};
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = mir.ExprId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+        .result_ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .operation = .{ .load = .{
+            .place = mir.PlaceId.fromIndex(0),
+            .access = .{ .kind = .race_unordered, .alignment = 4 },
+            .representation_source = source,
+            .representation_span_id = mir.SpanId.fromIndex(0),
+        } },
+    }};
+    var edges = [_]mir.ExecutableTrapEdge{.{
+        .owner = mir.ExprId.fromIndex(0),
+        .from_block = mir.BlockId.fromIndex(0),
+        .trap_block = mir.BlockId.fromIndex(1),
+        .kind = .InvalidRepresentation,
+        .source = .representation_check,
+    }};
+    var statements = [_]mir.ExecutableStatement{.{
+        .id = mir.InstId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .source = source,
+        .operation = .{ .return_ = mir.ExprId.fromIndex(0) },
+    }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .InvalidRepresentation } },
+    };
+    const body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .expressions = &expressions,
+        .trap_edges = &edges,
+        .places = &places,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+
+    try std.testing.expect(supports(&body, value_ty));
+    const rendered = try render(std.testing.allocator, &body, value_ty);
+    defer std.testing.allocator.free(rendered);
+    const guard = std.mem.indexOf(u8, rendered, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const load = std.mem.indexOf(u8, rendered, "load atomic i32, ptr %mc_arg_0 unordered, align 4") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < load);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "br i1 %mc_expr_tmp_0, label %mc_block_1, label %mc_representation_ready_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "mc_block_1:\n  call void @mc_trap_InvalidRepresentation()") != null);
+}
+
+test "mechanical renderer guards address of parameter deref and returns the same pointer" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 10, .offset = 9, .len = 3 };
+    const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
+    const value_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = pointer_ty, .type_id = mir.TypeId.fromIndex(0), .source = source, .span_id = mir.SpanId.fromIndex(0) }};
+    var places = [_]mir.ExecutablePlace{.{
+        .id = mir.PlaceId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+        .root = .{ .local = mir.LocalId.fromIndex(0) },
+        .root_ty = pointer_ty,
+        .root_type_id = mir.TypeId.fromIndex(0),
+        .ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .projection_count = 1,
+    }};
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = mir.ExprId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+        .result_ty = pointer_ty,
+        .type_id = mir.TypeId.fromIndex(0),
+        .operation = .{ .address_of = .{
+            .place = mir.PlaceId.fromIndex(0),
+            .representation_source = source,
+            .representation_span_id = mir.SpanId.fromIndex(0),
+        } },
+    }};
+    var edges = [_]mir.ExecutableTrapEdge{.{
+        .owner = mir.ExprId.fromIndex(0),
+        .from_block = mir.BlockId.fromIndex(0),
+        .trap_block = mir.BlockId.fromIndex(1),
+        .kind = .InvalidRepresentation,
+        .source = .representation_check,
+    }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(0) } }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .InvalidRepresentation } },
+    };
+    const body: mir.ExecutableBody = .{ .parameters = &parameters, .expressions = &expressions, .trap_edges = &edges, .places = &places, .statements = &statements, .terminators = &terminators };
+
+    try std.testing.expect(supports(&body, pointer_ty));
+    const rendered = try render(std.testing.allocator, &body, pointer_ty);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "icmp eq ptr %mc_arg_0, null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ret ptr %mc_arg_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "load ptr, ptr %mc_arg_0") == null);
+}
+
+test "mechanical renderer rejects mutated parameter deref place access and trap facts" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
+    const value_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = pointer_ty, .type_id = mir.TypeId.fromIndex(0), .source = source }};
+    var places = [_]mir.ExecutablePlace{.{
+        .id = mir.PlaceId.fromIndex(0),
+        .source = source,
+        .root = .{ .local = mir.LocalId.fromIndex(0) },
+        .root_ty = pointer_ty,
+        .root_type_id = mir.TypeId.fromIndex(0),
+        .ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .projection_count = 1,
+    }};
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = mir.ExprId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .source = source,
+        .result_ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .operation = .{ .load = .{
+            .place = mir.PlaceId.fromIndex(0),
+            .access = .{ .kind = .race_unordered, .alignment = 4 },
+            .representation_source = source,
+            .representation_span_id = mir.SpanId.fromIndex(0),
+        } },
+    }};
+    var edges = [_]mir.ExecutableTrapEdge{.{ .owner = mir.ExprId.fromIndex(0), .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(1), .kind = .InvalidRepresentation, .source = .representation_check }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(0) } }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .InvalidRepresentation } },
+    };
+    var body: mir.ExecutableBody = .{ .parameters = &parameters, .expressions = &expressions, .trap_edges = &edges, .places = &places, .statements = &statements, .terminators = &terminators };
+    try std.testing.expect(supports(&body, value_ty));
+
+    expressions[0].operation.load.access.kind = .plain;
+    try std.testing.expect(!supports(&body, value_ty));
+    expressions[0].operation.load.access.kind = .race_unordered;
+
+    edges[0].source = .checked_arithmetic;
+    try std.testing.expect(!supports(&body, value_ty));
+    edges[0].source = .representation_check;
+
+    edges[0].owner = mir.ExprId.fromIndex(1);
+    try std.testing.expect(!supports(&body, value_ty));
+    edges[0].owner = mir.ExprId.fromIndex(0);
+
+    places[0].root_type_id = mir.TypeId.fromIndex(2);
+    try std.testing.expect(!supports(&body, value_ty));
+    places[0].root_type_id = mir.TypeId.fromIndex(0);
+
+    expressions[0].type_id = mir.TypeId.fromIndex(2);
+    try std.testing.expect(!supports(&body, value_ty));
+    expressions[0].type_id = mir.TypeId.fromIndex(1);
+
+    places[0].projections[0] = .{ .field = 0 };
+    try std.testing.expect(!supports(&body, value_ty));
+    places[0].projections[0] = .deref;
+
+    const nullable_ty: mir.ValueType = .{ .nullable_pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
+    parameters[0].ty = nullable_ty;
+    places[0].root_ty = nullable_ty;
+    try std.testing.expect(!supports(&body, value_ty));
+    parameters[0].ty = pointer_ty;
+    places[0].root_ty = pointer_ty;
+
+    const raw_many_ty: mir.ValueType = .{ .pointer = .{ .kind = .raw_many, .mutability = .@"const", .child = "u32" } };
+    parameters[0].ty = raw_many_ty;
+    places[0].root_ty = raw_many_ty;
+    try std.testing.expect(!supports(&body, value_ty));
+    try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, value_ty));
 }

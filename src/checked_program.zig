@@ -42,7 +42,7 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
     if (callables.len != module.functions.len) return false;
     for (callables, module.functions, 0..) |checked, function, index| {
         if (!checked.symbol_id.eql(function.typed_symbol_id) or !checked.source_id.eql(function.typed_source_id)) return false;
-        if (checked.kind != function.callable_kind or !std.meta.eql(checked.return_ty, function.return_ty)) return false;
+        if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
         if (checked.param_count != function.param_count or checked.c_abi != function.c_abi) return false;
         if (checked.no_lang_trap != function.no_lang_trap or checked.irq_context != function.irq_context) return false;
 

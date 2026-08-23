@@ -5346,6 +5346,7 @@ const LlvmEmitter = struct {
             .float => |name| if (std.mem.eql(u8, name, "f32")) "float" else if (std.mem.eql(u8, name, "f64")) "double" else null,
             .pointer => "ptr",
             .slice => "{ ptr, i64 }",
+            .address => "i64",
             .struct_, .closed_enum, .open_enum => |name| self.llvmType(simpleType(.{ .offset = 0, .len = 0, .line = 0, .column = 0 }, name)) catch null,
             else => null,
         };
@@ -5376,14 +5377,9 @@ const LlvmEmitter = struct {
             },
             .builtin_call => return false,
             .indirect_call => return false,
-            .address_of => |operand_id| {
+            .address_of => {
                 switch (expression.result_ty) {
                     .pointer => {},
-                    else => return false,
-                }
-                if (!operand_id.isValid() or operand_id.index() >= fn_mir.executable_body.expressions.len) return false;
-                switch (fn_mir.executable_body.expressions[operand_id.index()].operation) {
-                    .local => {},
                     else => return false,
                 }
             },
@@ -5394,10 +5390,10 @@ const LlvmEmitter = struct {
                 .local => {},
                 .symbol => return false,
             }
-            for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-                .deref => return false,
-                .field, .index => {},
-            };
+            // The syntax-free executable-MIR renderer owns projection
+            // admission.  Keep this integration check limited to roots that
+            // the LLVM declaration registry can resolve instead of rebuilding
+            // typed place semantics here.
         }
         return true;
     }

@@ -71,6 +71,98 @@ test "executable type identities distinguish structural pointer shapes" {
     try executable.verify(function);
 }
 
+test "single parameter pointer deref owns typed place and race access" {
+    const source =
+        \\fn read_u32(pointer: *u32) -> u32 { return pointer.*; }
+        \\fn read_paddr(pointer: *PAddr) -> PAddr { return pointer.*; }
+        \\fn ordinary_store(pointer: *mut u32, value: u32) -> void { pointer.* = value; }
+        \\fn identity(pointer: *mut u32) -> *mut u32 { return &pointer.*; }
+        \\fn const_store(pointer: *u32, value: u32) -> void { pointer.* = value; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_pointer_deref.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const complete_indices = [_]usize{ 0, 1, 3 };
+    const leaf_names = [_][]const u8{ "u32", "PAddr", "u32" };
+    for (complete_indices, leaf_names) |index, leaf_name| {
+        const function = &module.functions[index];
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        try std.testing.expectEqual(@as(usize, 1), function.executable_body.places.len);
+        const place = function.executable_body.places[0];
+        try std.testing.expectEqual(@as(usize, 1), place.projection_count);
+        try std.testing.expect(place.projections[0] == .deref);
+        try std.testing.expectEqualStrings(leaf_name, place.ty.name());
+        try std.testing.expect(place.root_type_id.isValid());
+        try std.testing.expect(place.type_id.isValid());
+        try std.testing.expect(!place.root_type_id.eql(place.type_id));
+        try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+        try std.testing.expect(function.executable_body.trap_edges[0].kind == .InvalidRepresentation);
+        try std.testing.expect(function.executable_body.trap_edges[0].source == .representation_check);
+    }
+    try std.testing.expect(!executable.isComplete(&module.functions[2]));
+    try std.testing.expect(!executable.isComplete(&module.functions[4]));
+    for ([_]usize{ 2, 4 }) |index| {
+        const store = &module.functions[index];
+        store.executable_body.complete = true;
+        try std.testing.expectError(error.InvalidCompletionClaim, executable.verify(store));
+        store.executable_body.complete = false;
+        try executable.verify(store);
+    }
+
+    const read = &module.functions[0];
+    const read_place = &read.executable_body.places[0];
+    const saved_root_type_id = read_place.root_type_id;
+    const saved_leaf_type_id = read_place.type_id;
+    read_place.root_type_id = saved_leaf_type_id;
+    try std.testing.expectError(error.InvalidTypeReference, executable.verify(read));
+    read_place.root_type_id = saved_root_type_id;
+    read_place.type_id = saved_root_type_id;
+    try std.testing.expectError(error.InvalidTypeReference, executable.verify(read));
+    read_place.type_id = saved_leaf_type_id;
+    try executable.verify(read);
+
+    for (read.executable_body.expressions) |*value| switch (value.operation) {
+        .load => |*load| {
+            try std.testing.expect(load.access.kind == .race_unordered);
+            load.access.kind = .plain;
+            try std.testing.expectError(error.InvalidMemoryAccessKind, executable.verify(read));
+            load.access.kind = .race_unordered;
+            const saved_representation_span_id = load.representation_span_id;
+            load.representation_span_id = .invalid;
+            try std.testing.expectError(error.InvalidSpanReference, executable.verify(read));
+            load.representation_span_id = saved_representation_span_id;
+            const saved_edge_kind = read.executable_body.trap_edges[0].kind;
+            read.executable_body.trap_edges[0].kind = .DivideByZero;
+            try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(read));
+            read.executable_body.trap_edges[0].kind = saved_edge_kind;
+            try executable.verify(read);
+            break;
+        },
+        else => {},
+    } else return error.TestUnexpectedResult;
+
+    const identity = &module.functions[3];
+    for (identity.executable_body.expressions) |value| switch (value.operation) {
+        .address_of => |address| {
+            try std.testing.expect(address.representation_span_id.isValid());
+            try std.testing.expect(address.representation_source != null);
+            try std.testing.expect(address.place.eql(identity.executable_body.places[0].id));
+            return;
+        },
+        else => {},
+    };
+    return error.TestUnexpectedResult;
+}
+
 test "type keys distinguish every legacy spelling collision family" {
     const pointer_u8: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     const pointer_u32: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };

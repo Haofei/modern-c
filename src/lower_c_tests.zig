@@ -11793,11 +11793,39 @@ test "lower-c admits scalar deref returns from MIR; optional-pointee derefs stay
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    // Plain scalar deref: single race load, correct payload cast.
-    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(p));");
+    // Plain scalar deref is now emitted mechanically from the canonical body:
+    // the exact representation edge guards the race-tolerant load, whose
+    // value is staged before the return.
+    const scalar_body = try cFunctionBody(output.items, "static uint32_t read_u32(uint32_t * p)");
+    const scalar_guard = std.mem.indexOf(u8, scalar_body, "if (p == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const scalar_load = std.mem.indexOf(u8, scalar_body, "mc_race_load_u32(p)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(scalar_guard < scalar_load);
+    try expectContains(scalar_body, "return mc_exec_tmp_");
     // Optional deref (fallback): loads the tag bool too — never a single scalar load.
     const opt_body = try cFunctionBody(output.items, "static mc_opt_u32 read_opt(mc_opt_u32 * p)");
     try expectContains(opt_body, "mc_race_load_bool");
+}
+
+test "lower-c canonical executable scalar parameter deref guards exact representation edge without fallback" {
+    const source =
+        \\fn read(pointer: *u32) -> u32 { return pointer.*; }
+        \\fn identity(pointer: *mut u32) -> *mut u32 { return &pointer.*; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_executable_pointer_deref.mc", source, &output);
+
+    const read = try cFunctionBody(output.items, "static uint32_t read(");
+    const read_guard = std.mem.indexOf(u8, read, "if (pointer == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const read_load = std.mem.indexOf(u8, read, "mc_race_load_u32(pointer)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(read_guard < read_load);
+    try expectContains(read, "return mc_exec_tmp_");
+
+    const identity = try cFunctionBody(output.items, "static uint32_t * identity(");
+    const identity_guard = std.mem.indexOf(u8, identity, "if (pointer == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const identity_value = std.mem.indexOf(u8, identity, "= pointer;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(identity_guard < identity_value);
+    try expectNotContains(identity, "&(*");
 }
 
 test "lower-c admits address-typed scalar deref returns from MIR" {
@@ -11818,7 +11846,11 @@ test "lower-c admits address-typed scalar deref returns from MIR" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return ((uintptr_t)mc_race_load_usize(p));");
+    const body = try cFunctionBody(output.items, "static uintptr_t deref_pa(uintptr_t * p)");
+    const guard = std.mem.indexOf(u8, body, "if (p == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const load = std.mem.indexOf(u8, body, "mc_race_load_usize(p)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < load);
+    try expectContains(body, "return mc_exec_tmp_");
 }
 
 test "lower-c admits pointer comparison returns from MIR past elided nonnull checks" {

@@ -607,7 +607,12 @@ pub const ExecutableExpression = struct {
     pub const Operation = union(enum) {
         local: LocalId,
         symbol: SymbolId,
-        load: struct { place: PlaceId, access: ExecutableMemoryAccess },
+        load: struct {
+            place: PlaceId,
+            access: ExecutableMemoryAccess,
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
+        },
         literal: ExecutableLiteral,
         unary: struct { op: ExecutableUnaryOp, operand: ExprId },
         binary: struct {
@@ -636,7 +641,11 @@ pub const ExecutableExpression = struct {
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
-        address_of: PlaceId,
+        address_of: struct {
+            place: PlaceId,
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
+        },
         deref: ExprId,
         index: struct { base: ExprId, index: ExprId },
         range_slice: struct { base: ExprId, start: ExprId, end: ExprId },
@@ -672,6 +681,10 @@ pub const ExecutablePlace = struct {
     source: SourcePoint,
     span_id: SpanId = .invalid,
     root: union(enum) { local: LocalId, symbol: SymbolId },
+    root_ty: ValueType = .unknown,
+    root_type_id: TypeId = .invalid,
+    ty: ValueType = .unknown,
+    type_id: TypeId = .invalid,
     projections: [max_executable_projections]Projection = [_]Projection{.deref} ** max_executable_projections,
     projection_count: usize = 0,
 
@@ -1459,7 +1472,6 @@ pub const Function = struct {
     name: []const u8,
     typed_symbol_id: SymbolId = .invalid,
     typed_source_id: SourceId = .invalid,
-    callable_kind: CallableKind = .function,
     return_ty: ValueType,
     // Signature obligations are produced once as typed MIR facts. Consumers
     // must not reconstruct them by rescanning source declarations.

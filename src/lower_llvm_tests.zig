@@ -10747,7 +10747,10 @@ test "LLVM admits scalar deref returns from MIR; optional-pointee derefs stay on
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_scalar_deref_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @read_i32");
-    try expectContains(body, "load atomic i32, ptr %p unordered");
+    try expectContains(body, "; canonical executable MIR");
+    const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const load = std.mem.indexOf(u8, body, "load atomic i32, ptr %mc_arg_0 unordered") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < load);
     try expectContains(body, "ret i32 ");
     // Optional deref (fallback): loads the tag (i8) too — never a single i32 load.
     const opt = try llvmFunctionBody(output.items, "@read_opt");
@@ -10764,7 +10767,9 @@ test "LLVM admits address-typed scalar deref returns from MIR" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_addr_deref.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @deref_pa");
-    try expectContains(body, "load atomic i64, ptr %p unordered");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "icmp eq ptr %mc_arg_0, null");
+    try expectContains(body, "load atomic i64, ptr %mc_arg_0 unordered");
     try expectContains(body, "ret i64 %");
 }
 
@@ -12756,48 +12761,49 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(returned_pointer_body, "load i32, ptr %");
 
     const param_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @consume_global_param");
-    try expectContains(param_pointer_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(param_pointer_body, "load i32, ptr %p");
+    try expectContains(param_pointer_body, "; canonical executable MIR");
+    try expectContains(param_pointer_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(param_pointer_body, "load i32, ptr %mc_arg_0");
 
     const indirect_param_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_global_param");
-    try expectContains(indirect_param_pointer_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(indirect_param_pointer_body, "load i32, ptr %p");
+    try expectContains(indirect_param_pointer_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(indirect_param_pointer_body, "load i32, ptr %mc_arg_0");
 
     const indirect_local_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_local_param");
-    try expectContains(indirect_local_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(indirect_local_param_body, "load i32, ptr %p");
+    try expectContains(indirect_local_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(indirect_local_param_body, "load i32, ptr %mc_arg_0");
 
     const alias_copy_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_param");
-    try expectContains(alias_copy_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(alias_copy_param_body, "load i32, ptr %p");
+    try expectContains(alias_copy_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(alias_copy_param_body, "load i32, ptr %mc_arg_0");
 
     const indirect_reassigned_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_reassigned_param");
-    try expectContains(indirect_reassigned_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(indirect_reassigned_param_body, "load i32, ptr %p");
+    try expectContains(indirect_reassigned_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(indirect_reassigned_param_body, "load i32, ptr %mc_arg_0");
 
     const indirect_reassigned_other_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_reassigned_other_param");
-    try expectContains(indirect_reassigned_other_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(indirect_reassigned_other_param_body, "load i32, ptr %p");
+    try expectContains(indirect_reassigned_other_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(indirect_reassigned_other_param_body, "load i32, ptr %mc_arg_0");
 
     const alias_copy_reassigned_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_reassigned_param");
-    try expectContains(alias_copy_reassigned_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(alias_copy_reassigned_param_body, "load i32, ptr %p");
+    try expectContains(alias_copy_reassigned_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(alias_copy_reassigned_param_body, "load i32, ptr %mc_arg_0");
 
     const alias_copy_reassigned_other_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_reassigned_other_param");
-    try expectContains(alias_copy_reassigned_other_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(alias_copy_reassigned_other_param_body, "load i32, ptr %p");
+    try expectContains(alias_copy_reassigned_other_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(alias_copy_reassigned_other_param_body, "load i32, ptr %mc_arg_0");
 
     const alias_copy_escape_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_escape_param");
-    try expectContains(alias_copy_escape_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(alias_copy_escape_param_body, "load i32, ptr %p");
+    try expectContains(alias_copy_escape_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(alias_copy_escape_param_body, "load i32, ptr %mc_arg_0");
 
     const mixed_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_mixed_param");
-    try expectContains(mixed_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(mixed_param_body, "load i32, ptr %p");
+    try expectContains(mixed_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(mixed_param_body, "load i32, ptr %mc_arg_0");
 
     const local_only_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_local_only_param");
-    try expectContains(local_only_param_body, "load atomic i32, ptr %p unordered, align 4");
-    try expectNotContains(local_only_param_body, "load i32, ptr %p");
+    try expectContains(local_only_param_body, "load atomic i32, ptr %mc_arg_0 unordered, align 4");
+    try expectNotContains(local_only_param_body, "load i32, ptr %mc_arg_0");
 
     const unproven_param_store_body = try llvmFunctionBody(output.items, "define internal void @unproven_param_pointer_store_lowers_atomic");
     try expectContains(unproven_param_store_body, "store atomic i32 %x, ptr %p unordered, align 4");
@@ -14171,6 +14177,29 @@ test "LLVM canonical executable MIR precedes legacy specialized plans" {
     const body = try llvmFunctionBody(output.items, "define internal i32 @identity");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "ret i32 %mc_arg_0");
+}
+
+test "LLVM canonical executable MIR guards parameter deref load and address identity" {
+    const source =
+        \\fn read(pointer: *u32) -> u32 { return pointer.*; }
+        \\fn identity(pointer: *mut u32) -> *mut u32 { return &pointer.*; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_parameter_deref.mc", source, &output);
+
+    const read = try llvmFunctionBody(output.items, "define internal i32 @read");
+    try expectContains(read, "; canonical executable MIR");
+    const read_guard = std.mem.indexOf(u8, read, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const read_load = std.mem.indexOf(u8, read, "load atomic i32, ptr %mc_arg_0 unordered, align 4") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(read_guard < read_load);
+    try expectContains(read, "call void @mc_trap_InvalidRepresentation()");
+
+    const identity = try llvmFunctionBody(output.items, "define internal ptr @identity");
+    try expectContains(identity, "; canonical executable MIR");
+    try expectContains(identity, "icmp eq ptr %mc_arg_0, null");
+    try expectContains(identity, "ret ptr %mc_arg_0");
+    try expectNotContains(identity, "load ptr, ptr %mc_arg_0");
 }
 
 test "LLVM local-address access tag lowers checked update without function body fallback" {

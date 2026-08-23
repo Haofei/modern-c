@@ -1078,7 +1078,6 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .name = fn_decl.name.text,
                         .typed_symbol_id = checked.symbol_id,
                         .typed_source_id = checked.source_id,
-                        .callable_kind = checked.kind,
                         .return_ty = checked.return_ty,
                         .param_count = checked.param_count,
                         .is_extern = true,
@@ -1141,7 +1140,6 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
 fn applyCheckedCallableFact(function: *Function, checked: CheckedCallableFact) void {
     function.typed_symbol_id = checked.symbol_id;
     function.typed_source_id = checked.source_id;
-    function.callable_kind = checked.kind;
     function.return_ty = checked.return_ty;
     function.param_count = checked.param_count;
     function.c_abi = checked.c_abi;
@@ -6596,6 +6594,14 @@ const FunctionBuilder = struct {
             expression.span_id = self.span_ids.get(expression.source) orelse .invalid;
             expression.type_id = self.type_ids.get(TypeKey.fromValueType(expression.result_ty)) orelse .invalid;
             switch (expression.operation) {
+                .load => |*load| if (load.representation_source) |source| {
+                    load.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                    if (!load.representation_span_id.isValid()) complete = false;
+                },
+                .address_of => |*address| if (address.representation_source) |source| {
+                    address.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                    if (!address.representation_span_id.isValid()) complete = false;
+                },
                 .direct_call => |call| {
                     const callee_span_id: SpanId = self.span_ids.get(call.callee_source) orelse SpanId.invalid;
                     expression.operation.direct_call.callee_span_id = callee_span_id;
@@ -6611,10 +6617,10 @@ const FunctionBuilder = struct {
         }
         for (self.executable_places.items) |*place| {
             place.span_id = self.span_ids.get(place.source) orelse .invalid;
-            if (!place.span_id.isValid() or place.projection_count >= mir_model.max_executable_projections) complete = false;
-            for (place.projections[0..@min(place.projection_count, mir_model.max_executable_projections)]) |projection| switch (projection) {
-                .field, .index, .deref => complete = false,
-            };
+            place.root_type_id = self.type_ids.get(TypeKey.fromValueType(place.root_ty)) orelse .invalid;
+            place.type_id = self.type_ids.get(TypeKey.fromValueType(place.ty)) orelse .invalid;
+            if (!place.span_id.isValid() or !place.root_type_id.isValid() or !place.type_id.isValid() or
+                place.projection_count >= mir_model.max_executable_projections or !self.executablePlaceComplete(place.*)) complete = false;
         }
         for (self.executable_statements.items) |*statement| {
             statement.span_id = self.span_ids.get(statement.source) orelse .invalid;
@@ -6630,7 +6636,10 @@ const FunctionBuilder = struct {
                 },
                 .store => |*store| {
                     store.type_id = self.type_ids.get(TypeKey.fromValueType(store.ty)) orelse .invalid;
-                    if (!store.type_id.isValid() or store.value.index() >= self.executable_expressions.items.len) {
+                    if (!store.type_id.isValid() or store.value.index() >= self.executable_expressions.items.len or
+                        !store.place.isValid() or store.place.index() >= self.executable_places.items.len or
+                        !self.executableMemoryAccessComplete(self.executable_places.items[store.place.index()], store.ty, store.access, true))
+                    {
                         complete = false;
                     } else {
                         const value = self.executable_expressions.items[store.value.index()];
@@ -6727,8 +6736,19 @@ const FunctionBuilder = struct {
 
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
-            .unsupported, .address_of, .deref, .index, .range_slice, .member, .array, .struct_ => false,
-            .load => |load| load.place.isValid() and load.place.index() < self.executable_places.items.len and load.access.alignment != 0,
+            .unsupported, .deref, .index, .range_slice, .member, .array, .struct_ => false,
+            .address_of => |address| address.place.isValid() and address.place.index() < self.executable_places.items.len and
+                self.executableAddressOfComplete(expression.result_ty, self.executable_places.items[address.place.index()]) and
+                address.representation_source != null and address.representation_span_id.isValid(),
+            .load => |load| load_complete: {
+                if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len or
+                    !self.executableMemoryAccessComplete(self.executable_places.items[load.place.index()], expression.result_ty, load.access, false)) break :load_complete false;
+                const projected = self.executable_places.items[load.place.index()].projection_count != 0;
+                break :load_complete if (projected)
+                    load.representation_source != null and load.representation_span_id.isValid()
+                else
+                    load.representation_source == null and !load.representation_span_id.isValid();
+            },
             .literal => |literal| switch (literal) {
                 .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
                 .string, .character, .uninit, .enum_value => false,
@@ -6743,6 +6763,57 @@ const FunctionBuilder = struct {
             },
             .builtin_call => |call| self.executableBuiltinComplete(expression, call),
             else => true,
+        };
+    }
+
+    fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
+        if (place.projection_count == 0) return true;
+        if (place.projection_count != 1 or place.projections[0] != .deref) return false;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol => return false,
+        };
+        var parameter_ty: ?ValueType = null;
+        for (self.executable_parameters.items) |parameter| if (parameter.local.eql(local_id)) {
+            parameter_ty = parameter.ty;
+            break;
+        };
+        const root_ty = parameter_ty orelse return false;
+        if (!sameValueType(root_ty, place.root_ty) or mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        const shape = switch (root_ty) {
+            .pointer => |value| value,
+            else => return false,
+        };
+        return shape.kind == .single and std.mem.eql(u8, shape.child, place.ty.name());
+    }
+
+    fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
+        return self.executablePlaceComplete(place) and place.projection_count == 1 and sameValueType(result_ty, place.root_ty);
+    }
+
+    fn executableMemoryAccessComplete(
+        self: *const FunctionBuilder,
+        place: ExecutablePlace,
+        ty: ValueType,
+        access: mir_model.ExecutableMemoryAccess,
+        is_store: bool,
+    ) bool {
+        if (!sameValueType(place.ty, ty) or access.alignment != mir_model.ExecutableMemoryAccess.scalarAlignment(ty)) return false;
+        if (place.projection_count != 0) {
+            // ExecutableTrapEdge is still expression-owned. A projected store
+            // is a statement, so it cannot yet own the mandatory pointer
+            // representation guard without reintroducing backend inference.
+            if (is_store or !self.executablePlaceComplete(place) or access.kind != .race_unordered) return false;
+            return true;
+        }
+        return switch (place.root) {
+            .local => access.kind == .plain,
+            .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
+                const identity = self.executable_symbols.items[id.index()];
+                if (identity.kind != .global or (is_store and !identity.mutable)) break :symbol false;
+                const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+                break :symbol access.kind == expected_kind;
+            } else false,
         };
     }
 
@@ -6768,7 +6839,12 @@ const FunctionBuilder = struct {
                 edge.kind != legacy.kind or edge.source != legacy.source) return false;
             if (!edge.owner.isValid() or edge.owner.index() >= self.executable_expressions.items.len) return false;
             const owner = self.executable_expressions.items[edge.owner.index()];
-            if (!owner.block_id.eql(edge.from_block) or !owner.span_id.eql(legacy.typed_span_id)) return false;
+            const owner_span_id = switch (owner.operation) {
+                .load => |load| load.representation_span_id,
+                .address_of => |address| address.representation_span_id,
+                else => owner.span_id,
+            };
+            if (!owner.block_id.eql(edge.from_block) or !owner_span_id.eql(legacy.typed_span_id)) return false;
         }
         return true;
     }
@@ -6882,6 +6958,10 @@ const FunctionBuilder = struct {
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
             result_ty = expected;
         };
+        if (expr.kind == .address_of or expr.kind == .borrow_expr) if (expected_ty) |expected| switch (expected) {
+            .pointer => result_ty = expected,
+            else => {},
+        };
         // Recursively materialize operands first. ExprId order is therefore
         // the language evaluation order, rather than an AST tree a backend is
         // free to visit in a different order.
@@ -6960,9 +7040,21 @@ const FunctionBuilder = struct {
                 };
                 break :cast .{ .cast = .{ .operand = operand, .kind = kind } };
             },
-            .address_of => |inner| .{ .address_of = try self.appendExecutablePlace(inner.*) },
-            .borrow_expr => |node| .{ .address_of = try self.appendExecutablePlace(node.value.*) },
-            .deref => |inner| .{ .deref = try self.ensureExecutableExpr(inner.*) },
+            .address_of => |inner| address: {
+                const guard_source = executableDerefOperandSource(inner.*) orelse break :address .unsupported;
+                break :address .{ .address_of = .{
+                    .place = try self.appendExecutablePlace(inner.*),
+                    .representation_source = guard_source,
+                    .representation_span_id = try self.internSpanId(guard_source),
+                } };
+            },
+            .borrow_expr => .unsupported,
+            .deref => |inner| .{ .load = .{
+                .place = try self.appendExecutablePlace(expr),
+                .access = self.executableMemoryAccess(expr, result_ty),
+                .representation_source = self.sourcePoint(inner.span),
+                .representation_span_id = try self.internSpanId(self.sourcePoint(inner.span)),
+            } },
             .index => |node| .{ .index = .{
                 .base = try self.ensureExecutableExpr(node.base.*),
                 .index = try self.ensureExecutableExpr(node.index.*),
@@ -7084,11 +7176,33 @@ const FunctionBuilder = struct {
             // complete effect ordering contract for those regions.
             if (self.globals.contains(name) and self.current != 0) self.executable_supported = false;
         }
-        const kind: mir_model.ExecutableMemoryAccessKind = if (root) |name|
+        const kind: mir_model.ExecutableMemoryAccessKind = if (executablePlaceHasDeref(place_expr))
+            .race_unordered
+        else if (root) |name|
             if (self.globals.contains(name) and self.mutable_globals.contains(name)) .race_unordered else .plain
         else
             .plain;
         return .{ .kind = kind, .alignment = alignment };
+    }
+
+    fn executablePlaceHasDeref(expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| executablePlaceHasDeref(inner.*),
+            .member => |node| executablePlaceHasDeref(node.base.*),
+            .index => |node| executablePlaceHasDeref(node.base.*),
+            .deref => true,
+            else => false,
+        };
+    }
+
+    fn executableDerefOperandSource(expr: ast.Expr) ?SourcePoint {
+        return switch (expr.kind) {
+            .grouped => |inner| executableDerefOperandSource(inner.*),
+            .member => |node| executableDerefOperandSource(node.base.*),
+            .index => |node| executableDerefOperandSource(node.base.*),
+            .deref => |inner| .{ .line = inner.span.line, .column = inner.span.column, .offset = inner.span.offset, .len = inner.span.len },
+            else => null,
+        };
     }
 
     fn executablePlaceRootIdent(input: ast.Expr) ?[]const u8 {
@@ -7222,11 +7336,14 @@ const FunctionBuilder = struct {
     }
 
     fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) anyerror!PlaceId {
+        const place_ty = self.exprType(expr);
         var place: ExecutablePlace = .{
             .id = PlaceId.fromIndex(self.executable_places.items.len),
             .source = self.sourcePoint(expr.span),
             .span_id = try self.internSpanId(self.sourcePoint(expr.span)),
             .root = undefined,
+            .ty = place_ty,
+            .type_id = try self.internTypeId(place_ty),
         };
         if (!try self.fillExecutablePlace(&place, expr)) {
             // Invalid root uses a dedicated synthetic symbol and the verifier
@@ -7242,12 +7359,15 @@ const FunctionBuilder = struct {
         return switch (expr.kind) {
             .grouped => |inner| try self.fillExecutablePlace(place, inner.*),
             .ident => |ident| root: {
+                const root_ty = self.local_types.get(ident.text) orelse self.globals.get(ident.text) orelse break :root false;
                 place.root = if (self.executable_local_ids.get(ident.text)) |local|
                     .{ .local = local }
                 else if (self.globals.contains(ident.text))
                     .{ .symbol = try self.internExecutableGlobalSymbol(ident.text) }
                 else
                     .{ .symbol = try self.internExecutableSymbol(ident.text) };
+                place.root_ty = root_ty;
+                place.root_type_id = try self.internTypeId(root_ty);
                 break :root true;
             },
             .member => |node| projection: {
@@ -11295,6 +11415,40 @@ const FunctionBuilder = struct {
         try self.addInstrWithValue(.representation_check, representationTypeName(ty), ty, span, value_id);
         if (representationCheckTraps(ty)) {
             try self.addTrapEdge(.InvalidRepresentation, .representation_check, span);
+            try self.attachExecutableRepresentationTrapEdge(span);
+        }
+    }
+
+    fn attachExecutableRepresentationTrapEdge(self: *FunctionBuilder, span: ast.Span) !void {
+        if (self.trap_edges.items.len == 0) return;
+        const span_id = try self.internSpanId(self.sourcePoint(span));
+        var index = self.executable_expressions.items.len;
+        while (index > 0) {
+            index -= 1;
+            const expression = self.executable_expressions.items[index];
+            if (!expression.block_id.eql(BlockId.fromIndex(self.current))) continue;
+            const Representation = struct { place: PlaceId, span_id: SpanId };
+            const representation: Representation = switch (expression.operation) {
+                .load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
+                .address_of => |value| .{ .place = value.place, .span_id = value.representation_span_id },
+                else => continue,
+            };
+            if (!representation.span_id.eql(span_id)) continue;
+            const place_id = representation.place;
+            if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) continue;
+            const place = self.executable_places.items[place_id.index()];
+            if (!self.executablePlaceComplete(place) or place.projection_count != 1) continue;
+            const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+            if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
+                legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+            try self.executable_trap_edges.append(self.allocator, .{
+                .owner = expression.id,
+                .from_block = BlockId.fromIndex(legacy.from_block),
+                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .kind = legacy.kind,
+                .source = legacy.source,
+            });
+            return;
         }
     }
 
