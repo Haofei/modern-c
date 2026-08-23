@@ -14182,6 +14182,7 @@ test "LLVM canonical executable MIR precedes legacy specialized plans" {
 test "LLVM canonical executable MIR guards parameter deref load and address identity" {
     const source =
         \\fn read(pointer: *u32) -> u32 { return pointer.*; }
+        \\fn write(pointer: *mut u32, value: u32) -> void { pointer.* = value; return; }
         \\fn identity(pointer: *mut u32) -> *mut u32 { return &pointer.*; }
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -14194,6 +14195,13 @@ test "LLVM canonical executable MIR guards parameter deref load and address iden
     const read_load = std.mem.indexOf(u8, read, "load atomic i32, ptr %mc_arg_0 unordered, align 4") orelse return error.TestUnexpectedResult;
     try std.testing.expect(read_guard < read_load);
     try expectContains(read, "call void @mc_trap_InvalidRepresentation()");
+
+    const write = try llvmFunctionBody(output.items, "define internal void @write");
+    try expectContains(write, "; canonical executable MIR");
+    const write_guard = std.mem.indexOf(u8, write, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const write_store = std.mem.indexOf(u8, write, "store atomic i32 %mc_arg_1, ptr %mc_arg_0 unordered, align 4") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(write_guard < write_store);
+    try expectContains(write, "call void @mc_trap_InvalidRepresentation()");
 
     const identity = try llvmFunctionBody(output.items, "define internal ptr @identity");
     try expectContains(identity, "; canonical executable MIR");

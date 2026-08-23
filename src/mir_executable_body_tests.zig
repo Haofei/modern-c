@@ -90,8 +90,8 @@ test "single parameter pointer deref owns typed place and race access" {
     var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
     defer module.deinit();
 
-    const complete_indices = [_]usize{ 0, 1, 3 };
-    const leaf_names = [_][]const u8{ "u32", "PAddr", "u32" };
+    const complete_indices = [_]usize{ 0, 1, 2, 3 };
+    const leaf_names = [_][]const u8{ "u32", "PAddr", "u32", "u32" };
     for (complete_indices, leaf_names) |index, leaf_name| {
         const function = &module.functions[index];
         try executable.verify(function);
@@ -108,9 +108,8 @@ test "single parameter pointer deref owns typed place and race access" {
         try std.testing.expect(function.executable_body.trap_edges[0].kind == .InvalidRepresentation);
         try std.testing.expect(function.executable_body.trap_edges[0].source == .representation_check);
     }
-    try std.testing.expect(!executable.isComplete(&module.functions[2]));
     try std.testing.expect(!executable.isComplete(&module.functions[4]));
-    for ([_]usize{ 2, 4 }) |index| {
+    for ([_]usize{4}) |index| {
         const store = &module.functions[index];
         store.executable_body.complete = true;
         try std.testing.expectError(error.InvalidCompletionClaim, executable.verify(store));
@@ -149,6 +148,77 @@ test "single parameter pointer deref owns typed place and race access" {
         },
         else => {},
     } else return error.TestUnexpectedResult;
+
+    const store_function = &module.functions[2];
+    const store_statement = store_statement: {
+        for (store_function.executable_body.statements) |*statement| switch (statement.operation) {
+            .store => break :store_statement statement,
+            else => {},
+        };
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqual(@as(usize, 1), store_function.executable_body.trap_edges.len);
+    switch (store_function.executable_body.trap_edges[0].owner) {
+        .statement => |id| try std.testing.expect(id.eql(store_statement.id)),
+        .expression => return error.TestUnexpectedResult,
+    }
+    switch (store_statement.operation) {
+        .store => |*store| {
+            try std.testing.expect(store.access.kind == .race_unordered);
+            try std.testing.expect(store.representation_source != null);
+            try std.testing.expect(store.representation_span_id.isValid());
+
+            const store_place = &store_function.executable_body.places[store.place.index()];
+            const saved_store_root_type_id = store_place.root_type_id;
+            const saved_store_leaf_type_id = store_place.type_id;
+            store_place.root_type_id = saved_store_leaf_type_id;
+            try std.testing.expectError(error.InvalidTypeReference, executable.verify(store_function));
+            store_place.root_type_id = saved_store_root_type_id;
+            store_place.type_id = saved_store_root_type_id;
+            try std.testing.expectError(error.InvalidTypeReference, executable.verify(store_function));
+            store_place.type_id = saved_store_leaf_type_id;
+
+            const saved_representation_span_id = store.representation_span_id;
+            store.representation_span_id = .invalid;
+            try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+            store.representation_span_id = saved_representation_span_id;
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const store_edge = &store_function.executable_body.trap_edges[0];
+    const saved_owner = store_edge.owner;
+    switch (store_statement.operation) {
+        .store => |store| store_edge.owner = .{ .expression = store.value },
+        else => unreachable,
+    }
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+    store_edge.owner = .{ .statement = .invalid };
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+    store_edge.owner = saved_owner;
+
+    const saved_from_block = store_edge.from_block;
+    store_edge.from_block = .invalid;
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+    store_edge.from_block = saved_from_block;
+    const saved_kind = store_edge.kind;
+    store_edge.kind = .DivideByZero;
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+    store_edge.kind = saved_kind;
+    const saved_source = store_edge.source;
+    store_edge.source = .checked_arithmetic;
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+    store_edge.source = saved_source;
+
+    const saved_edges = store_function.executable_body.trap_edges;
+    defer store_function.executable_body.trap_edges = saved_edges;
+    store_function.executable_body.trap_edges = saved_edges[0..0];
+    try std.testing.expectError(error.InvalidCompletionClaim, executable.verify(store_function));
+    var duplicate_edges = [_]mir.ExecutableTrapEdge{ saved_edges[0], saved_edges[0] };
+    store_function.executable_body.trap_edges = duplicate_edges[0..];
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(store_function));
+    store_function.executable_body.trap_edges = saved_edges;
+    try executable.verify(store_function);
 
     const identity = &module.functions[3];
     for (identity.executable_body.expressions) |value| switch (value.operation) {
@@ -388,7 +458,8 @@ test "checked add owns an explicit verified overflow edge" {
     const edge = function.executable_body.trap_edges[0];
     try std.testing.expectEqual(mir.TrapKind.IntegerOverflow, edge.kind);
     try std.testing.expectEqual(mir.TrapSource.checked_arithmetic, edge.source);
-    const owner = function.executable_body.expressions[edge.owner.index()];
+    const owner_id = edge.owner.expressionId() orelse return error.TestUnexpectedResult;
+    const owner = function.executable_body.expressions[owner_id.index()];
     switch (owner.operation) {
         .binary => |binary| {
             try std.testing.expectEqual(mir.ExecutableBinaryOp.add, binary.op);
@@ -437,7 +508,7 @@ test "checked div mod and shifts own their exact exceptional edges" {
             else => {},
         };
         const owner = checked_owner orelse return error.TestUnexpectedResult;
-        for (function.executable_body.trap_edges) |edge| try std.testing.expect(edge.owner.eql(owner));
+        for (function.executable_body.trap_edges) |edge| try std.testing.expect(edge.owner.eql(.{ .expression = owner }));
     }
 
     const mutated = &module.functions[2];

@@ -741,6 +741,8 @@ pub const PlaceId = mir_model.PlaceId;
 pub const ExecutableParameter = mir_model.ExecutableParameter;
 pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
 pub const ExecutableExpression = mir_model.ExecutableExpression;
+pub const ExecutableTrapOwner = mir_model.ExecutableTrapOwner;
+pub const ExecutableTrapEdge = mir_model.ExecutableTrapEdge;
 pub const ExecutablePlace = mir_model.ExecutablePlace;
 pub const ExecutableStatement = mir_model.ExecutableStatement;
 pub const ExecutableTerminator = mir_model.ExecutableTerminator;
@@ -6636,12 +6638,18 @@ const FunctionBuilder = struct {
                 },
                 .store => |*store| {
                     store.type_id = self.type_ids.get(TypeKey.fromValueType(store.ty)) orelse .invalid;
+                    if (store.representation_source) |source| {
+                        store.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                    }
                     if (!store.type_id.isValid() or store.value.index() >= self.executable_expressions.items.len or
                         !store.place.isValid() or store.place.index() >= self.executable_places.items.len or
                         !self.executableMemoryAccessComplete(self.executable_places.items[store.place.index()], store.ty, store.access, true))
                     {
                         complete = false;
                     } else {
+                        const projected = self.executable_places.items[store.place.index()].projection_count != 0;
+                        if ((projected and (store.representation_source == null or !store.representation_span_id.isValid())) or
+                            (!projected and (store.representation_source != null or store.representation_span_id.isValid()))) complete = false;
                         const value = self.executable_expressions.items[store.value.index()];
                         if (!sameValueType(value.result_ty, store.ty)) complete = false;
                     }
@@ -6800,10 +6808,14 @@ const FunctionBuilder = struct {
     ) bool {
         if (!sameValueType(place.ty, ty) or access.alignment != mir_model.ExecutableMemoryAccess.scalarAlignment(ty)) return false;
         if (place.projection_count != 0) {
-            // ExecutableTrapEdge is still expression-owned. A projected store
-            // is a statement, so it cannot yet own the mandatory pointer
-            // representation guard without reintroducing backend inference.
-            if (is_store or !self.executablePlaceComplete(place) or access.kind != .race_unordered) return false;
+            if (!self.executablePlaceComplete(place) or access.kind != .race_unordered) return false;
+            if (is_store) {
+                const shape = switch (place.root_ty) {
+                    .pointer => |value| value,
+                    else => return false,
+                };
+                if (shape.mutability != .mut) return false;
+            }
             return true;
         }
         return switch (place.root) {
@@ -6837,14 +6849,29 @@ const FunctionBuilder = struct {
             if (!edge.from_block.eql(BlockId.fromIndex(legacy.from_block)) or
                 !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
                 edge.kind != legacy.kind or edge.source != legacy.source) return false;
-            if (!edge.owner.isValid() or edge.owner.index() >= self.executable_expressions.items.len) return false;
-            const owner = self.executable_expressions.items[edge.owner.index()];
-            const owner_span_id = switch (owner.operation) {
-                .load => |load| load.representation_span_id,
-                .address_of => |address| address.representation_span_id,
-                else => owner.span_id,
+            const OwnerIdentity = struct { block_id: BlockId, span_id: SpanId };
+            const owner_identity: OwnerIdentity = switch (edge.owner) {
+                .expression => |id| expression: {
+                    if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return false;
+                    const owner = self.executable_expressions.items[id.index()];
+                    const owner_span_id = switch (owner.operation) {
+                        .load => |load| load.representation_span_id,
+                        .address_of => |address| address.representation_span_id,
+                        else => owner.span_id,
+                    };
+                    break :expression .{ .block_id = owner.block_id, .span_id = owner_span_id };
+                },
+                .statement => |id| statement: {
+                    if (!id.isValid() or id.index() >= self.executable_statements.items.len) return false;
+                    const owner = self.executable_statements.items[id.index()];
+                    const owner_span_id = switch (owner.operation) {
+                        .store => |store| store.representation_span_id,
+                        else => return false,
+                    };
+                    break :statement .{ .block_id = owner.block_id, .span_id = owner_span_id };
+                },
             };
-            if (!owner.block_id.eql(edge.from_block) or !owner_span_id.eql(legacy.typed_span_id)) return false;
+            if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) return false;
         }
         return true;
     }
@@ -7715,11 +7742,14 @@ const FunctionBuilder = struct {
             .assignment => |node| {
                 const assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
+                const representation_source = executableDerefOperandSource(node.target);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = try self.appendExecutablePlace(node.target),
                     .value = try self.ensureExecutableExprAs(node.value, assignment_target_ty),
                     .ty = assignment_target_ty,
                     .access = self.executableMemoryAccess(node.target, assignment_target_ty),
+                    .representation_source = representation_source,
+                    .representation_span_id = if (representation_source) |source| try self.internSpanId(source) else .invalid,
                 } });
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
                 const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
@@ -10350,7 +10380,7 @@ const FunctionBuilder = struct {
             return;
         }
         try self.executable_trap_edges.append(self.allocator, .{
-            .owner = owner_id,
+            .owner = .{ .expression = owner_id },
             .from_block = BlockId.fromIndex(legacy.from_block),
             .trap_block = BlockId.fromIndex(legacy.trap_block),
             .kind = kind,
@@ -11442,7 +11472,33 @@ const FunctionBuilder = struct {
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
                 legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
             try self.executable_trap_edges.append(self.allocator, .{
-                .owner = expression.id,
+                .owner = .{ .expression = expression.id },
+                .from_block = BlockId.fromIndex(legacy.from_block),
+                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .kind = legacy.kind,
+                .source = legacy.source,
+            });
+            return;
+        }
+        index = self.executable_statements.items.len;
+        while (index > 0) {
+            index -= 1;
+            const statement = self.executable_statements.items[index];
+            if (!statement.block_id.eql(BlockId.fromIndex(self.current))) continue;
+            const store = switch (statement.operation) {
+                .store => |value| value,
+                else => continue,
+            };
+            if (!store.representation_span_id.eql(span_id)) continue;
+            if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len) continue;
+            const place = self.executable_places.items[store.place.index()];
+            if (!self.executablePlaceComplete(place) or place.projection_count != 1 or
+                !self.executableMemoryAccessComplete(place, store.ty, store.access, true)) continue;
+            const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+            if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
+                legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+            try self.executable_trap_edges.append(self.allocator, .{
+                .owner = .{ .statement = statement.id },
                 .from_block = BlockId.fromIndex(legacy.from_block),
                 .trap_block = BlockId.fromIndex(legacy.trap_block),
                 .kind = legacy.kind,

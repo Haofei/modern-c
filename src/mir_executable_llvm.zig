@@ -30,14 +30,25 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         if (!operationSupported(body, expression)) return false;
     }
     for (body.trap_edges) |edge| {
-        if (!expressionValid(body, edge.owner)) return false;
-        const owner = body.expressions[edge.owner.index()];
-        switch (owner.operation) {
-            .binary => |binary| {
-                if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
+        switch (edge.owner) {
+            .expression => |owner_id| {
+                if (!expressionValid(body, owner_id)) return false;
+                const owner = body.expressions[owner_id.index()];
+                switch (owner.operation) {
+                    .binary => |binary| {
+                        if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
+                    },
+                    .load, .address_of => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    else => return false,
+                }
             },
-            .load, .address_of => if (!representationTrapEdgeIsExact(body, owner)) return false,
-            else => return false,
+            .statement => |owner_id| {
+                const owner = statementIdentity(body, owner_id) orelse return false;
+                switch (owner.operation) {
+                    .store => |store| if (!memoryStoreSupported(body, owner, store)) return false,
+                    else => return false,
+                }
+            },
         }
     }
     for (body.places) |place| {
@@ -56,7 +67,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .store => |store| {
                 if (!placeValid(body, store.place) or !expressionValid(body, store.value) or
                     !sameValueType(store.ty, body.expressions[store.value.index()].result_ty) or
-                    !memoryAccessSupported(body, store.place, store.ty, store.access, true)) return false;
+                    !memoryStoreSupported(body, statement, store)) return false;
             },
             .eval => |value| if (!expressionValid(body, value)) return false,
             .guard => |guard| {
@@ -173,7 +184,11 @@ const Renderer = struct {
             },
             .store => |store| {
                 const value = try self.emitExpression(store.value);
-                const pointer = try self.emitPlace(store.place, value.ty);
+                const place = self.body.places[store.place.index()];
+                const pointer = if (place.projection_count == 1)
+                    try self.emitGuardedParameterStorePointer(statement, store.place)
+                else
+                    try self.emitPlace(store.place, value.ty);
                 if (!sameValueType(store.ty, self.body.expressions[store.value.index()].result_ty)) return error.InvalidBody;
                 try self.emitMemoryStore(store.place, value, pointer, store.access);
             },
@@ -636,16 +651,36 @@ const Renderer = struct {
         };
         const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
         if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
-        const invalid = try self.temp();
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
+        return local.storage;
+    }
+
+    fn emitGuardedParameterStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!singleParameterDerefStorePlaceSupported(self.body, place)) return error.InvalidBody;
+        const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_store_ready_{d}", .{statement.id.raw});
+        try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
+        return local.storage;
+    }
+
+    fn emitPointerRepresentationGuard(self: *Renderer, pointer: []const u8, edge: mir.ExecutableTrapEdge, continuation: []const u8) RenderError!void {
+        const invalid = try self.temp();
         try self.output.print(
             self.allocator,
             "  {s} = icmp eq ptr {s}, null\n" ++
                 "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
                 "{s}:\n",
-            .{ invalid, local.storage, invalid, edge.trap_block.raw, continuation, continuation },
+            .{ invalid, pointer, invalid, edge.trap_block.raw, continuation, continuation },
         );
-        return local.storage;
     }
 
     fn temp(self: *Renderer) RenderError![]const u8 {
@@ -767,7 +802,8 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
     const requirements = mir.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty) orelse return false;
     var total: usize = 0;
     for (body.trap_edges) |edge| {
-        if (!edge.owner.eql(expression.id)) continue;
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
         total += 1;
         if (!edge.from_block.eql(expression.block_id)) return false;
     }
@@ -775,7 +811,8 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
     for (requirements.items[0..requirements.count]) |requirement| {
         var matches: usize = 0;
         for (body.trap_edges) |edge| {
-            if (!edge.owner.eql(expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
+            const owner = edge.owner.expressionId() orelse continue;
+            if (!owner.eql(expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
             const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return false;
             switch (trap_terminator.operation) {
                 .trap_ => |kind| {
@@ -796,7 +833,8 @@ fn checkedTrapEdge(
 ) ?mir.ExecutableTrapEdge {
     if (!checkedIntegerBinaryHasExactTrapEdges(body, expression)) return null;
     for (body.trap_edges) |edge| {
-        if (edge.owner.eql(expression.id) and edge.kind == requirement.kind and edge.source == requirement.source) return edge;
+        const owner = edge.owner.expressionId() orelse continue;
+        if (owner.eql(expression.id) and edge.kind == requirement.kind and edge.source == requirement.source) return edge;
     }
     return null;
 }
@@ -865,6 +903,12 @@ fn expressionValid(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     return id.isValid() and id.index() < body.expressions.len and body.expressions[id.index()].id.eql(id);
 }
 
+fn statementIdentity(body: *const mir.ExecutableBody, id: mir.InstId) ?mir.ExecutableStatement {
+    if (!id.isValid() or id.index() >= body.statements.len) return null;
+    const statement = body.statements[id.index()];
+    return if (statement.id.eql(id)) statement else null;
+}
+
 fn placeValid(body: *const mir.ExecutableBody, id: mir.PlaceId) bool {
     return id.isValid() and id.index() < body.places.len and body.places[id.index()].id.eql(id);
 }
@@ -904,6 +948,14 @@ fn singleParameterDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
     return pointer.kind == .single and std.mem.eql(u8, pointer.child, place.ty.name());
 }
 
+fn singleParameterDerefStorePlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (!singleParameterDerefPlaceSupported(body, place)) return false;
+    return switch (place.root_ty) {
+        .pointer => |shape| shape.mutability == .mut,
+        else => false,
+    };
+}
+
 fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
     if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false)) return false;
     const place = body.places[load.place.index()];
@@ -925,12 +977,30 @@ fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression:
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement, store: anytype) bool {
+    if (!memoryAccessSupported(body, store.place, store.ty, store.access, true) or !expressionValid(body, store.value)) return false;
+    const place = body.places[store.place.index()];
+    const value = body.expressions[store.value.index()];
+    if (!sameValueType(store.ty, value.result_ty)) return false;
+    if (place.projection_count == 0) {
+        return store.representation_source == null and !store.representation_span_id.isValid();
+    }
+    return singleParameterDerefStorePlaceSupported(body, place) and
+        store.type_id.isValid() and store.type_id.eql(place.type_id) and
+        value.type_id.isValid() and value.type_id.eql(store.type_id) and
+        store.representation_source != null and store.representation_span_id.isValid() and
+        statementRepresentationTrapEdgeIsExact(body, statement);
+}
+
 fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool) bool {
     if (!placeValid(body, place_id) or mir.ExecutableMemoryAccess.scalarAlignment(ty) != access.alignment) return false;
     const place = body.places[place_id.index()];
     if (place.projection_count != 0) {
-        // Projected stores are deliberately not part of this slice.
-        return !is_store and sameValueType(place.ty, ty) and access.kind == .race_unordered and singleParameterDerefPlaceSupported(body, place);
+        return sameValueType(place.ty, ty) and access.kind == .race_unordered and
+            if (is_store)
+                singleParameterDerefStorePlaceSupported(body, place)
+            else
+                singleParameterDerefPlaceSupported(body, place);
     }
     return switch (place.root) {
         .local => |id| localAddressable(body, id) and access.kind == .plain,
@@ -952,8 +1022,30 @@ fn representationTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mi
 fn representationTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {
-        if (!edge.owner.eql(expression.id)) continue;
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
         if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .InvalidRepresentation or
+            edge.source != .representation_check) return null;
+        const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap_terminator.operation) {
+            .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
+}
+
+fn statementRepresentationTrapEdgeIsExact(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) bool {
+    return statementRepresentationTrapEdge(body, statement) != null;
+}
+
+fn statementRepresentationTrapEdge(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) ?mir.ExecutableTrapEdge {
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.statementId() orelse continue;
+        if (!owner.eql(statement.id)) continue;
+        if (found != null or !edge.from_block.eql(statement.block_id) or edge.kind != .InvalidRepresentation or
             edge.source != .representation_check) return null;
         const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
         switch (trap_terminator.operation) {
@@ -1314,7 +1406,7 @@ test "mechanical renderer emits signed and unsigned checked add sub mul edges" {
             .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = case.op, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
         };
         const trap_edges = [_]mir.ExecutableTrapEdge{.{
-            .owner = mir.ExprId.fromIndex(2),
+            .owner = .{ .expression = mir.ExprId.fromIndex(2) },
             .from_block = mir.BlockId.fromIndex(0),
             .trap_block = mir.BlockId.fromIndex(1),
             .kind = .IntegerOverflow,
@@ -1384,7 +1476,7 @@ test "mechanical renderer guards checked div mod and shifts before unsafe operat
         for (requirements.items[0..requirements.count], 0..) |requirement, index| {
             const trap_block = mir.BlockId.fromIndex(index + 1);
             edges[index] = .{
-                .owner = mir.ExprId.fromIndex(2),
+                .owner = .{ .expression = mir.ExprId.fromIndex(2) },
                 .from_block = mir.BlockId.fromIndex(0),
                 .trap_block = trap_block,
                 .kind = requirement.kind,
@@ -1444,8 +1536,8 @@ test "mechanical renderer rejects checked div and shift trap requirement drift" 
         .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .div, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
     };
     var edges = [_]mir.ExecutableTrapEdge{
-        .{ .owner = mir.ExprId.fromIndex(2), .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(1), .kind = .DivideByZero, .source = .checked_arithmetic },
-        .{ .owner = mir.ExprId.fromIndex(2), .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(2), .kind = .IntegerOverflow, .source = .checked_arithmetic },
+        .{ .owner = .{ .expression = mir.ExprId.fromIndex(2) }, .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(1), .kind = .DivideByZero, .source = .checked_arithmetic },
+        .{ .owner = .{ .expression = mir.ExprId.fromIndex(2) }, .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(2), .kind = .IntegerOverflow, .source = .checked_arithmetic },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
@@ -1505,7 +1597,7 @@ test "mechanical renderer rejects mutated checked arithmetic trap edges" {
         .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .IntegerOverflow } },
     };
     const valid_edge: mir.ExecutableTrapEdge = .{
-        .owner = mir.ExprId.fromIndex(2),
+        .owner = .{ .expression = mir.ExprId.fromIndex(2) },
         .from_block = mir.BlockId.fromIndex(0),
         .trap_block = mir.BlockId.fromIndex(1),
         .kind = .IntegerOverflow,
@@ -1534,7 +1626,7 @@ test "mechanical renderer rejects mutated checked arithmetic trap edges" {
     try std.testing.expect(!supports(&duplicate_body, int_ty));
 
     var wrong_owner = valid_edge;
-    wrong_owner.owner = mir.ExprId.fromIndex(0);
+    wrong_owner.owner = .{ .expression = mir.ExprId.fromIndex(0) };
     const wrong_owner_edges = [_]mir.ExecutableTrapEdge{wrong_owner};
     const wrong_owner_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&wrong_owner_edges), .statements = @constCast(&statements), .terminators = @constCast(&valid_terminators) };
     try std.testing.expect(!supports(&wrong_owner_body, int_ty));
@@ -1859,7 +1951,7 @@ test "mechanical renderer guards single parameter deref before race-unordered lo
         } },
     }};
     var edges = [_]mir.ExecutableTrapEdge{.{
-        .owner = mir.ExprId.fromIndex(0),
+        .owner = .{ .expression = mir.ExprId.fromIndex(0) },
         .from_block = mir.BlockId.fromIndex(0),
         .trap_block = mir.BlockId.fromIndex(1),
         .kind = .InvalidRepresentation,
@@ -1925,7 +2017,7 @@ test "mechanical renderer guards address of parameter deref and returns the same
         } },
     }};
     var edges = [_]mir.ExecutableTrapEdge{.{
-        .owner = mir.ExprId.fromIndex(0),
+        .owner = .{ .expression = mir.ExprId.fromIndex(0) },
         .from_block = mir.BlockId.fromIndex(0),
         .trap_block = mir.BlockId.fromIndex(1),
         .kind = .InvalidRepresentation,
@@ -1975,7 +2067,7 @@ test "mechanical renderer rejects mutated parameter deref place access and trap 
             .representation_span_id = mir.SpanId.fromIndex(0),
         } },
     }};
-    var edges = [_]mir.ExecutableTrapEdge{.{ .owner = mir.ExprId.fromIndex(0), .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(1), .kind = .InvalidRepresentation, .source = .representation_check }};
+    var edges = [_]mir.ExecutableTrapEdge{.{ .owner = .{ .expression = mir.ExprId.fromIndex(0) }, .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(1), .kind = .InvalidRepresentation, .source = .representation_check }};
     var statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(0) } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
@@ -1992,9 +2084,9 @@ test "mechanical renderer rejects mutated parameter deref place access and trap 
     try std.testing.expect(!supports(&body, value_ty));
     edges[0].source = .representation_check;
 
-    edges[0].owner = mir.ExprId.fromIndex(1);
+    edges[0].owner = .{ .expression = mir.ExprId.fromIndex(1) };
     try std.testing.expect(!supports(&body, value_ty));
-    edges[0].owner = mir.ExprId.fromIndex(0);
+    edges[0].owner = .{ .expression = mir.ExprId.fromIndex(0) };
 
     places[0].root_type_id = mir.TypeId.fromIndex(2);
     try std.testing.expect(!supports(&body, value_ty));
@@ -2020,4 +2112,107 @@ test "mechanical renderer rejects mutated parameter deref place access and trap 
     places[0].root_ty = raw_many_ty;
     try std.testing.expect(!supports(&body, value_ty));
     try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, value_ty));
+}
+
+test "mechanical renderer guards statement-owned parameter deref before atomic store" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 20, .offset = 19, .len = 2 };
+    const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
+    const value_ty: mir.ValueType = .{ .integer = "u32" };
+    var parameters = [_]mir.ExecutableParameter{
+        .{ .local = mir.LocalId.fromIndex(0), .ty = pointer_ty, .type_id = mir.TypeId.fromIndex(0), .source = source, .span_id = mir.SpanId.fromIndex(0) },
+        .{ .local = mir.LocalId.fromIndex(1), .ty = value_ty, .type_id = mir.TypeId.fromIndex(1), .source = source, .span_id = mir.SpanId.fromIndex(0) },
+    };
+    var places = [_]mir.ExecutablePlace{.{
+        .id = mir.PlaceId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+        .root = .{ .local = mir.LocalId.fromIndex(0) },
+        .root_ty = pointer_ty,
+        .root_type_id = mir.TypeId.fromIndex(0),
+        .ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .projection_count = 1,
+    }};
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = mir.ExprId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+        .result_ty = value_ty,
+        .type_id = mir.TypeId.fromIndex(1),
+        .operation = .{ .local = mir.LocalId.fromIndex(1) },
+    }};
+    var edges = [_]mir.ExecutableTrapEdge{.{
+        .owner = .{ .statement = mir.InstId.fromIndex(0) },
+        .from_block = mir.BlockId.fromIndex(0),
+        .trap_block = mir.BlockId.fromIndex(1),
+        .kind = .InvalidRepresentation,
+        .source = .representation_check,
+    }};
+    var statements = [_]mir.ExecutableStatement{
+        .{
+            .id = mir.InstId.fromIndex(0),
+            .block_id = mir.BlockId.fromIndex(0),
+            .source = source,
+            .span_id = mir.SpanId.fromIndex(0),
+            .operation = .{ .store = .{
+                .place = mir.PlaceId.fromIndex(0),
+                .value = mir.ExprId.fromIndex(0),
+                .ty = value_ty,
+                .type_id = mir.TypeId.fromIndex(1),
+                .access = .{ .kind = .race_unordered, .alignment = 4 },
+                .representation_source = source,
+                .representation_span_id = mir.SpanId.fromIndex(0),
+            } },
+        },
+        .{ .id = mir.InstId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = null } },
+    };
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .InvalidRepresentation } },
+    };
+    var body: mir.ExecutableBody = .{ .parameters = &parameters, .expressions = &expressions, .trap_edges = &edges, .places = &places, .statements = &statements, .terminators = &terminators };
+
+    try std.testing.expect(supports(&body, .void));
+    const rendered = try render(std.testing.allocator, &body, .void);
+    defer std.testing.allocator.free(rendered);
+    const guard = std.mem.indexOf(u8, rendered, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const store = std.mem.indexOf(u8, rendered, "store atomic i32 %mc_arg_1, ptr %mc_arg_0 unordered, align 4") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < store);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "label %mc_block_1, label %mc_representation_store_ready_0") != null);
+
+    statements[0].operation.store.access.kind = .plain;
+    try std.testing.expect(!supports(&body, .void));
+    statements[0].operation.store.access.kind = .race_unordered;
+
+    statements[0].operation.store.representation_span_id = .invalid;
+    try std.testing.expect(!supports(&body, .void));
+    statements[0].operation.store.representation_span_id = mir.SpanId.fromIndex(0);
+
+    edges[0].owner = .{ .expression = mir.ExprId.fromIndex(0) };
+    try std.testing.expect(!supports(&body, .void));
+    edges[0].owner = .{ .statement = mir.InstId.fromIndex(0) };
+
+    edges[0].owner = .{ .statement = mir.InstId.fromIndex(1) };
+    try std.testing.expect(!supports(&body, .void));
+    edges[0].owner = .{ .statement = mir.InstId.fromIndex(0) };
+
+    statements[0].operation.store.type_id = mir.TypeId.fromIndex(2);
+    try std.testing.expect(!supports(&body, .void));
+    statements[0].operation.store.type_id = mir.TypeId.fromIndex(1);
+
+    expressions[0].type_id = mir.TypeId.fromIndex(2);
+    try std.testing.expect(!supports(&body, .void));
+    expressions[0].type_id = mir.TypeId.fromIndex(1);
+
+    places[0].root_ty.pointer.mutability = .@"const";
+    parameters[0].ty.pointer.mutability = .@"const";
+    try std.testing.expect(!supports(&body, .void));
+    places[0].root_ty.pointer.mutability = .mut;
+    parameters[0].ty.pointer.mutability = .mut;
+
+    places[0].projections[0] = .{ .index = mir.ExprId.fromIndex(0) };
+    try std.testing.expect(!supports(&body, .void));
+    try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, .void));
 }

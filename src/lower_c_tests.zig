@@ -11810,6 +11810,7 @@ test "lower-c canonical executable scalar parameter deref guards exact represent
     const source =
         \\fn read(pointer: *u32) -> u32 { return pointer.*; }
         \\fn identity(pointer: *mut u32) -> *mut u32 { return &pointer.*; }
+        \\fn write(pointer: *mut u32, value: u32) -> void { pointer.* = value; }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -11826,6 +11827,12 @@ test "lower-c canonical executable scalar parameter deref guards exact represent
     const identity_value = std.mem.indexOf(u8, identity, "= pointer;") orelse return error.TestUnexpectedResult;
     try std.testing.expect(identity_guard < identity_value);
     try expectNotContains(identity, "&(*");
+
+    const write = try cFunctionBody(output.items, "static void write(");
+    const write_value = std.mem.indexOf(u8, write, "= value;") orelse return error.TestUnexpectedResult;
+    const write_guard = std.mem.indexOf(u8, write, "if (pointer == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const write_store = std.mem.indexOf(u8, write, "mc_race_store_u32(pointer,") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(write_value < write_guard and write_guard < write_store);
 }
 
 test "lower-c admits address-typed scalar deref returns from MIR" {

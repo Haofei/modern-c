@@ -18,6 +18,12 @@ pub fn expression(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.E
     return if (value.id.eql(id)) value else null;
 }
 
+pub fn statement(body: *const mir.ExecutableBody, id: mir.InstId) ?*const mir.ExecutableStatement {
+    if (!id.isValid() or id.index() >= body.statements.len) return null;
+    const value = &body.statements[id.index()];
+    return if (value.id.eql(id)) value else null;
+}
+
 pub fn place(body: *const mir.ExecutableBody, id: mir.PlaceId) ?*const mir.ExecutablePlace {
     if (!id.isValid() or id.index() >= body.places.len) return null;
     const value = &body.places[id.index()];
@@ -112,8 +118,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
-                if (ownedTrapCountAll(body, value.id) != expected_traps or
-                    (expected_traps == 1 and ownedTrapCount(body, value.id, .InvalidRepresentation, .representation_check) != 1))
+                if (ownedTrapCountAll(body, .{ .expression = value.id }) != expected_traps or
+                    (expected_traps == 1 and ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1))
                     return error.InvalidMemoryAccessTrap;
             } else if (place(body, operation.place) == null) return error.InvalidPlaceReference;
         },
@@ -136,9 +142,9 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 if (!sameValueType(value.result_ty, left.result_ty) or !sameValueType(left.result_ty, right.result_ty) or
                     std.meta.activeTag(value.result_ty) != .integer) return error.InvalidCheckedArithmetic;
                 const requirements = mir.executableCheckedBinaryTrapRequirements(operation.op, value.result_ty) orelse return error.InvalidCheckedArithmetic;
-                if (ownedTrapCountAll(body, value.id) != requirements.count) return error.InvalidCheckedArithmetic;
+                if (ownedTrapCountAll(body, .{ .expression = value.id }) != requirements.count) return error.InvalidCheckedArithmetic;
                 for (requirements.items[0..requirements.count]) |requirement| {
-                    if (ownedTrapCount(body, value.id, requirement.kind, requirement.source) != 1) return error.InvalidCheckedArithmetic;
+                    if (ownedTrapCount(body, .{ .expression = value.id }, requirement.kind, requirement.source) != 1) return error.InvalidCheckedArithmetic;
                 }
             }
         },
@@ -173,8 +179,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 if (!isSingleParameterDerefPlace(body, target.*, false) or !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
                 const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
                 try verifySpan(function, address.representation_span_id, source);
-                if (ownedTrapCountAll(body, value.id) != 1 or
-                    ownedTrapCount(body, value.id, .InvalidRepresentation, .representation_check) != 1) return error.InvalidMemoryAccessTrap;
+                if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                    ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1) return error.InvalidMemoryAccessTrap;
             }
         },
         .deref, .slice_length => |id| try verifyOperand(body, value, id),
@@ -196,22 +202,44 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
 fn verifyTrapEdges(function: *const mir.Function) !void {
     const body = &function.executable_body;
     for (body.trap_edges, 0..) |edge, edge_index| {
-        const owner = expression(body, edge.owner) orelse return error.InvalidTrapEdge;
-        if (!owner.block_id.eql(edge.from_block)) return error.InvalidTrapEdge;
-        switch (owner.operation) {
-            .binary => |binary| if (binary.arithmetic != .checked) return error.InvalidTrapEdge,
-            .load => |load| {
-                const target = place(body, load.place) orelse return error.InvalidTrapEdge;
-                if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
-                    edge.source != .representation_check) return error.InvalidTrapEdge;
+        const OwnerInfo = struct { block_id: mir.BlockId, span_id: mir.SpanId };
+        const owner_info: OwnerInfo = switch (edge.owner) {
+            .expression => |id| expression_owner: {
+                const owner = expression(body, id) orelse return error.InvalidTrapEdge;
+                switch (owner.operation) {
+                    .binary => |binary| if (binary.arithmetic != .checked) return error.InvalidTrapEdge,
+                    .load => |load| {
+                        const target = place(body, load.place) orelse return error.InvalidTrapEdge;
+                        if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
+                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                    },
+                    .address_of => |address| {
+                        const target = place(body, address.place) orelse return error.InvalidTrapEdge;
+                        if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
+                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                    },
+                    else => return error.InvalidTrapEdge,
+                }
+                const span_id = switch (owner.operation) {
+                    .load => |load| load.representation_span_id,
+                    .address_of => |address| address.representation_span_id,
+                    else => owner.span_id,
+                };
+                break :expression_owner .{ .block_id = owner.block_id, .span_id = span_id };
             },
-            .address_of => |address| {
-                const target = place(body, address.place) orelse return error.InvalidTrapEdge;
-                if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
+            .statement => |id| statement_owner: {
+                const owner = statement(body, id) orelse return error.InvalidTrapEdge;
+                const store = switch (owner.operation) {
+                    .store => |value| value,
+                    else => return error.InvalidTrapEdge,
+                };
+                const target = place(body, store.place) orelse return error.InvalidTrapEdge;
+                if (!isSingleParameterDerefPlace(body, target.*, true) or edge.kind != .InvalidRepresentation or
                     edge.source != .representation_check) return error.InvalidTrapEdge;
+                break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
             },
-            else => return error.InvalidTrapEdge,
-        }
+        };
+        if (!owner_info.block_id.eql(edge.from_block)) return error.InvalidTrapEdge;
         const source_block = blockById(function, edge.from_block) orelse return error.InvalidTrapEdge;
         var has_successor = false;
         for (source_block.typed_successors) |successor| if (successor.eql(edge.trap_block)) {
@@ -225,14 +253,9 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
             else => return error.InvalidTrapEdge,
         }
         var legacy_matches: usize = 0;
-        const owner_span_id = switch (owner.operation) {
-            .load => |load| load.representation_span_id,
-            .address_of => |address| address.representation_span_id,
-            else => owner.span_id,
-        };
         for (function.trap_edges) |legacy| {
             if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
-                legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(owner_span_id)) legacy_matches += 1;
+                legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(owner_info.span_id)) legacy_matches += 1;
         }
         if (legacy_matches != 1) return error.InvalidTrapEdge;
         for (body.trap_edges[0..edge_index]) |previous| {
@@ -253,7 +276,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
     }
 }
 
-fn ownedTrapCount(body: *const mir.ExecutableBody, owner: mir.ExprId, kind: mir.TrapKind, source: mir.TrapSource) usize {
+fn ownedTrapCount(body: *const mir.ExecutableBody, owner: mir.ExecutableTrapOwner, kind: mir.TrapKind, source: mir.TrapSource) usize {
     var count: usize = 0;
     for (body.trap_edges) |edge| if (edge.owner.eql(owner) and edge.kind == kind and edge.source == source) {
         count += 1;
@@ -261,7 +284,7 @@ fn ownedTrapCount(body: *const mir.ExecutableBody, owner: mir.ExprId, kind: mir.
     return count;
 }
 
-fn ownedTrapCountAll(body: *const mir.ExecutableBody, owner: mir.ExprId) usize {
+fn ownedTrapCountAll(body: *const mir.ExecutableBody, owner: mir.ExecutableTrapOwner) usize {
     var count: usize = 0;
     for (body.trap_edges) |edge| {
         if (edge.owner.eql(owner)) count += 1;
@@ -280,7 +303,21 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
         .store => |operation| {
             const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
             try verifyType(function, operation.type_id, operation.ty, body.complete);
-            if (body.complete) try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
+            if (body.complete) {
+                try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
+                const projected = target.projection_count != 0;
+                if (projected) {
+                    const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
+                    try verifySpan(function, operation.representation_span_id, source);
+                    if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 1 or
+                        ownedTrapCount(body, .{ .statement = statement_value.id }, .InvalidRepresentation, .representation_check) != 1)
+                        return error.InvalidMemoryAccessTrap;
+                } else if (operation.representation_source != null or operation.representation_span_id.isValid() or
+                    ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 0)
+                {
+                    return error.InvalidMemoryAccessTrap;
+                }
+            }
             for (target.projections[0..target.projection_count]) |projection| switch (projection) {
                 .index => |id| try verifyStatementExpr(body, statement_value, id),
                 .field, .deref => {},
@@ -405,10 +442,7 @@ fn verifyMemoryAccess(
     const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return error.InvalidMemoryAccessType;
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
     if (target.projection_count != 0) {
-        // Projected stores need a statement-owned representation trap edge.
-        // Until that identity exists, complete bodies must reject them.
-        if (is_store) return error.InvalidMemoryAccessTrap;
-        if (!isSingleParameterDerefPlace(body, target.*, false)) return error.InvalidPlaceType;
+        if (!isSingleParameterDerefPlace(body, target.*, is_store)) return error.InvalidPlaceType;
         if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
         return;
     }

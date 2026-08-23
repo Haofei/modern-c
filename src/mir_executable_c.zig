@@ -71,6 +71,10 @@ fn emitStatement(
     source_path: ?[]const u8,
 ) (RenderError || std.mem.Allocator.Error)!void {
     try prepareStatementExpressions(allocator, out, body, statement, indent, source_path);
+    if (statementRepresentationGuard(statement)) |guard| {
+        try writeSourceLineDirective(allocator, out, source_path, guard.source);
+        try emitRepresentationGuard(allocator, out, body, guard, indent);
+    }
     try writeSourceLineDirective(allocator, out, source_path, statement.source);
     switch (statement.operation) {
         .local_init => |local| {
@@ -95,8 +99,8 @@ fn emitStatement(
                 },
                 .race_unordered => {
                     const scalar = scalarMemoryInfo(store.ty) orelse return error.UnsupportedType;
-                    try out.print(allocator, "mc_race_store_{s}(&", .{scalar.helper_suffix});
-                    try emitPlace(allocator, out, body, store.place);
+                    try out.print(allocator, "mc_race_store_{s}(", .{scalar.helper_suffix});
+                    try emitPlaceAddress(allocator, out, body, store.place);
                     try out.print(allocator, ", ({s})", .{scalar.c_type});
                     try emitExpression(allocator, out, body, store.value, 0);
                     try out.appendSlice(allocator, ");\n");
@@ -296,8 +300,19 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     // trap set this renderer understands. This prevents a newly added edge
     // kind from being silently ignored while still emitting ordinary C.
     for (body.trap_edges) |edge| {
-        const owner = expressionById(body, edge.owner) orelse return false;
-        if (!expressionHasExactTrapEdges(body, owner.*)) return false;
+        switch (edge.owner) {
+            .expression => |owner_id| {
+                const owner = expressionById(body, owner_id) orelse return false;
+                if (!expressionHasExactTrapEdges(body, owner.*)) return false;
+            },
+            .statement => |owner_id| {
+                const owner = statementById(body, owner_id) orelse return false;
+                switch (owner.operation) {
+                    .store => |store| if (!memoryStoreSupported(body, owner.*, store)) return false,
+                    else => return false,
+                }
+            },
+        }
     }
     for (body.places) |place| {
         if (place.projection_count != 0 and !singleParameterScalarDerefPlaceSupported(body, place)) return false;
@@ -316,7 +331,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                 if (!supportsType(local.ty) or localById(body, local.local) == null) return false;
                 if (local.value) |value| if (expressionById(body, value) == null) return false;
             },
-            .store => |store| if (!memoryStoreSupported(body, store)) return false,
+            .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
             .eval => |value| if (expressionById(body, value) == null) return false,
             .guard => |guard| if (expressionById(body, guard.condition) == null) return false,
             .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return false,
@@ -485,6 +500,7 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
 
 fn memoryStoreSupported(
     body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
     store: @FieldType(mir.ExecutableStatement.Operation, "store"),
 ) bool {
     const scalar = scalarMemoryInfo(store.ty) orelse return false;
@@ -492,7 +508,16 @@ fn memoryStoreSupported(
     const value = expressionById(body, store.value) orelse return false;
     if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(store.ty), mir.TypeKey.fromValueType(value.result_ty))) return false;
     const place = placeById(body, store.place) orelse return false;
-    if (place.projection_count != 0) return false;
+    if (place.projection_count != 0) {
+        const shape = switch (place.root_ty) {
+            .pointer => |pointer| pointer,
+            else => return false,
+        };
+        return shape.mutability == .mut and
+            singleParameterScalarDerefPlaceSupported(body, place.*) and
+            store.access.kind == .race_unordered and
+            statementRepresentationOperationHasExactTrapEdge(body, statement, store);
+    }
     return switch (place.root) {
         .local => |local| localById(body, local) != null and store.access.kind == .plain,
         .symbol => |id| if (symbolById(body, id)) |symbol|
@@ -530,7 +555,7 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
     const requirements = mir.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty) orelse return false;
     var total: usize = 0;
     for (body.trap_edges) |edge| {
-        if (!edge.owner.eql(expression.id)) continue;
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
         total += 1;
         if (!edge.from_block.eql(expression.block_id)) return false;
     }
@@ -538,7 +563,7 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
     for (requirements.items[0..requirements.count]) |requirement| {
         var matching: usize = 0;
         for (body.trap_edges) |edge| {
-            if (!edge.owner.eql(expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
+            if (!edgeOwnedByExpression(edge, expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
             const trap_terminator = terminatorByBlock(body, edge.trap_block) orelse return false;
             switch (trap_terminator.operation) {
                 .trap_ => |kind| {
@@ -581,7 +606,7 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
     };
     if (metadata.source == null or !metadata.span_id.isValid() or ownedTrapEdgeCount(body, expression.id) != 1) return false;
     for (body.trap_edges) |edge| {
-        if (!edge.owner.eql(expression.id)) continue;
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
         if (!edge.from_block.eql(expression.block_id) or edge.kind != .InvalidRepresentation or edge.source != .representation_check) return false;
         const trap = terminatorByBlock(body, edge.trap_block) orelse return false;
         return switch (trap.operation) {
@@ -592,9 +617,52 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
     return false;
 }
 
+fn statementRepresentationOperationHasExactTrapEdge(
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    store: @FieldType(mir.ExecutableStatement.Operation, "store"),
+) bool {
+    const place = placeById(body, store.place) orelse return false;
+    if (!singleParameterScalarDerefPlaceSupported(body, place.*) or
+        store.representation_source == null or !store.representation_span_id.isValid() or
+        ownedStatementTrapEdgeCount(body, statement.id) != 1) return false;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByStatement(edge, statement.id)) continue;
+        if (!edge.from_block.eql(statement.block_id) or edge.kind != .InvalidRepresentation or edge.source != .representation_check) return false;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return false;
+        return switch (trap.operation) {
+            .trap_ => |kind| kind == .InvalidRepresentation,
+            else => false,
+        };
+    }
+    return false;
+}
+
+fn edgeOwnedByExpression(edge: mir.ExecutableTrapEdge, owner: mir.ExprId) bool {
+    return switch (edge.owner) {
+        .expression => |id| id.eql(owner),
+        .statement => false,
+    };
+}
+
+fn edgeOwnedByStatement(edge: mir.ExecutableTrapEdge, owner: mir.InstId) bool {
+    return switch (edge.owner) {
+        .expression => false,
+        .statement => |id| id.eql(owner),
+    };
+}
+
+fn ownedStatementTrapEdgeCount(body: *const mir.ExecutableBody, owner: mir.InstId) usize {
+    var count: usize = 0;
+    for (body.trap_edges) |edge| if (edgeOwnedByStatement(edge, owner)) {
+        count += 1;
+    };
+    return count;
+}
+
 fn ownedTrapEdgeCount(body: *const mir.ExecutableBody, owner: mir.ExprId) usize {
     var count: usize = 0;
-    for (body.trap_edges) |edge| if (edge.owner.eql(owner)) {
+    for (body.trap_edges) |edge| if (edgeOwnedByExpression(edge, owner)) {
         count += 1;
     };
     return count;
@@ -631,10 +699,7 @@ fn prepareStatementExpressions(
         if (!expression.owner_statement.eql(statement.id)) continue;
         if (representationGuard(expression)) |guard| {
             try writeSourceLineDirective(allocator, out, source_path, guard.source);
-            try writeIndent(allocator, out, indent);
-            try out.appendSlice(allocator, "if (");
-            try emitPlaceRoot(allocator, out, body, guard.place);
-            try out.appendSlice(allocator, " == NULL) mc_trap_InvalidRepresentation();\n");
+            try emitRepresentationGuard(allocator, out, body, guard, indent);
         }
         try writeSourceLineDirective(allocator, out, source_path, expression.source);
         try writeIndent(allocator, out, indent);
@@ -655,6 +720,26 @@ fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuar
         .address_of => |address| if (address.representation_source) |source| .{ .place = address.place, .source = source } else null,
         else => null,
     };
+}
+
+fn statementRepresentationGuard(statement: mir.ExecutableStatement) ?RepresentationGuard {
+    return switch (statement.operation) {
+        .store => |store| if (store.representation_source) |source| .{ .place = store.place, .source = source } else null,
+        else => null,
+    };
+}
+
+fn emitRepresentationGuard(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    guard: RepresentationGuard,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "if (");
+    try emitPlaceRoot(allocator, out, body, guard.place);
+    try out.appendSlice(allocator, " == NULL) mc_trap_InvalidRepresentation();\n");
 }
 
 fn writeSourceLineDirective(
@@ -843,6 +928,12 @@ fn appendIdent(allocator: std.mem.Allocator, out: *std.ArrayList(u8), spelling: 
 fn expressionById(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
     if (!id.isValid()) return null;
     for (body.expressions) |*expression| if (expression.id.eql(id)) return expression;
+    return null;
+}
+
+fn statementById(body: *const mir.ExecutableBody, id: mir.InstId) ?*const mir.ExecutableStatement {
+    if (!id.isValid()) return null;
+    for (body.statements) |*statement| if (statement.id.eql(id)) return statement;
     return null;
 }
 
@@ -1167,9 +1258,9 @@ test "executable C renderer admits checked arithmetic with exact overflow edges"
         .{ .id = mul, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .mul, .left = sub, .right = two, .arithmetic = .checked } } },
     };
     var edges = [_]mir.ExecutableTrapEdge{
-        .{ .owner = add, .from_block = entry, .trap_block = add_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
-        .{ .owner = sub, .from_block = entry, .trap_block = sub_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
-        .{ .owner = mul, .from_block = entry, .trap_block = mul_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
+        .{ .owner = .{ .expression = add }, .from_block = entry, .trap_block = add_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
+        .{ .owner = .{ .expression = sub }, .from_block = entry, .trap_block = sub_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
+        .{ .owner = .{ .expression = mul }, .from_block = entry, .trap_block = mul_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = mul } }};
     var terminators = [_]mir.ExecutableTerminator{
@@ -1209,7 +1300,7 @@ test "executable C renderer rejects checked arithmetic edge drift" {
         .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = left, .right = right, .arithmetic = .checked } } },
     };
-    var edge = [_]mir.ExecutableTrapEdge{.{ .owner = result, .from_block = entry, .trap_block = trap, .kind = .IntegerOverflow, .source = .checked_arithmetic }};
+    var edge = [_]mir.ExecutableTrapEdge{.{ .owner = .{ .expression = result }, .from_block = entry, .trap_block = trap, .kind = .IntegerOverflow, .source = .checked_arithmetic }};
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
@@ -1670,7 +1761,7 @@ fn expectCheckedIntegerBinaryTrapSet(
     for (specs, 0..) |spec, index| {
         const trap_block = mir.BlockId.fromIndex(index + 1);
         edges[index] = .{
-            .owner = result,
+            .owner = .{ .expression = result },
             .from_block = entry,
             .trap_block = trap_block,
             .kind = spec.kind,
@@ -1780,8 +1871,8 @@ test "executable C renderer guards single parameter scalar deref with exact repr
         } },
     }};
     var edges = [_]mir.ExecutableTrapEdge{
-        .{ .owner = value_id, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
-        .{ .owner = value_id, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
+        .{ .owner = .{ .expression = value_id }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
+        .{ .owner = .{ .expression = value_id }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = value_id } }};
     var terminators = [_]mir.ExecutableTerminator{
@@ -1877,7 +1968,7 @@ test "executable C renderer guards address of parameter deref and returns origin
             .representation_span_id = mir.SpanId.fromIndex(0),
         } },
     }};
-    var edges = [_]mir.ExecutableTrapEdge{.{ .owner = value_id, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check }};
+    var edges = [_]mir.ExecutableTrapEdge{.{ .owner = .{ .expression = value_id }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check }};
     var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = value_id } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
@@ -1903,5 +1994,128 @@ test "executable C renderer guards address of parameter deref and returns origin
     try std.testing.expect(std.mem.indexOf(u8, output.items, "&(*") == null);
 
     expressions[0].result_ty = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
+    try std.testing.expect(!canEmitBody(&body));
+}
+
+test "executable C renderer guards statement-owned parameter scalar store with exact representation edge" {
+    const pointer_local = mir.LocalId.fromIndex(0);
+    const value_local = mir.LocalId.fromIndex(1);
+    const place_id = mir.PlaceId.fromIndex(0);
+    const value_id = mir.ExprId.fromIndex(0);
+    const store_statement = mir.InstId.fromIndex(0);
+    const entry = mir.BlockId.fromIndex(0);
+    const trap = mir.BlockId.fromIndex(1);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 51, .offset = 50, .len = 17 };
+    const pointer_source: mir.SourcePoint = .{ .line = 1, .column = 51, .offset = 50, .len = 7 };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
+    var parameters = [_]mir.ExecutableParameter{
+        .{ .local = pointer_local, .ty = pointer_ty, .source = pointer_source },
+        .{ .local = value_local, .ty = u32_ty, .source = source },
+    };
+    var locals = [_]mir.ExecutableLocalIdentity{
+        .{ .id = pointer_local, .spelling = "pointer" },
+        .{ .id = value_local, .spelling = "value" },
+    };
+    var places = [_]mir.ExecutablePlace{.{
+        .id = place_id,
+        .source = source,
+        .root = .{ .local = pointer_local },
+        .root_ty = pointer_ty,
+        .ty = u32_ty,
+        .projections = blk: {
+            var projections = [_]mir.ExecutablePlace.Projection{.deref} ** mir.max_executable_projections;
+            projections[0] = .deref;
+            break :blk projections;
+        },
+        .projection_count = 1,
+    }};
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = value_id,
+        .block_id = entry,
+        .owner_statement = store_statement,
+        .source = source,
+        .result_ty = u32_ty,
+        .operation = .{ .local = value_local },
+    }};
+    var statements = [_]mir.ExecutableStatement{.{
+        .id = store_statement,
+        .block_id = entry,
+        .source = source,
+        .operation = .{ .store = .{
+            .place = place_id,
+            .value = value_id,
+            .ty = u32_ty,
+            .access = .{ .kind = .race_unordered, .alignment = 4 },
+            .representation_source = pointer_source,
+            .representation_span_id = mir.SpanId.fromIndex(0),
+        } },
+    }};
+    var edges = [_]mir.ExecutableTrapEdge{
+        .{ .owner = .{ .statement = store_statement }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
+        .{ .owner = .{ .statement = store_statement }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
+    };
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = entry, .operation = .return_ },
+        .{ .block_id = trap, .operation = .{ .trap_ = .InvalidRepresentation } },
+    };
+    var body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .trap_edges = edges[0..1],
+        .places = &places,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    const value_pos = std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = value;") orelse return error.TestUnexpectedResult;
+    const guard_pos = std.mem.indexOf(u8, output.items, "if (pointer == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const store_pos = std.mem.indexOf(u8, output.items, "mc_race_store_u32(pointer, (uint32_t)mc_exec_tmp_0);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(value_pos < guard_pos and guard_pos < store_pos);
+
+    body.trap_edges = &.{};
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = edges[0..2];
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = edges[0..1];
+
+    edges[0].owner = .{ .expression = value_id };
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].owner = .{ .statement = store_statement };
+    edges[0].kind = .Bounds;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].kind = .InvalidRepresentation;
+    edges[0].source = .checked_arithmetic;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].source = .representation_check;
+    terminators[1].operation = .{ .trap_ = .Bounds };
+    try std.testing.expect(!canEmitBody(&body));
+    terminators[1].operation = .{ .trap_ = .InvalidRepresentation };
+
+    statements[0].operation.store.access.kind = .plain;
+    try std.testing.expect(!canEmitBody(&body));
+    statements[0].operation.store.access.kind = .race_unordered;
+    statements[0].operation.store.representation_span_id = .invalid;
+    try std.testing.expect(!canEmitBody(&body));
+    statements[0].operation.store.representation_span_id = mir.SpanId.fromIndex(0);
+
+    places[0].root_ty.pointer.mutability = .@"const";
+    parameters[0].ty = places[0].root_ty;
+    try std.testing.expect(!canEmitBody(&body));
+    places[0].root_ty = pointer_ty;
+    parameters[0].ty = pointer_ty;
+    places[0].root_ty.pointer.kind = .raw_many;
+    parameters[0].ty = places[0].root_ty;
+    try std.testing.expect(!canEmitBody(&body));
+    places[0].root_ty = pointer_ty;
+    parameters[0].ty = pointer_ty;
+    places[0].projections[0] = .{ .field = 0 };
+    try std.testing.expect(!canEmitBody(&body));
+    places[0].projections[0] = .{ .index = value_id };
     try std.testing.expect(!canEmitBody(&body));
 }

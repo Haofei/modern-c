@@ -665,11 +665,38 @@ pub const ExecutableExpression = struct {
     };
 };
 
-/// Typed exceptional control-flow owned by one executable expression.  The
-/// source span remains diagnostic data on the expression; it is deliberately
+/// Typed exceptional control-flow owned by one executable operation.  The
+/// source span remains diagnostic data on that operation; it is deliberately
 /// not the semantic identity of this edge.
+pub const ExecutableTrapOwner = union(enum) {
+    expression: ExprId,
+    statement: InstId,
+
+    pub fn eql(left: ExecutableTrapOwner, right: ExecutableTrapOwner) bool {
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        return switch (left) {
+            .expression => |id| id.eql(right.expression),
+            .statement => |id| id.eql(right.statement),
+        };
+    }
+
+    pub fn expressionId(self: ExecutableTrapOwner) ?ExprId {
+        return switch (self) {
+            .expression => |id| id,
+            .statement => null,
+        };
+    }
+
+    pub fn statementId(self: ExecutableTrapOwner) ?InstId {
+        return switch (self) {
+            .expression => null,
+            .statement => |id| id,
+        };
+    }
+};
+
 pub const ExecutableTrapEdge = struct {
-    owner: ExprId,
+    owner: ExecutableTrapOwner,
     from_block: BlockId,
     trap_block: BlockId,
     kind: TrapKind,
@@ -704,7 +731,15 @@ pub const ExecutableStatement = struct {
 
     pub const Operation = union(enum) {
         local_init: struct { local: LocalId, ty: ValueType, type_id: TypeId = .invalid, value: ?ExprId, mutable: bool },
-        store: struct { place: PlaceId, value: ExprId, ty: ValueType, type_id: TypeId = .invalid, access: ExecutableMemoryAccess },
+        store: struct {
+            place: PlaceId,
+            value: ExprId,
+            ty: ValueType,
+            type_id: TypeId = .invalid,
+            access: ExecutableMemoryAccess,
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
+        },
         eval: ExprId,
         guard: struct { kind: enum { if_, while_, switch_, assert_ }, condition: ExprId },
         return_: ?ExprId,
