@@ -253,7 +253,7 @@ test "lower-c emits assertion expression trees from MIR without body fallback" {
     const source =
         \\extern fn next_value() -> u32;
         \\fn require_complex(a: u32, b: u32, flag: bool) -> void {
-        \\    assert(flag && (a == b || a != 0));
+        \\    assert(flag == (a == b));
         \\}
         \\fn assert_ordered_comparison() -> void {
         \\    assert(next_value() == next_value());
@@ -264,12 +264,20 @@ test "lower-c emits assertion expression trees from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_assert_expression_tree.mc", source, &output);
 
     const complex = try cFunctionBody(output.items, "static void require_complex(uint32_t a, uint32_t b, bool flag)");
-    try expectContains(complex, "if (!((flag && ((a == b) || (a != 0))))) mc_trap_Assert();");
+    try expectContains(complex, "/* canonical executable MIR */");
+    try expectContains(complex, "if (!(mc_exec_tmp_");
+    try expectContains(complex, ")) goto mc_bb_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, complex, "mc_trap_Assert();"));
     const ordered = try cFunctionBody(output.items, "static void assert_ordered_comparison(void)");
-    const first = std.mem.indexOf(u8, ordered, "mc_tmp0 = next_value();") orelse return error.TestUnexpectedResult;
-    const second = std.mem.indexOfPos(u8, ordered, first + "mc_tmp0 = next_value();".len, "mc_tmp1 = next_value();") orelse return error.TestUnexpectedResult;
+    try expectContains(ordered, "/* canonical executable MIR */");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ordered, "next_value()"));
+    const call = " = next_value();";
+    const first = std.mem.indexOf(u8, ordered, call) orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, ordered, first + call.len, call) orelse return error.TestUnexpectedResult;
     try std.testing.expect(first < second);
-    try expectContains(ordered, "if (!((mc_tmp0 == mc_tmp1))) mc_trap_Assert();");
+    try expectContains(ordered, "if (!(mc_exec_tmp_");
+    try expectContains(ordered, ")) goto mc_bb_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ordered, "mc_trap_Assert();"));
 }
 
 test "MIR assertion plan admits require_complex" {
@@ -8339,7 +8347,11 @@ test "lower-c runtime asserts require MIR bool condition types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_assert_condition_type_facts.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "if (!(flag)) mc_trap_Assert();") != null);
+    const complete_body = try cFunctionBody(complete_output.items, "static void require_flag(bool flag)");
+    try expectContains(complete_body, "/* canonical executable MIR */");
+    try expectContains(complete_body, "if (!(mc_exec_tmp_");
+    try expectContains(complete_body, ")) goto mc_bb_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, complete_body, "mc_trap_Assert();"));
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -8363,7 +8375,11 @@ test "lower-c emits runtime assert from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_runtime_assert.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(flag)) mc_trap_Assert();") != null);
+    const body = try cFunctionBody(output.items, "static void require_flag(bool flag)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "if (!(mc_exec_tmp_");
+    try expectContains(body, ")) goto mc_bb_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "mc_trap_Assert();"));
 }
 
 test "lower-c while loops require MIR bool condition types" {
@@ -19716,7 +19732,11 @@ test "lower-c emits assert trap" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_assert.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(flag)) mc_trap_Assert();") != null);
+    const flag_body = try cFunctionBody(output.items, "static void require_flag(bool flag)");
+    try expectContains(flag_body, "/* canonical executable MIR */");
+    try expectContains(flag_body, "if (!(mc_exec_tmp_");
+    try expectContains(flag_body, ")) goto mc_bb_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, flag_body, "mc_trap_Assert();"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((a == b) || (a != 0)))) mc_trap_Assert();") != null);
 }
 

@@ -36,7 +36,8 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
     for (body.statements) |statement_value| switch (statement_value.operation) {
         .unsupported => return "unsupported_statement",
         .defer_cleanup => return "defer_cleanup",
-        .guard => |guard| if (guard.kind == .assert_) return "assert_guard",
+        .guard => |guard| if (guard.kind == .assert_ and
+            !assertGuardHasExactTrapEdge(body, statement_value, guard)) return "assert_guard",
         else => {},
     };
     for (body.terminators) |terminator| switch (terminator.operation) {
@@ -397,14 +398,27 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
             },
             .statement => |id| statement_owner: {
                 const owner = statement(body, id) orelse return error.InvalidTrapEdge;
-                const store = switch (owner.operation) {
-                    .store => |value| value,
+                switch (owner.operation) {
+                    .store => |store| {
+                        const target = place(body, store.place) orelse return error.InvalidTrapEdge;
+                        if (!isParameterScalarAccessPlace(body, target.*, true) or edge.kind != .InvalidRepresentation or
+                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                        break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
+                    },
+                    .guard => |guard| {
+                        const condition = expression(body, guard.condition) orelse return error.InvalidTrapEdge;
+                        if (guard.kind != .assert_ or !sameValueType(condition.result_ty, .bool) or
+                            !condition.owner_statement.eql(owner.id) or !condition.block_id.eql(owner.block_id) or
+                            edge.kind != .Assert or edge.source != .assert_stmt) return error.InvalidTrapEdge;
+                        const executable_trap = executableTerminator(body, edge.trap_block) orelse return error.InvalidTrapEdge;
+                        switch (executable_trap.operation) {
+                            .trap_ => |kind| if (kind != .Assert) return error.InvalidTrapEdge,
+                            else => return error.InvalidTrapEdge,
+                        }
+                        break :statement_owner .{ .block_id = owner.block_id, .span_id = owner.span_id };
+                    },
                     else => return error.InvalidTrapEdge,
-                };
-                const target = place(body, store.place) orelse return error.InvalidTrapEdge;
-                if (!isParameterScalarAccessPlace(body, target.*, true) or edge.kind != .InvalidRepresentation or
-                    edge.source != .representation_check) return error.InvalidTrapEdge;
-                break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
+                }
             },
         };
         if (!owner_info.block_id.eql(edge.from_block)) return error.InvalidTrapEdge;
@@ -460,6 +474,35 @@ fn ownedTrapCountAll(body: *const mir.ExecutableBody, owner: mir.ExecutableTrapO
     return count;
 }
 
+fn executableTerminator(body: *const mir.ExecutableBody, block_id: mir.BlockId) ?mir.ExecutableTerminator {
+    for (body.terminators) |terminator| if (terminator.block_id.eql(block_id)) return terminator;
+    return null;
+}
+
+fn assertGuardHasExactTrapEdge(
+    body: *const mir.ExecutableBody,
+    statement_value: mir.ExecutableStatement,
+    guard: @FieldType(mir.ExecutableStatement.Operation, "guard"),
+) bool {
+    if (guard.kind != .assert_) return false;
+    const condition = expression(body, guard.condition) orelse return false;
+    if (!sameValueType(condition.result_ty, .bool) or
+        !condition.owner_statement.eql(statement_value.id) or
+        !condition.block_id.eql(statement_value.block_id) or
+        ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 1 or
+        ownedTrapCount(body, .{ .statement = statement_value.id }, .Assert, .assert_stmt) != 1) return false;
+    for (body.trap_edges) |edge| {
+        if (!edge.owner.eql(.{ .statement = statement_value.id })) continue;
+        if (!edge.from_block.eql(statement_value.block_id)) return false;
+        const trap = executableTerminator(body, edge.trap_block) orelse return false;
+        return switch (trap.operation) {
+            .trap_ => |kind| kind == .Assert,
+            else => false,
+        };
+    }
+    return false;
+}
+
 fn verifyStatement(function: *const mir.Function, statement_value: mir.ExecutableStatement) !void {
     const body = &function.executable_body;
     switch (statement_value.operation) {
@@ -499,7 +542,15 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             if (body.complete and !sameValueType(stored.result_ty, operation.ty)) return error.InvalidStoreType;
         },
         .eval => |id| try verifyStatementExpr(body, statement_value, id),
-        .guard => |operation| try verifyStatementExpr(body, statement_value, operation.condition),
+        .guard => |operation| {
+            try verifyStatementExpr(body, statement_value, operation.condition);
+            if (body.complete) {
+                const expected_traps: usize = if (operation.kind == .assert_) 1 else 0;
+                if (operation.kind == .assert_) {
+                    if (!assertGuardHasExactTrapEdge(body, statement_value, operation)) return error.InvalidTrapEdge;
+                } else if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != expected_traps) return error.InvalidTrapEdge;
+            }
+        },
         .return_ => |maybe_id| {
             if (body.complete) {
                 const block = blockById(function, statement_value.block_id) orelse return error.InvalidBlockReference;

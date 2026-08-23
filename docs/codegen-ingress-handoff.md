@@ -62,12 +62,12 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-710 to an incomplete MIR producer, 47 to renderer support and 2 nominally
-ready; LLVM attributes 750/72/4 respectively. The producer bucket is now
+708 to an incomplete MIR producer, 49 to renderer support and 2 nominally
+ready; LLVM attributes 748/75/3 respectively. The producer bucket is now
 classified by its first stable canonical-model gap. The largest C reasons are
-producer invariants (136), trap projection (112), non-canonical literals (107),
+producer invariants (141), trap projection (112), non-canonical literals (107),
 unsupported members (50), and unresolved indexing (46); LLVM records
-136/125/110/50/60 respectively. Direct pointer-member scalar access is
+141/125/110/50/60 respectively. Direct pointer-member scalar access is
 canonical in the targeted census; the remaining `unlowered_member` reason count
 is 15 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
@@ -381,6 +381,16 @@ payloads remain fail-closed. The pointer-depth rule was also corrected in sema
 and the legacy C shape helper, preventing `**atomic<T>` from being read as the
 payload at the wrong address. The 522-root census is now C **937/1696 (55.2%)**
 and LLVM **936/1762 (53.1%)**, with 759/826 fallbacks.
+
+Runtime `assert` now owns one typed statement-level `Assert/assert_stmt` edge
+whose source block, trap block and bool condition are verified before codegen.
+The C renderer branches to the MIR trap block; LLVM emits the corresponding
+guard/continuation CFG. Both evaluate the condition graph once. Short-circuit
+conditions remain fallback because eager expression materialization would
+change their semantics, and comptime assertions remain outside the runtime
+executable body. This slice moved two module-visibility functions per backend
+from producer-incomplete to renderer-unsupported; it deliberately did not
+change the broad admitted/fallback totals above.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

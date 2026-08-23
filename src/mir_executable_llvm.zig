@@ -163,6 +163,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                 const owner = statementIdentity(body, owner_id) orelse return false;
                 switch (owner.operation) {
                     .store => |store| if (!memoryStoreSupported(body, owner, store)) return false,
+                    .guard => |guard| if (guard.kind != .assert_ or !assertTrapEdgeIsExact(body, owner)) return false,
                     else => return false,
                 }
             },
@@ -190,10 +191,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             },
             .eval => |value| if (!expressionValid(body, value)) return false,
             .guard => |guard| {
-                // A branch guard is consumed by its terminator. An assertion
-                // additionally owns a trap edge which this renderer does not
-                // yet model, so admitting it would silently discard the trap.
-                if (guard.kind == .assert_ or !expressionValid(body, guard.condition)) return false;
+                if (!expressionValid(body, guard.condition) or body.expressions[guard.condition.index()].result_ty != .bool) return false;
+                if (guard.kind == .assert_ and !assertTrapEdgeIsExact(body, statement)) return false;
             },
             .return_ => |value| if (value) |result| {
                 if (!expressionValid(body, result)) return false;
@@ -349,7 +348,20 @@ const Renderer = struct {
                 try self.emitMemoryStore(store.place, value, pointer, store.access);
             },
             .eval => |value| _ = try self.emitExpression(value),
-            .guard => |guard| _ = try self.emitExpression(guard.condition),
+            .guard => |guard| {
+                const condition = try self.emitExpression(guard.condition);
+                if (!std.mem.eql(u8, condition.ty, "i1")) return error.InvalidBody;
+                if (guard.kind == .assert_) {
+                    const edge = assertTrapEdge(self.body, statement) orelse return error.InvalidBody;
+                    const continuation = try std.fmt.allocPrint(self.allocator, "mc_assert_ready_{d}", .{statement.id.raw});
+                    try self.output.print(
+                        self.allocator,
+                        "  br i1 {s}, label %{s}, label %mc_block_{d}\n" ++
+                            "{s}:\n",
+                        .{ condition.spelling, continuation, edge.trap_block.raw, continuation },
+                    );
+                }
+            },
             .return_ => |value| {
                 const rendered = if (value) |result| try self.emitExpression(result) else null;
                 try self.returns.put(statement.block_id.raw, rendered);
@@ -1843,6 +1855,33 @@ fn statementRepresentationTrapEdge(body: *const mir.ExecutableBody, statement: m
     return found;
 }
 
+fn assertTrapEdgeIsExact(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) bool {
+    return assertTrapEdge(body, statement) != null;
+}
+
+fn assertTrapEdge(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) ?mir.ExecutableTrapEdge {
+    const guard = switch (statement.operation) {
+        .guard => |value| value,
+        else => return null,
+    };
+    if (guard.kind != .assert_ or !expressionValid(body, guard.condition) or
+        body.expressions[guard.condition.index()].result_ty != .bool) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.statementId() orelse continue;
+        if (!owner.eql(statement.id)) continue;
+        if (found != null or !edge.from_block.eql(statement.block_id) or edge.kind != .Assert or
+            edge.source != .assert_stmt) return null;
+        const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap_terminator.operation) {
+            .trap_ => |kind| if (kind != .Assert) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
+}
+
 fn placeIsGlobal(body: *const mir.ExecutableBody, id: mir.PlaceId) bool {
     if (!placeValid(body, id)) return false;
     return switch (body.places[id.index()].root) {
@@ -2118,7 +2157,7 @@ test "mechanical renderer classifies only supported C ABI direct-call types" {
     try std.testing.expectEqual(AbiExtension.none, abiExtension(.aarch64, .{ .domain_integer = .{ .kind = .wrap, .child = "u8" } }));
 }
 
-test "mechanical renderer rejects assertions until their trap edge is explicit" {
+test "mechanical renderer consumes exact statement-owned assertion trap edge" {
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .bool, .source = source },
@@ -2130,10 +2169,38 @@ test "mechanical renderer rejects assertions until their trap edge is explicit" 
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .guard = .{ .kind = .assert_, .condition = mir.ExprId.fromIndex(0) } } },
         .{ .id = mir.InstId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = null } },
     };
-    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
-    const body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
+    var edge = [_]mir.ExecutableTrapEdge{.{
+        .owner = .{ .statement = mir.InstId.fromIndex(0) },
+        .from_block = mir.BlockId.fromIndex(0),
+        .trap_block = mir.BlockId.fromIndex(1),
+        .kind = .Assert,
+        .source = .assert_stmt,
+    }};
+    const terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .Assert } },
+    };
+    var body: mir.ExecutableBody = .{
+        .complete = true,
+        .parameters = @constCast(&parameters),
+        .expressions = @constCast(&expressions),
+        .trap_edges = &edge,
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+    try std.testing.expect(supports(&body, .void));
+    const rendered = try render(std.testing.allocator, &body, .void);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "br i1 %mc_arg_0"));
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "label %mc_assert_ready_0, label %mc_block_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "call void @mc_trap_Assert()") != null);
+
+    edge[0].source = .bounds_check;
     try std.testing.expect(!supports(&body, .void));
-    try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, .void));
+    edge[0].source = .assert_stmt;
+    const duplicate = [_]mir.ExecutableTrapEdge{ edge[0], edge[0] };
+    body.trap_edges = @constCast(&duplicate);
+    try std.testing.expect(!supports(&body, .void));
 }
 
 test "mechanical renderer hoists loop local alloca to the entry prologue" {

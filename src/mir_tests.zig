@@ -138,6 +138,101 @@ test "executable MIR owns bounded atomic loads and rejects semantic drift" {
     pointer.executable_body.trap_edges[0].kind = .InvalidRepresentation;
     try mir_executable_body.verify(pointer);
 }
+
+test "executable MIR owns assertion trap edges and rejects semantic drift" {
+    const source =
+        \\fn require_flag(flag: bool) -> void {
+        \\    assert(flag);
+        \\}
+        \\fn compile_only() -> u32 {
+        \\    comptime { assert(true); }
+        \\    return 1;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_assert.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const compile_only = functionByName(module_mir, "compile_only") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!compile_only.executable_body.complete);
+
+    const function = functionByNameMut(&module_mir, "require_flag") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.expressions.len);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+
+    var assert_statement_index: ?usize = null;
+    for (function.executable_body.statements, 0..) |statement, index| switch (statement.operation) {
+        .guard => |guard| {
+            if (guard.kind == .assert_) assert_statement_index = index;
+        },
+        else => {},
+    };
+    const statement_index = assert_statement_index orelse return error.TestUnexpectedResult;
+    const statement = &function.executable_body.statements[statement_index];
+    const guard = statement.operation.guard;
+    const condition = &function.executable_body.expressions[guard.condition.index()];
+    try std.testing.expectEqual(mir.ValueType.bool, condition.result_ty);
+    try std.testing.expect(condition.owner_statement.eql(statement.id));
+    try std.testing.expect(condition.block_id.eql(statement.block_id));
+    try std.testing.expect(function.executable_body.trap_edges[0].owner.eql(.{ .statement = statement.id }));
+    try std.testing.expectEqual(mir.TrapKind.Assert, function.executable_body.trap_edges[0].kind);
+    try std.testing.expectEqual(mir.TrapSource.assert_stmt, function.executable_body.trap_edges[0].source);
+    try mir_executable_body.verify(function);
+
+    const saved_edges = function.executable_body.trap_edges;
+    function.executable_body.trap_edges = &.{};
+    try std.testing.expectError(error.InvalidCompletionClaim, mir_executable_body.verify(function));
+    function.executable_body.trap_edges = saved_edges;
+
+    var duplicate_edges = [_]mir.ExecutableTrapEdge{ saved_edges[0], saved_edges[0] };
+    function.executable_body.trap_edges = &duplicate_edges;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    function.executable_body.trap_edges = saved_edges;
+
+    const saved_owner = saved_edges[0].owner;
+    saved_edges[0].owner = .{ .expression = guard.condition };
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    saved_edges[0].owner = saved_owner;
+
+    const saved_from_block = saved_edges[0].from_block;
+    saved_edges[0].from_block = saved_edges[0].trap_block;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    saved_edges[0].from_block = saved_from_block;
+
+    const saved_trap_block = saved_edges[0].trap_block;
+    saved_edges[0].trap_block = saved_edges[0].from_block;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    saved_edges[0].trap_block = saved_trap_block;
+
+    saved_edges[0].kind = .IntegerOverflow;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    saved_edges[0].kind = .Assert;
+
+    saved_edges[0].source = .checked_arithmetic;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    saved_edges[0].source = .assert_stmt;
+
+    const saved_span_id = statement.span_id;
+    statement.span_id = condition.span_id;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    statement.span_id = saved_span_id;
+
+    const trap_index = saved_edges[0].trap_block.index();
+    const saved_terminator = function.executable_body.terminators[trap_index].operation;
+    function.executable_body.terminators[trap_index].operation = .{ .trap_ = .IntegerOverflow };
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    function.executable_body.terminators[trap_index].operation = saved_terminator;
+
+    const saved_condition_type_id = condition.type_id;
+    condition.result_ty = .void;
+    condition.type_id = function.executable_body.return_type_id;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_executable_body.verify(function));
+    condition.result_ty = .bool;
+    condition.type_id = saved_condition_type_id;
+    try mir_executable_body.verify(function);
+}
 const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;

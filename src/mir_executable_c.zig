@@ -128,10 +128,11 @@ fn emitStatement(
         },
         .guard => |guard| switch (guard.kind) {
             .assert_ => {
+                const edge = assertGuardTrapEdge(body, statement, guard) orelse return error.InvalidBlock;
                 try writeIndent(allocator, out, indent);
                 try out.appendSlice(allocator, "if (!(");
                 try emitExpression(allocator, out, body, guard.condition, 0);
-                try out.appendSlice(allocator, ")) mc_trap_Assert();\n");
+                try out.print(allocator, ")) goto mc_bb_{d};\n", .{edge.trap_block.raw});
             },
             // Branch/loop/switch guards are represented by the block
             // terminator.  The statement only preserves the source operation.
@@ -378,6 +379,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                 const owner = statementById(body, owner_id) orelse return false;
                 switch (owner.operation) {
                     .store => |store| if (!memoryStoreSupported(body, owner.*, store)) return false,
+                    .guard => |guard| if (!assertGuardHasExactTrapEdge(body, owner.*, guard)) return false,
                     else => return false,
                 }
             },
@@ -408,7 +410,15 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
             .eval => |value| if (expressionById(body, value) == null) return false,
-            .guard => |guard| if (expressionById(body, guard.condition) == null) return false,
+            .guard => |guard| {
+                const condition = expressionById(body, guard.condition) orelse return false;
+                if (guard.kind == .assert_) {
+                    if (!sameValueType(condition.result_ty, .bool) or
+                        !condition.owner_statement.eql(statement.id) or
+                        !condition.block_id.eql(statement.block_id) or
+                        !assertGuardHasExactTrapEdge(body, statement, guard)) return false;
+                }
+            },
             .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return false,
             .control_transfer => {},
             .defer_cleanup, .unsupported => return false,
@@ -1030,6 +1040,37 @@ fn statementRepresentationOperationHasExactTrapEdge(
         };
     }
     return false;
+}
+
+fn assertGuardHasExactTrapEdge(
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    guard: @FieldType(mir.ExecutableStatement.Operation, "guard"),
+) bool {
+    return assertGuardTrapEdge(body, statement, guard) != null;
+}
+
+fn assertGuardTrapEdge(
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    guard: @FieldType(mir.ExecutableStatement.Operation, "guard"),
+) ?mir.ExecutableTrapEdge {
+    if (guard.kind != .assert_ or ownedStatementTrapEdgeCount(body, statement.id) != 1) return null;
+    const condition = expressionById(body, guard.condition) orelse return null;
+    if (!sameValueType(condition.result_ty, .bool) or
+        !condition.owner_statement.eql(statement.id) or
+        !condition.block_id.eql(statement.block_id)) return null;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByStatement(edge, statement.id)) continue;
+        if (!edge.from_block.eql(statement.block_id) or edge.kind != .Assert or edge.source != .assert_stmt) return null;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Assert) return null,
+            else => return null,
+        }
+        return edge;
+    }
+    return null;
 }
 
 fn edgeOwnedByExpression(edge: mir.ExecutableTrapEdge, owner: mir.ExprId) bool {
@@ -1724,6 +1765,73 @@ test "executable C renderer maps only closed trap helpers" {
     var unknown_terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .{ .trap_ = .Unknown } }};
     const unknown_body: mir.ExecutableBody = .{ .terminators = &unknown_terminators };
     try std.testing.expect(!canEmitBody(&unknown_body));
+}
+
+test "executable C renderer admits assert only with its exact statement trap edge" {
+    const entry = mir.BlockId.fromIndex(0);
+    const trap = mir.BlockId.fromIndex(1);
+    const statement = mir.InstId.fromIndex(0);
+    const condition = mir.ExprId.fromIndex(0);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = condition,
+        .block_id = entry,
+        .owner_statement = statement,
+        .source = source,
+        .result_ty = .bool,
+        .operation = .{ .literal = .{ .boolean = false } },
+    }};
+    var statements = [_]mir.ExecutableStatement{.{
+        .id = statement,
+        .block_id = entry,
+        .source = source,
+        .operation = .{ .guard = .{ .kind = .assert_, .condition = condition } },
+    }};
+    var edges = [_]mir.ExecutableTrapEdge{.{
+        .owner = .{ .statement = statement },
+        .from_block = entry,
+        .trap_block = trap,
+        .kind = .Assert,
+        .source = .assert_stmt,
+    }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = entry, .operation = .return_ },
+        .{ .block_id = trap, .operation = .{ .trap_ = .Assert } },
+    };
+    var body: mir.ExecutableBody = .{
+        .complete = true,
+        .expressions = &expressions,
+        .trap_edges = &edges,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_0 = false;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(mc_exec_tmp_0)) goto mc_bb_1;") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "mc_trap_Assert();"));
+
+    body.trap_edges = &.{};
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = &edges;
+
+    edges[0].source = .checked_arithmetic;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].source = .assert_stmt;
+
+    edges[0].kind = .IntegerOverflow;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].kind = .Assert;
+
+    terminators[1].operation = .{ .trap_ = .IntegerOverflow };
+    try std.testing.expect(!canEmitBody(&body));
+    terminators[1].operation = .{ .trap_ = .Assert };
+
+    var duplicate_edges = [_]mir.ExecutableTrapEdge{ edges[0], edges[0] };
+    body.trap_edges = &duplicate_edges;
+    try std.testing.expect(!canEmitBody(&body));
 }
 
 test "executable C renderer admits checked arithmetic with exact overflow edges" {

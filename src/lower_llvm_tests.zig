@@ -123,7 +123,7 @@ test "LLVM emits assertion expression trees from MIR without body fallback" {
     const source =
         \\extern fn next_value() -> u32;
         \\fn require_complex(a: u32, b: u32, flag: bool) -> void {
-        \\    assert(flag && (a == b || a != 0));
+        \\    assert(flag == (a == b));
         \\}
         \\fn assert_ordered_comparison() -> void {
         \\    assert(next_value() == next_value());
@@ -134,14 +134,20 @@ test "LLVM emits assertion expression trees from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_assert_expression_tree.mc", source, &output);
 
     const complex = try llvmFunctionBody(output.items, "define internal void @require_complex");
-    try expectContains(complex, "and i1 %flag");
-    try expectContains(complex, "or i1");
+    try expectContains(complex, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, complex, "icmp eq"));
+    try expectNotContains(complex, " and i1 ");
+    try expectNotContains(complex, " or i1 ");
+    try expectContains(complex, "label %mc_assert_ready_");
     try expectContains(complex, "call void @mc_trap_Assert()");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, complex, "call void @mc_trap_Assert()"));
     const ordered = try llvmFunctionBody(output.items, "define internal void @assert_ordered_comparison");
     const first = std.mem.indexOf(u8, ordered, "call i32 @next_value()") orelse return error.TestUnexpectedResult;
     const second = std.mem.indexOfPos(u8, ordered, first + "call i32 @next_value()".len, "call i32 @next_value()") orelse return error.TestUnexpectedResult;
     try std.testing.expect(first < second);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ordered, "call i32 @next_value()"));
     try expectContains(ordered, "icmp eq i32");
+    try expectContains(ordered, "label %mc_assert_ready_");
     try expectContains(ordered, "call void @mc_trap_Assert()");
 }
 
@@ -9028,8 +9034,11 @@ test "LLVM emits runtime assert from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_runtime_assert.mc", source, &output);
-    try expectContains(output.items, "br i1 %flag");
-    try expectContains(output.items, "call void @mc_trap_Assert()");
+    const body = try llvmFunctionBody(output.items, "define internal void @require_flag");
+    try expectContains(body, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "br i1 %mc_arg_0"));
+    try expectContains(body, "label %mc_assert_ready_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @mc_trap_Assert()"));
 }
 
 test "LLVM while loops require MIR bool condition types" {

@@ -123,14 +123,23 @@ nested-pointer semantic helper was tightened at the same time so
 `**atomic<T>` cannot be mistaken for a direct receiver. This admits 3 additional
 functions in each backend.
 
+Runtime assertions now carry a statement-owned, exact `Assert/assert_stmt`
+edge into executable MIR. Producer completion and the verifier require one bool
+condition in the same statement/block and one typed trap terminator. C branches
+to that trap block and LLVM emits an explicit guard/continuation edge, so neither
+renderer reconstructs assertion semantics from the AST. Short-circuit and
+comptime assertions stay fail-closed. In the broad census this moved two
+module-visibility functions per backend to the renderer boundary without yet
+changing the admitted totals.
+
 The census also ranks the canonical stopping layer. For C the remaining 759
-fallbacks are 710 `producer_incomplete`, 47 `renderer_unsupported`, and 2
-`ready`; LLVM is 750/72/0/4. Producer-incomplete
+fallbacks are 708 `producer_incomplete`, 49 `renderer_unsupported`, and 2
+`ready`; LLVM is 748/75/0/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (136),
+The leading C reasons are `producer_invariant` (141),
 `trap_projection` (112), `noncanonical_literal` (107),
 `unsupported_member` (50), and
-`unlowered_index` (46). LLVM has `producer_invariant` 136,
+`unlowered_index` (46). LLVM has `producer_invariant` 141,
 `trap_projection` 125, `noncanonical_literal` 110, `unlowered_index` 60 and
 `unsupported_member` 50. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are

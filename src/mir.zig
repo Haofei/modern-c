@@ -6757,7 +6757,9 @@ const FunctionBuilder = struct {
                 } else if (self.return_ty != .void) {
                     complete = false;
                 },
-                .guard => |guard| if (guard.kind == .assert_) {
+                .guard => |guard| if (guard.kind == .assert_ and
+                    !self.executableAssertGuardComplete(statement.*, guard))
+                {
                     complete = false;
                 },
                 .unsupported, .defer_cleanup => complete = false,
@@ -7197,6 +7199,7 @@ const FunctionBuilder = struct {
                     const owner = self.executable_statements.items[id.index()];
                     const owner_span_id = switch (owner.operation) {
                         .store => |store| store.representation_span_id,
+                        .guard => |guard| if (guard.kind == .assert_) owner.span_id else return false,
                         else => return false,
                     };
                     break :statement .{ .block_id = owner.block_id, .span_id = owner_span_id };
@@ -7205,6 +7208,29 @@ const FunctionBuilder = struct {
             if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) return false;
         }
         return true;
+    }
+
+    fn executableAssertGuardComplete(
+        self: *const FunctionBuilder,
+        statement: ExecutableStatement,
+        guard: @FieldType(ExecutableStatement.Operation, "guard"),
+    ) bool {
+        if (guard.kind != .assert_ or !guard.condition.isValid() or
+            guard.condition.index() >= self.executable_expressions.items.len) return false;
+        const condition = self.executable_expressions.items[guard.condition.index()];
+        if (!sameValueType(condition.result_ty, .bool) or
+            !condition.owner_statement.eql(statement.id) or
+            !condition.block_id.eql(statement.block_id)) return false;
+        var owned: usize = 0;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .statement => |id| if (id.eql(statement.id)) {
+                if (!edge.from_block.eql(statement.block_id) or edge.kind != .Assert or
+                    edge.source != .assert_stmt) return false;
+                owned += 1;
+            },
+            .expression => {},
+        };
+        return owned == 1;
     }
 
     fn executableGuardForBlock(statements: []const ExecutableStatement, block_id: BlockId) ?ExprId {
@@ -8563,12 +8589,19 @@ const FunctionBuilder = struct {
                 return false;
             },
             .assert => |expr| {
-                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .guard = .{ .kind = .assert_, .condition = try self.ensureExecutableExpr(expr) } });
+                const condition = try self.ensureExecutableExpr(expr);
+                // Expression construction may append prerequisite statements
+                // (for example materialized calls or stores). The assertion
+                // owns the next statement identity, not the pre-evaluation
+                // length of the statement stream.
+                const statement_id = InstId.fromIndex(self.executable_statements.items.len);
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .guard = .{ .kind = .assert_, .condition = condition } });
                 try self.addInstr(.assert_condition, "condition", .bool, stmt.span);
                 try self.appendTargetTypeFact(.assert_condition, ast_query.simpleNameType("bool", expr.span), .bool, expr.span);
                 try self.addConversionCheck(.bool, expr, .condition, expr.span);
                 try self.buildExpr(expr);
                 try self.addTrapEdge(.Assert, .assert_stmt, stmt.span);
+                try self.attachExecutableAssertTrapEdge(statement_id, stmt.span);
                 // OPT (annex E) — control only continues past the assert when its condition held,
                 // so its range facts are proven for the rest of this block (dropped when it pops).
                 try self.recordTrueCondFacts(expr);
@@ -8648,7 +8681,15 @@ const FunctionBuilder = struct {
                 try self.buildExpr(expr);
                 return false;
             },
-            .block, .comptime_block => |body| return try self.buildBlock(body),
+            .block => |body| return try self.buildBlock(body),
+            .comptime_block => |body| {
+                // Comptime statements belong to evaluation, not the runtime
+                // executable body. Until that phase has a separate typed
+                // representation, retain the verified legacy lowering and
+                // fail closed instead of emitting its assertions at runtime.
+                self.executable_supported = false;
+                return try self.buildBlock(body);
+            },
             .unsafe_block => |body| return try self.buildUnsafeBlock(body),
             .contract_block => |contract| return try self.buildContractBlock(contract, stmt.span),
             .if_let => |node| return try self.buildIfLet(node, stmt.span),
@@ -11124,6 +11165,39 @@ const FunctionBuilder = struct {
             .trap_block = BlockId.fromIndex(legacy.trap_block),
             .kind = kind,
             .source = source,
+        });
+    }
+
+    fn attachExecutableAssertTrapEdge(self: *FunctionBuilder, statement_id: InstId, span: ast.Span) !void {
+        if (!statement_id.isValid() or statement_id.index() >= self.executable_statements.items.len or
+            self.trap_edges.items.len == 0)
+        {
+            self.executable_supported = false;
+            return;
+        }
+        const statement = self.executable_statements.items[statement_id.index()];
+        const guard = switch (statement.operation) {
+            .guard => |value| value,
+            else => {
+                self.executable_supported = false;
+                return;
+            },
+        };
+        const span_id = try self.internSpanId(self.sourcePoint(span));
+        const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+        if (guard.kind != .assert_ or !statement.span_id.eql(span_id) or
+            legacy.kind != .Assert or legacy.source != .assert_stmt or
+            legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id))
+        {
+            self.executable_supported = false;
+            return;
+        }
+        try self.executable_trap_edges.append(self.allocator, .{
+            .owner = .{ .statement = statement_id },
+            .from_block = BlockId.fromIndex(legacy.from_block),
+            .trap_block = BlockId.fromIndex(legacy.trap_block),
+            .kind = .Assert,
+            .source = .assert_stmt,
         });
     }
 
