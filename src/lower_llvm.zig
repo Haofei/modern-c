@@ -1672,8 +1672,76 @@ const LlvmEmitter = struct {
         right: SimpleMirCallArg,
     };
 
+    fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) !bool {
+        const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
+            fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
+            for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
+            break :cleanup_edges true;
+        };
+        if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(function, fn_mir)) return false;
+
+        const rendered = mir_executable_llvm.render(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unsupported, error.InvalidBody => return false,
+        };
+        const sig_facts = function.signature;
+        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
+        const ret_llvm = try self.llvmType(ret_ty);
+        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
+
+        const old_scope = self.current_debug_scope;
+        const old_span = self.current_debug_span;
+        const old_return_ty = self.current_return_ty;
+        const old_function = self.current_function;
+        const old_params = self.current_params;
+        self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
+        self.current_debug_span = sig_facts.name.span;
+        self.current_return_ty = ret_ty;
+        self.current_function = sig_facts.name.text;
+        self.current_params = sig_facts.params;
+        defer {
+            self.current_debug_scope = old_scope;
+            self.current_debug_span = old_span;
+            self.current_return_ty = old_return_ty;
+            self.current_function = old_function;
+            self.current_params = old_params;
+        }
+
+        const attr_str: []const u8 = if (self.linux_kernel and self.target_arch == .x86_64)
+            " nounwind fn_ret_thunk_extern"
+        else if (self.linux_kernel and self.target_arch == .aarch64)
+            " nounwind \"branch-target-enforcement\""
+        else if (self.linux_kernel)
+            " nounwind"
+        else
+            "";
+        const weak_str: []const u8 = if (!sig_facts.exported) "internal " else "";
+
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, sig_facts.name.text });
+        for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
+            try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.llvmType(param.ty), param_ext, executable_parameter.local.raw });
+        }
+        const entry_label = try self.functionEntryLabel();
+        if (self.current_debug_scope) |scope| {
+            try self.out.print(self.allocator, "){s} !dbg !{d} {{\n{s}:\n", .{ attr_str, scope, entry_label });
+        } else {
+            try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
+        }
+        try self.out.appendSlice(self.allocator, rendered);
+        try self.out.appendSlice(self.allocator, "}\n\n");
+        return true;
+    }
+
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        // Prefer the canonical executable body before constructing any of the
+        // legacy, source-shaped recognition plans below.  Unsupported bodies
+        // still fall through to those plans, but an admitted body has exactly
+        // one semantic input: verified executable MIR.
+        if (try self.emitExecutableMirFunction(function, fn_mir)) return true;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const assert_expression_plan = if (simple_trap == null)
             if (mir_assert_plan.build(fn_mir)) |plan|
@@ -1888,19 +1956,7 @@ const LlvmEmitter = struct {
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const legacy_plan_missing = simple_trap == null and simple_assert == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and scalar_control_plan == null and llvm_access_operation == null and llvm_local_address_update == null and llvm_structural_access_operation == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and slice_length_return_plan == null and place_store_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null;
-        const executable_cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
-            fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
-            for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
-            break :cleanup_edges true;
-        };
-        const llvm_executable_body: ?[]const u8 = if (legacy_plan_missing and executable_cleanup_free) blk: {
-            if (!mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(function, fn_mir)) break :blk null;
-            break :blk mir_executable_llvm.render(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.Unsupported, error.InvalidBody => null,
-            };
-        } else null;
-        if (legacy_plan_missing and llvm_executable_body == null) return false;
+        if (legacy_plan_missing) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1943,12 +1999,7 @@ const LlvmEmitter = struct {
         for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
-            if (llvm_executable_body != null) {
-                const executable_parameter = fn_mir.executable_body.parameters[i];
-                try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.llvmType(param.ty), param_ext, executable_parameter.local.raw });
-            } else {
-                try self.out.print(self.allocator, "{s} {s}%{s}", .{ try self.llvmType(param.ty), param_ext, param.name.text });
-            }
+            try self.out.print(self.allocator, "{s} {s}%{s}", .{ try self.llvmType(param.ty), param_ext, param.name.text });
         }
         const entry_label = try self.functionEntryLabel();
         if (self.current_debug_scope) |scope| {
@@ -1993,8 +2044,6 @@ const LlvmEmitter = struct {
             try self.emitMirLocalAddressUpdate(operation, ret_llvm);
         } else if (llvm_structural_access_operation) |operation| {
             try self.emitMirStructuralAccessPlan(access_body_plan.?, operation, ret_llvm);
-        } else if (llvm_executable_body) |rendered| {
-            try self.out.appendSlice(self.allocator, rendered);
         } else if (identity_return_plan) |plan| {
             try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{plan.name}), spanFromMirSourcePoint(plan.return_location.source));
         } else if (while_control_plan) |plan| {
@@ -5311,11 +5360,10 @@ const LlvmEmitter = struct {
             if (!std.mem.eql(u8, self.mirStructuralType(parameter.ty) orelse return false, self.llvmType(source_parameter.ty) catch return false)) return false;
         }
         for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
-            .symbol => |symbol_id| {
-                const symbol = mir_executable_body.symbol(&fn_mir.executable_body, symbol_id) orelse return false;
-                const global_ty = self.global_types.get(symbol.spelling) orelse return false;
-                if (!std.mem.eql(u8, self.llvmType(global_ty) catch return false, self.mirStructuralType(expression.result_ty) orelse return false)) return false;
-            },
+            // Generic executable MIR does not yet carry the ordinary/atomic/
+            // volatile/MMIO access mode.  Keep every memory read on the
+            // specialized path until that semantic fact is explicit.
+            .symbol, .deref => return false,
             .direct_call => |call| {
                 const symbol = mir_executable_body.symbol(&fn_mir.executable_body, call.callee) orelse return false;
                 const signature = self.fn_sigs.get(symbol.spelling) orelse return false;
@@ -5328,12 +5376,29 @@ const LlvmEmitter = struct {
             },
             .builtin_call => return false,
             .indirect_call => return false,
-            .address_of => switch (expression.result_ty) {
-                .pointer => {},
-                else => return false,
+            .address_of => |operand_id| {
+                switch (expression.result_ty) {
+                    .pointer => {},
+                    else => return false,
+                }
+                if (!operand_id.isValid() or operand_id.index() >= fn_mir.executable_body.expressions.len) return false;
+                switch (fn_mir.executable_body.expressions[operand_id.index()].operation) {
+                    .local => {},
+                    else => return false,
+                }
             },
             else => {},
         };
+        for (fn_mir.executable_body.places) |place| {
+            switch (place.root) {
+                .local => {},
+                .symbol => return false,
+            }
+            for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+                .deref => return false,
+                .field, .index => {},
+            };
+        }
         return true;
     }
 

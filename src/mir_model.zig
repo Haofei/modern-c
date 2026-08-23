@@ -157,6 +157,113 @@ pub const ValueType = union(enum) {
     }
 };
 
+/// Structural identity for a MIR value type. `ValueType.name()` remains a
+/// presentation/legacy spelling and is intentionally not an identity: for
+/// example `*T`, `?*T`, `[]T`, and a nominal `T` can share that spelling.
+pub const TypeKey = union(enum) {
+    legacy,
+    void,
+    never,
+    bool,
+    value,
+    integer: []const u8,
+    float: []const u8,
+    cstr,
+    pointer: PointerShape,
+    nullable_pointer: PointerShape,
+    nullable_dyn_trait,
+    nullable_value: []const u8,
+    slice: []const u8,
+    array: []const u8,
+    address: AddressClass,
+    closed_enum: []const u8,
+    open_enum: []const u8,
+    struct_: []const u8,
+    result: ResultShape,
+    contract,
+    branch,
+    trap,
+    unknown,
+
+    pub fn fromValueType(ty: ValueType) TypeKey {
+        return switch (ty) {
+            .void => .void,
+            .never => .never,
+            .bool => .bool,
+            .value => .value,
+            .integer => |name| .{ .integer = name },
+            .float => |name| .{ .float = name },
+            .cstr => .cstr,
+            .pointer => |shape| .{ .pointer = shape },
+            .nullable_pointer => |shape| .{ .nullable_pointer = shape },
+            .nullable_dyn_trait => .nullable_dyn_trait,
+            .nullable_value => |name| .{ .nullable_value = name },
+            .slice => |name| .{ .slice = name },
+            .array => |name| .{ .array = name },
+            .address => |address_class| .{ .address = address_class },
+            .closed_enum => |name| .{ .closed_enum = name },
+            .open_enum => |name| .{ .open_enum = name },
+            .struct_ => |name| .{ .struct_ = name },
+            .result => |shape| .{ .result = shape },
+            .contract => .contract,
+            .branch => .branch,
+            .trap => .trap,
+            .unknown => .unknown,
+        };
+    }
+
+    pub fn toValueType(self: TypeKey) ?ValueType {
+        return switch (self) {
+            .legacy => null,
+            .void => .void,
+            .never => .never,
+            .bool => .bool,
+            .value => .value,
+            .integer => |name| .{ .integer = name },
+            .float => |name| .{ .float = name },
+            .cstr => .cstr,
+            .pointer => |shape| .{ .pointer = shape },
+            .nullable_pointer => |shape| .{ .nullable_pointer = shape },
+            .nullable_dyn_trait => .nullable_dyn_trait,
+            .nullable_value => |name| .{ .nullable_value = name },
+            .slice => |name| .{ .slice = name },
+            .array => |name| .{ .array = name },
+            .address => |address_class| .{ .address = address_class },
+            .closed_enum => |name| .{ .closed_enum = name },
+            .open_enum => |name| .{ .open_enum = name },
+            .struct_ => |name| .{ .struct_ = name },
+            .result => |shape| .{ .result = shape },
+            .contract => .contract,
+            .branch => .branch,
+            .trap => .trap,
+            .unknown => .unknown,
+        };
+    }
+
+    pub fn eql(left: TypeKey, right: TypeKey) bool {
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        return switch (left) {
+            .integer => |name| std.mem.eql(u8, name, right.integer),
+            .float => |name| std.mem.eql(u8, name, right.float),
+            .pointer => |shape| pointerShapeEql(shape, right.pointer),
+            .nullable_pointer => |shape| pointerShapeEql(shape, right.nullable_pointer),
+            .nullable_value => |name| std.mem.eql(u8, name, right.nullable_value),
+            .slice => |name| std.mem.eql(u8, name, right.slice),
+            .array => |name| std.mem.eql(u8, name, right.array),
+            .address => |address_class| address_class == right.address,
+            .closed_enum => |name| std.mem.eql(u8, name, right.closed_enum),
+            .open_enum => |name| std.mem.eql(u8, name, right.open_enum),
+            .struct_ => |name| std.mem.eql(u8, name, right.struct_),
+            .result => |shape| std.mem.eql(u8, shape.ok, right.result.ok) and std.mem.eql(u8, shape.err, right.result.err),
+            else => true,
+        };
+    }
+
+    fn pointerShapeEql(left: PointerShape, right: PointerShape) bool {
+        return left.kind == right.kind and left.mutability == right.mutability and std.mem.eql(u8, left.child, right.child);
+    }
+};
+
 pub const Instruction = struct {
     pub const BuiltinMember = enum {
         slice_length,
@@ -1121,6 +1228,14 @@ pub const RepresentationFact = struct {
 pub const TypeIdentity = struct {
     id: TypeId,
     spelling: []const u8,
+    /// `.legacy` is retained for narrow synthetic fixtures. Producer-created
+    /// identities always carry a structural key.
+    key: TypeKey = .legacy,
+
+    pub fn matches(self: TypeIdentity, ty: ValueType) bool {
+        if (!std.mem.eql(u8, self.spelling, ty.name())) return false;
+        return self.key == .legacy or TypeKey.eql(self.key, TypeKey.fromValueType(ty));
+    }
 };
 
 pub const SymbolIdentity = struct {

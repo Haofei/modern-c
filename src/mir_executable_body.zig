@@ -268,7 +268,7 @@ fn verifyType(function: *const mir.Function, id: mir.TypeId, ty: mir.ValueType, 
     }
     if (id.index() >= function.type_identities.len) return error.InvalidTypeReference;
     const identity = function.type_identities[id.index()];
-    if (!identity.id.eql(id) or !std.mem.eql(u8, identity.spelling, ty.name())) return error.InvalidTypeReference;
+    if (!identity.id.eql(id) or !identity.matches(ty)) return error.InvalidTypeReference;
 }
 
 fn blockExists(function: *const mir.Function, id: mir.BlockId) bool {
@@ -289,5 +289,5 @@ fn sameSource(left: mir.SourcePoint, right: mir.SourcePoint) bool {
 }
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
-    return std.meta.activeTag(left) == std.meta.activeTag(right) and std.mem.eql(u8, left.name(), right.name());
+    return mir.TypeKey.eql(mir.TypeKey.fromValueType(left), mir.TypeKey.fromValueType(right));
 }

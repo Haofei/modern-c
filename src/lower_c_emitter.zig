@@ -1624,6 +1624,20 @@ pub const CEmitter = struct {
 
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        // Prefer the canonical, syntax-free executable body whenever it is
+        // complete and within this backend's capability set.  In particular,
+        // do this before constructing any of the transitional specialized
+        // plans below: once the canonical body is admitted, AST-shaped plans
+        // must not get another opportunity to decide the function semantics.
+        const executable_body = if (self.mirExecutableBodySupported(function, &fn_mir)) body: {
+            mir_executable_body.verify(&fn_mir) catch break :body null;
+            break :body &fn_mir.executable_body;
+        } else null;
+        if (executable_body) |body| {
+            try self.emitExecutableMirFunction(function, body);
+            return true;
+        }
+
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const assert_expression_plan = if (simple_trap == null)
             if (mir_assert_plan.build(fn_mir)) |plan|
@@ -1844,11 +1858,7 @@ pub const CEmitter = struct {
         else
             null;
         const no_specialized_body = simple_trap == null and simple_assert == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and access_structural_operation == null and scalar_expression_plan == null and scalar_control_plan == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and slice_length_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null;
-        const executable_body = if (no_specialized_body and self.mirExecutableBodySupported(function, &fn_mir)) body: {
-            mir_executable_body.verify(&fn_mir) catch break :body null;
-            break :body &fn_mir.executable_body;
-        } else null;
-        if (no_specialized_body and executable_body == null) return false;
+        if (no_specialized_body) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -2263,11 +2273,26 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, ";\n");
         } else if (access_structural_operation) |operation| {
             try self.emitMirAccessStructuralPlan(access_body_plan.?, operation);
-        } else if (executable_body) |body| {
-            try mir_executable_c.emitBody(self.allocator, self.out, body, self.indent);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
+    }
+
+    fn emitExecutableMirFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody) !void {
+        try self.writeLineDirective(function.signature.name.span);
+        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
+        try self.out.appendSlice(self.allocator, " {\n");
+
+        const previous_function = self.current_function;
+        self.current_function = function.signature.name.text;
+        defer self.current_function = previous_function;
+
+        {
+            self.indent += 1;
+            defer self.indent -= 1;
+            try mir_executable_c.emitBody(self.allocator, self.out, body, self.indent);
+        }
+        try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
     fn mirExecutableBodySupported(self: *CEmitter, function_artifact: anytype, function: *const mir.Function) bool {
