@@ -10911,7 +10911,10 @@ test "LLVM admits scalar pointer-field-load returns from MIR" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_scalar_field_load.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @get_b");
-    try expectContains(body, "getelementptr { i32, i64 }, ptr %r, i64 0, i32 1");
+    try expectContains(body, "; canonical executable MIR");
+    const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const field = std.mem.indexOf(u8, body, "getelementptr inbounds { i32, i64 }, ptr %mc_arg_0, i32 0, i32 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < field);
     try expectContains(body, "load atomic i64, ptr %");
     try expectContains(body, "unordered");
 }
@@ -10927,7 +10930,10 @@ test "LLVM admits address-typed pointer-field-load returns from MIR" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_addr_field.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @pr_start");
-    try expectContains(body, "getelementptr { i64, i64 }, ptr %r, i64 0, i32 0");
+    try expectContains(body, "; canonical executable MIR");
+    const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const field = std.mem.indexOf(u8, body, "getelementptr inbounds { i64, i64 }, ptr %mc_arg_0, i32 0, i32 0") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < field);
     try expectContains(body, "load atomic i64, ptr %");
     try expectContains(body, "ret i64 %");
 }
@@ -13780,8 +13786,11 @@ test "LLVM checked pointer-root field store does not use function body fallback"
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_root_store.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @store_value");
-    try expectContains(body, "getelementptr { i32 }, ptr %env, i64 0, i32 0");
-    try expectContains(body, "store atomic i32 %value, ptr %");
+    try expectContains(body, "; canonical executable MIR");
+    const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const field = std.mem.indexOf(u8, body, "getelementptr inbounds { i32 }, ptr %mc_arg_0, i32 0, i32 0") orelse return error.TestUnexpectedResult;
+    const store = std.mem.indexOf(u8, body, "store atomic i32 %mc_arg_1, ptr %") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < field and field < store);
 }
 
 test "LLVM checked pointer-to-integer cast does not use function body fallback" {

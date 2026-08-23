@@ -55,7 +55,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections) return false;
         if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
-        } else if (!singleParameterDerefPlaceSupported(body, place)) return false;
+        } else if (!parameterScalarAccessPlaceSupported(body, place)) return false;
     }
     for (body.statements) |statement| {
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
@@ -205,7 +205,7 @@ const Renderer = struct {
             .store => |store| {
                 const value = try self.emitExpression(store.value);
                 const place = self.body.places[store.place.index()];
-                const pointer = if (place.projection_count == 1)
+                const pointer = if (place.projection_count != 0)
                     try self.emitGuardedParameterStorePointer(statement, store.place)
                 else
                     try self.emitPlace(store.place, value.ty);
@@ -652,8 +652,8 @@ const Renderer = struct {
         if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
         const value_ty = try self.typeText(expression.result_ty);
         const place = self.body.places[load.place.index()];
-        const pointer = if (place.projection_count == 1)
-            try self.emitGuardedParameterDerefPointer(expression, load.place)
+        const pointer = if (place.projection_count != 0)
+            try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
             try self.emitPlace(load.place, value_ty);
         const global_bool = placeIsGlobal(self.body, load.place) and expression.result_ty == .bool;
@@ -723,10 +723,26 @@ const Renderer = struct {
         return local.storage;
     }
 
+    fn emitGuardedParameterAccessPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!parameterScalarAccessPlaceSupported(self.body, place)) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
+        return self.emitParameterAccessPointer(place, local.storage);
+    }
+
     fn emitGuardedParameterStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
-        if (!singleParameterDerefStorePlaceSupported(self.body, place)) return error.InvalidBody;
+        if (!parameterScalarAccessStorePlaceSupported(self.body, place)) return error.InvalidBody;
         const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
@@ -736,7 +752,30 @@ const Renderer = struct {
         if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_store_ready_{d}", .{statement.id.raw});
         try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
-        return local.storage;
+        return self.emitParameterAccessPointer(place, local.storage);
+    }
+
+    fn emitParameterAccessPointer(self: *Renderer, place: mir.ExecutablePlace, root_pointer: []const u8) RenderError![]const u8 {
+        if (place.projection_count == 1) return root_pointer;
+        if (place.projection_count != 2) return error.InvalidBody;
+        const field_index = switch (place.projections[1]) {
+            .field => |index| index,
+            .deref, .index => return error.InvalidBody,
+        };
+        const pointer = switch (place.root_ty) {
+            .pointer => |shape| shape,
+            else => return error.InvalidBody,
+        };
+        const aggregate = aggregateTypeForValueType(self.body, .{ .struct_ = pointer.child }) orelse return error.InvalidBody;
+        if (field_index >= aggregate.field_count) return error.InvalidBody;
+        const aggregate_ty = try self.typeText(aggregate.ty);
+        const field_pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+            .{ field_pointer, aggregate_ty, root_pointer, field_index },
+        );
+        return field_pointer;
     }
 
     fn emitPointerRepresentationGuard(self: *Renderer, pointer: []const u8, edge: mir.ExecutableTrapEdge, continuation: []const u8) RenderError!void {
@@ -1094,6 +1133,40 @@ fn singleParameterDerefStorePlaceSupported(body: *const mir.ExecutableBody, plac
     };
 }
 
+fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.projection_count == 1) return singleParameterDerefPlaceSupported(body, place);
+    if (place.projection_count != 2 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+    const field_index = switch (place.projections[1]) {
+        .field => |index| index,
+        .deref, .index => return false,
+    };
+    const local_id = switch (place.root) {
+        .local => |id| id,
+        .symbol => return false,
+    };
+    const parameter = parameterIdentity(body, local_id) orelse return false;
+    if (!parameter.type_id.eql(place.root_type_id) or !sameValueType(parameter.ty, place.root_ty)) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    if (pointer.kind != .single) return false;
+    const aggregate = aggregateTypeForValueType(body, .{ .struct_ = pointer.child }) orelse return false;
+    return aggregate.construction == .declared_struct and field_index < aggregate.field_count and
+        aggregate.field_type_ids[field_index].eql(place.type_id) and
+        sameValueType(aggregate.field_types[field_index], place.ty);
+}
+
+fn parameterScalarAccessStorePlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (!parameterScalarAccessPlaceSupported(body, place)) return false;
+    return switch (place.root_ty) {
+        .pointer => |shape| shape.mutability == .mut,
+        else => false,
+    };
+}
+
 fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
     if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false)) return false;
     const place = body.places[load.place.index()];
@@ -1123,7 +1196,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     if (place.projection_count == 0) {
         return store.representation_source == null and !store.representation_span_id.isValid();
     }
-    return singleParameterDerefStorePlaceSupported(body, place) and
+    return parameterScalarAccessStorePlaceSupported(body, place) and
         store.type_id.isValid() and store.type_id.eql(place.type_id) and
         value.type_id.isValid() and value.type_id.eql(store.type_id) and
         store.representation_source != null and store.representation_span_id.isValid() and
@@ -1136,9 +1209,9 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     if (place.projection_count != 0) {
         return sameValueType(place.ty, ty) and access.kind == .race_unordered and
             if (is_store)
-                singleParameterDerefStorePlaceSupported(body, place)
+                parameterScalarAccessStorePlaceSupported(body, place)
             else
-                singleParameterDerefPlaceSupported(body, place);
+                parameterScalarAccessPlaceSupported(body, place);
     }
     return switch (place.root) {
         .local => |id| localAddressable(body, id) and access.kind == .plain,

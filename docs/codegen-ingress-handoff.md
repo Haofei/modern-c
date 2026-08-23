@@ -8,9 +8,11 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
-  checkpoint, not the deletion boundary: the 521-root broad census still finds
-  **988/1800 C** and **1053/1866 LLVM** distinct functions using the AST body
-  (C admits 45.1%, LLVM 43.6%).
+  checkpoint, not the deletion boundary: the current 522-root broad census
+  finds **920/1752 C** and **991/1818 LLVM** distinct functions using the AST
+  body (C admits 47.5%, LLVM 45.5%). Report mode intentionally preserves
+  partial records from reject/unsupported roots, so these figures are the
+  current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
   enough for that corpus and the artifact/branch is physically deleted.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
@@ -48,19 +50,26 @@ Resolved by-value struct members are also canonical executable-MIR operations.
 MIR owns the base value, dense field index, result type, aggregate layout shape,
 and a presentation-only field spelling. C mechanically emits the spelling and
 LLVM emits `extractvalue`; neither backend scans a declaration or expression
-AST. Nested member chains are admitted, while pointer members remain closed
-until their load/access/trap semantics are explicit. The shared C identifier
-policy keeps declarations and canonical accesses consistent for prelude names
-such as `offsetof` and `uint32_t`.
+AST. Nested by-value member chains are admitted. Direct scalar fields of
+non-null `*Struct` parameters now lower as canonical `deref + field +
+load/store` places: MIR owns the pointee aggregate, field index/type,
+representation edge and access ordering; C emits `root->field` and LLVM emits a
+checked GEP plus atomic load/store. Pointer-valued fields and nested/temporary
+pointer roots remain fail-closed until their additional representation and
+lifetime edges are explicit. The shared C identifier policy keeps declarations
+and canonical accesses consistent for prelude names such as `offsetof` and
+`uint32_t`.
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-939 to an incomplete MIR producer, 41 to renderer support, 6 to final ingress
-checks and 2 nominally ready; LLVM attributes 978/55/18/2 respectively. The
+867 to an incomplete MIR producer, 45 to renderer support, 6 to final ingress
+checks and 2 nominally ready; LLVM attributes 906/59/23/3 respectively. The
 producer bucket is now classified by its first stable canonical-model gap. The
-largest C reasons are unsupported expressions (314), producer invariants (161),
-trap projection (154), non-canonical literals (108), and unresolved indexing
-(43); LLVM has the same ordering within a few functions. This turns
+largest C reasons are unsupported expressions (219), producer invariants (168),
+trap projection (165), non-canonical literals (113), and unresolved indexing
+(44); LLVM records 222/168/175/116/58 respectively. Direct pointer-member
+scalar access is now canonical in the targeted census; the remaining
+`unlowered_member` reason count is 23 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
 prevents work on the wrong layer.
 

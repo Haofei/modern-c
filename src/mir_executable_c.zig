@@ -347,7 +347,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         }
     }
     for (body.places) |place| {
-        if (place.projection_count != 0 and !singleParameterScalarDerefPlaceSupported(body, place)) return false;
+        if (place.projection_count != 0 and !parameterScalarAccessPlaceSupported(body, place)) return false;
         switch (place.root) {
             .local => |local| if (localById(body, local) == null) return false,
             .symbol => |symbol| {
@@ -535,7 +535,7 @@ fn memoryLoadSupported(
     if (load.access.alignment != scalar.alignment) return false;
     const place = placeById(body, load.place) orelse return false;
     if (place.projection_count != 0) {
-        return singleParameterScalarDerefPlaceSupported(body, place.*) and
+        return parameterScalarAccessPlaceSupported(body, place.*) and
             load.access.kind == .race_unordered and
             representationOperationHasExactTrapEdge(body, expression);
     }
@@ -579,6 +579,46 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
     return shape.kind == .single and std.mem.eql(u8, shape.child, place.ty.name());
 }
 
+fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.projection_count == 1) return singleParameterScalarDerefPlaceSupported(body, place);
+    if (place.projection_count != 2 or place.projections[0] != .deref or scalarMemoryInfo(place.ty) == null or
+        !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
+    const field_index = switch (place.projections[1]) {
+        .field => |index| index,
+        .deref, .index => return false,
+    };
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol => return false,
+    };
+    var parameter: ?mir.ExecutableParameter = null;
+    for (body.parameters) |candidate| if (candidate.local.eql(local)) {
+        parameter = candidate;
+        break;
+    };
+    const root = parameter orelse return false;
+    if (!root.type_id.eql(place.root_type_id) or
+        !mir.TypeKey.eql(mir.TypeKey.fromValueType(root.ty), mir.TypeKey.fromValueType(place.root_ty))) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    if (pointer.kind != .single) return false;
+    var aggregate: ?*const mir.ExecutableAggregateType = null;
+    for (body.aggregate_types) |*candidate| if (mir.TypeKey.eql(
+        mir.TypeKey.fromValueType(candidate.ty),
+        mir.TypeKey.fromValueType(.{ .struct_ = pointer.child }),
+    )) {
+        aggregate = candidate;
+        break;
+    };
+    const shape = aggregate orelse return false;
+    return shape.construction == .declared_struct and field_index < shape.field_count and
+        isSafeIdentifier(shape.field_spellings[field_index]) and
+        shape.field_type_ids[field_index].eql(place.type_id) and
+        mir.TypeKey.eql(mir.TypeKey.fromValueType(shape.field_types[field_index]), mir.TypeKey.fromValueType(place.ty));
+}
+
 fn memoryStoreSupported(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
@@ -595,7 +635,7 @@ fn memoryStoreSupported(
             else => return false,
         };
         return shape.mutability == .mut and
-            singleParameterScalarDerefPlaceSupported(body, place.*) and
+            parameterScalarAccessPlaceSupported(body, place.*) and
             store.access.kind == .race_unordered and
             statementRepresentationOperationHasExactTrapEdge(body, statement, store);
     }
@@ -675,7 +715,7 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
     const metadata: RepresentationMetadata = switch (expression.operation) {
         .load => |load| blk: {
             const place = placeById(body, load.place) orelse return false;
-            if (!singleParameterScalarDerefPlaceSupported(body, place.*)) return false;
+            if (!parameterScalarAccessPlaceSupported(body, place.*)) return false;
             break :blk .{ .source = load.representation_source, .span_id = load.representation_span_id };
         },
         .address_of => |address| blk: {
@@ -704,7 +744,7 @@ fn statementRepresentationOperationHasExactTrapEdge(
     store: @FieldType(mir.ExecutableStatement.Operation, "store"),
 ) bool {
     const place = placeById(body, store.place) orelse return false;
-    if (!singleParameterScalarDerefPlaceSupported(body, place.*) or
+    if (!parameterScalarAccessPlaceSupported(body, place.*) or
         store.representation_source == null or !store.representation_span_id.isValid() or
         ownedStatementTrapEdgeCount(body, statement.id) != 1) return false;
     for (body.trap_edges) |edge| {
@@ -898,7 +938,32 @@ fn emitPlaceAddress(
         try emitPlaceRootValue(allocator, out, body, place.*);
         return;
     }
-    if (!singleParameterScalarDerefPlaceSupported(body, place.*)) return error.UnsupportedOperation;
+    if (!parameterScalarAccessPlaceSupported(body, place.*)) return error.UnsupportedOperation;
+    if (place.projection_count == 2) {
+        const field_index = switch (place.projections[1]) {
+            .field => |index| index,
+            .deref, .index => return error.UnsupportedOperation,
+        };
+        const pointer = switch (place.root_ty) {
+            .pointer => |shape| shape,
+            else => return error.UnsupportedOperation,
+        };
+        var aggregate: ?*const mir.ExecutableAggregateType = null;
+        for (body.aggregate_types) |*candidate| if (mir.TypeKey.eql(
+            mir.TypeKey.fromValueType(candidate.ty),
+            mir.TypeKey.fromValueType(.{ .struct_ = pointer.child }),
+        )) {
+            aggregate = candidate;
+            break;
+        };
+        const shape = aggregate orelse return error.UnsupportedOperation;
+        try out.appendSlice(allocator, "&(");
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, "->");
+        try appendIdent(allocator, out, shape.field_spellings[field_index]);
+        try out.append(allocator, ')');
+        return;
+    }
     // `&p.*` is the original pointer value. Keeping this identity also avoids
     // creating a second C dereference after the explicit representation guard.
     try emitPlaceRootValue(allocator, out, body, place.*);

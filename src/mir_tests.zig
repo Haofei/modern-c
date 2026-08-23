@@ -133,6 +133,46 @@ test "executable MIR owns nested by-value struct member identity and spelling" {
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 
+test "executable MIR owns pointer member load place and representation edge" {
+    const source =
+        \\struct Pair { first: u32, second: u64 }
+        \\fn read(pair: *Pair) -> u64 { return pair.second; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_pointer_member.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const module = try source_parser.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "read") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.aggregate_types.len);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.places.len);
+    const place = function.executable_body.places[0];
+    try std.testing.expectEqual(@as(usize, 2), place.projection_count);
+    try std.testing.expect(place.projections[0] == .deref);
+    try std.testing.expectEqual(@as(usize, 1), place.projections[1].field);
+    try std.testing.expectEqualStrings("u64", place.ty.name());
+    const result = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    const load = switch (result.operation) {
+        .load => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(load.place.eql(place.id));
+    try std.testing.expect(load.access.kind == .race_unordered);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "read") orelse return error.TestUnexpectedResult;
+    mutable_function.executable_body.places[0].projections[1] = .{ .field = 0 };
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
 test "MIR carries resolved per-file source identity into verified functions" {
     const first_source = "fn first() -> u32 { return 1; }\n";
     const second_source = "fn second() -> u32 { return 2; }\n";

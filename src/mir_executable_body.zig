@@ -151,7 +151,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
                 const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
-                const expected_traps: usize = if (target.projection_count == 1) 1 else 0;
+                const expected_traps: usize = if (target.projection_count != 0) 1 else 0;
                 if (expected_traps == 1) {
                     const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, operation.representation_span_id, source);
@@ -256,7 +256,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .binary => |binary| if (binary.arithmetic != .checked) return error.InvalidTrapEdge,
                     .load => |load| {
                         const target = place(body, load.place) orelse return error.InvalidTrapEdge;
-                        if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
+                        if (!isParameterScalarAccessPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     .address_of => |address| {
@@ -280,7 +280,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     else => return error.InvalidTrapEdge,
                 };
                 const target = place(body, store.place) orelse return error.InvalidTrapEdge;
-                if (!isSingleParameterDerefPlace(body, target.*, true) or edge.kind != .InvalidRepresentation or
+                if (!isParameterScalarAccessPlace(body, target.*, true) or edge.kind != .InvalidRepresentation or
                     edge.source != .representation_check) return error.InvalidTrapEdge;
                 break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
             },
@@ -463,7 +463,7 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         },
         else => {},
     };
-    for (body.places) |value| if (value.projection_count != 0 and !isSingleParameterDerefPlace(body, value, false)) return true;
+    for (body.places) |value| if (value.projection_count != 0 and !isParameterScalarAccessPlace(body, value, false)) return true;
     for (body.statements) |value| switch (value.operation) {
         .unsupported, .defer_cleanup => return true,
         else => {},
@@ -546,7 +546,7 @@ fn verifyMemoryAccess(
     const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return error.InvalidMemoryAccessType;
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
     if (target.projection_count != 0) {
-        if (!isSingleParameterDerefPlace(body, target.*, is_store)) return error.InvalidPlaceType;
+        if (!isParameterScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
         if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
         return;
     }
@@ -566,7 +566,7 @@ fn verifyMemoryAccess(
 
 fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) !void {
     if (target.projection_count == 0) return;
-    if (!isSingleParameterDerefPlace(body, target, false)) return error.InvalidPlaceType;
+    if (!isParameterScalarAccessPlace(body, target, false)) return error.InvalidPlaceType;
 }
 
 fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
@@ -592,6 +592,45 @@ fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
     };
     if (shape.kind != .single or (require_mutable and shape.mutability != .mut)) return false;
     return std.mem.eql(u8, shape.child, target.ty.name());
+}
+
+fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
+    if (target.projection_count == 1) return isSingleParameterDerefPlace(body, target, require_mutable);
+    if (target.projection_count != 2 or !target.root_type_id.isValid() or !target.type_id.isValid()) return false;
+    switch (target.projections[0]) {
+        .deref => {},
+        .field, .index => return false,
+    }
+    const field_index = switch (target.projections[1]) {
+        .field => |index| index,
+        .deref, .index => return false,
+    };
+    const local_id = switch (target.root) {
+        .local => |id| id,
+        .symbol => return false,
+    };
+    var parameter: ?mir.ExecutableParameter = null;
+    for (body.parameters) |candidate| if (candidate.local.eql(local_id)) {
+        parameter = candidate;
+        break;
+    };
+    const root = parameter orelse return false;
+    if (!root.type_id.eql(target.root_type_id) or !sameValueType(root.ty, target.root_ty) or
+        mir.ExecutableMemoryAccess.scalarAlignment(target.ty) == null) return false;
+    const pointer = switch (target.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    if (pointer.kind != .single or (require_mutable and pointer.mutability != .mut)) return false;
+    var pointee: ?*const mir.ExecutableAggregateType = null;
+    for (body.aggregate_types) |*aggregate| if (sameValueType(aggregate.ty, .{ .struct_ = pointer.child })) {
+        pointee = aggregate;
+        break;
+    };
+    const aggregate = pointee orelse return false;
+    return aggregate.construction == .declared_struct and field_index < aggregate.field_count and
+        aggregate.field_type_ids[field_index].eql(target.type_id) and
+        sameValueType(aggregate.field_types[field_index], target.ty);
 }
 
 fn verifyExpr(body: *const mir.ExecutableBody, id: mir.ExprId) !void {

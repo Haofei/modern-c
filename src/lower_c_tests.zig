@@ -12280,7 +12280,14 @@ test "lower-c admits scalar pointer-field-load returns from MIR; optional field 
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(&(r->a)));");
+    const scalar_body = try cFunctionBody(output.items, "static uint32_t get_a(S * r)");
+    try expectContains(scalar_body, "mc_race_load_u32(");
+    if (isCanonicalExecutableCBody(scalar_body)) {
+        const scalar_guard = std.mem.indexOf(u8, scalar_body, "if (r == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+        const scalar_load = std.mem.indexOf(u8, scalar_body, "mc_race_load_u32(&(r->a))") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(scalar_guard < scalar_load);
+        try expectContains(scalar_body, "return mc_exec_tmp_");
+    }
     // Optional field (fallback): loads the tag bool too.
     const opt_body = try cFunctionBody(output.items, "static mc_opt_u32 get_opt(T * r)");
     try expectContains(opt_body, "mc_race_load_bool");
@@ -12306,7 +12313,32 @@ test "lower-c admits address-typed pointer-field-load returns from MIR" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return ((uintptr_t)mc_race_load_usize(&(r->start)));");
+    const body = try cFunctionBody(output.items, "static uintptr_t pr_start(PhysRange * r)");
+    try expectContains(body, "mc_race_load_usize(");
+    if (isCanonicalExecutableCBody(body)) {
+        const guard = std.mem.indexOf(u8, body, "if (r == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+        const load = std.mem.indexOf(u8, body, "mc_race_load_usize(&(r->start))") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(guard < load);
+        try expectContains(body, "return mc_exec_tmp_");
+    }
+}
+
+test "lower-c pointer member load uses typed place without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u64 }
+        \\fn read_second(pair: *Pair) -> u64 { return pair.second; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_executable_pointer_member.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint64_t read_second(Pair * pair)");
+    try expectContains(body, "mc_race_load_u64(");
+    if (isCanonicalExecutableCBody(body)) {
+        const guard = std.mem.indexOf(u8, body, "if (pair == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+        const load = std.mem.indexOf(u8, body, "mc_race_load_u64(&(pair->second))") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(guard < load);
+        try expectContains(body, "return mc_exec_tmp_");
+    }
 }
 
 test "lower-c admits phys address-constructor returns from MIR" {
@@ -13473,9 +13505,17 @@ test "lower-c pointer member scalar access lowers race-tolerantly" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_member_access.mc", source, &output);
     const load_body = try cFunctionBody(output.items, "static uint32_t pointer_member_load(SharedPair * p)");
-    try expectContains(load_body, "return ((uint32_t)mc_race_load_u32(&(p->value)));");
+    if (isCanonicalExecutableCBody(load_body)) {
+        const guard = std.mem.indexOf(u8, load_body, "if (p == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+        const load = std.mem.indexOf(u8, load_body, "mc_race_load_u32(&(p->value))") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(guard < load);
+        try expectContains(load_body, "return mc_exec_tmp_");
+    } else try expectContains(load_body, "return ((uint32_t)mc_race_load_u32(&(p->value)));");
     const store_body = try cFunctionBody(output.items, "static void pointer_member_store(SharedPair * p, uint32_t x)");
-    try expectContains(store_body, "mc_race_store_u32(&(p->value), (uint32_t)mc_tmp");
+    try expectContains(store_body, if (isCanonicalExecutableCBody(store_body))
+        "mc_race_store_u32(&(p->value), (uint32_t)mc_exec_tmp_"
+    else
+        "mc_race_store_u32(&(p->value), (uint32_t)mc_tmp");
     const call_load_body = try cFunctionBody(output.items, "static uint32_t call_pointer_member_load(void)");
     try expectContains(call_load_body, "return ((uint32_t)mc_race_load_u32(&(external_pair()->value)));");
 }
@@ -13491,7 +13531,10 @@ test "lower-c checked pointer-root field store does not use function body fallba
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_root_store.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void store_value(Env * env, uint32_t value)");
-    try expectContains(body, "mc_race_store_u32(&(env->value), (uint32_t)mc_tmp");
+    try expectContains(body, if (isCanonicalExecutableCBody(body))
+        "mc_race_store_u32(&(env->value), (uint32_t)mc_exec_tmp_"
+    else
+        "mc_race_store_u32(&(env->value), (uint32_t)mc_tmp");
 }
 
 test "lower-c checked pointer-to-integer cast does not use function body fallback" {

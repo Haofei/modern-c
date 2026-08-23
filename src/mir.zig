@@ -6840,7 +6840,8 @@ const FunctionBuilder = struct {
 
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
         if (place.projection_count == 0) return true;
-        if (place.projection_count != 1 or place.projections[0] != .deref) return false;
+        if (place.projection_count != 1 and place.projection_count != 2) return false;
+        if (place.projections[0] != .deref) return false;
         const local_id = switch (place.root) {
             .local => |id| id,
             .symbol => return false,
@@ -6856,7 +6857,25 @@ const FunctionBuilder = struct {
             .pointer => |value| value,
             else => return false,
         };
-        return shape.kind == .single and std.mem.eql(u8, shape.child, place.ty.name());
+        if (shape.kind != .single) return false;
+        if (place.projection_count == 1) return std.mem.eql(u8, shape.child, place.ty.name());
+
+        const field_index = switch (place.projections[1]) {
+            .field => |index| index,
+            .deref, .index => return false,
+        };
+        const aggregate_ty: ValueType = .{ .struct_ = shape.child };
+        const aggregate_type_id = self.type_ids.get(TypeKey.fromValueType(aggregate_ty)) orelse return false;
+        var aggregate: ?mir_model.ExecutableAggregateType = null;
+        for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(aggregate_type_id)) {
+            aggregate = candidate;
+            break;
+        };
+        const pointee = aggregate orelse return false;
+        return pointee.construction == .declared_struct and field_index < pointee.field_count and
+            sameValueType(pointee.ty, aggregate_ty) and
+            sameValueType(place.ty, pointee.field_types[field_index]) and
+            place.type_id.eql(pointee.field_type_ids[field_index]);
     }
 
     fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
@@ -7147,7 +7166,7 @@ const FunctionBuilder = struct {
                 break :cast .{ .cast = .{ .operand = operand, .kind = kind } };
             },
             .address_of => |inner| address: {
-                const guard_source = executableDerefOperandSource(inner.*) orelse break :address .unsupported;
+                const guard_source = self.executableDerefOperandSource(inner.*) orelse break :address .unsupported;
                 break :address .{ .address_of = .{
                     .place = try self.appendExecutablePlace(inner.*),
                     .representation_source = guard_source,
@@ -7175,18 +7194,36 @@ const FunctionBuilder = struct {
             else member: {
                 const field_index = self.memberFieldIndex(node) orelse break :member .unsupported;
                 const base_ty = self.exprType(node.base.*);
+                const pointer_shape = switch (base_ty) {
+                    .pointer => |shape| shape,
+                    else => null,
+                };
                 const struct_name = switch (base_ty) {
                     .struct_ => |name| name,
-                    // Pointer/member access carries memory and representation
-                    // effects. Keep it closed until it is a canonical load,
-                    // rather than silently treating it as a value projection.
+                    .pointer => |shape| shape.child,
                     else => break :member .unsupported,
                 };
                 const summary = self.structs.get(struct_name) orelse break :member .unsupported;
                 if (field_index >= summary.fields.len or
-                    !try self.internExecutableAggregateType(base_ty, .declared_struct, summary.fields)) break :member .unsupported;
+                    !try self.internExecutableAggregateType(.{ .struct_ = struct_name }, .declared_struct, summary.fields)) break :member .unsupported;
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty)) break :member .unsupported;
+                if (pointer_shape) |shape| {
+                    // Pointer member access is a memory operation, not a pure
+                    // aggregate projection.  This first slice admits a direct
+                    // non-null single pointer and a scalar field whose loaded
+                    // representation needs no second trap.  Pointer-valued
+                    // fields stay closed until MIR can own both trap edges.
+                    if (shape.kind != .single or representationCheckKind(result_ty) != null or
+                        mir_model.ExecutableMemoryAccess.scalarAlignment(result_ty) == null) break :member .unsupported;
+                    const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
+                    break :member .{ .load = .{
+                        .place = try self.appendExecutablePlace(expr),
+                        .access = self.executableMemoryAccess(expr, result_ty),
+                        .representation_source = guard_source,
+                        .representation_span_id = try self.internSpanId(guard_source),
+                    } };
+                }
                 break :member .{ .member = .{
                     .base = try self.ensureExecutableExprAs(node.base.*, base_ty),
                     .field_index = field_index,
@@ -7381,7 +7418,7 @@ const FunctionBuilder = struct {
             // complete effect ordering contract for those regions.
             if (self.globals.contains(name) and self.current != 0) self.executable_supported = false;
         }
-        const kind: mir_model.ExecutableMemoryAccessKind = if (executablePlaceHasDeref(place_expr))
+        const kind: mir_model.ExecutableMemoryAccessKind = if (self.executablePlaceHasDeref(place_expr))
             .race_unordered
         else if (root) |name|
             if (self.globals.contains(name) and self.mutable_globals.contains(name)) .race_unordered else .plain
@@ -7390,22 +7427,28 @@ const FunctionBuilder = struct {
         return .{ .kind = kind, .alignment = alignment };
     }
 
-    fn executablePlaceHasDeref(expr: ast.Expr) bool {
+    fn executablePlaceHasDeref(self: *FunctionBuilder, expr: ast.Expr) bool {
         return switch (expr.kind) {
-            .grouped => |inner| executablePlaceHasDeref(inner.*),
-            .member => |node| executablePlaceHasDeref(node.base.*),
-            .index => |node| executablePlaceHasDeref(node.base.*),
+            .grouped => |inner| self.executablePlaceHasDeref(inner.*),
+            .member => |node| switch (self.exprType(node.base.*)) {
+                .pointer, .nullable_pointer => true,
+                else => self.executablePlaceHasDeref(node.base.*),
+            },
+            .index => |node| self.executablePlaceHasDeref(node.base.*),
             .deref => true,
             else => false,
         };
     }
 
-    fn executableDerefOperandSource(expr: ast.Expr) ?SourcePoint {
+    fn executableDerefOperandSource(self: *FunctionBuilder, expr: ast.Expr) ?SourcePoint {
         return switch (expr.kind) {
-            .grouped => |inner| executableDerefOperandSource(inner.*),
-            .member => |node| executableDerefOperandSource(node.base.*),
-            .index => |node| executableDerefOperandSource(node.base.*),
-            .deref => |inner| .{ .line = inner.span.line, .column = inner.span.column, .offset = inner.span.offset, .len = inner.span.len },
+            .grouped => |inner| self.executableDerefOperandSource(inner.*),
+            .member => |node| switch (self.exprType(node.base.*)) {
+                .pointer, .nullable_pointer => self.sourcePoint(canonicalOperatorOperand(node.base.*).span),
+                else => self.executableDerefOperandSource(node.base.*),
+            },
+            .index => |node| self.executableDerefOperandSource(node.base.*),
+            .deref => |inner| self.sourcePoint(canonicalOperatorOperand(inner.*).span),
             else => null,
         };
     }
@@ -7575,7 +7618,25 @@ const FunctionBuilder = struct {
                 break :root true;
             },
             .member => |node| projection: {
-                if (!try self.fillExecutablePlace(place, node.base.*) or place.projection_count >= mir_model.max_executable_projections) break :projection false;
+                const base_ty = self.exprType(node.base.*);
+                const implicit_deref = switch (base_ty) {
+                    .pointer, .nullable_pointer => true,
+                    else => false,
+                };
+                if (implicit_deref) {
+                    const struct_name = switch (base_ty) {
+                        .pointer, .nullable_pointer => |shape| shape.child,
+                        else => unreachable,
+                    };
+                    const summary = self.structs.get(struct_name) orelse break :projection false;
+                    if (!try self.internExecutableAggregateType(.{ .struct_ = struct_name }, .declared_struct, summary.fields)) break :projection false;
+                }
+                if (!try self.fillExecutablePlace(place, node.base.*) or
+                    place.projection_count + @intFromBool(implicit_deref) >= mir_model.max_executable_projections) break :projection false;
+                if (implicit_deref) {
+                    place.projections[place.projection_count] = .deref;
+                    place.projection_count += 1;
+                }
                 const field_index = self.memberFieldIndex(node) orelse break :projection false;
                 place.projections[place.projection_count] = .{ .field = field_index };
                 place.projection_count += 1;
@@ -7928,7 +7989,7 @@ const FunctionBuilder = struct {
             .assignment => |node| {
                 const assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
-                const representation_source = executableDerefOperandSource(node.target);
+                const representation_source = self.executableDerefOperandSource(node.target);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = try self.appendExecutablePlace(node.target),
                     .value = try self.ensureExecutableExprAs(node.value, assignment_target_ty),
@@ -11653,7 +11714,7 @@ const FunctionBuilder = struct {
             const place_id = representation.place;
             if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) continue;
             const place = self.executable_places.items[place_id.index()];
-            if (!self.executablePlaceComplete(place) or place.projection_count != 1) continue;
+            if (!self.executablePlaceComplete(place) or place.projection_count == 0) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
                 legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
@@ -11678,7 +11739,7 @@ const FunctionBuilder = struct {
             if (!store.representation_span_id.eql(span_id)) continue;
             if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len) continue;
             const place = self.executable_places.items[store.place.index()];
-            if (!self.executablePlaceComplete(place) or place.projection_count != 1 or
+            if (!self.executablePlaceComplete(place) or place.projection_count == 0 or
                 !self.executableMemoryAccessComplete(place, store.ty, store.access, true)) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
