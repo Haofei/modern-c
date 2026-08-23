@@ -69,6 +69,27 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     });
 }
 
+test "lower-c valid slice representation check uses canonical executable MIR" {
+    const source =
+        \\fn identity_slice(items: []const u32) -> []const u32 {
+        \\    return items;
+        \\}
+        \\fn slice_len(items: []const u32) -> usize {
+        \\    return items.len;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_valid_slice.mc", source, &output);
+    const body = try cFunctionBody(output.items, "mc_slice_const_u32 identity_slice");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "__auto_type mc_exec_tmp_0 = items;");
+    try expectContains(body, "mc_exec_tmp_1.ptr == NULL && mc_exec_tmp_1.len != 0");
+    try expectContains(body, "return mc_exec_tmp_1;");
+    const len_body = try cFunctionBody(output.items, "uintptr_t slice_len");
+    try expectContains(len_body, "/* canonical executable MIR */");
+}
+
 test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     const source =
         \\fn grouped_i128_minimum() -> i128 {
@@ -188,9 +209,15 @@ test "lower-c emits slice length returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_slice_length_return.mc", source, &output);
 
     const const_body = try cFunctionBody(output.items, "static uintptr_t const_slice_len(mc_slice_const_u8 values)");
-    try expectContains(const_body, "return values.len;");
+    try expectContains(const_body, ".ptr == NULL && ");
+    try expectContains(const_body, ".len != 0");
+    try expectContains(const_body, ".len;");
+    try expectContains(const_body, "return mc_exec_tmp_");
     const mutable_body = try cFunctionBody(output.items, "static uintptr_t mutable_slice_len(mc_slice_mut_u32 values)");
-    try expectContains(mutable_body, "return values.len;");
+    try expectContains(mutable_body, ".ptr == NULL && ");
+    try expectContains(mutable_body, ".len != 0");
+    try expectContains(mutable_body, ".len;");
+    try expectContains(mutable_body, "return mc_exec_tmp_");
 }
 
 test "lower-c emits assertion expression trees from MIR without body fallback" {

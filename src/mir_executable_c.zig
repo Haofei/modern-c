@@ -48,6 +48,10 @@ pub fn emitBodyWithSourcePath(
     // expression tree here would lose the order already verified by MIR.
     for (body.expressions) |expression| {
         if (!expressionNeedsTemporary(expression)) continue;
+        // MC slices use a declaration-owned typedef whose spelling is not a
+        // MIR semantic identity. Infer the exact C type at the single
+        // materialization point instead of reconstructing syntax here.
+        if (isSliceType(expression.result_ty)) continue;
         try writeIndent(allocator, out, indent);
         try appendCType(allocator, out, expression.result_ty);
         try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
@@ -83,8 +87,13 @@ fn emitStatement(
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
-            try appendCType(allocator, out, local.ty);
-            try out.append(allocator, ' ');
+            if (isSliceType(local.ty)) {
+                if (local.value == null) return error.UnsupportedType;
+                try out.appendSlice(allocator, "__auto_type ");
+            } else {
+                try appendCType(allocator, out, local.ty);
+                try out.append(allocator, ' ');
+            }
             try appendLocal(allocator, out, body, local.local);
             if (local.value) |value| {
                 try out.appendSlice(allocator, " = ");
@@ -384,7 +393,10 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         switch (statement.operation) {
             .local_init => |local| {
                 if (!supportsType(local.ty) or localById(body, local.local) == null) return false;
-                if (local.value) |value| if (expressionById(body, value) == null) return false;
+                if (local.value) |value| {
+                    const expression = expressionById(body, value) orelse return false;
+                    if (!sameValueType(local.ty, expression.result_ty)) return false;
+                } else if (isSliceType(local.ty)) return false;
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
             .eval => |value| if (expressionById(body, value) == null) return false,
@@ -980,8 +992,16 @@ fn supportsType(ty: mir.ValueType) bool {
         .void, .never, .bool, .cstr, .address => true,
         .integer, .float => |name| primitiveType(name) != null,
         .domain_integer => |shape| primitiveType(shape.child) != null,
-        .pointer, .nullable_pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
+        .pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
+        .nullable_pointer => |shape| shape.kind != .slice and (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
+        else => false,
+    };
+}
+
+fn isSliceType(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .pointer => |shape| shape.kind == .slice,
         else => false,
     };
 }
@@ -1006,13 +1026,22 @@ fn prepareStatementExpressions(
         }
         try writeSourceLineDirective(allocator, out, source_path, expression.source);
         try writeIndent(allocator, out, indent);
-        if (expressionNeedsTemporary(expression)) try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
+        if (expressionNeedsTemporary(expression)) {
+            if (isSliceType(expression.result_ty)) {
+                try out.print(allocator, "__auto_type mc_exec_tmp_{d} = ", .{expression.id.raw});
+            } else {
+                try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
+            }
+        }
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
-        if (resultRepresentationSource(expression)) |guard_source| {
-            try writeSourceLineDirective(allocator, out, source_path, guard_source);
+        if (resultRepresentationGuard(expression)) |guard| {
+            try writeSourceLineDirective(allocator, out, source_path, guard.source);
             try writeIndent(allocator, out, indent);
-            try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw});
+            switch (guard.kind) {
+                .nonnull_pointer => try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw}),
+                .valid_slice => try out.print(allocator, "if (mc_exec_tmp_{d}.ptr == NULL && mc_exec_tmp_{d}.len != 0) mc_trap_InvalidRepresentation();\n", .{ expression.id.raw, expression.id.raw }),
+            }
         }
     }
 }
@@ -1030,10 +1059,18 @@ fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuar
     };
 }
 
-fn resultRepresentationSource(expression: mir.ExecutableExpression) ?mir.SourcePoint {
+const ResultRepresentationGuard = struct {
+    source: mir.SourcePoint,
+    kind: mir.ExecutableRepresentationCheckKind,
+};
+
+fn resultRepresentationGuard(expression: mir.ExecutableExpression) ?ResultRepresentationGuard {
     return switch (expression.operation) {
-        .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_source else null,
-        .representation_check => expression.source,
+        .builtin_call => |call| if (call.kind == .raw_ptr and call.representation_source != null)
+            .{ .source = call.representation_source.?, .kind = .nonnull_pointer }
+        else
+            null,
+        .representation_check => |check| .{ .source = expression.source, .kind = check.kind },
         else => null,
     };
 }
@@ -1231,6 +1268,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.Va
         .domain_integer => |shape| try out.appendSlice(allocator, primitiveType(shape.child) orelse return error.UnsupportedType),
         .cstr => try out.appendSlice(allocator, "char const *"),
         .pointer, .nullable_pointer => |shape| {
+            if (shape.kind == .slice) return error.UnsupportedType;
             const child = if (std.mem.eql(u8, shape.child, "c_void")) "void" else primitiveType(shape.child) orelse shape.child;
             try out.appendSlice(allocator, child);
             try out.appendSlice(allocator, if (shape.mutability == .mut) " *" else " const *");
@@ -2553,4 +2591,96 @@ test "executable C renderer guards statement-owned parameter scalar store with e
     try std.testing.expect(!canEmitBody(&body));
     places[0].projections[0] = .{ .index = value_id };
     try std.testing.expect(!canEmitBody(&body));
+}
+
+test "executable C renderer validates a slice once with an exact representation edge" {
+    const slice_ty: mir.ValueType = .{ .pointer = .{ .kind = .slice, .mutability = .@"const", .child = "u32" } };
+    const source: mir.SourcePoint = .{ .line = 1, .column = 35, .offset = 34, .len = 2 };
+    const entry = mir.BlockId.fromIndex(0);
+    const trap = mir.BlockId.fromIndex(1);
+    const return_statement = mir.InstId.fromIndex(0);
+    var locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "items" }};
+    var parameters = [_]mir.ExecutableParameter{.{
+        .local = mir.LocalId.fromIndex(0),
+        .ty = slice_ty,
+        .type_id = mir.TypeId.fromIndex(0),
+        .source = source,
+        .span_id = mir.SpanId.fromIndex(0),
+    }};
+    var expressions = [_]mir.ExecutableExpression{
+        .{
+            .id = mir.ExprId.fromIndex(0),
+            .block_id = entry,
+            .owner_statement = return_statement,
+            .source = source,
+            .span_id = mir.SpanId.fromIndex(0),
+            .result_ty = slice_ty,
+            .type_id = mir.TypeId.fromIndex(0),
+            .operation = .{ .local = mir.LocalId.fromIndex(0) },
+        },
+        .{
+            .id = mir.ExprId.fromIndex(1),
+            .block_id = entry,
+            .owner_statement = return_statement,
+            .source = source,
+            .span_id = mir.SpanId.fromIndex(0),
+            .result_ty = slice_ty,
+            .type_id = mir.TypeId.fromIndex(0),
+            .operation = .{ .representation_check = .{ .operand = mir.ExprId.fromIndex(0), .kind = .valid_slice } },
+        },
+    };
+    var edges = [_]mir.ExecutableTrapEdge{
+        .{ .owner = .{ .expression = mir.ExprId.fromIndex(1) }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
+        .{ .owner = .{ .expression = mir.ExprId.fromIndex(1) }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .span_id = mir.SpanId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = entry, .operation = .return_ },
+        .{ .block_id = trap, .operation = .{ .trap_ = .InvalidRepresentation } },
+    };
+    var body: mir.ExecutableBody = .{
+        .parameters = &parameters,
+        .locals = &locals,
+        .expressions = &expressions,
+        .trap_edges = edges[0..1],
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+
+    try std.testing.expect(canEmitBody(&body));
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "__auto_type mc_exec_tmp_0 = items;"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "mc_exec_tmp_1.ptr == NULL && mc_exec_tmp_1.len != 0"));
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_1;") != null);
+
+    body.trap_edges = &.{};
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = edges[0..2];
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = edges[0..1];
+    edges[0].kind = .Bounds;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].kind = .InvalidRepresentation;
+    edges[0].source = .bounds_check;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].source = .representation_check;
+    edges[0].from_block = trap;
+    try std.testing.expect(!canEmitBody(&body));
+    edges[0].from_block = entry;
+
+    const rejected_types = [_]mir.ValueType{
+        .{ .nullable_pointer = .{ .kind = .slice, .mutability = .@"const", .child = "u32" } },
+        .{ .pointer = .{ .kind = .raw_many, .mutability = .@"const", .child = "u32" } },
+        .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } },
+        .{ .array = "u32" },
+        .cstr,
+        .{ .closed_enum = "State" },
+    };
+    for (rejected_types) |rejected| {
+        expressions[0].result_ty = rejected;
+        expressions[1].result_ty = rejected;
+        try std.testing.expect(!canEmitBody(&body));
+    }
 }

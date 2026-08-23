@@ -656,12 +656,17 @@ pub const ExecutableMemoryAccessKind = enum {
 /// predicate succeeds.
 pub const ExecutableRepresentationCheckKind = enum {
     nonnull_pointer,
+    valid_slice,
 
     pub fn typesValid(kind: ExecutableRepresentationCheckKind, result: ValueType, operand: ValueType) bool {
         if (!TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operand))) return false;
         return switch (kind) {
             .nonnull_pointer => switch (result) {
                 .pointer => |shape| shape.kind == .single,
+                else => false,
+            },
+            .valid_slice => switch (result) {
+                .pointer => |shape| shape.kind == .slice,
                 else => false,
             },
         };

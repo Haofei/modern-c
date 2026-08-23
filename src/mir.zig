@@ -7401,9 +7401,10 @@ const FunctionBuilder = struct {
                 .start = try self.ensureExecutableExpr(node.start.*),
                 .end = try self.ensureExecutableExpr(node.end.*),
             } },
-            .member => |node| if (std.mem.eql(u8, node.name.text, "len"))
-                .{ .slice_length = try self.ensureExecutableExpr(node.base.*) }
-            else member: {
+            .member => |node| if (std.mem.eql(u8, node.name.text, "len")) slice_length: {
+                result_ty = .{ .integer = "usize" };
+                break :slice_length .{ .slice_length = try self.ensureExecutableExpr(node.base.*) };
+            } else member: {
                 const field_index = self.memberFieldIndex(node) orelse
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
                 const base_ty = self.exprType(node.base.*);
@@ -7597,18 +7598,32 @@ const FunctionBuilder = struct {
             .type_id = type_id,
             .operation = operation,
         });
-        const needs_nonnull_check = switch (operation) {
-            .local => switch (expr.kind) {
-                .ident => |ident| switch (result_ty) {
-                    .pointer => |shape| shape.kind == .single and
-                        !self.proven_nonnull_bindings.contains(ident.text),
-                    else => false,
+        const representation_check_kind: ?mir_model.ExecutableRepresentationCheckKind = switch (result_ty) {
+            .pointer => |shape| switch (shape.kind) {
+                .single => switch (operation) {
+                    .local => switch (expr.kind) {
+                        .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
+                        else => null,
+                    },
+                    else => null,
                 },
-                else => false,
+                .slice => switch (operation) {
+                    // These are precisely the value-producing expression
+                    // shapes for which the legacy semantic pass records an
+                    // InvalidRepresentation edge. Bounds remain owned by
+                    // index/range operations and are deliberately excluded.
+                    .local, .member, .cast => .valid_slice,
+                    .direct_call, .indirect_call => switch (expr.kind) {
+                        .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .valid_slice else null,
+                        else => null,
+                    },
+                    else => null,
+                },
+                .raw_many => null,
             },
-            else => false,
+            else => null,
         };
-        if (!needs_nonnull_check) return id;
+        const check_kind = representation_check_kind orelse return id;
 
         const checked_id = ExprId.fromIndex(self.executable_expressions.items.len);
         try self.executable_expressions.append(self.allocator, .{
@@ -7621,9 +7636,15 @@ const FunctionBuilder = struct {
             .type_id = type_id,
             .operation = .{ .representation_check = .{
                 .operand = id,
-                .kind = .nonnull_pointer,
+                .kind = check_kind,
             } },
         });
+        // Some source operations (notably slice member access) record the
+        // semantic representation edge before recursively materializing the
+        // checked operand. Attach that already-existing edge now; operations
+        // that record it later still use addRuntimeRepresentationCheck's
+        // normal attachment path.
+        if (self.trap_edges.items.len != 0) try self.attachExecutableRepresentationTrapEdge(expr.span);
         return checked_id;
     }
 

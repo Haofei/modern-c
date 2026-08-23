@@ -10,6 +10,30 @@ const mir = @import("mir.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM valid slice representation check uses canonical executable MIR" {
+    const source =
+        \\fn identity_slice(items: []const u32) -> []const u32 {
+        \\    return items;
+        \\}
+        \\fn slice_len(items: []const u32) -> usize {
+        \\    return items.len;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_valid_slice.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal { ptr, i64 } @identity_slice");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "extractvalue { ptr, i64 } %mc_arg_0, 0");
+    try expectContains(body, "extractvalue { ptr, i64 } %mc_arg_0, 1");
+    try expectContains(body, "icmp eq ptr");
+    try expectContains(body, "icmp ne i64");
+    try expectContains(body, "and i1");
+    try expectContains(body, "ret { ptr, i64 } %mc_arg_0");
+    const len_body = try llvmFunctionBody(output.items, "define internal i64 @slice_len");
+    try expectContains(len_body, "; canonical executable MIR");
+}
+
 test "LLVM shared structural body plans cover nested, aggregate, workflow, and hoisted-loop families" {
     const Case = struct { name: []const u8, path: []const u8, function_header: []const u8, needle: []const u8 };
     const cases = [_]Case{
@@ -418,11 +442,13 @@ test "LLVM emits slice length returns from shared MIR plan without body fallback
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_slice_length_return.mc", source, &output);
 
     const const_body = try llvmFunctionBody(output.items, "define internal i64 @const_slice_len");
-    try expectContains(const_body, "extractvalue { ptr, i64 } %values, 1");
-    try expectContains(const_body, "ret i64 %t");
+    try expectContains(const_body, "extractvalue { ptr, i64 } %mc_arg_0, 0");
+    try expectContains(const_body, "extractvalue { ptr, i64 } %mc_arg_0, 1");
+    try expectContains(const_body, "ret i64 %mc_expr_tmp_");
     const mutable_body = try llvmFunctionBody(output.items, "define internal i64 @mutable_slice_len");
-    try expectContains(mutable_body, "extractvalue { ptr, i64 } %values, 1");
-    try expectContains(mutable_body, "ret i64 %t");
+    try expectContains(mutable_body, "extractvalue { ptr, i64 } %mc_arg_0, 0");
+    try expectContains(mutable_body, "extractvalue { ptr, i64 } %mc_arg_0, 1");
+    try expectContains(mutable_body, "ret i64 %mc_expr_tmp_");
 }
 
 test "LLVM emits slice foreach local updates from MIR without body fallback" {

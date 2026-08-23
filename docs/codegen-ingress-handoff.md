@@ -347,21 +347,28 @@ offset expression, and the verifier admits only that builtin plus one deref.
 Load, address and mutable store use race-unordered access and no non-null
 representation edge. C emits the existing race helpers; LLVM reuses the GEP SSA
 value. The focused raw-many root is C **25/27** and LLVM **26/27** admitted. The
-522-root census is now C **930/1696 (54.8%)** and LLVM **929/1762 (52.7%)**,
-with 766/833 fallbacks. Computed raw-many places removed 19 fallbacks from each
+522-root census is now C **934/1696 (55.1%)** and LLVM **933/1762 (53.0%)**,
+with 762/829 fallbacks. Computed raw-many places removed 19 fallbacks from each
 backend; the following fixed-arity C-ABI call slice removed the remaining 11
 LLVM ingress mismatches. MIR now owns canonical parameter types and the
 variadic bit, while a syntax-free per-call ABI plan owns target
 `zeroext`/`signext`; variadic calls remain fail-closed on the legacy path.
 CheckedProgram now owns an independent copy of the canonical parameter-type
-vector, so equal-arity signature drift is rejected before codegen. Domain integer C-ABI
-arguments share their child integer extension class, and aggregate/unknown ABI
-classes fail closed instead of being mistaken for a valid no-extension class.
+vector, so equal-arity signature drift is rejected before codegen. Domain
+integer C-ABI arguments share their child integer extension class, and
+aggregate/unknown ABI classes fail closed instead of being mistaken for a valid
+no-extension class.
 `forget_unchecked` now crosses the same boundary as a typed unsafe builtin: its
 operand is evaluated once, no release operation is emitted, and signature
 aggregate metadata lets LLVM type linear resource parameters without AST body
 fallback. That made 11 more bodies producer-complete per backend and admitted
 11 C / 9 LLVM functions.
+Non-nullable slices now carry a typed `valid_slice` representation check in
+executable MIR. Both renderers evaluate the slice once and reject exactly
+`len != 0 && ptr == null`; nullable slices, ordinary/raw pointers, arrays and
+enums remain fail-closed. The broad census admitted 4 more functions per
+backend and projected 13 previously missing representation edges per backend;
+the remaining 9 in that group now expose independent producer invariants.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

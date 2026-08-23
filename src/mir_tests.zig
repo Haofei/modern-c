@@ -28,6 +28,50 @@ const SpanId = mir.SpanId;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
 const SymbolId = mir.SymbolId;
+
+test "executable MIR owns valid slice representation checks and rejects mutations" {
+    const source =
+        \\fn identity_slice(items: []const u32) -> []const u32 {
+        \\    return items;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_valid_slice.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "identity_slice") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    var check_index: ?usize = null;
+    for (function.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .representation_check => |check| if (check.kind == .valid_slice) {
+            check_index = index;
+        },
+        else => {},
+    };
+    const index = check_index orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+    try std.testing.expectEqual(mir.TrapKind.InvalidRepresentation, function.executable_body.trap_edges[0].kind);
+    try std.testing.expectEqual(mir.TrapSource.representation_check, function.executable_body.trap_edges[0].source);
+    try mir_executable_body.verify(function);
+
+    function.executable_body.expressions[index].operation.representation_check.kind = .nonnull_pointer;
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, mir_executable_body.verify(function));
+    function.executable_body.expressions[index].operation.representation_check.kind = .valid_slice;
+
+    const saved_edges = function.executable_body.trap_edges;
+    function.executable_body.trap_edges = &.{};
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, mir_executable_body.verify(function));
+    function.executable_body.trap_edges = saved_edges;
+
+    function.executable_body.trap_edges[0].kind = .Bounds;
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, mir_executable_body.verify(function));
+    function.executable_body.trap_edges[0].kind = .InvalidRepresentation;
+    function.executable_body.trap_edges[0].source = .bounds_check;
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, mir_executable_body.verify(function));
+    function.executable_body.trap_edges[0].source = .representation_check;
+    try mir_executable_body.verify(function);
+}
 const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;

@@ -2941,6 +2941,8 @@ pub const CEmitter = struct {
                     std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
                 .raw_many_pointer => |source_pointer| pointer.kind == .raw_many and pointer.mutability == source_pointer.mutability and
                     std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
+                .slice => |source_slice| pointer.kind == .slice and pointer.mutability == source_slice.mutability and
+                    std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_slice.child.*)) orelse return false),
                 else => false,
             },
             .nullable_pointer => |pointer| self.mirNullableControlPointerShapeMatches(pointer, resolved, true),
