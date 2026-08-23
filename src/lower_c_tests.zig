@@ -129,6 +129,51 @@ test "lower-c executable body renders broad CFG calls without AST fallback" {
     try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
 }
 
+test "lower-c executable MIR owns reflection constants without AST fallback" {
+    const source =
+        \\extern struct Packet {
+        \\    len: u16,
+        \\    tag: u8,
+        \\}
+        \\enum Mode: u8 { normal = 0 }
+        \\overlay union Overlay { byte: u8, word: u32 }
+        \\#[c_union]
+        \\struct CUnion { byte: u8, word: u64 }
+        \\fn packet_size() -> usize { return sizeof<Packet>(); }
+        \\fn packet_alignment() -> usize { return alignof<Packet>(); }
+        \\fn packet_tag_offset() -> usize { return field_offset<Packet>(.tag); }
+        \\fn packet_tag_bit_offset() -> usize { return bit_offset<Packet>(.tag); }
+        \\fn mode_repr() -> usize { return repr_of<Mode>(); }
+        \\fn overlay_size() -> usize { return sizeof<Overlay>(); }
+        \\fn overlay_word_offset() -> usize { return field_offset<Overlay>(.word); }
+        \\fn c_union_size() -> usize { return sizeof<CUnion>(); }
+        \\fn c_union_word_offset() -> usize { return field_offset<CUnion>(.word); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_executable_reflection_constants.mc", source, &output);
+
+    const packet_size = try cFunctionBody(output.items, "static uintptr_t packet_size(void)");
+    try expectContains(packet_size, "= 4;");
+    try expectContains(packet_size, "return mc_exec_tmp_");
+    const packet_alignment = try cFunctionBody(output.items, "static uintptr_t packet_alignment(void)");
+    try expectContains(packet_alignment, "= 2;");
+    const packet_tag_offset = try cFunctionBody(output.items, "static uintptr_t packet_tag_offset(void)");
+    try expectContains(packet_tag_offset, "= 2;");
+    const packet_tag_bit_offset = try cFunctionBody(output.items, "static uintptr_t packet_tag_bit_offset(void)");
+    try expectContains(packet_tag_bit_offset, "= 16;");
+    const mode_repr = try cFunctionBody(output.items, "static uintptr_t mode_repr(void)");
+    try expectContains(mode_repr, "= 1;");
+    const overlay_size = try cFunctionBody(output.items, "static uintptr_t overlay_size(void)");
+    try expectContains(overlay_size, "= 4;");
+    const overlay_word_offset = try cFunctionBody(output.items, "static uintptr_t overlay_word_offset(void)");
+    try expectContains(overlay_word_offset, "= 0;");
+    const c_union_size = try cFunctionBody(output.items, "static uintptr_t c_union_size(void)");
+    try expectContains(c_union_size, "= 8;");
+    const c_union_word_offset = try cFunctionBody(output.items, "static uintptr_t c_union_word_offset(void)");
+    try expectContains(c_union_word_offset, "= 0;");
+}
+
 test "lower-c emits slice length returns from MIR without body fallback" {
     const source =
         \\fn const_slice_len(values: []const u8) -> usize {
@@ -2837,8 +2882,9 @@ test "lower-c typed unary fast path never substitutes an operand descendant" {
     try appendCheckedCTest("c_mir_typed_unary_operand_root.mc", source, &output);
 
     const masked_bits = try cFunctionBody(output.items, "static float masked_bits(uint32_t x, uint32_t y)");
-    try expectContains(masked_bits, "(x & y)");
-    try expectContains(masked_bits, "__builtin_memcpy");
+    try expectContains(masked_bits, "mc_exec_tmp_2 = (mc_exec_tmp_0 & mc_exec_tmp_1);");
+    try expectContains(masked_bits, "__builtin_bit_cast(float, mc_exec_tmp_2)");
+    try expectNotContains(masked_bits, "__builtin_memcpy");
 
     const masked_phys = try cFunctionBody(output.items, "static uintptr_t masked_phys(uintptr_t x, uintptr_t y)");
     try expectContains(masked_phys, "return ((uintptr_t)((x & y)));");
@@ -12178,8 +12224,14 @@ test "lower-c f32 literal expressions compute in float, not double" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "1.7f") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "2.3f") != null);
+    // Canonical executable MIR owns the exact f32 payload.  Rendering it via a
+    // bit-cast is stronger than decimal spelling: Clang cannot promote the
+    // operands to double and then round the product back to f32.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "0x3FD9999A") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "0x40133333") != null);
+    try std.testing.expect(std.mem.count(u8, output.items, "__builtin_bit_cast(float") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "1.7f") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "2.3f") == null);
 }
 
 test "lower-c tuples desugar to one nominal struct with numeric field access" {

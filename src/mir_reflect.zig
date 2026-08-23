@@ -169,7 +169,7 @@ fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8
         return null;
     }
     const byte_offset = comptimeFieldOffset(env, ty, field, depth + 1) orelse return null;
-    return byte_offset * 8;
+    return std.math.mul(i128, byte_offset, 8) catch null;
 }
 
 const StructLayout = struct {
@@ -180,6 +180,26 @@ const StructLayout = struct {
 
 fn comptimeStructLayout(env: *const ReflectEnv, info: StructSummary, depth: usize, want_field: ?[]const u8) ?StructLayout {
     if (depth > 32) return null;
+    if (info.is_c_union) {
+        var max_size: i128 = 0;
+        var max_align: i128 = 1;
+        var found: ?i128 = null;
+        for (info.fields) |field| {
+            const size = comptimeSizeOf(env, field.ty, depth + 1) orelse return null;
+            const alignment = comptimeAlignOf(env, field.ty, depth + 1) orelse return null;
+            if (size < 0 or alignment <= 0) return null;
+            max_size = @max(max_size, size);
+            max_align = @max(max_align, alignment);
+            if (want_field) |wanted| {
+                if (std.mem.eql(u8, field.name.text, wanted)) found = 0;
+            }
+        }
+        return .{
+            .size = alignForward(max_size, max_align) orelse return null,
+            .alignment = max_align,
+            .field_offset = found,
+        };
+    }
     var offset: i128 = 0;
     var max_align: i128 = 1;
     var found: ?i128 = null;
@@ -198,7 +218,7 @@ fn comptimeStructLayout(env: *const ReflectEnv, info: StructSummary, depth: usiz
         if (want_field) |wanted| {
             if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
         }
-        offset += size;
+        offset = std.math.add(i128, offset, size) catch return null;
     }
     return .{
         .size = alignForward(offset, max_align) orelse return null,

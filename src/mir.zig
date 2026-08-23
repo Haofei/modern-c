@@ -918,7 +918,10 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                 try ast_structs.put(struct_decl.name.text, struct_decl);
             },
             .union_decl => |union_decl| try unions.put(union_decl.name.text, .{ .cases = union_decl.cases }),
-            .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields }),
+            // Overlay unions share the aggregate summary table during the
+            // transition, but their layout is union layout: every field starts
+            // at offset zero and the storage is the largest aligned field.
+            .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields, .is_c_union = true }),
             .packed_bits_decl => |decl_packed_bits| try packed_bits.put(decl_packed_bits.name.text, .{ .repr = decl_packed_bits.repr, .fields = decl_packed_bits.fields }),
             .type_alias => |alias| try aliases.put(alias.name.text, alias.ty),
             .trait_decl => |trait| try traits.put(trait.name.text, trait),
@@ -7099,6 +7102,17 @@ const FunctionBuilder = struct {
                 .unsupported,
             .call => |node| call: {
                 if (node.args.len > mir_model.max_executable_operands) break :call .unsupported;
+                // Reflection is a compile-time semantic operation.  Legalize it
+                // before the generic builtin path so executable MIR owns the
+                // selected value and codegen only renders an ordinary scalar
+                // literal.  An unresolved reflection query remains incomplete;
+                // it must never degrade into a runtime call or backend-side AST
+                // inference.
+                if (reflectionCallTargetKind(node) != null) {
+                    const value = self.executableReflectionConstant(expr) orelse break :call .unsupported;
+                    result_ty = .{ .integer = "usize" };
+                    break :call .{ .literal = .{ .integer = value } };
+                }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
@@ -7165,6 +7179,22 @@ const FunctionBuilder = struct {
             .operation = operation,
         });
         return id;
+    }
+
+    fn executableReflectionConstant(self: *FunctionBuilder, expr: ast.Expr) ?u128 {
+        var reflect_env = MirReflectEnv{
+            .enums = self.enums,
+            .structs = self.structs,
+            .unions = self.unions,
+            .packed_bits = self.packed_bits,
+            .aliases = self.aliases,
+        };
+        const value = mir_reflect.comptimeReflectThunk(&reflect_env, expr) orelse return null;
+        if (value < 0) return null;
+        // `usize` is currently admitted only for the qualified 64-bit targets.
+        // Keep the fold bounded to its semantic result type rather than relying
+        // on the build host's pointer width.
+        return std.math.cast(u64, value) orelse return null;
     }
 
     fn executableBinaryResultType(self: *FunctionBuilder, node: anytype) ValueType {
@@ -7301,7 +7331,6 @@ const FunctionBuilder = struct {
         if (self.cpuPauseCallValueType(call) != null) return .cpu_pause;
         if (self.fenceCallTargetKind(call.callee.*)) |kind| return kind;
         if (self.conversionCallFactInfo(call)) |target| return target.kind;
-        if (self.reflectionCallTarget(call)) |target| return target.kind;
         if (self.byteViewCallTarget(call)) |target| return target.kind;
         if (try self.semanticEscapeCallTarget(call)) |target| return target.kind;
         return null;

@@ -8,8 +8,9 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
-  checkpoint, not the deletion boundary: the 520-root broad census still finds
-  **1164/1804 C** and **1206/1870 LLVM** distinct functions using the AST body.
+  checkpoint, not the deletion boundary: the 521-root broad census still finds
+  **1031/1800 C** and **1088/1866 LLVM** distinct functions using the AST body
+  (C admits 42.7%, LLVM 41.7%).
   P0 therefore remains incomplete until the executable MIR body is general
   enough for that corpus and the artifact/branch is physically deleted.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
@@ -34,6 +35,14 @@ typed-fact driven: shared plans do not recognize fixture, function, local or
 callee spellings. Renamed-equivalent tests enforce that property. The work also
 caught an initializer-graph parent-slot overflow and prevented a C slice path
 from silently dropping race-safe load/store operations.
+
+The latest vertical slice moves scalar bitcast and value reflection into the
+canonical executable body. `sizeof`, `alignof`, `field_offset`, `bit_offset`
+and `repr_of` are evaluated once by the MIR semantic helper and become ordinary
+typed `usize` literals; C and LLVM no longer interpret their type/field syntax
+for admitted bodies. Unresolved layouts remain incomplete and use the legacy
+path. Overlay unions and `#[c_union]` summaries use union layout, and checked
+layout arithmetic prevents malformed input from wrapping a reflected value.
 
 ## The three goals, precisely
 
