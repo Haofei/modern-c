@@ -15,9 +15,9 @@ which function shapes still fall back. The strict ratchet corpus now admits
 zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
-The strict corpus is not the P0 completion definition. The current 2026-08-22
+The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 867 C and 929 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 834 C and 899 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -25,28 +25,27 @@ figures establish that final deletion now requires a
 general syntax-free executable MIR body and mechanical backend renderers; more
 strict-corpus recognizers are no longer an honest completion strategy.
 
-### Last completed broad census snapshot (2026-08-22)
+### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **829/1696 admitted (48.9%)**, 867 fallback, and
-LLVM **833/1762 admitted (47.3%)**, 929 fallback. There were no unsupported
+The 522-root sweep found C **862/1696 admitted (50.8%)**, 834 fallback, and
+LLVM **863/1762 admitted (49.0%)**, 899 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
-makes `raw_many_offset` a typed executable-MIR builtin with an explicit receiver,
-`usize` index, exact raw-many pointer result, evaluation order, and lexical
-unsafe authorization. Both mechanical renderers consume that contract; the
-focused raw-many corpus moved from C 9/40 and LLVM 12/40 to C 20/40 and LLVM
-21/40. Offset-result dereference/address operations remain closed until MIR owns
-an expression-root memory access with its race/representation semantics.
-`phys(...)` now also owns its fixed `PAddr` result type, so nested checked
-arithmetic such as `phys((address as usize) + amount)` preserves its overflow
-edge and lowers mechanically instead of ending in an unknown producer type.
+makes scalar `raw.load<T>` / `raw.store<T>` typed executable-MIR builtins. MIR
+owns the exact `PAddr` operand, payload/result type, lexical unsafe authority and
+left-to-right operand evaluation. C mechanically selects the existing volatile
+runtime helper (preserving sanitizer hooks); LLVM emits volatile load/store and
+keeps sanitizer profiles on the instrumented legacy path. Aggregate raw access
+remains fail-closed until canonical layout and instrumentation policy cross the
+boundary. This slice admitted 33 additional C functions and 30 LLVM functions.
+`raw_many_offset` and `phys(...)` remain canonical as described below.
 
-The census also ranks the canonical stopping layer. For C the remaining 867
-fallbacks are 823 `producer_incomplete`, 41 `renderer_unsupported`, 1
-`ingress_mismatch`, and 2 `ready`; LLVM is 861/56/9/3. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 834
+fallbacks are 790 `producer_incomplete`, 41 `renderer_unsupported`, 1
+`ingress_mismatch`, and 2 `ready`; LLVM is 828/57/11/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (170), `trap_projection` (164),
+The leading C reasons are `trap_projection` (164), `producer_invariant` (137),
 `noncanonical_literal` (116), `unsupported_member` (49), and `unlowered_index`
-(46); LLVM has 170/174/119/49/60 respectively. By-value struct member
+(46); LLVM has 174/137/119/49/60 respectively. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be
@@ -55,9 +54,9 @@ family (LLVM has the same distribution within a few functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
-| 116 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
-| 96 | 11% | return `<ident>` 2 blk 1 trap | pa_offset, slice_of_struct | same + a bounds/repr trap |
-| 60 | 7% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 108 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
+| 94 | 11% | return `<ident>` 2 blk 1 trap | slice_of_struct, slice_of_array | same + a bounds/repr trap |
+| 47 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
 | 46 | 5% | switch return `<ident>` 5+ blk | pa_align_down, SlotFuture__poll | general CFG + value graph |
 | 41 | 5% | return `<ident>` 3-4 blk 2+ trap | inferred_call_slice_element | same, more control flow |
 | 18 | 2% | return binary 2 blk 1 trap | counter_differs, ptr_differs | checked/atomic operands with exact trap edges |

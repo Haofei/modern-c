@@ -12239,6 +12239,33 @@ test "lower-c emits raw-many offset from typed MIR without body fallback" {
     try expectNeedlesInOrder(body, &.{ "= pointer;", "= next_index();", " + ", "return mc_exec_tmp_" });
 }
 
+test "lower-c emits raw scalar load and store from typed MIR without body fallback" {
+    const source =
+        \\fn load(address: PAddr) -> u32 { unsafe { return raw.load<u32>(address); } }
+        \\fn store(address: PAddr, value: u32) -> void { unsafe { raw.store<u32>(address, value); } }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "raw_scalar_executable.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, module.decls, .{});
+    defer module_mir.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, module.decls, &module_mir, &output, .kernel, "raw_scalar_executable.mc", .{}, false, null);
+    const load = try cFunctionBody(output.items, "static uint32_t load(uintptr_t address)");
+    try expectContains(load, "/* canonical executable MIR */");
+    try expectContains(load, "mc_raw_load_u32(");
+    const store = try cFunctionBody(output.items, "static void store(uintptr_t address, uint32_t value)");
+    try expectContains(store, "/* canonical executable MIR */");
+    try expectContains(store, "mc_raw_store_u32(");
+}
+
 test "lower-c admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
     const source =
         \\fn u_and(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a & b; }
@@ -12855,7 +12882,11 @@ test "lower-c sequences raw store address and value operands" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp0 = next_addr();\n        uint8_t mc_tmp1 = next_byte();\n        uint8_t mc_tmp2 = box_byte(mc_tmp1);\n        mc_raw_store_u8(mc_tmp0, mc_tmp2);") != null);
+    try expectContains(output.items, "/* canonical executable MIR */");
+    try expectContains(output.items, "mc_exec_tmp_0 = next_addr();");
+    try expectContains(output.items, "mc_exec_tmp_1 = next_byte();");
+    try expectContains(output.items, "mc_exec_tmp_2 = box_byte(mc_exec_tmp_1);");
+    try expectContains(output.items, "mc_raw_store_u8(mc_exec_tmp_0, mc_exec_tmp_2);");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_raw_store_u8(next_addr(), box_byte(next_byte()))") == null);
 }
 

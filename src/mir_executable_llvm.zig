@@ -701,6 +701,26 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, element_text, operands[0].spelling, operands[1].spelling });
                 return .{ .ty = "ptr", .spelling = result };
             },
+            .raw_load => {
+                const address = operands[0];
+                if (!std.mem.eql(u8, address.ty, "i64") or scalarLlvmType(expression.result_ty) == null) return error.InvalidBody;
+                const pointer = try self.temp();
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ pointer, address.spelling });
+                try self.output.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ result, result_ty, pointer });
+                return .{ .ty = result_ty, .spelling = result };
+            },
+            .raw_store => {
+                const address = operands[0];
+                const value = operands[1];
+                if (!std.mem.eql(u8, result_ty, "void") or !std.mem.eql(u8, address.ty, "i64") or
+                    scalarLlvmType(self.body.expressions[call.arguments[1].index()].result_ty) == null)
+                    return error.InvalidBody;
+                const pointer = try self.temp();
+                try self.output.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ pointer, address.spelling });
+                try self.output.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ value.ty, value.spelling, pointer });
+                return .{ .ty = "void", .spelling = "" };
+            },
             else => return error.Unsupported,
         };
     }
@@ -975,9 +995,9 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 }
 
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
-    if ((call.kind == .raw_many_offset) != call.unsafe_authorized) return false;
+    if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_store => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;

@@ -5389,7 +5389,13 @@ const LlvmEmitter = struct {
             // The syntax-free renderer performs the closed, typed admission
             // for builtin operations.  Re-rejecting the whole union here kept
             // even fully modelled pure builtins on the AST fallback path.
-            .builtin_call => {},
+            .builtin_call => |call| {
+                // The standalone renderer deliberately has no profile state.
+                // Raw scalar accesses are therefore admitted here only when
+                // no sanitizer instrumentation would be required; the legacy
+                // path remains authoritative for instrumented builds.
+                if ((call.kind == .raw_load or call.kind == .raw_store) and (self.ksan or self.msan or self.csan)) return false;
+            },
             .indirect_call => return false,
             .address_of => {
                 switch (expression.result_ty) {

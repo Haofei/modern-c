@@ -1,7 +1,7 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the per-file module cutover and strict-corpus body-plan cutover.
+2026-08-23 after the per-file module cutover and strict-corpus body-plan cutover.
 
 ## TL;DR
 
@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **884/1696 C** and **942/1762 LLVM** distinct functions using the AST
-  body (C admits 47.9%, LLVM 46.5%). Report mode intentionally preserves
+  finds **834/1696 C** and **899/1762 LLVM** distinct functions using the AST
+  body (C admits 50.8%, LLVM 49.0%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -298,12 +298,19 @@ side-effecting bodies, and general loops remain fail-closed.
 
 ## Next work
 
-The raw-many offset slice is now canonical for direct values and nested call
+Scalar `raw.load<T>` and `raw.store<T>` are now canonical for supported scalar
+payloads. Their executable-MIR call owns a typed `PAddr`, exact payload/result,
+lexical unsafe authority and operand order. C uses its existing volatile helper,
+while LLVM emits a volatile access and declines the canonical path when a
+sanitizer profile needs legacy instrumentation. Aggregate payloads remain
+fail-closed. The broad census moved to C 862/1696 and LLVM 863/1762 admitted,
+removing 33 and 30 fallbacks respectively.
+
+The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced
 `usize` index, exact raw-many pointer type, evaluation order, and an
 `unsafe_authorized` bit verified before codegen. The C and LLVM renderers emit
-pointer addition/GEP mechanically. The 522-root broad census is now C 829/1696
-and LLVM 833/1762 admitted; the focused raw-many corpus is C 20/40 and LLVM
+pointer addition/GEP mechanically. The focused raw-many corpus is C 20/40 and LLVM
 21/40. Do not reopen `p.offset(i).*` with an AST recognizer: its correct next
 primitive is an expression-root load/store/address operation carrying the
 race-unordered access mode and representation edge.

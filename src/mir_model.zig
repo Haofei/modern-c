@@ -567,6 +567,33 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
                 TypeKey.fromValueType(.{ .integer = "usize" }),
             );
         },
+        .raw_load => operands.len == 1 and isExecutableRawScalar(result) and switch (operands[0]) {
+            .address => |class| class == .paddr,
+            else => false,
+        },
+        .raw_store => operands.len == 2 and result == .void and isExecutableRawScalar(operands[1]) and switch (operands[0]) {
+            .address => |class| class == .paddr,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+pub fn executableBuiltinRequiresUnsafe(kind: CallTargetKind) bool {
+    return switch (kind) {
+        .raw_many_offset, .raw_load, .raw_store => true,
+        else => false,
+    };
+}
+
+fn isExecutableRawScalar(ty: ValueType) bool {
+    return switch (ty) {
+        .bool, .address => true,
+        .integer => |name| std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+            std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "usize") or
+            std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "i16") or std.mem.eql(u8, name, "i32") or
+            std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize"),
+        .float => |name| std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64"),
         else => false,
     };
 }

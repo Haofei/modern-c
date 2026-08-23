@@ -7296,7 +7296,12 @@ const FunctionBuilder = struct {
                     break :call .{ .literal = .{ .integer = value } };
                 }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
-                    if (kind == .phys) result_ty = .{ .address = .paddr };
+                    const raw_target = self.rawCallTarget(node);
+                    if (kind == .phys) {
+                        result_ty = .{ .address = .paddr };
+                    } else if (raw_target) |target| {
+                        if (target.kind == .raw_load or target.kind == .raw_store) result_ty = target.result_ty;
+                    }
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     const receiver = if (kind == .raw_many_offset)
                         (memberExpr(node.callee.*) orelse
@@ -7308,7 +7313,7 @@ const FunctionBuilder = struct {
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
                         .kind = kind,
-                        .unsafe_authorized = kind == .raw_many_offset and self.active_unsafe,
+                        .unsafe_authorized = mir_model.executableBuiltinRequiresUnsafe(kind) and self.active_unsafe,
                         .callee_source = callee_source,
                         .callee_span_id = try self.internSpanId(callee_source),
                         .argument_count = argument_count,
@@ -7318,9 +7323,14 @@ const FunctionBuilder = struct {
                         call_value.arguments[0] = try self.ensureExecutableExprAs(base, result_ty);
                         argument_index = 1;
                     }
-                    for (node.args) |argument| {
+                    for (node.args, 0..) |argument, source_index| {
                         call_value.arguments[argument_index] = if (kind == .raw_many_offset)
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
+                        else if (raw_target) |target|
+                            if (target.kind == .raw_load or target.kind == .raw_store)
+                                try self.ensureExecutableExprAs(argument, if (source_index == 0) target.address_ty else target.payload_ty)
+                            else
+                                try self.ensureExecutableExpr(argument)
                         else
                             try self.ensureExecutableExpr(argument);
                         if (kind == .wrapping_add) self.contextualizeExecutableLiteral(call_value.arguments[argument_index], result_ty);

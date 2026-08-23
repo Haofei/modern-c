@@ -476,9 +476,9 @@ fn builtinCallSupported(
     expression: mir.ExecutableExpression,
     call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
 ) bool {
-    if ((call.kind == .raw_many_offset) != call.unsafe_authorized) return false;
+    if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_store => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -538,6 +538,21 @@ fn emitBuiltinCall(
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, " + ");
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
+            try out.append(allocator, ')');
+        },
+        .raw_load => {
+            const scalar = scalarMemoryInfo(result_ty) orelse return error.UnsupportedType;
+            try out.print(allocator, "mc_raw_load_{s}(", .{scalar.helper_suffix});
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.append(allocator, ')');
+        },
+        .raw_store => {
+            const value = expressionById(body, call.arguments[1]) orelse return error.InvalidExpression;
+            const scalar = scalarMemoryInfo(value.result_ty) orelse return error.UnsupportedType;
+            try out.print(allocator, "mc_raw_store_{s}(", .{scalar.helper_suffix});
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ", ");
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.append(allocator, ')');
         },

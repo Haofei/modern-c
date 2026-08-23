@@ -235,7 +235,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         },
         .builtin_call => |call| {
             try verifySpan(function, call.callee_span_id, call.callee_source);
-            if ((call.kind == .raw_many_offset) != call.unsafe_authorized) return error.InvalidUnsafeAuthorization;
+            if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return error.InvalidUnsafeAuthorization;
             try verifyArguments(body, value, call.arguments, call.argument_count);
             var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
             for (call.arguments[0..call.argument_count], 0..) |argument, index| {
@@ -490,7 +490,7 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
         .unsupported, .deref, .index, .range_slice, .array => return true,
         .builtin_call => |call| {
-            if ((call.kind == .raw_many_offset) != call.unsafe_authorized) return true;
+            if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return true;
             if (call.argument_count > mir.max_executable_operands) return true;
             var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
             for (call.arguments[0..call.argument_count], 0..) |argument, index| {

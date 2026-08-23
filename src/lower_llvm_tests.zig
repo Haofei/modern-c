@@ -9915,7 +9915,9 @@ test "LLVM inferred local raw result calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_raw_local_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%value") != null);
+    const raw_load = try llvmFunctionBody(complete_output.items, "define internal i32 @inferred_raw_load");
+    try expectContains(raw_load, "; canonical executable MIR");
+    try expectContains(raw_load, "load volatile i32, ptr");
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%pointer") != null);
 
     for ([_][]const u8{ "inferred_raw_load", "inferred_raw_ptr" }) |name| {
@@ -14320,6 +14322,25 @@ test "LLVM canonical executable MIR lowers pure scalar bitcasts without body fal
     try expectContains(signed_to_unsigned, "; canonical executable MIR");
     try expectContains(signed_to_unsigned, "ret i32 %mc_arg_0");
     try expectNotContains(signed_to_unsigned, "bitcast");
+}
+
+test "LLVM canonical executable MIR emits raw scalar load and store without AST fallback" {
+    const source =
+        \\fn load(address: PAddr) -> u32 { unsafe { return raw.load<u32>(address); } }
+        \\fn store(address: PAddr, value: u32) -> void { unsafe { raw.store<u32>(address, value); } }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_raw_scalar.mc", source, &output);
+
+    const load = try llvmFunctionBody(output.items, "define internal i32 @load");
+    try expectContains(load, "; canonical executable MIR");
+    try expectContains(load, "inttoptr i64 %mc_arg_0 to ptr");
+    try expectContains(load, "load volatile i32, ptr");
+    const store = try llvmFunctionBody(output.items, "define internal void @store");
+    try expectContains(store, "; canonical executable MIR");
+    try expectContains(store, "inttoptr i64 %mc_arg_0 to ptr");
+    try expectContains(store, "store volatile i32 %mc_arg_1, ptr");
 }
 
 test "LLVM canonical executable MIR owns reflection constants without AST fallback" {

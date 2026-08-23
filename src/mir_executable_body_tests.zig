@@ -399,6 +399,48 @@ test "raw many offset owns its receiver and index operands" {
     try executable.verify(function);
 }
 
+test "raw scalar load and store carry typed operands and unsafe authority" {
+    const source =
+        \\fn load(address: PAddr) -> u32 {
+        \\    unsafe { return raw.load<u32>(address); }
+        \\}
+        \\fn store(address: PAddr, value: u32) -> void {
+        \\    unsafe { raw.store<u32>(address, value); }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_raw_scalar.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions, 0..) |*function, function_index| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        const expected_kind: mir.CallTargetKind = if (function_index == 0) .raw_load else .raw_store;
+        var saw_raw = false;
+        for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+            .builtin_call => |*call| if (call.kind == expected_kind) {
+                saw_raw = true;
+                try std.testing.expect(call.unsafe_authorized);
+                try std.testing.expectEqual(if (expected_kind == .raw_load) @as(usize, 1) else @as(usize, 2), call.argument_count);
+                const saved = call.unsafe_authorized;
+                call.unsafe_authorized = false;
+                try std.testing.expectError(error.InvalidUnsafeAuthorization, executable.verify(function));
+                call.unsafe_authorized = saved;
+            },
+            else => {},
+        };
+        try std.testing.expect(saw_raw);
+        try executable.verify(function);
+    }
+}
+
 test "physical address construction owns nested checked arithmetic" {
     const source =
         \\fn offset(address: PAddr, amount: usize) -> PAddr {
