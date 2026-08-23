@@ -6501,6 +6501,9 @@ test "MIR records forget events for no-drop move resources" {
         \\    unsafe { forget_unchecked(token); }
         \\    return 0;
         \\}
+        \\fn forget_parameter(token: Token) -> void {
+        \\    unsafe { forget_unchecked(token); }
+        \\}
     ;
     var parsed = try test_support.parseModule("mir_no_drop_forget.mc", source);
     defer parsed.deinit();
@@ -6508,6 +6511,20 @@ test "MIR records forget events for no-drop move resources" {
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "forget_token") orelse return error.TestUnexpectedResult;
+    const executable_function = functionByName(module_mir, "forget_parameter") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(executable_function.executable_body.complete);
+    var forget_expression_index: ?usize = null;
+    for (executable_function.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .builtin_call => |call| if (call.kind == .forget_unchecked) {
+            try std.testing.expect(call.unsafe_authorized);
+            try std.testing.expectEqual(@as(usize, 1), call.argument_count);
+            try std.testing.expectEqual(mir.ValueType.void, expression.result_ty);
+            forget_expression_index = index;
+        },
+        else => {},
+    };
+    try std.testing.expect(forget_expression_index != null);
+    try mir_executable_body.verify(&executable_function);
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, function.ownership_events[0].kind);
     try std.testing.expectEqual(mir.OwnershipEventKind.init, function.ownership_events[1].kind);
@@ -6515,6 +6532,17 @@ test "MIR records forget events for no-drop move resources" {
     try std.testing.expect(function.ownership_events[2].place.root_type_symbol_id.isValid());
     try std.testing.expect(!function.ownership_events[2].drop_glue_symbol_id.isValid());
     try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "forget_parameter") orelse return error.TestUnexpectedResult;
+    const forget_expression = &mutable_function.executable_body.expressions[forget_expression_index.?];
+    forget_expression.operation.builtin_call.unsafe_authorized = false;
+    try std.testing.expectError(error.InvalidUnsafeAuthorization, mir_executable_body.verify(mutable_function));
+    forget_expression.operation.builtin_call.unsafe_authorized = true;
+
+    forget_expression.operation.builtin_call.argument_count = 0;
+    try std.testing.expectError(error.InvalidArgumentCount, mir_executable_body.verify(mutable_function));
+    forget_expression.operation.builtin_call.argument_count = 1;
+    try mir_executable_body.verify(mutable_function);
 }
 
 test "MIR cleanup cfg records ordinary defer cleanup actions" {

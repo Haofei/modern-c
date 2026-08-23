@@ -6270,6 +6270,16 @@ const FunctionBuilder = struct {
         };
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
+            switch (param_ty) {
+                .struct_ => |name| if (structs.get(name)) |summary| {
+                    // LLVM needs the canonical aggregate shape even when a
+                    // resource parameter is only consumed by a no-runtime-op
+                    // ownership intrinsic such as `forget_unchecked`.
+                    if (!try builder.internExecutableAggregateType(param_ty, .declared_struct, summary.fields))
+                        builder.executable_supported = false;
+                },
+                else => {},
+            }
             const executable_local = try builder.internExecutableLocal(param.name.text);
             const parameter_source = builder.sourcePoint(param.name.span);
             try builder.executable_parameters.append(allocator, .{
@@ -7433,7 +7443,7 @@ const FunctionBuilder = struct {
                     const raw_target = self.rawCallTarget(node);
                     if (kind == .phys) {
                         result_ty = .{ .address = .paddr };
-                    } else if (kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
+                    } else if (kind == .forget_unchecked or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
                         if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store) result_ty = target.result_ty;

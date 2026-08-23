@@ -489,7 +489,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -579,6 +579,15 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, ", ");
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.append(allocator, ')');
+        },
+        .forget_unchecked => {
+            // Operand expressions are materialized in source order before the
+            // owning statement is emitted.  Referencing the materialized value
+            // here preserves exactly-once evaluation while intentionally
+            // emitting no release operation.
+            try out.appendSlice(allocator, "((void)(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "))");
         },
         .fence_full, .fence_release, .fence_acquire => try out.appendSlice(allocator, switch (call.kind) {
             .fence_full => "mc_barrier_full()",

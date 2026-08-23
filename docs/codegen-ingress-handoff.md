@@ -347,12 +347,17 @@ offset expression, and the verifier admits only that builtin plus one deref.
 Load, address and mutable store use race-unordered access and no non-null
 representation edge. C emits the existing race helpers; LLVM reuses the GEP SSA
 value. The focused raw-many root is C **25/27** and LLVM **26/27** admitted. The
-522-root census is now C **919/1696 (54.2%)** and LLVM **920/1762 (52.2%)**,
-with 777/842 fallbacks. Computed raw-many places removed 19 fallbacks from each
+522-root census is now C **930/1696 (54.8%)** and LLVM **929/1762 (52.7%)**,
+with 766/833 fallbacks. Computed raw-many places removed 19 fallbacks from each
 backend; the following fixed-arity C-ABI call slice removed the remaining 11
 LLVM ingress mismatches. MIR now owns canonical parameter types and the
 variadic bit, while a syntax-free per-call ABI plan owns target
 `zeroext`/`signext`; variadic calls remain fail-closed on the legacy path.
+`forget_unchecked` now crosses the same boundary as a typed unsafe builtin: its
+operand is evaluated once, no release operation is emitted, and signature
+aggregate metadata lets LLVM type linear resource parameters without AST body
+fallback. That made 11 more bodies producer-complete per backend and admitted
+11 C / 9 LLVM functions.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

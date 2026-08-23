@@ -6122,6 +6122,27 @@ test "lower-c discard calls require MIR identity and argument type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
 }
 
+test "lower-c executable MIR forget evaluates its operand once without a release call" {
+    const source =
+        \\linear struct Token { id: u32 }
+        \\fn next_value() -> u32 { return 41; }
+        \\fn forget_token(token: Token) -> void {
+        \\    unsafe { forget_unchecked(token); }
+        \\}
+        \\fn forget_result() -> u32 {
+        \\    unsafe { forget_unchecked(next_value()); }
+        \\    return 42;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_discard_value.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "next_value()"));
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "forget_unchecked(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR: forget_token */") != null);
+}
+
 test "lower-c wrapping arithmetic requires MIR identity and operand/result type facts" {
     const source =
         \\fn wrapping_fact_gate(a: u32) -> u32 {

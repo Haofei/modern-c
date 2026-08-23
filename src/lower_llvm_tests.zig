@@ -5851,6 +5851,29 @@ test "LLVM discard calls require MIR identity and argument type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, "llvm_discard_call_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM executable MIR forget evaluates its operand once without a release call" {
+    const source =
+        \\linear struct Token { id: u32 }
+        \\fn next_value() -> u32 { return 41; }
+        \\fn forget_token(token: Token) -> void {
+        \\    unsafe { forget_unchecked(token); }
+        \\}
+        \\fn forget_result() -> u32 {
+        \\    unsafe { forget_unchecked(next_value()); }
+        \\    return 42;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_discard_value.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "@forget_result");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call i32 @next_value()"));
+    try std.testing.expect(std.mem.indexOf(u8, body, "forget_unchecked(") == null);
+    const token_body = try llvmFunctionBody(output.items, "@forget_token");
+    try std.testing.expect(std.mem.indexOf(u8, token_body, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, token_body, "forget_unchecked(") == null);
+}
+
 test "LLVM emits auto-drop release for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }

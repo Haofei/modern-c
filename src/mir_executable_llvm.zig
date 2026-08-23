@@ -853,6 +853,13 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ value.ty, value.spelling, pointer });
                 return .{ .ty = "void", .spelling = "" };
             },
+            .forget_unchecked => {
+                // `operands` were rendered above in source order.  Forgetting
+                // consumes the ownership obligation but has no LLVM runtime
+                // operation and, in particular, must not invoke drop glue.
+                if (!std.mem.eql(u8, result_ty, "void") or call.argument_count != 1) return error.InvalidBody;
+                return .{ .ty = "void", .spelling = "" };
+            },
             .fence_full, .fence_release, .fence_acquire => {
                 if (!std.mem.eql(u8, result_ty, "void")) return error.InvalidBody;
                 const ordering: []const u8 = switch (call.kind) {
@@ -1171,7 +1178,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
