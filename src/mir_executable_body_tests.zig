@@ -441,6 +441,44 @@ test "raw scalar load and store carry typed operands and unsafe authority" {
     }
 }
 
+test "fences are explicit typed void effects" {
+    const source =
+        \\fn sync() -> void {
+        \\    fence.release();
+        \\    fence.acquire();
+        \\    fence.full();
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_fences.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    var fence_count: usize = 0;
+    for (function.executable_body.expressions) |expression| switch (expression.operation) {
+        .builtin_call => |call| switch (call.kind) {
+            .fence_release, .fence_acquire, .fence_full => {
+                try std.testing.expectEqual(@as(usize, 0), call.argument_count);
+                try std.testing.expect(!call.unsafe_authorized);
+                try std.testing.expectEqual(mir.ValueType.void, expression.result_ty);
+                fence_count += 1;
+            },
+            else => {},
+        },
+        else => {},
+    };
+    try std.testing.expectEqual(@as(usize, 3), fence_count);
+}
+
 test "physical address construction owns nested checked arithmetic" {
     const source =
         \\fn offset(address: PAddr, amount: usize) -> PAddr {

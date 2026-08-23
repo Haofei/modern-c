@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **834/1696 C** and **899/1762 LLVM** distinct functions using the AST
-  body (C admits 50.8%, LLVM 49.0%). Report mode intentionally preserves
+  finds **829/1696 C** and **894/1762 LLVM** distinct functions using the AST
+  body (C admits 51.1%, LLVM 49.3%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -303,8 +303,10 @@ payloads. Their executable-MIR call owns a typed `PAddr`, exact payload/result,
 lexical unsafe authority and operand order. C uses its existing volatile helper,
 while LLVM emits a volatile access and declines the canonical path when a
 sanitizer profile needs legacy instrumentation. Aggregate payloads remain
-fail-closed. The broad census moved to C 862/1696 and LLVM 863/1762 admitted,
-removing 33 and 30 fallbacks respectively.
+fail-closed. `fence.release/acquire/full` also carry an explicit typed void
+effect and lower mechanically to the existing C barriers or LLVM fence
+orderings. The broad census moved to C 867/1696 and LLVM 868/1762 admitted,
+removing 38 and 35 fallbacks across the two machine-effect slices.
 
 The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced

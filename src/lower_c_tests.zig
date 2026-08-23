@@ -12243,6 +12243,7 @@ test "lower-c emits raw scalar load and store from typed MIR without body fallba
     const source =
         \\fn load(address: PAddr) -> u32 { unsafe { return raw.load<u32>(address); } }
         \\fn store(address: PAddr, value: u32) -> void { unsafe { raw.store<u32>(address, value); } }
+        \\fn sync() -> void { fence.release(); fence.acquire(); fence.full(); }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "raw_scalar_executable.mc", source);
     defer reporter.deinit();
@@ -12264,6 +12265,9 @@ test "lower-c emits raw scalar load and store from typed MIR without body fallba
     const store = try cFunctionBody(output.items, "static void store(uintptr_t address, uint32_t value)");
     try expectContains(store, "/* canonical executable MIR */");
     try expectContains(store, "mc_raw_store_u32(");
+    const sync = try cFunctionBody(output.items, "static void sync(void)");
+    try expectContains(sync, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(sync, &.{ "mc_barrier_release_before();", "mc_barrier_acquire_after();", "mc_barrier_full();" });
 }
 
 test "lower-c admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {

@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 834 C and 899 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 829 C and 894 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,25 +27,28 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **862/1696 admitted (50.8%)**, 834 fallback, and
-LLVM **863/1762 admitted (49.0%)**, 899 fallback. There were no unsupported
+The 522-root sweep found C **867/1696 admitted (51.1%)**, 829 fallback, and
+LLVM **868/1762 admitted (49.3%)**, 894 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
-makes scalar `raw.load<T>` / `raw.store<T>` typed executable-MIR builtins. MIR
+makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
+typed executable-MIR builtins. MIR
 owns the exact `PAddr` operand, payload/result type, lexical unsafe authority and
 left-to-right operand evaluation. C mechanically selects the existing volatile
 runtime helper (preserving sanitizer hooks); LLVM emits volatile load/store and
 keeps sanitizer profiles on the instrumented legacy path. Aggregate raw access
 remains fail-closed until canonical layout and instrumentation policy cross the
-boundary. This slice admitted 33 additional C functions and 30 LLVM functions.
+boundary. Fences carry a typed void effect and preserve release/acquire/full
+order in both renderers. Together these slices admitted 38 additional C
+functions and 35 LLVM functions.
 `raw_many_offset` and `phys(...)` remain canonical as described below.
 
-The census also ranks the canonical stopping layer. For C the remaining 834
-fallbacks are 790 `producer_incomplete`, 41 `renderer_unsupported`, 1
-`ingress_mismatch`, and 2 `ready`; LLVM is 828/57/11/3. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 829
+fallbacks are 785 `producer_incomplete`, 41 `renderer_unsupported`, 1
+`ingress_mismatch`, and 2 `ready`; LLVM is 823/57/11/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `trap_projection` (164), `producer_invariant` (137),
+The leading C reasons are `trap_projection` (164), `producer_invariant` (132),
 `noncanonical_literal` (116), `unsupported_member` (49), and `unlowered_index`
-(46); LLVM has 174/137/119/49/60 respectively. By-value struct member
+(46); LLVM has 174/132/119/49/60 respectively. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be
@@ -54,9 +57,9 @@ family (LLVM has the same distribution within a few functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
-| 108 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
+| 107 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
 | 94 | 11% | return `<ident>` 2 blk 1 trap | slice_of_struct, slice_of_array | same + a bounds/repr trap |
-| 47 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 45 | 5% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
 | 46 | 5% | switch return `<ident>` 5+ blk | pa_align_down, SlotFuture__poll | general CFG + value graph |
 | 41 | 5% | return `<ident>` 3-4 blk 2+ trap | inferred_call_slice_element | same, more control flow |
 | 18 | 2% | return binary 2 blk 1 trap | counter_differs, ptr_differs | checked/atomic operands with exact trap edges |

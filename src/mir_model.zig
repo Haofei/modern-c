@@ -575,6 +575,7 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             .address => |class| class == .paddr,
             else => false,
         },
+        .fence_full, .fence_release, .fence_acquire => operands.len == 0 and result == .void,
         else => false,
     };
 }

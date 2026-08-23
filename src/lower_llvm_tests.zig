@@ -10247,6 +10247,14 @@ fn expectContains(haystack: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
 }
 
+fn expectNeedlesInOrder(haystack: []const u8, needles: []const []const u8) !void {
+    var offset: usize = 0;
+    for (needles) |needle| {
+        const relative = std.mem.indexOf(u8, haystack[offset..], needle) orelse return error.TestUnexpectedResult;
+        offset += relative + needle.len;
+    }
+}
+
 fn expectContainsAny(haystack: []const u8, needles: []const []const u8) !void {
     for (needles) |needle| {
         if (std.mem.indexOf(u8, haystack, needle) != null) return;
@@ -14328,6 +14336,7 @@ test "LLVM canonical executable MIR emits raw scalar load and store without AST 
     const source =
         \\fn load(address: PAddr) -> u32 { unsafe { return raw.load<u32>(address); } }
         \\fn store(address: PAddr, value: u32) -> void { unsafe { raw.store<u32>(address, value); } }
+        \\fn sync() -> void { fence.release(); fence.acquire(); fence.full(); }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -14341,6 +14350,9 @@ test "LLVM canonical executable MIR emits raw scalar load and store without AST 
     try expectContains(store, "; canonical executable MIR");
     try expectContains(store, "inttoptr i64 %mc_arg_0 to ptr");
     try expectContains(store, "store volatile i32 %mc_arg_1, ptr");
+    const sync = try llvmFunctionBody(output.items, "define internal void @sync");
+    try expectContains(sync, "; canonical executable MIR");
+    try expectNeedlesInOrder(sync, &.{ "fence release", "fence acquire", "fence seq_cst" });
 }
 
 test "LLVM canonical executable MIR owns reflection constants without AST fallback" {

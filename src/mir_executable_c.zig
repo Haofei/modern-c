@@ -478,7 +478,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_store => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -556,6 +556,12 @@ fn emitBuiltinCall(
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.append(allocator, ')');
         },
+        .fence_full, .fence_release, .fence_acquire => try out.appendSlice(allocator, switch (call.kind) {
+            .fence_full => "mc_barrier_full()",
+            .fence_release => "mc_barrier_release_before()",
+            .fence_acquire => "mc_barrier_acquire_after()",
+            else => unreachable,
+        }),
         else => return error.UnsupportedOperation,
     }
 }

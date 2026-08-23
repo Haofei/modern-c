@@ -7299,6 +7299,8 @@ const FunctionBuilder = struct {
                     const raw_target = self.rawCallTarget(node);
                     if (kind == .phys) {
                         result_ty = .{ .address = .paddr };
+                    } else if (kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
+                        result_ty = .void;
                     } else if (raw_target) |target| {
                         if (target.kind == .raw_load or target.kind == .raw_store) result_ty = target.result_ty;
                     }
