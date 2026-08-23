@@ -26,6 +26,16 @@ pub fn emitBody(
     body: *const mir.ExecutableBody,
     indent: usize,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    return emitBodyWithSourcePath(allocator, out, body, indent, null);
+}
+
+pub fn emitBodyWithSourcePath(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    indent: usize,
+    source_path: ?[]const u8,
+) (RenderError || std.mem.Allocator.Error)!void {
     if (!body.isComplete() or !canEmitBody(body)) return error.IncompleteBody;
     if (body.terminators.len == 0) return error.InvalidBlock;
 
@@ -46,7 +56,7 @@ pub fn emitBody(
 
         for (body.statements) |statement| {
             if (!statement.block_id.eql(terminator.block_id)) continue;
-            try emitStatement(allocator, out, body, statement, indent + 1);
+            try emitStatement(allocator, out, body, statement, indent + 1, source_path);
         }
         try emitTerminator(allocator, out, body, terminator, indent + 1);
     }
@@ -58,8 +68,10 @@ fn emitStatement(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
     indent: usize,
+    source_path: ?[]const u8,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    try prepareStatementExpressions(allocator, out, body, statement, indent);
+    try prepareStatementExpressions(allocator, out, body, statement, indent, source_path);
+    try writeSourceLineDirective(allocator, out, source_path, statement.source);
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
@@ -263,6 +275,13 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |expression| {
         if (!supportsExpression(body, expression)) return false;
     }
+    // Every exceptional edge must be owned by the one checked arithmetic
+    // operation this renderer understands. This prevents a newly added edge
+    // kind from being silently ignored while still emitting ordinary C.
+    for (body.trap_edges) |edge| {
+        const owner = expressionById(body, edge.owner) orelse return false;
+        if (!checkedIntegerBinaryHasExactOverflowEdge(body, owner.*)) return false;
+    }
     for (body.places) |place| {
         if (place.projection_count != 0) return false;
         switch (place.root) {
@@ -317,13 +336,64 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
             else => true,
         },
         .unary => |unary| expressionById(body, unary.operand) != null,
-        .binary => |binary| binary.op != .logical_and and binary.op != .logical_or and expressionById(body, binary.left) != null and expressionById(body, binary.right) != null,
+        .binary => |binary| binarySupported(body, expression, binary),
         .cast => false,
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .indirect_call => |call| call.argument_count <= call.arguments.len and expressionById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call, .address_of, .deref, .index, .range_slice, .member, .array, .struct_, .unsupported => false,
     };
+}
+
+fn binarySupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    binary: @FieldType(mir.ExecutableExpression.Operation, "binary"),
+) bool {
+    if (binary.op == .logical_and or binary.op == .logical_or) return false;
+    if (expressionById(body, binary.left) == null or expressionById(body, binary.right) == null) return false;
+    return switch (binary.arithmetic) {
+        .ordinary => ownedTrapEdgeCount(body, expression.id) == 0,
+        .checked => checkedIntegerBinaryHasExactOverflowEdge(body, expression),
+    };
+}
+
+fn checkedIntegerBinaryHasExactOverflowEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const binary = switch (expression.operation) {
+        .binary => |value| value,
+        else => return false,
+    };
+    if (binary.arithmetic != .checked) return false;
+    if (binary.op != .add and binary.op != .sub and binary.op != .mul) return false;
+    if (integerSuffix(expression.result_ty) == null) return false;
+    const left = expressionById(body, binary.left) orelse return false;
+    const right = expressionById(body, binary.right) orelse return false;
+    const result_key = mir.TypeKey.fromValueType(expression.result_ty);
+    if (!mir.TypeKey.eql(result_key, mir.TypeKey.fromValueType(left.result_ty)) or
+        !mir.TypeKey.eql(result_key, mir.TypeKey.fromValueType(right.result_ty))) return false;
+    var matching: usize = 0;
+    var total: usize = 0;
+    for (body.trap_edges) |edge| {
+        if (!edge.owner.eql(expression.id)) continue;
+        total += 1;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .IntegerOverflow or edge.source != .checked_arithmetic) continue;
+        const trap_terminator = terminatorByBlock(body, edge.trap_block) orelse continue;
+        switch (trap_terminator.operation) {
+            .trap_ => |kind| if (kind == .IntegerOverflow) {
+                matching += 1;
+            },
+            else => {},
+        }
+    }
+    return total == 1 and matching == 1;
+}
+
+fn ownedTrapEdgeCount(body: *const mir.ExecutableBody, owner: mir.ExprId) usize {
+    var count: usize = 0;
+    for (body.trap_edges) |edge| if (edge.owner.eql(owner)) {
+        count += 1;
+    };
+    return count;
 }
 
 fn allExpressionsExist(body: *const mir.ExecutableBody, expressions: []const mir.ExprId) bool {
@@ -347,6 +417,7 @@ fn prepareStatementExpressions(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
     indent: usize,
+    source_path: ?[]const u8,
 ) (RenderError || std.mem.Allocator.Error)!void {
     // ExprIds are emitted by the producer in source evaluation order and the
     // verified body requires operands to precede their consumer under one
@@ -354,11 +425,32 @@ fn prepareStatementExpressions(
     // call or store cannot change what an earlier operand observes.
     for (body.expressions) |expression| {
         if (!expression.owner_statement.eql(statement.id)) continue;
+        try writeSourceLineDirective(allocator, out, source_path, expression.source);
         try writeIndent(allocator, out, indent);
         if (expressionNeedsTemporary(expression)) try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
     }
+}
+
+fn writeSourceLineDirective(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    source_path: ?[]const u8,
+    source: mir.SourcePoint,
+) std.mem.Allocator.Error!void {
+    const path = source_path orelse return;
+    if (source.line == 0) return;
+    try out.print(allocator, "#line {d} \"", .{source.line});
+    for (path) |ch| switch (ch) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        else => try out.append(allocator, ch),
+    };
+    try out.appendSlice(allocator, "\"\n");
 }
 
 fn emitPreparedArguments(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, arguments: []const mir.ExprId) (RenderError || std.mem.Allocator.Error)!void {
@@ -511,6 +603,12 @@ fn placeById(body: *const mir.ExecutableBody, id: mir.PlaceId) ?*const mir.Execu
 fn hasBlock(body: *const mir.ExecutableBody, id: mir.BlockId) bool {
     for (body.terminators) |terminator| if (terminator.block_id.eql(id)) return true;
     return false;
+}
+
+fn terminatorByBlock(body: *const mir.ExecutableBody, id: mir.BlockId) ?*const mir.ExecutableTerminator {
+    if (!id.isValid()) return null;
+    for (body.terminators) |*terminator| if (terminator.block_id.eql(id)) return terminator;
+    return null;
 }
 
 fn blockHasReturn(body: *const mir.ExecutableBody, id: mir.BlockId) bool {
@@ -774,4 +872,97 @@ test "executable C renderer maps only closed trap helpers" {
     var unknown_terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .{ .trap_ = .Unknown } }};
     const unknown_body: mir.ExecutableBody = .{ .terminators = &unknown_terminators };
     try std.testing.expect(!canEmitBody(&unknown_body));
+}
+
+test "executable C renderer admits checked arithmetic with exact overflow edges" {
+    const entry = mir.BlockId.fromIndex(0);
+    const add_trap = mir.BlockId.fromIndex(1);
+    const sub_trap = mir.BlockId.fromIndex(2);
+    const mul_trap = mir.BlockId.fromIndex(3);
+    const statement = mir.InstId.fromIndex(0);
+    const one = mir.ExprId.fromIndex(0);
+    const two = mir.ExprId.fromIndex(1);
+    const add = mir.ExprId.fromIndex(2);
+    const sub = mir.ExprId.fromIndex(3);
+    const mul = mir.ExprId.fromIndex(4);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = one, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = two, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = add, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = one, .right = two, .arithmetic = .checked } } },
+        .{ .id = sub, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .sub, .left = add, .right = one, .arithmetic = .checked } } },
+        .{ .id = mul, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .mul, .left = sub, .right = two, .arithmetic = .checked } } },
+    };
+    var edges = [_]mir.ExecutableTrapEdge{
+        .{ .owner = add, .from_block = entry, .trap_block = add_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
+        .{ .owner = sub, .from_block = entry, .trap_block = sub_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
+        .{ .owner = mul, .from_block = entry, .trap_block = mul_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
+    };
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = mul } }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = entry, .operation = .return_ },
+        .{ .block_id = add_trap, .operation = .{ .trap_ = .IntegerOverflow } },
+        .{ .block_id = sub_trap, .operation = .{ .trap_ = .IntegerOverflow } },
+        .{ .block_id = mul_trap, .operation = .{ .trap_ = .IntegerOverflow } },
+    };
+    const body: mir.ExecutableBody = .{
+        .complete = true,
+        .expressions = &expressions,
+        .trap_edges = &edges,
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    try std.testing.expect(canEmitBody(&body));
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &output, &body, 0);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(mc_exec_tmp_0, mc_exec_tmp_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32(mc_exec_tmp_2, mc_exec_tmp_0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mul_u32(mc_exec_tmp_3, mc_exec_tmp_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_bb_1: ;\n    mc_trap_IntegerOverflow();") != null);
+}
+
+test "executable C renderer rejects checked arithmetic edge drift" {
+    const entry = mir.BlockId.fromIndex(0);
+    const trap = mir.BlockId.fromIndex(1);
+    const statement = mir.InstId.fromIndex(0);
+    const left = mir.ExprId.fromIndex(0);
+    const right = mir.ExprId.fromIndex(1);
+    const result = mir.ExprId.fromIndex(2);
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const u32_ty: mir.ValueType = .{ .integer = "u32" };
+    var expressions = [_]mir.ExecutableExpression{
+        .{ .id = left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = left, .right = right, .arithmetic = .checked } } },
+    };
+    var edge = [_]mir.ExecutableTrapEdge{.{ .owner = result, .from_block = entry, .trap_block = trap, .kind = .IntegerOverflow, .source = .checked_arithmetic }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = entry, .operation = .return_ },
+        .{ .block_id = trap, .operation = .{ .trap_ = .IntegerOverflow } },
+    };
+    var body: mir.ExecutableBody = .{ .complete = true, .expressions = &expressions, .trap_edges = &edge, .statements = &statements, .terminators = &terminators };
+    try std.testing.expect(canEmitBody(&body));
+
+    body.trap_edges = &.{};
+    try std.testing.expect(!canEmitBody(&body));
+    body.trap_edges = &edge;
+
+    edge[0].kind = .DivideByZero;
+    try std.testing.expect(!canEmitBody(&body));
+    edge[0].kind = .IntegerOverflow;
+
+    terminators[1].operation = .{ .trap_ = .DivideByZero };
+    try std.testing.expect(!canEmitBody(&body));
+    terminators[1].operation = .{ .trap_ = .IntegerOverflow };
+
+    expressions[2].operation.binary.arithmetic = .ordinary;
+    try std.testing.expect(!canEmitBody(&body));
+    expressions[2].operation.binary.arithmetic = .checked;
+
+    var duplicate_edges = [_]mir.ExecutableTrapEdge{ edge[0], edge[0] };
+    body.trap_edges = &duplicate_edges;
+    try std.testing.expect(!canEmitBody(&body));
 }

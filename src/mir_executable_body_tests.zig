@@ -210,7 +210,7 @@ test "lowering admission rejects executable body identity drift" {
     return error.TestUnexpectedResult;
 }
 
-test "unrepresented traps asserts and eager logical operators remain incomplete" {
+test "checked traps are complete while asserts and eager logical operators remain incomplete" {
     const source =
         \\fn checked(value: u32) -> u32 { return value + 1; }
         \\fn logical(left: bool, right: bool) -> bool { return left && right; }
@@ -226,10 +226,46 @@ test "unrepresented traps asserts and eager logical operators remain incomplete"
     try std.testing.expect(!reporter.has_errors);
     var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
     defer module.deinit();
-    for (module.functions) |*function| {
+    for (module.functions, 0..) |*function, index| {
         try executable.verify(function);
-        try std.testing.expect(!executable.isComplete(function));
+        try std.testing.expectEqual(index == 0, executable.isComplete(function));
     }
+}
+
+test "checked add owns an explicit verified overflow edge" {
+    const source = "fn checked(left: u32, right: u32) -> u32 { return left + right; }";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_checked_add.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expect(executable.isComplete(function));
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+    const edge = function.executable_body.trap_edges[0];
+    try std.testing.expectEqual(mir.TrapKind.IntegerOverflow, edge.kind);
+    try std.testing.expectEqual(mir.TrapSource.checked_arithmetic, edge.source);
+    const owner = function.executable_body.expressions[edge.owner.index()];
+    switch (owner.operation) {
+        .binary => |binary| {
+            try std.testing.expectEqual(mir.ExecutableBinaryOp.add, binary.op);
+            try std.testing.expectEqual(mir.ExecutableArithmeticSemantics.checked, binary.arithmetic);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const saved_target = function.executable_body.trap_edges[0].trap_block;
+    function.executable_body.trap_edges[0].trap_block = mir.BlockId.invalid;
+    try std.testing.expectError(error.InvalidTrapEdge, executable.verify(function));
+    function.executable_body.trap_edges[0].trap_block = saved_target;
+    try executable.verify(function);
 }
 
 test "ownership cleanup obligations keep executable admission closed" {

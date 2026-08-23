@@ -9,7 +9,7 @@ const mir = @import("mir_model.zig");
 
 pub fn isComplete(function: *const mir.Function) bool {
     verify(function) catch return false;
-    return function.executable_body.complete;
+    return function.executable_body.isComplete();
 }
 
 pub fn expression(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
@@ -63,6 +63,7 @@ pub fn verify(function: *const mir.Function) !void {
         try verifyType(function, value.type_id, value.result_ty, body.complete);
         try verifyExpression(function, value);
     }
+    try verifyTrapEdges(function);
 
     for (body.places, 0..) |value, index| {
         if (!value.id.isValid() or value.id.index() != index or value.projection_count > mir.max_executable_projections) return error.InvalidPlaceIdentity;
@@ -102,6 +103,15 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .binary => |operation| {
             try verifyOperand(body, value, operation.left);
             try verifyOperand(body, value, operation.right);
+            const left = expression(body, operation.left) orelse return error.InvalidExpressionReference;
+            const right = expression(body, operation.right) orelse return error.InvalidExpressionReference;
+            if (operation.arithmetic == .checked) {
+                if (operation.op != .add and operation.op != .sub and operation.op != .mul) return error.InvalidCheckedArithmetic;
+                if (!sameValueType(value.result_ty, left.result_ty) or !sameValueType(left.result_ty, right.result_ty) or
+                    std.meta.activeTag(value.result_ty) != .integer) return error.InvalidCheckedArithmetic;
+                if (ownedTrapCount(body, value.id, .IntegerOverflow, .checked_arithmetic) != 1 or ownedTrapCountAll(body, value.id) != 1)
+                    return error.InvalidCheckedArithmetic;
+            }
         },
         .cast => |operation| try verifyOperand(body, value, operation.operand),
         .direct_call => |call| {
@@ -131,6 +141,67 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .array => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
         .struct_ => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
     }
+}
+
+fn verifyTrapEdges(function: *const mir.Function) !void {
+    const body = &function.executable_body;
+    for (body.trap_edges, 0..) |edge, edge_index| {
+        const owner = expression(body, edge.owner) orelse return error.InvalidTrapEdge;
+        if (!owner.block_id.eql(edge.from_block)) return error.InvalidTrapEdge;
+        switch (owner.operation) {
+            .binary => |binary| if (binary.arithmetic != .checked) return error.InvalidTrapEdge,
+            else => return error.InvalidTrapEdge,
+        }
+        const source_block = blockById(function, edge.from_block) orelse return error.InvalidTrapEdge;
+        var has_successor = false;
+        for (source_block.typed_successors) |successor| if (successor.eql(edge.trap_block)) {
+            has_successor = true;
+            break;
+        };
+        if (!has_successor) return error.InvalidTrapEdge;
+        const trap_block = blockById(function, edge.trap_block) orelse return error.InvalidTrapEdge;
+        switch (trap_block.terminator) {
+            .trap_ => |kind| if (kind != edge.kind) return error.InvalidTrapEdge,
+            else => return error.InvalidTrapEdge,
+        }
+        var legacy_matches: usize = 0;
+        for (function.trap_edges) |legacy| {
+            if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
+                legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(owner.span_id)) legacy_matches += 1;
+        }
+        if (legacy_matches != 1) return error.InvalidTrapEdge;
+        for (body.trap_edges[0..edge_index]) |previous| {
+            if (previous.owner.eql(edge.owner) and previous.trap_block.eql(edge.trap_block) and
+                previous.kind == edge.kind and previous.source == edge.source) return error.InvalidTrapEdge;
+        }
+    }
+    if (body.complete) {
+        if (body.trap_edges.len != function.trap_edges.len) return error.InvalidCompletionClaim;
+        for (function.trap_edges) |legacy| {
+            var matches: usize = 0;
+            for (body.trap_edges) |edge| {
+                if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
+                    legacy.kind == edge.kind and legacy.source == edge.source) matches += 1;
+            }
+            if (matches != 1) return error.InvalidCompletionClaim;
+        }
+    }
+}
+
+fn ownedTrapCount(body: *const mir.ExecutableBody, owner: mir.ExprId, kind: mir.TrapKind, source: mir.TrapSource) usize {
+    var count: usize = 0;
+    for (body.trap_edges) |edge| if (edge.owner.eql(owner) and edge.kind == kind and edge.source == source) {
+        count += 1;
+    };
+    return count;
+}
+
+fn ownedTrapCountAll(body: *const mir.ExecutableBody, owner: mir.ExprId) usize {
+    var count: usize = 0;
+    for (body.trap_edges) |edge| {
+        if (edge.owner.eql(owner)) count += 1;
+    }
+    return count;
 }
 
 fn verifyStatement(function: *const mir.Function, statement_value: mir.ExecutableStatement) !void {

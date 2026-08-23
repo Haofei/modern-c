@@ -705,6 +705,8 @@ pub const SourceIdentity = mir_model.SourceIdentity;
 pub const SpanIdentity = mir_model.SpanIdentity;
 pub const TypeIdentity = mir_model.TypeIdentity;
 pub const TypeKey = mir_model.TypeKey;
+pub const ExecutableBinaryOp = mir_model.ExecutableBinaryOp;
+pub const ExecutableArithmeticSemantics = mir_model.ExecutableArithmeticSemantics;
 pub const ValueIdentity = mir_model.ValueIdentity;
 pub const OwnershipEventKind = mir_model.OwnershipEventKind;
 pub const OwnershipLoanKind = mir_model.OwnershipLoanKind;
@@ -6068,6 +6070,7 @@ const FunctionBuilder = struct {
     executable_locals: std.ArrayList(ExecutableLocalIdentity),
     executable_symbols: std.ArrayList(SymbolIdentity),
     executable_expressions: std.ArrayList(ExecutableExpression),
+    executable_trap_edges: std.ArrayList(mir_model.ExecutableTrapEdge),
     executable_places: std.ArrayList(ExecutablePlace),
     executable_statements: std.ArrayList(ExecutableStatement),
     executable_terminators: std.ArrayList(ExecutableTerminator),
@@ -6195,6 +6198,7 @@ const FunctionBuilder = struct {
             .executable_locals = .empty,
             .executable_symbols = .empty,
             .executable_expressions = .empty,
+            .executable_trap_edges = .empty,
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
@@ -6301,6 +6305,7 @@ const FunctionBuilder = struct {
             .executable_locals = .empty,
             .executable_symbols = .empty,
             .executable_expressions = .empty,
+            .executable_trap_edges = .empty,
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
@@ -6374,6 +6379,7 @@ const FunctionBuilder = struct {
         self.executable_locals.deinit(self.allocator);
         self.executable_symbols.deinit(self.allocator);
         self.executable_expressions.deinit(self.allocator);
+        self.executable_trap_edges.deinit(self.allocator);
         self.executable_places.deinit(self.allocator);
         self.executable_statements.deinit(self.allocator);
         self.executable_terminators.deinit(self.allocator);
@@ -6578,7 +6584,8 @@ const FunctionBuilder = struct {
     }
 
     fn finishExecutableBody(self: *FunctionBuilder, trap_edges: []const TrapEdge) !ExecutableBody {
-        var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0 and trap_edges.len == 0;
+        var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
+        if (!self.executableTrapProjectionComplete(trap_edges)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
             parameter.type_id = self.type_ids.get(TypeKey.fromValueType(parameter.ty)) orelse .invalid;
@@ -6682,6 +6689,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(symbols);
         const expressions = try self.executable_expressions.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(expressions);
+        const executable_trap_edges = try self.executable_trap_edges.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(executable_trap_edges);
         const places = try self.executable_places.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(places);
         const statements = try self.executable_statements.toOwnedSlice(self.allocator);
@@ -6698,6 +6707,7 @@ const FunctionBuilder = struct {
             .locals = locals,
             .symbols = symbols,
             .expressions = expressions,
+            .trap_edges = executable_trap_edges,
             .places = places,
             .statements = statements,
             .terminators = terminators,
@@ -6721,6 +6731,19 @@ const FunctionBuilder = struct {
             .builtin_call => false,
             else => true,
         };
+    }
+
+    fn executableTrapProjectionComplete(self: *const FunctionBuilder, legacy_edges: []const TrapEdge) bool {
+        if (self.executable_trap_edges.items.len != legacy_edges.len) return false;
+        for (self.executable_trap_edges.items, legacy_edges) |edge, legacy| {
+            if (!edge.from_block.eql(BlockId.fromIndex(legacy.from_block)) or
+                !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
+                edge.kind != legacy.kind or edge.source != legacy.source) return false;
+            if (!edge.owner.isValid() or edge.owner.index() >= self.executable_expressions.items.len) return false;
+            const owner = self.executable_expressions.items[edge.owner.index()];
+            if (!owner.block_id.eql(edge.from_block) or !owner.span_id.eql(legacy.typed_span_id)) return false;
+        }
+        return true;
     }
 
     fn executableGuardForBlock(statements: []const ExecutableStatement, block_id: BlockId) ?ExprId {
@@ -6784,6 +6807,7 @@ const FunctionBuilder = struct {
             else => unreachable,
         };
         const source = self.sourcePoint(expr.span);
+        var result_ty = self.exprType(expr);
         // Recursively materialize operands first. ExprId order is therefore
         // the language evaluation order, rather than an AST tree a backend is
         // free to visit in a different order.
@@ -6811,11 +6835,23 @@ const FunctionBuilder = struct {
                 .op = executableUnaryOp(node.op),
                 .operand = try self.ensureExecutableExpr(node.expr.*),
             } },
-            .binary => |node| .{ .binary = .{
-                .op = executableBinaryOp(node.op),
-                .left = try self.ensureExecutableExpr(node.left.*),
-                .right = try self.ensureExecutableExpr(node.right.*),
-            } },
+            .binary => |node| binary: {
+                const left = try self.ensureExecutableExpr(node.left.*);
+                const right = try self.ensureExecutableExpr(node.right.*);
+                result_ty = self.executableBinaryResultType(node);
+                const arithmetic: mir_model.ExecutableArithmeticSemantics = if ((node.op == .add or node.op == .sub or node.op == .mul) and
+                    std.meta.activeTag(result_ty) == .integer and !self.binaryIsNoTrapArithmeticDomain(node) and !self.binaryIsFloat(node)) .checked else .ordinary;
+                if (arithmetic == .checked) {
+                    self.contextualizeExecutableLiteral(left, result_ty);
+                    self.contextualizeExecutableLiteral(right, result_ty);
+                }
+                break :binary .{ .binary = .{
+                    .op = executableBinaryOp(node.op),
+                    .left = left,
+                    .right = right,
+                    .arithmetic = arithmetic,
+                } };
+            },
             .cast => |node| .{ .cast = .{ .operand = try self.ensureExecutableExpr(node.value.*) } },
             .address_of => |inner| .{ .address_of = try self.ensureExecutableExpr(inner.*) },
             .borrow_expr => |node| .{ .address_of = try self.ensureExecutableExpr(node.value.*) },
@@ -6885,11 +6921,36 @@ const FunctionBuilder = struct {
             .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
             .source = source,
             .span_id = try self.internSpanId(source),
-            .result_ty = self.exprType(expr),
-            .type_id = try self.internTypeId(self.exprType(expr)),
+            .result_ty = result_ty,
+            .type_id = try self.internTypeId(result_ty),
             .operation = operation,
         });
         return id;
+    }
+
+    fn executableBinaryResultType(self: *FunctionBuilder, node: anytype) ValueType {
+        if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) return .bool;
+        const left = self.exprType(node.left.*);
+        const right = self.exprType(node.right.*);
+        // Unsuffixed literals take the other operand's arithmetic type.  The
+        // general exprType query follows the left spine and can therefore see
+        // a target-context type from an enclosing conversion instead of the
+        // binary operation's own type (`u8.trap_from(1 + x: u64)`).
+        const left_literal = executableExprIsIntegerLiteral(node.left.*);
+        const right_literal = executableExprIsIntegerLiteral(node.right.*);
+        if (left_literal and !right_literal and right != .unknown) return right;
+        if (right_literal and !left_literal and left != .unknown) return left;
+        return left;
+    }
+
+    fn executableExprIsIntegerLiteral(input: ast.Expr) bool {
+        var expr = input;
+        while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
+            .grouped => |inner| inner.*,
+            .move_expr => |inner| inner.*,
+            else => unreachable,
+        };
+        return expr.kind == .int_literal;
     }
 
     fn executableUnaryOp(op: ast.UnaryOp) mir_model.ExecutableUnaryOp {
@@ -7251,6 +7312,10 @@ const FunctionBuilder = struct {
     }
 
     fn buildUnsafeBlock(self: *FunctionBuilder, block: ast.Block) anyerror!bool {
+        // The executable body does not yet carry lexical unsafe-scope markers.
+        // Keep the canonical lowering closed instead of erasing an auditable
+        // boundary in generated code.
+        self.executable_supported = false;
         const old_unsafe = self.active_unsafe;
         self.active_unsafe = true;
         defer self.active_unsafe = old_unsafe;
@@ -7526,6 +7591,10 @@ const FunctionBuilder = struct {
     }
 
     fn buildContractBlock(self: *FunctionBuilder, contract: ast.ContractBlock, stmt_span: ast.Span) !bool {
+        // Contract regions are verified MIR facts, but their begin/end
+        // operations are not yet part of ExecutableBody.  Do not let the
+        // mechanical renderer silently discard those audit markers.
+        self.executable_supported = false;
         const id = self.next_contract_region_id;
         self.next_contract_region_id += 1;
         const name = contractName(contract.attr);
@@ -9936,9 +10005,52 @@ const FunctionBuilder = struct {
                 try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
             },
             .shr => try self.addTrapEdge(.InvalidShift, .checked_shift, span),
-            .add, .sub, .mul => try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span),
+            .add, .sub, .mul => {
+                try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
+                try self.attachExecutableTrapEdge(span, .IntegerOverflow, .checked_arithmetic);
+            },
             else => {},
         }
+    }
+
+    fn attachExecutableTrapEdge(self: *FunctionBuilder, span: ast.Span, kind: TrapKind, source: TrapSource) !void {
+        if (self.trap_edges.items.len == 0) {
+            self.executable_supported = false;
+            return;
+        }
+        const span_id = try self.internSpanId(self.sourcePoint(span));
+        var owner: ?ExprId = null;
+        var index = self.executable_expressions.items.len;
+        while (index > 0) {
+            index -= 1;
+            const expression = self.executable_expressions.items[index];
+            if (!expression.block_id.eql(BlockId.fromIndex(self.current)) or !expression.span_id.eql(span_id)) continue;
+            switch (expression.operation) {
+                .binary => |binary| if (binary.arithmetic == .checked and
+                    (binary.op == .add or binary.op == .sub or binary.op == .mul))
+                {
+                    owner = expression.id;
+                    break;
+                },
+                else => {},
+            }
+        }
+        const owner_id = owner orelse {
+            self.executable_supported = false;
+            return;
+        };
+        const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+        if (legacy.kind != kind or legacy.source != source or legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) {
+            self.executable_supported = false;
+            return;
+        }
+        try self.executable_trap_edges.append(self.allocator, .{
+            .owner = owner_id,
+            .from_block = BlockId.fromIndex(legacy.from_block),
+            .trap_block = BlockId.fromIndex(legacy.trap_block),
+            .kind = kind,
+            .source = source,
+        });
     }
 
     fn addBlock(self: *FunctionBuilder, kind: []const u8) !usize {

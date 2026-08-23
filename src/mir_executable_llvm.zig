@@ -29,6 +29,16 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or llvmType(expression.result_ty) == null) return false;
         if (!operationSupported(body, expression)) return false;
     }
+    for (body.trap_edges) |edge| {
+        if (!expressionValid(body, edge.owner)) return false;
+        const owner = body.expressions[edge.owner.index()];
+        switch (owner.operation) {
+            .binary => |binary| {
+                if (binary.arithmetic != .checked or checkedOverflowEdge(body, owner) == null) return false;
+            },
+            else => return false,
+        }
+    }
     for (body.places) |place| {
         if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections or !placeRootValid(body, place)) return false;
         for (place.projections[0..place.projection_count]) |projection| switch (projection) {
@@ -223,7 +233,7 @@ const Renderer = struct {
             },
             .literal => |literal| try self.literalValue(ty, literal),
             .unary => |unary| try self.emitUnary(ty, unary),
-            .binary => |binary| try self.emitBinary(ty, binary),
+            .binary => |binary| try self.emitBinary(expression, ty, binary),
             .direct_call => |call| try self.emitDirectCall(ty, call),
             .builtin_call => return error.Unsupported,
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
@@ -274,10 +284,35 @@ const Renderer = struct {
         return .{ .ty = ty, .spelling = value };
     }
 
-    fn emitBinary(self: *Renderer, result_ty: []const u8, binary: anytype) RenderError!Value {
+    fn emitBinary(self: *Renderer, expression: mir.ExecutableExpression, result_ty: []const u8, binary: anytype) RenderError!Value {
         const left = try self.emitExpression(binary.left);
         const right = try self.emitExpression(binary.right);
         if (!std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
+        if (binary.arithmetic == .checked) {
+            if (!std.mem.eql(u8, result_ty, left.ty)) return error.InvalidBody;
+            const edge = checkedOverflowEdge(self.body, expression) orelse return error.InvalidBody;
+            const op: []const u8 = switch (binary.op) {
+                .add => "add",
+                .sub => "sub",
+                .mul => "mul",
+                else => return error.InvalidBody,
+            };
+            const signedness: []const u8 = if (integerTypeSigned(expression.result_ty)) "s" else "u";
+            const pair = try self.temp();
+            const value = try self.temp();
+            const overflow = try self.temp();
+            const continuation = try std.fmt.allocPrint(self.allocator, "mc_checked_cont_{d}", .{expression.id.raw});
+            try self.output.print(
+                self.allocator,
+                "  {s} = call {{ {s}, i1 }} @llvm.{s}{s}.with.overflow.{s}({s} {s}, {s} {s})\n" ++
+                    "  {s} = extractvalue {{ {s}, i1 }} {s}, 0\n" ++
+                    "  {s} = extractvalue {{ {s}, i1 }} {s}, 1\n" ++
+                    "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                    "{s}:\n",
+                .{ pair, result_ty, signedness, op, result_ty, left.ty, left.spelling, right.ty, right.spelling, value, result_ty, pair, overflow, result_ty, pair, overflow, edge.trap_block.raw, continuation, continuation },
+            );
+            return .{ .ty = result_ty, .spelling = value };
+        }
         const value = try self.temp();
         const operation: []const u8 = switch (binary.op) {
             .add => "add",
@@ -394,7 +429,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
             else => false,
         },
         .unary => |unary| unarySupported(body, expression.result_ty, unary),
-        .binary => |binary| binarySupported(body, expression.result_ty, binary),
+        .binary => |binary| binarySupported(body, expression, binary),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
         .builtin_call => false,
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
@@ -426,16 +461,48 @@ fn unarySupported(body: *const mir.ExecutableBody, result_ty: mir.ValueType, una
     };
 }
 
-fn binarySupported(body: *const mir.ExecutableBody, result_ty: mir.ValueType, binary: anytype) bool {
+fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, binary: anytype) bool {
     if (!expressionValid(body, binary.left) or !expressionValid(body, binary.right)) return false;
     const left_ty = body.expressions[binary.left.index()].result_ty;
     const right_ty = body.expressions[binary.right.index()].result_ty;
     if (!sameValueType(left_ty, right_ty)) return false;
     return switch (binary.op) {
-        .add, .sub, .mul => sameValueType(result_ty, left_ty) and arithmeticIntegerType(left_ty),
-        .bit_or, .bit_xor, .bit_and => sameValueType(result_ty, left_ty) and integerLike(left_ty),
-        .eq, .ne => result_ty == .bool and comparableEqualityType(left_ty),
-        .lt, .le, .gt, .ge => result_ty == .bool and orderedIntegerType(left_ty),
+        .add, .sub, .mul => sameValueType(expression.result_ty, left_ty) and arithmeticIntegerType(left_ty) and
+            (binary.arithmetic == .ordinary or checkedOverflowEdge(body, expression) != null),
+        .bit_or, .bit_xor, .bit_and => binary.arithmetic == .ordinary and sameValueType(expression.result_ty, left_ty) and integerLike(left_ty),
+        .eq, .ne => binary.arithmetic == .ordinary and expression.result_ty == .bool and comparableEqualityType(left_ty),
+        .lt, .le, .gt, .ge => binary.arithmetic == .ordinary and expression.result_ty == .bool and orderedIntegerType(left_ty),
+        else => false,
+    };
+}
+
+fn checkedOverflowEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    var result: ?mir.ExecutableTrapEdge = null;
+    var owned_count: usize = 0;
+    for (body.trap_edges) |edge| {
+        if (!edge.owner.eql(expression.id)) continue;
+        owned_count += 1;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .IntegerOverflow or edge.source != .checked_arithmetic) continue;
+        const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse continue;
+        switch (trap_terminator.operation) {
+            .trap_ => |kind| {
+                if (kind == .IntegerOverflow) result = edge;
+            },
+            else => {},
+        }
+    }
+    return if (owned_count == 1) result else null;
+}
+
+fn terminatorForBlock(body: *const mir.ExecutableBody, id: mir.BlockId) ?mir.ExecutableTerminator {
+    if (!id.isValid()) return null;
+    for (body.terminators) |terminator| if (terminator.block_id.eql(id)) return terminator;
+    return null;
+}
+
+fn integerTypeSigned(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .integer => |name| name.len != 0 and (name[0] == 'i' or std.mem.eql(u8, name, "isize")),
         else => false,
     };
 }
@@ -748,4 +815,129 @@ test "mechanical renderer rejects global value access without explicit load mode
     const body: mir.ExecutableBody = .{ .symbols = @constCast(&symbols), .expressions = @constCast(&expressions), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
     try std.testing.expect(!supports(&body, .{ .integer = "u32" }));
     try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, .{ .integer = "u32" }));
+}
+
+test "mechanical renderer emits signed and unsigned checked add sub mul edges" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const Case = struct {
+        type_name: []const u8,
+        op: mir.ExecutableBinaryOp,
+        intrinsic: []const u8,
+    };
+    const cases = [_]Case{
+        .{ .type_name = "i32", .op = .add, .intrinsic = "@llvm.sadd.with.overflow.i32" },
+        .{ .type_name = "i32", .op = .sub, .intrinsic = "@llvm.ssub.with.overflow.i32" },
+        .{ .type_name = "i32", .op = .mul, .intrinsic = "@llvm.smul.with.overflow.i32" },
+        .{ .type_name = "u32", .op = .add, .intrinsic = "@llvm.uadd.with.overflow.i32" },
+        .{ .type_name = "u32", .op = .sub, .intrinsic = "@llvm.usub.with.overflow.i32" },
+        .{ .type_name = "u32", .op = .mul, .intrinsic = "@llvm.umul.with.overflow.i32" },
+    };
+
+    for (cases) |case| {
+        const int_ty: mir.ValueType = .{ .integer = case.type_name };
+        const parameters = [_]mir.ExecutableParameter{
+            .{ .local = mir.LocalId.fromIndex(0), .ty = int_ty, .source = source },
+            .{ .local = mir.LocalId.fromIndex(1), .ty = int_ty, .source = source },
+        };
+        const expressions = [_]mir.ExecutableExpression{
+            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+            .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = case.op, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
+        };
+        const trap_edges = [_]mir.ExecutableTrapEdge{.{
+            .owner = mir.ExprId.fromIndex(2),
+            .from_block = mir.BlockId.fromIndex(0),
+            .trap_block = mir.BlockId.fromIndex(1),
+            .kind = .IntegerOverflow,
+            .source = .checked_arithmetic,
+        }};
+        const statements = [_]mir.ExecutableStatement{
+            .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
+        };
+        const terminators = [_]mir.ExecutableTerminator{
+            .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+            .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .IntegerOverflow } },
+        };
+        const body: mir.ExecutableBody = .{
+            .parameters = @constCast(&parameters),
+            .expressions = @constCast(&expressions),
+            .trap_edges = @constCast(&trap_edges),
+            .statements = @constCast(&statements),
+            .terminators = @constCast(&terminators),
+        };
+
+        try std.testing.expect(supports(&body, int_ty));
+        const rendered = try render(std.testing.allocator, &body, int_ty);
+        defer std.testing.allocator.free(rendered);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, case.intrinsic));
+        try std.testing.expect(std.mem.indexOf(u8, rendered, " = extractvalue { i32, i1 }") != null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "label %mc_block_1, label %mc_checked_cont_2") != null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "mc_checked_cont_2:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "call void @mc_trap_IntegerOverflow()") != null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, " nsw ") == null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, " nuw ") == null);
+    }
+}
+
+test "mechanical renderer rejects mutated checked arithmetic trap edges" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const int_ty: mir.ValueType = .{ .integer = "u32" };
+    const parameters = [_]mir.ExecutableParameter{
+        .{ .local = mir.LocalId.fromIndex(0), .ty = int_ty, .source = source },
+        .{ .local = mir.LocalId.fromIndex(1), .ty = int_ty, .source = source },
+    };
+    const expressions = [_]mir.ExecutableExpression{
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
+    };
+    const statements = [_]mir.ExecutableStatement{
+        .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .source = source, .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
+    };
+    const valid_terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .IntegerOverflow } },
+    };
+    const valid_edge: mir.ExecutableTrapEdge = .{
+        .owner = mir.ExprId.fromIndex(2),
+        .from_block = mir.BlockId.fromIndex(0),
+        .trap_block = mir.BlockId.fromIndex(1),
+        .kind = .IntegerOverflow,
+        .source = .checked_arithmetic,
+    };
+
+    const empty_edges = [_]mir.ExecutableTrapEdge{};
+    const missing: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&empty_edges), .statements = @constCast(&statements), .terminators = @constCast(&valid_terminators) };
+    try std.testing.expect(!supports(&missing, int_ty));
+    try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &missing, int_ty));
+
+    var wrong_kind = valid_edge;
+    wrong_kind.kind = .DivideByZero;
+    const wrong_kind_edges = [_]mir.ExecutableTrapEdge{wrong_kind};
+    const wrong_kind_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&wrong_kind_edges), .statements = @constCast(&statements), .terminators = @constCast(&valid_terminators) };
+    try std.testing.expect(!supports(&wrong_kind_body, int_ty));
+
+    var wrong_source = valid_edge;
+    wrong_source.source = .checked_shift;
+    const wrong_source_edges = [_]mir.ExecutableTrapEdge{wrong_source};
+    const wrong_source_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&wrong_source_edges), .statements = @constCast(&statements), .terminators = @constCast(&valid_terminators) };
+    try std.testing.expect(!supports(&wrong_source_body, int_ty));
+
+    const duplicate_edges = [_]mir.ExecutableTrapEdge{ valid_edge, valid_edge };
+    const duplicate_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&duplicate_edges), .statements = @constCast(&statements), .terminators = @constCast(&valid_terminators) };
+    try std.testing.expect(!supports(&duplicate_body, int_ty));
+
+    var wrong_owner = valid_edge;
+    wrong_owner.owner = mir.ExprId.fromIndex(0);
+    const wrong_owner_edges = [_]mir.ExecutableTrapEdge{wrong_owner};
+    const wrong_owner_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&wrong_owner_edges), .statements = @constCast(&statements), .terminators = @constCast(&valid_terminators) };
+    try std.testing.expect(!supports(&wrong_owner_body, int_ty));
+
+    const wrong_trap_terminators = [_]mir.ExecutableTerminator{
+        .{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ },
+        .{ .block_id = mir.BlockId.fromIndex(1), .operation = .{ .trap_ = .DivideByZero } },
+    };
+    const valid_edges = [_]mir.ExecutableTrapEdge{valid_edge};
+    const wrong_trap_body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .trap_edges = @constCast(&valid_edges), .statements = @constCast(&statements), .terminators = @constCast(&wrong_trap_terminators) };
+    try std.testing.expect(!supports(&wrong_trap_body, int_ty));
 }

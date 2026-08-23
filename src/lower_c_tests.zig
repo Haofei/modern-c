@@ -266,22 +266,34 @@ test "lower-c emits scalar CFG plans from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_cfg.mc", source, &output);
 
     const adjust = try cFunctionBody(output.items, "static uint32_t adjust(uint32_t n, bool flag)");
-    try expectContains(adjust, "uint32_t x = n;");
-    try expectContains(adjust, "if (flag) {");
-    try expectContains(adjust, "x = mc_checked_add_u32(x, 1);");
-    try expectContains(adjust, "x = mc_checked_sub_u32(x, 1);");
-    try expectContains(adjust, "return x;");
+    if (isCanonicalExecutableCBody(adjust)) {
+        try expectContains(adjust, "uint32_t x = mc_exec_tmp_");
+        try expectContains(adjust, "mc_checked_add_u32(");
+        try expectContains(adjust, "mc_checked_sub_u32(");
+        try expectContains(adjust, "return mc_exec_tmp_");
+    } else {
+        try expectContains(adjust, "uint32_t x = n;");
+        try expectContains(adjust, "if (flag) {");
+        try expectContains(adjust, "x = mc_checked_add_u32(x, 1);");
+        try expectContains(adjust, "x = mc_checked_sub_u32(x, 1);");
+        try expectContains(adjust, "return x;");
+    }
 
     const maybe_inc = try cFunctionBody(output.items, "static uint32_t maybe_inc(uint32_t n, bool flag)");
-    try expectContains(maybe_inc, "if (flag) {");
-    try expectContains(maybe_inc, "x = mc_checked_add_u32(x, 1);");
-    try expectNotContains(maybe_inc, "} else {");
-    try expectContains(maybe_inc, "return x;");
+    if (isCanonicalExecutableCBody(maybe_inc)) {
+        try expectContains(maybe_inc, "mc_checked_add_u32(");
+        try expectContains(maybe_inc, "return mc_exec_tmp_");
+    } else {
+        try expectContains(maybe_inc, "if (flag) {");
+        try expectContains(maybe_inc, "x = mc_checked_add_u32(x, 1);");
+        try expectNotContains(maybe_inc, "} else {");
+        try expectContains(maybe_inc, "return x;");
+    }
 
     const count_down = try cFunctionBody(output.items, "static uint32_t count_down(uint32_t n)");
-    try expectContains(count_down, "while (x != 0) {");
-    try expectContains(count_down, "x = mc_checked_sub_u32(x, 1);");
-    try expectContains(count_down, "return x;");
+    try expectLegacyOrCanonicalLoop(count_down, "while (x != 0) {");
+    try expectContains(count_down, "mc_checked_sub_u32(");
+    try expectContains(count_down, if (isCanonicalExecutableCBody(count_down)) "return mc_exec_tmp_" else "return x;");
 }
 
 test "lower-c emits nullable binding and checked fallback return from MIR without body fallback" {
@@ -1213,9 +1225,14 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectNotContains(local_args_body, "switch");
 
     const checked_args_body = try cFunctionBody(output.items, "static void choose_void_checked_args(bool flag, int32_t a, int32_t b)");
-    try expectContains(checked_args_body, "if (flag)");
-    try expectContains(checked_args_body, "hit(mc_checked_add_i32(a, b));");
-    try expectContains(checked_args_body, "hit(mc_checked_sub_i32(a, b));");
+    try expectContains(checked_args_body, if (isCanonicalExecutableCBody(checked_args_body)) "if (mc_exec_tmp_" else "if (flag)");
+    if (isCanonicalExecutableCBody(checked_args_body)) {
+        try expectNeedlesInOrder(checked_args_body, &.{ "mc_checked_add_i32(", "hit(" });
+        try expectNeedlesInOrder(checked_args_body, &.{ "mc_checked_sub_i32(", "hit(" });
+    } else {
+        try expectContains(checked_args_body, "hit(mc_checked_add_i32(a, b));");
+        try expectContains(checked_args_body, "hit(mc_checked_sub_i32(a, b));");
+    }
     try expectNotContains(checked_args_body, "mc_tmp");
     try expectNotContains(checked_args_body, "switch");
 
@@ -1369,14 +1386,21 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     if (isCanonicalExecutableCBody(assigned_arg_body)) try expectContains(assigned_arg_body, " = 1;");
 
     const local_checked_arg_body = try cFunctionBody(output.items, "static void call_local_checked_arg(int32_t a, int32_t b)");
-    try expectContains(local_checked_arg_body, "hit(mc_checked_add_i32(a, b));");
-    try expectNotContains(local_checked_arg_body, "int32_t x");
+    if (isCanonicalExecutableCBody(local_checked_arg_body))
+        try expectNeedlesInOrder(local_checked_arg_body, &.{ "mc_checked_add_i32(", "int32_t x =", "hit(" })
+    else
+        try expectContains(local_checked_arg_body, "hit(mc_checked_add_i32(a, b));");
+    if (!isCanonicalExecutableCBody(local_checked_arg_body)) try expectNotContains(local_checked_arg_body, "int32_t x");
     try expectNotContains(local_checked_arg_body, "mc_tmp");
 
     const assigned_checked_arg_body = try cFunctionBody(output.items, "static void call_assigned_checked_arg(int32_t a, int32_t b)");
-    try expectContains(assigned_checked_arg_body, "hit(mc_checked_add_i32(a, b));");
-    try expectNotContains(assigned_checked_arg_body, "int32_t x");
-    try expectNotContains(assigned_checked_arg_body, "x =");
+    if (isCanonicalExecutableCBody(assigned_checked_arg_body))
+        try expectNeedlesInOrder(assigned_checked_arg_body, &.{ "mc_checked_add_i32(", "x =", "hit(" })
+    else {
+        try expectContains(assigned_checked_arg_body, "hit(mc_checked_add_i32(a, b));");
+        try expectNotContains(assigned_checked_arg_body, "int32_t x");
+        try expectNotContains(assigned_checked_arg_body, "x =");
+    }
     try expectNotContains(assigned_checked_arg_body, "mc_tmp");
 
     const local_call_arg_body = try cFunctionBody(output.items, "static void call_local_call_arg(int32_t a)");
@@ -2596,28 +2620,36 @@ test "lower-c emits checked arithmetic returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_arithmetic_returns.mc", source, &output);
 
     const add_body = try cFunctionBody(output.items, "static uint32_t add_u32(uint32_t a, uint32_t b)");
-    try expectContains(add_body, "return mc_checked_add_u32(a, b);");
+    try expectLegacyOrCanonicalReturn(add_body, "return mc_checked_add_u32(a, b);", "mc_checked_add_u32(");
     try expectNotContains(add_body, "mc_tmp");
 
     const sub_body = try cFunctionBody(output.items, "static int32_t sub_i32(int32_t a, int32_t b)");
-    try expectContains(sub_body, "return mc_checked_sub_i32(a, b);");
+    try expectLegacyOrCanonicalReturn(sub_body, "return mc_checked_sub_i32(a, b);", "mc_checked_sub_i32(");
     try expectNotContains(sub_body, "mc_tmp");
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_add(uint32_t a, uint32_t b)");
-    try expectContains(local_body, "return mc_checked_add_u32(a, b);");
-    try expectNotContains(local_body, "uint32_t out");
+    try expectLegacyOrCanonicalReturn(local_body, "return mc_checked_add_u32(a, b);", "mc_checked_add_u32(");
+    if (!isCanonicalExecutableCBody(local_body)) try expectNotContains(local_body, "uint32_t out");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static int32_t assigned_sub(int32_t a, int32_t b)");
-    try expectContains(assigned_body, "return mc_checked_sub_i32(a, b);");
-    try expectNotContains(assigned_body, "int32_t out");
-    try expectNotContains(assigned_body, "out =");
+    try expectLegacyOrCanonicalReturn(assigned_body, "return mc_checked_sub_i32(a, b);", "mc_checked_sub_i32(");
+    if (!isCanonicalExecutableCBody(assigned_body)) {
+        try expectNotContains(assigned_body, "int32_t out");
+        try expectNotContains(assigned_body, "out =");
+    }
     try expectNotContains(assigned_body, "mc_tmp");
 
     const choose_body = try cFunctionBody(output.items, "static uint32_t choose_add(bool flag, uint32_t a, uint32_t b)");
-    try expectContains(choose_body, "if (flag) {");
-    try expectContains(choose_body, "return mc_checked_add_u32(a, b);");
-    try expectContains(choose_body, "return mc_checked_sub_u32(a, b);");
+    if (isCanonicalExecutableCBody(choose_body)) {
+        try expectContains(choose_body, "if (mc_exec_tmp_");
+        try expectContains(choose_body, "mc_checked_add_u32(");
+        try expectContains(choose_body, "mc_checked_sub_u32(");
+    } else {
+        try expectContains(choose_body, "if (flag) {");
+        try expectContains(choose_body, "return mc_checked_add_u32(a, b);");
+        try expectContains(choose_body, "return mc_checked_sub_u32(a, b);");
+    }
     try expectNotContains(choose_body, "mc_tmp");
     try expectNotContains(choose_body, "switch");
 }
@@ -3453,7 +3485,10 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectNotContains(body, "mc_tmp");
 
     const add_body = try cFunctionBody(output.items, "static int32_t return_call_add(int32_t a, int32_t b)");
-    try expectContains(add_body, "return make(mc_checked_add_i32(a, b));");
+    if (isCanonicalExecutableCBody(add_body))
+        try expectNeedlesInOrder(add_body, &.{ "mc_checked_add_i32(", "= make(", "return mc_exec_tmp_" })
+    else
+        try expectContains(add_body, "return make(mc_checked_add_i32(a, b));");
     try expectNotContains(add_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static int32_t return_call_neg(int32_t a)");
@@ -3467,8 +3502,11 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectLegacyOrCanonicalReturn(assigned_call_body, "return make(a);", "= make(");
 
     const local_call_add_body = try cFunctionBody(output.items, "static int32_t return_local_call_add(int32_t a, int32_t b)");
-    try expectContains(local_call_add_body, "return make(mc_checked_add_i32(a, b));");
-    try expectNotContains(local_call_add_body, "int32_t x");
+    if (isCanonicalExecutableCBody(local_call_add_body))
+        try expectNeedlesInOrder(local_call_add_body, &.{ "mc_checked_add_i32(", "= make(", "return mc_exec_tmp_" })
+    else
+        try expectContains(local_call_add_body, "return make(mc_checked_add_i32(a, b));");
+    if (!isCanonicalExecutableCBody(local_call_add_body)) try expectNotContains(local_call_add_body, "int32_t x");
     try expectNotContains(local_call_add_body, "mc_tmp");
 
     const assigned_call_neg_body = try cFunctionBody(output.items, "static int32_t return_assigned_call_neg(int32_t a)");
@@ -3478,10 +3516,14 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectNotContains(assigned_call_neg_body, "mc_tmp");
 
     const side_then_local_call_add_body = try cFunctionBody(output.items, "static int32_t side_then_local_call_add(int32_t a, int32_t b)");
-    const side_hit = std.mem.indexOf(u8, side_then_local_call_add_body, "hit(0);") orelse return error.TestUnexpectedResult;
-    const side_ret = std.mem.indexOf(u8, side_then_local_call_add_body, "return make(mc_checked_add_i32(a, b));") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(side_hit < side_ret);
-    try expectNotContains(side_then_local_call_add_body, "int32_t x");
+    if (isCanonicalExecutableCBody(side_then_local_call_add_body)) {
+        try expectNeedlesInOrder(side_then_local_call_add_body, &.{ "hit(", "mc_checked_add_i32(", "= make(", "return mc_exec_tmp_" });
+    } else {
+        const side_hit = std.mem.indexOf(u8, side_then_local_call_add_body, "hit(0);") orelse return error.TestUnexpectedResult;
+        const side_ret = std.mem.indexOf(u8, side_then_local_call_add_body, "return make(mc_checked_add_i32(a, b));") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(side_hit < side_ret);
+        try expectNotContains(side_then_local_call_add_body, "int32_t x");
+    }
     try expectNotContains(side_then_local_call_add_body, "mc_tmp");
 }
 
@@ -4570,9 +4612,9 @@ test "lower-c loop checked scalar returns lower from MIR without body fallback" 
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_checked_scalar_returns.mc", source, &output);
 
     const add_body = try cFunctionBody(output.items, "static uint16_t loop_checked_add(bool flag, uint16_t value)");
-    try expectContains(add_body, "while (flag)");
-    try expectContains(add_body, "hit(value);");
-    try expectContains(add_body, "return mc_checked_add_u16(value, 1);");
+    try expectLegacyOrCanonicalLoop(add_body, "while (flag)");
+    try expectContains(add_body, if (isCanonicalExecutableCBody(add_body)) "hit(" else "hit(value);");
+    try expectLegacyOrCanonicalReturn(add_body, "return mc_checked_add_u16(value, 1);", "mc_checked_add_u16(");
     try expectNotContains(add_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static int16_t loop_checked_neg(bool flag, int16_t value)");
@@ -7012,7 +7054,8 @@ test "lower-c checked-binary inferred local lowers without function body fallbac
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_checked_binary_return.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u64(left, right);") != null);
+    const body = try cFunctionBody(output.items, "static uint64_t binary_local(uint64_t left, uint64_t right)");
+    try expectLegacyOrCanonicalReturn(body, "return mc_checked_add_u64(left, right);", "mc_checked_add_u64(");
 }
 
 test "lower-c logical-not inferred local lowers without function body fallback" {
@@ -11608,7 +11651,7 @@ test "lower-c source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:block:") != null);
 }
 
-test "lower-c admits direct-return checked arithmetic in normal emit, folding-let stays on fallback" {
+test "lower-c prefers canonical executable MIR for direct and local checked arithmetic" {
     // A direct `return <checked op of simple operands>` folds no source construct,
     // so the MIR fast path loses no source-map fidelity and is admitted even when a
     // body fallback is available (fallback available = normal emit). A `let`-folding
@@ -11631,10 +11674,12 @@ test "lower-c admits direct-return checked arithmetic in normal emit, folding-le
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    // Direct return: inline fast-path form.
-    try expectContains(output.items, "return mc_checked_sub_u32(b, a);");
-    // Folding let: fallback keeps the intermediate local, so it is NOT the inline form.
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(a, 1);") == null);
+    const direct = try cFunctionBody(output.items, "static uint32_t sub_params(uint32_t a, uint32_t b)");
+    try expectContains(direct, "mc_checked_sub_u32(");
+    try expectContains(direct, "return mc_exec_tmp_");
+    const folded = try cFunctionBody(output.items, "static uint32_t folded(uint32_t a)");
+    try expectContains(folded, "mc_checked_add_u32(");
+    try expectContains(folded, "uint32_t y = mc_exec_tmp_");
 }
 
 test "lower-c admits bare pointer param return past its elided nonnull check, folded stays on fallback" {
@@ -13139,8 +13184,9 @@ test "lower-c checked scalar local return does not use function body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_local_checked_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t local_copy(uint32_t n)");
-    try expectContains(body, "uint32_t x = mc_checked_add_u32(n, 1);");
-    try expectContains(body, "return x;");
+    try expectContains(body, "mc_checked_add_u32(");
+    try expectContains(body, if (isCanonicalExecutableCBody(body)) "uint32_t x = mc_exec_tmp_" else "uint32_t x = mc_checked_add_u32(n, 1);");
+    try expectContains(body, if (isCanonicalExecutableCBody(body)) "return mc_exec_tmp_" else "return x;");
 }
 
 test "lower-c nested pointer member scalar access lowers race-tolerantly" {
@@ -18166,12 +18212,13 @@ test "lower-c emits while loops and loop control" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_loops.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "while (flag) {") != null);
+    const body = try cFunctionBody(output.items, "static uint32_t loop_once(bool flag)");
+    try expectLegacyOrCanonicalLoop(body, "while (flag) {");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "goto mc_break_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "goto mc_continue_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, if (isCanonicalExecutableCBody(body)) "out = mc_exec_tmp_" else "out = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, if (isCanonicalExecutableCBody(body)) "goto mc_bb_" else "goto mc_break_") != null);
+    if (!isCanonicalExecutableCBody(body)) try std.testing.expect(std.mem.indexOf(u8, body, "goto mc_continue_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, if (isCanonicalExecutableCBody(body)) "return mc_exec_tmp_" else "return out;") != null);
 }
 
 test "lower-c hoists MMIO reads in while conditions" {

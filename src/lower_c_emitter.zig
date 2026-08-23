@@ -2290,7 +2290,7 @@ pub const CEmitter = struct {
         {
             self.indent += 1;
             defer self.indent -= 1;
-            try mir_executable_c.emitBody(self.allocator, self.out, body, self.indent);
+            try mir_executable_c.emitBodyWithSourcePath(self.allocator, self.out, body, self.indent, self.source_path);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
     }

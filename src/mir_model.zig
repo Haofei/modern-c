@@ -423,6 +423,11 @@ pub const ExecutableBinaryOp = enum {
     mod,
 };
 
+pub const ExecutableArithmeticSemantics = enum {
+    ordinary,
+    checked,
+};
+
 pub const ExecutableLiteral = union(enum) {
     /// Canonical unsigned magnitude. A negative source expression is a
     /// separate unary operation, so radix, separators and suffix spelling do
@@ -458,7 +463,12 @@ pub const ExecutableExpression = struct {
         symbol: SymbolId,
         literal: ExecutableLiteral,
         unary: struct { op: ExecutableUnaryOp, operand: ExprId },
-        binary: struct { op: ExecutableBinaryOp, left: ExprId, right: ExprId },
+        binary: struct {
+            op: ExecutableBinaryOp,
+            left: ExprId,
+            right: ExprId,
+            arithmetic: ExecutableArithmeticSemantics = .ordinary,
+        },
         cast: struct { operand: ExprId },
         direct_call: struct {
             callee: SymbolId,
@@ -497,6 +507,17 @@ pub const ExecutableExpression = struct {
         },
         unsupported,
     };
+};
+
+/// Typed exceptional control-flow owned by one executable expression.  The
+/// source span remains diagnostic data on the expression; it is deliberately
+/// not the semantic identity of this edge.
+pub const ExecutableTrapEdge = struct {
+    owner: ExprId,
+    from_block: BlockId,
+    trap_block: BlockId,
+    kind: TrapKind,
+    source: TrapSource,
 };
 
 pub const ExecutablePlace = struct {
@@ -562,6 +583,7 @@ pub const ExecutableBody = struct {
     locals: []ExecutableLocalIdentity = &.{},
     symbols: []SymbolIdentity = &.{},
     expressions: []ExecutableExpression = &.{},
+    trap_edges: []ExecutableTrapEdge = &.{},
     places: []ExecutablePlace = &.{},
     statements: []ExecutableStatement = &.{},
     terminators: []ExecutableTerminator = &.{},
@@ -575,6 +597,7 @@ pub const ExecutableBody = struct {
         if (self.locals.len != 0) allocator.free(self.locals);
         if (self.symbols.len != 0) allocator.free(self.symbols);
         if (self.expressions.len != 0) allocator.free(self.expressions);
+        if (self.trap_edges.len != 0) allocator.free(self.trap_edges);
         if (self.places.len != 0) allocator.free(self.places);
         if (self.statements.len != 0) allocator.free(self.statements);
         if (self.terminators.len != 0) allocator.free(self.terminators);
