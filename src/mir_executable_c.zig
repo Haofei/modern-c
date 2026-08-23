@@ -231,6 +231,12 @@ fn emitExpressionOperation(
                 try out.appendSlice(allocator, "))");
             },
         },
+        .atomic_load => |load| {
+            const scalar = scalarMemoryInfo(expression.result_ty) orelse return error.UnsupportedType;
+            try out.print(allocator, "(({s})__atomic_load_n(", .{scalar.c_type});
+            try emitAtomicPlaceAddress(allocator, out, body, load.place);
+            try out.print(allocator, ", {s}))", .{cAtomicOrdering(load.ordering)});
+        },
         .literal => |literal| try emitLiteral(allocator, out, expression.result_ty, literal),
         .unary => |unary| {
             if (unary.op == .neg and integerSuffix(expression.result_ty) != null) {
@@ -378,7 +384,9 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         }
     }
     for (body.places) |place| {
-        if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place)) return false;
+        if (place.storage == .atomic) {
+            if (!atomicPlaceSupported(body, place)) return false;
+        } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place)) return false;
         switch (place.root) {
             .local => |local| if (localById(body, local) == null) return false,
             .symbol => |symbol| {
@@ -427,6 +435,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         // remain closed until MIR owns an explicit access mode.
         .symbol => false,
         .load => |load| memoryLoadSupported(body, expression, load),
+        .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             // Raw source string spelling is not a canonical byte payload and
@@ -629,6 +638,7 @@ fn memoryLoadSupported(
     const scalar = scalarMemoryInfo(expression.result_ty) orelse return false;
     if (load.access.alignment != scalar.alignment) return false;
     const place = placeById(body, load.place) orelse return false;
+    if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
         if (!scalarAccessPlaceSupported(body, place.*) or load.access.kind != .race_unordered) return false;
         if (computedRawManyDerefPlaceSupported(body, place.*, false)) {
@@ -646,12 +656,79 @@ fn memoryLoadSupported(
     return load.access.kind == expected_kind;
 }
 
+fn atomicLoadSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    load: @FieldType(mir.ExecutableExpression.Operation, "atomic_load"),
+) bool {
+    if (!load.ordering.validForLoad()) return false;
+    const target = placeById(body, load.place) orelse return false;
+    if (!atomicPlaceSupported(body, target.*) or !sameValueType(target.ty, expression.result_ty) or
+        !target.type_id.eql(expression.type_id)) return false;
+    if (placeNeedsRepresentationGuard(target.*)) return representationOperationHasExactTrapEdge(body, expression);
+    return load.representation_source == null and !load.representation_span_id.isValid() and
+        ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid() or
+        scalarMemoryInfo(place.ty) == null) return false;
+    switch (place.ty) {
+        .bool, .integer => {},
+        else => return false,
+    }
+    if (place.projection_count == 0) return switch (place.root) {
+        .symbol => |id| if (symbolById(body, id)) |identity|
+            identity.kind == .global and identity.atomic_payload_type_id.eql(place.type_id)
+        else
+            false,
+        .local, .value => false,
+    };
+    if (place.projection_count != 1 or place.projections[0] != .deref) return false;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    var parameter: ?mir.ExecutableParameter = null;
+    for (body.parameters) |candidate| if (candidate.local.eql(local)) {
+        parameter = candidate;
+        break;
+    };
+    const root = parameter orelse return false;
+    if (!root.type_id.eql(place.root_type_id) or !root.atomic_payload_type_id.eql(place.type_id) or
+        !sameValueType(root.ty, place.root_ty)) return false;
+    const pointer = switch (root.ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single;
+}
+
+fn placeNeedsRepresentationGuard(place: mir.ExecutablePlace) bool {
+    if (place.projection_count == 0) return false;
+    return switch (place.root_ty) {
+        .pointer => |shape| shape.kind == .single,
+        .nullable_pointer => true,
+        else => false,
+    };
+}
+
+fn cAtomicOrdering(ordering: mir.ExecutableAtomicOrdering) []const u8 {
+    return switch (ordering) {
+        .relaxed => "__ATOMIC_RELAXED",
+        .acquire => "__ATOMIC_ACQUIRE",
+        .seq_cst => "__ATOMIC_SEQ_CST",
+        .release, .acq_rel => unreachable,
+    };
+}
+
 fn addressOfSupported(
     body: *const mir.ExecutableBody,
     expression: mir.ExecutableExpression,
     address: @FieldType(mir.ExecutableExpression.Operation, "address_of"),
 ) bool {
     const place = placeById(body, address.place) orelse return false;
+    if (place.storage != .ordinary) return false;
     if (!addressResultMatchesPlace(expression.result_ty, place.ty)) return false;
     if (place.projection_count == 0) {
         return directAddressablePlaceSupported(body, place.*) and address.representation_source == null and
@@ -675,7 +752,7 @@ fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) 
 }
 
 fn directAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
-    if (place.projection_count != 0 or !sameValueType(place.root_ty, place.ty)) return false;
+    if (place.storage != .ordinary or place.projection_count != 0 or !sameValueType(place.root_ty, place.ty)) return false;
     return switch (place.root) {
         .local => |id| local: {
             for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
@@ -691,7 +768,7 @@ fn directAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.E
 }
 
 fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
-    if (place.projection_count != 1 or place.projections[0] != .deref or scalarMemoryInfo(place.ty) == null) return false;
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or scalarMemoryInfo(place.ty) == null) return false;
     const local = switch (place.root) {
         .local => |id| id,
         .symbol, .value => return false,
@@ -711,6 +788,7 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
 }
 
 fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.storage != .ordinary) return false;
     if (place.projection_count == 1) return singleParameterScalarDerefPlaceSupported(body, place);
     if (place.projection_count != 2 or place.projections[0] != .deref or scalarMemoryInfo(place.ty) == null or
         !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
@@ -751,7 +829,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
 }
 
 fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, require_mutable: bool) bool {
-    if (place.projection_count != 1 or place.projections[0] != .deref or
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
         !place.root_type_id.isValid() or !place.type_id.isValid() or scalarMemoryInfo(place.ty) == null) return false;
     const root_id = switch (place.root) {
         .value => |id| id,
@@ -788,6 +866,7 @@ fn memoryStoreSupported(
     const value = expressionById(body, store.value) orelse return false;
     if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(store.ty), mir.TypeKey.fromValueType(value.result_ty))) return false;
     const place = placeById(body, store.place) orelse return false;
+    if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
         const shape = switch (place.root_ty) {
             .pointer => |pointer| pointer,
@@ -885,7 +964,7 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
 fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return switch (expression.operation) {
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
-        .load, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
+        .load, .atomic_load, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         else => false,
     };
 }
@@ -900,6 +979,11 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
         .load => |load| blk: {
             const place = placeById(body, load.place) orelse return false;
             if (!parameterScalarAccessPlaceSupported(body, place.*)) return false;
+            break :blk .{ .source = load.representation_source, .span_id = load.representation_span_id };
+        },
+        .atomic_load => |load| blk: {
+            const place = placeById(body, load.place) orelse return false;
+            if (!atomicPlaceSupported(body, place.*) or !placeNeedsRepresentationGuard(place.*)) return false;
             break :blk .{ .source = load.representation_source, .span_id = load.representation_span_id };
         },
         .address_of => |address| blk: {
@@ -1054,6 +1138,7 @@ const RepresentationGuard = struct {
 fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuard {
     return switch (expression.operation) {
         .load => |load| if (load.representation_source) |source| .{ .place = load.place, .source = source } else null,
+        .atomic_load => |load| if (load.representation_source) |source| .{ .place = load.place, .source = source } else null,
         .address_of => |address| if (address.representation_source) |source| .{ .place = address.place, .source = source } else null,
         else => null,
     };
@@ -1150,7 +1235,7 @@ fn emitPlace(
     id: mir.PlaceId,
 ) (RenderError || std.mem.Allocator.Error)!void {
     const place = placeById(body, id) orelse return error.InvalidPlace;
-    if (place.projection_count != 0) return error.UnsupportedOperation;
+    if (place.storage != .ordinary or place.projection_count != 0) return error.UnsupportedOperation;
     try emitPlaceRootValue(allocator, out, body, place.*);
 }
 
@@ -1161,6 +1246,7 @@ fn emitPlaceAddress(
     id: mir.PlaceId,
 ) (RenderError || std.mem.Allocator.Error)!void {
     const place = placeById(body, id) orelse return error.InvalidPlace;
+    if (place.storage != .ordinary) return error.UnsupportedOperation;
     if (place.projection_count == 0) {
         try out.append(allocator, '&');
         try emitPlaceRootValue(allocator, out, body, place.*);
@@ -1194,6 +1280,24 @@ fn emitPlaceAddress(
     }
     // `&p.*` is the original pointer value. Keeping this identity also avoids
     // creating a second C dereference after the explicit representation guard.
+    try emitPlaceRootValue(allocator, out, body, place.*);
+}
+
+fn emitAtomicPlaceAddress(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    id: mir.PlaceId,
+) (RenderError || std.mem.Allocator.Error)!void {
+    const place = placeById(body, id) orelse return error.InvalidPlace;
+    if (!atomicPlaceSupported(body, place.*)) return error.UnsupportedOperation;
+    if (place.projection_count == 0) {
+        try out.append(allocator, '&');
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        return;
+    }
+    // The value of a direct `*atomic<T>` parameter is the storage address;
+    // taking its address here would load from the parameter slot instead.
     try emitPlaceRootValue(allocator, out, body, place.*);
 }
 

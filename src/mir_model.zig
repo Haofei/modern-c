@@ -651,6 +651,29 @@ pub const ExecutableMemoryAccessKind = enum {
     race_unordered,
 };
 
+/// Canonical ordering selected by semantic analysis for an atomic operation.
+/// This is not a runtime enum operand: source spelling is discarded before
+/// codegen and the executable-body verifier checks operation-specific legality.
+pub const ExecutableAtomicOrdering = enum {
+    relaxed,
+    acquire,
+    release,
+    acq_rel,
+    seq_cst,
+
+    pub fn validForLoad(ordering: ExecutableAtomicOrdering) bool {
+        return switch (ordering) {
+            .relaxed, .acquire, .seq_cst => true,
+            .release, .acq_rel => false,
+        };
+    }
+};
+
+pub const ExecutablePlaceStorage = enum {
+    ordinary,
+    atomic,
+};
+
 /// A value-preserving runtime representation predicate. The wrapper owns its
 /// exceptional edge; renderers expose the unchanged value only after the
 /// predicate succeeds.
@@ -744,6 +767,12 @@ pub const ExecutableExpression = struct {
         load: struct {
             place: PlaceId,
             access: ExecutableMemoryAccess,
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
+        },
+        atomic_load: struct {
+            place: PlaceId,
+            ordering: ExecutableAtomicOrdering,
             representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
@@ -862,6 +891,7 @@ pub const ExecutablePlace = struct {
     root_type_id: TypeId = .invalid,
     ty: ValueType = .unknown,
     type_id: TypeId = .invalid,
+    storage: ExecutablePlaceStorage = .ordinary,
     projections: [max_executable_projections]Projection = [_]Projection{.deref} ** max_executable_projections,
     projection_count: usize = 0,
 
@@ -903,6 +933,10 @@ pub const ExecutableParameter = struct {
     local: LocalId,
     ty: ValueType,
     type_id: TypeId = .invalid,
+    /// Payload identity when the source parameter is `atomic<T>` or a direct
+    /// pointer to it. This is canonical frontend metadata, not a backend
+    /// inference from pointer spelling.
+    atomic_payload_type_id: TypeId = .invalid,
     source: SourcePoint,
     span_id: SpanId = .invalid,
 };
@@ -1650,6 +1684,8 @@ pub const SymbolIdentity = struct {
     spelling: []const u8,
     kind: enum { unknown, function, global } = .unknown,
     mutable: bool = false,
+    /// Payload identity for global `atomic<T>` storage.
+    atomic_payload_type_id: TypeId = .invalid,
 };
 
 pub const SourceIdentity = struct {

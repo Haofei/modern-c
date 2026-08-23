@@ -52,10 +52,10 @@ EXACT_BACKEND_COUNTS = {
     '@import("ast_bridge.zig")': 41,
     '@import("declaration_artifacts.zig")': 9,
     '@import("eval.zig")': 7,
-    # b20a31f5/e0763447 added the aggregate-place MIR slices before this gate
-    # was rerun. 2827 captures that existing master state; future patches may
-    # only lower it.
-    "ast_bridge.": 2827,
+    # The bounded atomic-load slice aliases its transitional type payload in
+    # one place instead of repeating bridge-qualified names. Future patches
+    # may only lower this count.
+    "ast_bridge.": 2824,
     "declaration_artifacts.": 44,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,

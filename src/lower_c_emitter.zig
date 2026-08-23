@@ -2316,7 +2316,8 @@ pub const CEmitter = struct {
         if (body.parameters.len != function_artifact.signature.params.len) return false;
         if (!self.mirExecutableTypeMatchesSource(function.return_ty, function_artifact.signature.transitionalReturnType())) return false;
         for (body.parameters, function_artifact.signature.params) |parameter, source_parameter| {
-            if (!self.mirExecutableTypeMatchesSource(parameter.ty, source_parameter.ty)) return false;
+            if (!self.mirExecutableTypeMatchesSource(parameter.ty, source_parameter.ty) and
+                !self.mirExecutableAtomicParameterMatchesSource(parameter, source_parameter.ty)) return false;
         }
         for (body.expressions) |expression| switch (expression.operation) {
             .symbol => |symbol_id| {
@@ -2341,6 +2342,24 @@ pub const CEmitter = struct {
             else => {},
         };
         return true;
+    }
+
+    fn mirExecutableAtomicParameterMatchesSource(self: *CEmitter, parameter: mir.ExecutableParameter, source_ty: TransitionalTypeExpr) bool {
+        if (!parameter.atomic_payload_type_id.isValid()) return false;
+        const pointer = switch (parameter.ty) {
+            .pointer => |shape| shape,
+            else => return false,
+        };
+        if (pointer.kind != .single) return false;
+        const resolved = self.resolveAliasType(source_ty);
+        const source_pointer = switch (resolved.kind) {
+            .pointer => |shape| shape,
+            else => return false,
+        };
+        if (pointer.mutability != source_pointer.mutability) return false;
+        const child = self.resolveAliasType(source_pointer.child.*);
+        if (child.kind == .pointer) return false;
+        return lower_c_shape.atomicPayloadOfType(child) != null;
     }
 
     fn mirExecutableTypeMatchesSource(self: *CEmitter, value_ty: mir.ValueType, maybe_source_ty: ?TransitionalTypeExpr) bool {

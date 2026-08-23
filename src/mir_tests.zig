@@ -72,6 +72,72 @@ test "executable MIR owns valid slice representation checks and rejects mutation
     function.executable_body.trap_edges[0].source = .representation_check;
     try mir_executable_body.verify(function);
 }
+
+test "executable MIR owns bounded atomic loads and rejects semantic drift" {
+    const source =
+        \\global ticks: atomic<u32> = atomic.init(0);
+        \\fn load_global() -> u32 { return ticks.load(.seq_cst); }
+        \\fn load_pointer(value: *mut atomic<u32>) -> u32 { return value.load(.acquire); }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_atomic_load.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const global = functionByName(module_mir, "load_global") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(global.executable_body.complete);
+    try mir_executable_body.verify(&global);
+
+    const pointer = functionByNameMut(&module_mir, "load_pointer") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(pointer.executable_body.complete);
+    var load_index: ?usize = null;
+    for (pointer.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .atomic_load => |load| {
+            try std.testing.expectEqual(mir.ExecutableAtomicOrdering.acquire, load.ordering);
+            load_index = index;
+        },
+        else => {},
+    };
+    const index = load_index orelse return error.TestUnexpectedResult;
+    const place_id = pointer.executable_body.expressions[index].operation.atomic_load.place;
+    const place = &pointer.executable_body.places[place_id.index()];
+    try std.testing.expectEqual(mir.ExecutablePlaceStorage.atomic, place.storage);
+    try std.testing.expectEqual(@as(usize, 1), pointer.executable_body.trap_edges.len);
+    try mir_executable_body.verify(pointer);
+
+    pointer.executable_body.expressions[index].operation.atomic_load.ordering = .release;
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(pointer));
+    pointer.executable_body.expressions[index].operation.atomic_load.ordering = .acquire;
+
+    const saved_payload = pointer.executable_body.parameters[0].atomic_payload_type_id;
+    pointer.executable_body.parameters[0].atomic_payload_type_id = .invalid;
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(pointer));
+    pointer.executable_body.parameters[0].atomic_payload_type_id = saved_payload;
+
+    const saved_storage = place.storage;
+    place.storage = .ordinary;
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(pointer));
+    place.storage = saved_storage;
+
+    const saved_operation = pointer.executable_body.expressions[index].operation;
+    pointer.executable_body.expressions[index].operation = .{ .load = .{
+        .place = place_id,
+        .access = .{ .kind = .race_unordered, .alignment = 4 },
+        .representation_source = saved_operation.atomic_load.representation_source,
+        .representation_span_id = saved_operation.atomic_load.representation_span_id,
+    } };
+    try std.testing.expectError(error.InvalidMemoryAccessType, mir_executable_body.verify(pointer));
+    pointer.executable_body.expressions[index].operation = saved_operation;
+
+    const saved_edges = pointer.executable_body.trap_edges;
+    pointer.executable_body.trap_edges = &.{};
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(pointer));
+    pointer.executable_body.trap_edges = saved_edges;
+    pointer.executable_body.trap_edges[0].kind = .Bounds;
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(pointer));
+    pointer.executable_body.trap_edges[0].kind = .InvalidRepresentation;
+    try mir_executable_body.verify(pointer);
+}
 const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;

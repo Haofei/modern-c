@@ -24,6 +24,7 @@ const constArrayLenValue = lower_c_const.constArrayLenValue;
 const intLiteralText = lower_c_expr.intLiteralText;
 const typeName = type_bridge.typeName;
 const widthBits = lower_c_op.widthBits;
+const TypeExpr = ast_bridge.TypeExpr;
 
 pub fn globalInfoFromType(ty: ast_bridge.TypeExpr) GlobalInfo {
     const name = typeName(ty) orelse "unknown";
@@ -216,7 +217,7 @@ pub fn structFieldType(struct_decl: ast_bridge.StructDecl, field_name: []const u
     return null;
 }
 
-pub fn genericChildType(ty: ast_bridge.TypeExpr, base_name: []const u8) ?ast_bridge.TypeExpr {
+pub fn genericChildType(ty: TypeExpr, base_name: []const u8) ?TypeExpr {
     return switch (ty.kind) {
         .generic => |node| {
             if (!std.mem.eql(u8, node.base.text, base_name) or node.args.len != 1) return null;
@@ -227,10 +228,14 @@ pub fn genericChildType(ty: ast_bridge.TypeExpr, base_name: []const u8) ?ast_bri
     };
 }
 
-pub fn atomicPayloadOfType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
+pub fn atomicPayloadOfType(ty: TypeExpr) ?TypeExpr {
+    return atomicPayloadOfTypeDepth(ty, false);
+}
+
+fn atomicPayloadOfTypeDepth(ty: TypeExpr, saw_pointer: bool) ?TypeExpr {
     return switch (ty.kind) {
-        .pointer => |node| atomicPayloadOfType(node.child.*),
-        .qualified => |node| atomicPayloadOfType(node.child.*),
+        .pointer => |node| if (saw_pointer) null else atomicPayloadOfTypeDepth(node.child.*, true),
+        .qualified => |node| atomicPayloadOfTypeDepth(node.child.*, saw_pointer),
         else => genericChildType(ty, "atomic"),
     };
 }

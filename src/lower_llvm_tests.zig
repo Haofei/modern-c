@@ -34,6 +34,37 @@ test "LLVM valid slice representation check uses canonical executable MIR" {
     try expectContains(len_body, "; canonical executable MIR");
 }
 
+test "LLVM atomic loads use canonical executable MIR" {
+    const source =
+        \\global relaxed_ticks: atomic<u32> = atomic.init(0);
+        \\global seq_ticks: atomic<u32> = atomic.init(0);
+        \\fn load_global_relaxed() -> u32 { return relaxed_ticks.load(.relaxed); }
+        \\fn load_global_seq_cst() -> u32 { return seq_ticks.load(.seq_cst); }
+        \\fn load_pointer_acquire(value: *mut atomic<u32>) -> u32 { return value.load(.acquire); }
+        \\fn load_bool_acquire(value: *const atomic<bool>) -> bool { return value.load(.acquire); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_atomic_load.mc", source, &output);
+
+    const relaxed = try llvmFunctionBody(output.items, "@load_global_relaxed");
+    try expectContains(relaxed, "; canonical executable MIR");
+    try expectContains(relaxed, "load atomic i32, ptr @relaxed_ticks monotonic, align 4");
+    const seq_cst = try llvmFunctionBody(output.items, "@load_global_seq_cst");
+    try expectContains(seq_cst, "load atomic i32, ptr @seq_ticks seq_cst, align 4");
+
+    const pointer = try llvmFunctionBody(output.items, "@load_pointer_acquire");
+    const guard_at = std.mem.indexOf(u8, pointer, "icmp eq ptr") orelse return error.TestUnexpectedResult;
+    const load_at = std.mem.indexOf(u8, pointer, "load atomic i32") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard_at < load_at);
+    try expectContains(pointer, "acquire, align 4");
+
+    const boolean = try llvmFunctionBody(output.items, "@load_bool_acquire");
+    try expectContains(boolean, "load atomic i8");
+    try expectContains(boolean, "trunc i8");
+    try expectNotContains(boolean, "load atomic i1");
+}
+
 test "LLVM shared structural body plans cover nested, aggregate, workflow, and hoisted-loop families" {
     const Case = struct { name: []const u8, path: []const u8, function_header: []const u8, needle: []const u8 };
     const cases = [_]Case{

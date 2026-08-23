@@ -90,6 +90,35 @@ test "lower-c valid slice representation check uses canonical executable MIR" {
     try expectContains(len_body, "/* canonical executable MIR */");
 }
 
+test "lower-c atomic loads use canonical executable MIR" {
+    const source =
+        \\global relaxed_ticks: atomic<u32> = atomic.init(0);
+        \\global seq_ticks: atomic<u32> = atomic.init(0);
+        \\fn load_global_relaxed() -> u32 { return relaxed_ticks.load(.relaxed); }
+        \\fn load_global_seq_cst() -> u32 { return seq_ticks.load(.seq_cst); }
+        \\fn load_pointer_acquire(value: *mut atomic<u32>) -> u32 { return value.load(.acquire); }
+        \\fn load_bool_acquire(value: *const atomic<bool>) -> bool { return value.load(.acquire); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_atomic_load.mc", source, &output);
+
+    const relaxed = try cFunctionBody(output.items, "load_global_relaxed(");
+    try expectContains(relaxed, "/* canonical executable MIR */");
+    try expectContains(relaxed, "__atomic_load_n(&relaxed_ticks, __ATOMIC_RELAXED)");
+    const seq_cst = try cFunctionBody(output.items, "load_global_seq_cst(");
+    try expectContains(seq_cst, "__atomic_load_n(&seq_ticks, __ATOMIC_SEQ_CST)");
+
+    const pointer = try cFunctionBody(output.items, "load_pointer_acquire(");
+    const guard_at = std.mem.indexOf(u8, pointer, "if (value == NULL)") orelse return error.TestUnexpectedResult;
+    const load_at = std.mem.indexOf(u8, pointer, "__atomic_load_n(value, __ATOMIC_ACQUIRE)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard_at < load_at);
+    try expectNotContains(pointer, "__atomic_load_n(&value");
+
+    const boolean = try cFunctionBody(output.items, "load_bool_acquire(");
+    try expectContains(boolean, "__atomic_load_n(value, __ATOMIC_ACQUIRE)");
+}
+
 test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     const source =
         \\fn grouped_i128_minimum() -> i128 {

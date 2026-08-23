@@ -155,7 +155,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
-                    .load, .address_of, .builtin_call, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .load, .atomic_load, .address_of, .builtin_call, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     else => return false,
                 }
             },
@@ -170,7 +170,9 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
     }
     for (body.places) |place| {
         if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections) return false;
-        if (place.projection_count == 0) {
+        if (place.storage == .atomic) {
+            if (!atomicPlaceSupported(body, place)) return false;
+        } else if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
         } else if (!scalarAccessPlaceSupported(body, place)) return false;
     }
@@ -406,6 +408,7 @@ const Renderer = struct {
                 break :blk .{ .ty = ty, .spelling = value };
             },
             .load => |load| try self.emitMemoryLoad(expression, load),
+            .atomic_load => |load| try self.emitAtomicLoad(expression, load),
             .literal => |literal| try self.literalValue(ty, literal),
             .unary => |unary| try self.emitUnary(ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
@@ -950,6 +953,43 @@ const Renderer = struct {
         return .{ .ty = "i1", .spelling = converted };
     }
 
+    fn emitAtomicLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
+        if (!atomicLoadSupported(self.body, expression, load)) return error.InvalidBody;
+        const place = self.body.places[load.place.index()];
+        const value_ty = try self.typeText(expression.result_ty);
+        const pointer: []const u8 = if (place.projection_count == 0) blk: {
+            const symbol_id = switch (place.root) {
+                .symbol => |id| id,
+                .local, .value => return error.InvalidBody,
+            };
+            break :blk try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody});
+        } else blk: {
+            const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+            const local_id = switch (place.root) {
+                .local => |id| id,
+                .symbol, .value => return error.InvalidBody,
+            };
+            const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+            if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+            const continuation = try std.fmt.allocPrint(self.allocator, "mc_atomic_load_ready_{d}", .{expression.id.raw});
+            try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
+            break :blk local.storage;
+        };
+        const storage_ty: []const u8 = if (expression.result_ty == .bool) "i8" else value_ty;
+        const loaded = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}\n", .{
+            loaded,
+            storage_ty,
+            pointer,
+            llvmAtomicOrdering(load.ordering),
+            mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty) orelse return error.InvalidBody,
+        });
+        if (expression.result_ty != .bool) return .{ .ty = value_ty, .spelling = loaded };
+        const converted = try self.temp();
+        try self.output.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ converted, loaded });
+        return .{ .ty = "i1", .spelling = converted };
+    }
+
     fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
         const place = &self.body.places[place_id.index()];
         const global_bool = switch (place.root) {
@@ -982,6 +1022,7 @@ const Renderer = struct {
 
     fn emitPlace(self: *Renderer, place_id: mir.PlaceId, value_ty: []const u8) RenderError![]const u8 {
         const place = &self.body.places[place_id.index()];
+        if (place.storage != .ordinary) return error.Unsupported;
         const pointer: []const u8 = switch (place.root) {
             .local => |local_id| blk: {
                 const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
@@ -1189,6 +1230,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         // SymbolId separately; global value reads remain fail-closed.
         .symbol => false,
         .load => |load| memoryLoadSupported(body, expression, load),
+        .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
             .integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
@@ -1507,7 +1549,7 @@ fn parameterIdentity(body: *const mir.ExecutableBody, id: mir.LocalId) ?mir.Exec
 }
 
 fn singleParameterDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
-    if (place.projection_count != 1 or !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
+    if (place.storage != .ordinary or place.projection_count != 1 or !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
     switch (place.projections[0]) {
         .deref => {},
         .field, .index => return false,
@@ -1537,6 +1579,7 @@ fn singleParameterDerefStorePlaceSupported(body: *const mir.ExecutableBody, plac
 }
 
 fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.storage != .ordinary) return false;
     if (place.projection_count == 1) return singleParameterDerefPlaceSupported(body, place);
     if (place.projection_count != 2 or place.projections[0] != .deref or
         !place.root_type_id.isValid() or !place.type_id.isValid() or
@@ -1571,7 +1614,7 @@ fn parameterScalarAccessStorePlaceSupported(body: *const mir.ExecutableBody, pla
 }
 
 fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, require_mutable: bool) bool {
-    if (place.projection_count != 1 or place.projections[0] != .deref or
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
         !place.root_type_id.isValid() or !place.type_id.isValid() or
         mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
     const root_id = switch (place.root) {
@@ -1614,6 +1657,57 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
+    if (!load.ordering.validForLoad() or !placeValid(body, load.place)) return false;
+    const place = body.places[load.place.index()];
+    if (!atomicPlaceSupported(body, place) or !sameValueType(place.ty, expression.result_ty) or
+        !place.type_id.eql(expression.type_id)) return false;
+    if (place.projection_count == 0) {
+        return load.representation_source == null and !load.representation_span_id.isValid() and
+            ownedExpressionTrapCount(body, expression.id) == 0;
+    }
+    return load.representation_source != null and load.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+}
+
+fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
+    switch (place.ty) {
+        .bool => {},
+        .integer => if (mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false,
+        else => return false,
+    }
+    if (place.projection_count == 0) return switch (place.root) {
+        .symbol => |id| if (symbolIdentity(body, id)) |identity|
+            identity.kind == .global and identity.atomic_payload_type_id.eql(place.type_id)
+        else
+            false,
+        .local, .value => false,
+    };
+    if (place.projection_count != 1 or place.projections[0] != .deref) return false;
+    const local_id = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    const parameter = parameterIdentity(body, local_id) orelse return false;
+    if (!parameter.type_id.eql(place.root_type_id) or !parameter.atomic_payload_type_id.eql(place.type_id) or
+        !sameValueType(parameter.ty, place.root_ty)) return false;
+    const pointer = switch (parameter.ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single;
+}
+
+fn llvmAtomicOrdering(ordering: mir.ExecutableAtomicOrdering) []const u8 {
+    return switch (ordering) {
+        .relaxed => "monotonic",
+        .acquire => "acquire",
+        .seq_cst => "seq_cst",
+        .release, .acq_rel => unreachable,
+    };
+}
+
 fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
@@ -1636,7 +1730,7 @@ fn addressOfComputedRawManyDerefSupported(body: *const mir.ExecutableBody, expre
 fn directAddressOfSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
-    if (place.projection_count != 0 or !sameValueType(place.root_ty, place.ty) or
+    if (place.storage != .ordinary or place.projection_count != 0 or !sameValueType(place.root_ty, place.ty) or
         !addressResultMatchesPlace(expression.result_ty, place.ty) or
         address.representation_source != null or address.representation_span_id.isValid() or
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
@@ -1677,6 +1771,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
 fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool) bool {
     if (!placeValid(body, place_id) or mir.ExecutableMemoryAccess.scalarAlignment(ty) != access.alignment) return false;
     const place = body.places[place_id.index()];
+    if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
         return sameValueType(place.ty, ty) and access.kind == .race_unordered and
             if (is_store)

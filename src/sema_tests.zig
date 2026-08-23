@@ -1022,6 +1022,19 @@ test "atomic cannot store affine or region payloads" {
     try std.testing.expectEqual(@as(usize, 5), countDiagnosticCode(&reporter, "E_ATOMIC_RESOURCE_PAYLOAD"));
 }
 
+test "atomic operations reject nested pointer receivers" {
+    const source =
+        \\fn reject_nested(value: *mut *mut atomic<u32>) -> u32 {
+        \\    return value.load(.acquire);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "atomic_nested_pointer.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    try std.testing.expect(reporter.has_errors);
+}
+
 test "external address and DMA payloads cannot store affine or region resources" {
     const source =
         \\move struct Ticket { id: u32 }

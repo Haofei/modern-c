@@ -504,13 +504,17 @@ pub fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
 }
 
 pub fn atomicPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return atomicPayloadTypeDepth(ty, false);
+}
+
+fn atomicPayloadTypeDepth(ty: ast.TypeExpr, saw_pointer: bool) ?ast.TypeExpr {
     return switch (ty.kind) {
-        .pointer => |node| atomicPayloadType(node.child.*),
+        .pointer => |node| if (saw_pointer) null else atomicPayloadTypeDepth(node.child.*, true),
         .generic => |node| {
             if (!std.mem.eql(u8, node.base.text, "atomic") or node.args.len != 1) return null;
             return node.args[0];
         },
-        .qualified => |node| atomicPayloadType(node.child.*),
+        .qualified => |node| atomicPayloadTypeDepth(node.child.*, saw_pointer),
         else => null,
     };
 }

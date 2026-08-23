@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 762 C and 829 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 759 C and 826 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **934/1696 admitted (55.1%)**, 762 fallback, and
-LLVM **933/1762 admitted (53.0%)**, 829 fallback. There were no unsupported
+The 522-root sweep found C **937/1696 admitted (55.2%)**, 759 fallback, and
+LLVM **936/1762 admitted (53.1%)**, 826 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
@@ -111,27 +111,39 @@ admits 4 more functions per backend and reduces `trap_projection` by 13 in each;
 9 of those functions now stop at a later producer invariant instead of a missing
 trap edge.
 
-The census also ranks the canonical stopping layer. For C the remaining 762
-fallbacks are 713 `producer_incomplete`, 47 `renderer_unsupported`, and 2
-`ready`; LLVM is 753/72/0/4. Producer-incomplete
+Scalar `atomic.load` now has a dedicated executable-MIR operation for direct
+global storage and exactly one pointer indirection. The operation owns its
+atomic place, scalar payload identity, typed memory ordering and exact
+`InvalidRepresentation` edge. Ordinary load/store/address operations reject
+atomic places, and both renderers accept only bool or 8/16/32/64/size integer
+payloads. C emits `__atomic_load_n`; LLVM emits `load atomic`, maps relaxed to
+`monotonic`, and loads bool storage as `i8`. Local `atomic.init`, aggregate
+atomic fields, fetch/store and nested pointers remain on the fallback. The
+nested-pointer semantic helper was tightened at the same time so
+`**atomic<T>` cannot be mistaken for a direct receiver. This admits 3 additional
+functions in each backend.
+
+The census also ranks the canonical stopping layer. For C the remaining 759
+fallbacks are 710 `producer_incomplete`, 47 `renderer_unsupported`, and 2
+`ready`; LLVM is 750/72/0/4. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (135),
-`noncanonical_literal` (116), `trap_projection` (107),
+The leading C reasons are `producer_invariant` (136),
+`trap_projection` (112), `noncanonical_literal` (107),
 `unsupported_member` (50), and
-`unlowered_index` (46). LLVM has `producer_invariant` 135,
-`trap_projection` 120, `noncanonical_literal` 119, `unlowered_index` 60 and
+`unlowered_index` (46). LLVM has `producer_invariant` 136,
+`trap_projection` 125, `noncanonical_literal` 110, `unlowered_index` 60 and
 `unsupported_member` 50. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
-canonical; the remaining `unlowered_member` bucket is 22 in each backend.
+canonical; the remaining `unlowered_member` bucket is 15 in each backend.
 Therefore producer work is the dominant next step and renderer work can be
 selected as a small bounded parallel lane. Remaining C fallbacks ranked by
 family (LLVM has the same distribution within a few functions):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
-| 107 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
-| 84 | 10% | return `<ident>` 2 blk 1 trap | slice_of_struct, slice_of_array | remaining slice/enum representation and bounds traps |
-| 45 | 5% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 102 | 13% | return `<ident>` 1 blk 0 trap | load_acquire, region_holds | remaining local/effectful computations |
+| 82 | 11% | return `<ident>` 2 blk 1 trap | slice_of_struct, slice_of_array | remaining slice/enum representation and bounds traps |
+| 34 | 4% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
 | 46 | 5% | switch return `<ident>` 5+ blk | pa_align_down, SlotFuture__poll | general CFG + value graph |
 | 41 | 5% | return `<ident>` 3-4 blk 2+ trap | inferred_call_slice_element | same, more control flow |
 | 18 | 2% | return binary 2 blk 1 trap | counter_differs, ptr_differs | checked/atomic operands with exact trap edges |

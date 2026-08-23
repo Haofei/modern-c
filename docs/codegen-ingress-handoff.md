@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **828/1696 C** and **893/1762 LLVM** distinct functions using the AST
-  body (C admits 51.2%, LLVM 49.3%). Report mode intentionally preserves
+  finds **759/1696 C** and **826/1762 LLVM** distinct functions using the AST
+  body (C admits 55.2%, LLVM 53.1%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -62,14 +62,14 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-784 to an incomplete MIR producer, 41 to renderer support, 1 to final ingress
-checks and 2 nominally ready; LLVM attributes 822/57/11/3 respectively. The
-producer bucket is now classified by its first stable canonical-model gap. The
-largest C reasons are trap projection (163), producer invariants (132),
-non-canonical literals (116), unsupported members (49), and unresolved indexing
-(46); LLVM records 173/132/119/49/60 respectively. Direct pointer-member scalar
-access is canonical in the targeted census; the remaining `unlowered_member`
-reason count is 22 in each backend. This turns
+710 to an incomplete MIR producer, 47 to renderer support and 2 nominally
+ready; LLVM attributes 750/72/4 respectively. The producer bucket is now
+classified by its first stable canonical-model gap. The largest C reasons are
+producer invariants (136), trap projection (112), non-canonical literals (107),
+unsupported members (50), and unresolved indexing (46); LLVM records
+136/125/110/50/60 respectively. Direct pointer-member scalar access is
+canonical in the targeted census; the remaining `unlowered_member` reason count
+is 15 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
 prevents work on the wrong layer.
 
@@ -369,6 +369,18 @@ executable MIR. Both renderers evaluate the slice once and reject exactly
 enums remain fail-closed. The broad census admitted 4 more functions per
 backend and projected 13 previously missing representation edges per backend;
 the remaining 9 in that group now expose independent producer invariants.
+
+Bounded scalar `atomic.load` is now a dedicated executable-MIR operation for
+global atomic storage and direct `*atomic<T>` parameters. MIR owns the storage
+`PlaceId`, payload `TypeId`, compile-time ordering and exact pointer
+representation edge; ordinary memory operations cannot consume an atomic
+place. C maps the three legal load orders to `__ATOMIC_*`, while LLVM maps
+relaxed to `monotonic` and loads bool storage as `i8` before truncating to `i1`.
+Nested pointers, local `atomic.init`, atomic aggregate fields and non-scalar
+payloads remain fail-closed. The pointer-depth rule was also corrected in sema
+and the legacy C shape helper, preventing `**atomic<T>` from being read as the
+payload at the wrong address. The 522-root census is now C **937/1696 (55.2%)**
+and LLVM **936/1762 (53.1%)**, with 759/826 fallbacks.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

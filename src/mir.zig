@@ -744,6 +744,8 @@ pub const PlaceId = mir_model.PlaceId;
 pub const ExecutableParameter = mir_model.ExecutableParameter;
 pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
 pub const ExecutableExpression = mir_model.ExecutableExpression;
+pub const ExecutableAtomicOrdering = mir_model.ExecutableAtomicOrdering;
+pub const ExecutablePlaceStorage = mir_model.ExecutablePlaceStorage;
 pub const ExecutableTrapOwner = mir_model.ExecutableTrapOwner;
 pub const ExecutableTrapEdge = mir_model.ExecutableTrapEdge;
 pub const ExecutablePlace = mir_model.ExecutablePlace;
@@ -6292,6 +6294,10 @@ const FunctionBuilder = struct {
         };
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
+            const atomic_payload_ty: ?ValueType = if (directAtomicPayloadTypeExprAlias(param.ty, aliases, true)) |payload|
+                valueTypeFromTypeAlias(payload, enums, structs, packed_bits, aliases)
+            else
+                null;
             switch (param_ty) {
                 .struct_ => |name| if (structs.get(name)) |summary| {
                     // LLVM needs the canonical aggregate shape even when a
@@ -6308,6 +6314,7 @@ const FunctionBuilder = struct {
                 .local = executable_local,
                 .ty = param_ty,
                 .type_id = try builder.internTypeId(param_ty),
+                .atomic_payload_type_id = if (atomic_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
                 .source = parameter_source,
                 .span_id = try builder.internSpanId(parameter_source),
             });
@@ -6681,6 +6688,10 @@ const FunctionBuilder = struct {
                     load.representation_span_id = self.span_ids.get(source) orelse .invalid;
                     if (!load.representation_span_id.isValid()) complete = false;
                 },
+                .atomic_load => |*load| if (load.representation_source) |source| {
+                    load.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                    if (!load.representation_span_id.isValid()) complete = false;
+                },
                 .address_of => |*address| if (address.representation_source) |source| {
                     address.representation_span_id = self.span_ids.get(source) orelse .invalid;
                     if (!address.representation_span_id.isValid()) complete = false;
@@ -6855,6 +6866,7 @@ const FunctionBuilder = struct {
                 else
                     load.representation_source == null and !load.representation_span_id.isValid();
             },
+            .atomic_load => |load| self.executableAtomicLoadComplete(expression, load),
             .literal => |literal| switch (literal) {
                 .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
                 .string, .uninit, .enum_value => false,
@@ -6956,6 +6968,7 @@ const FunctionBuilder = struct {
     }
 
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
+        if (place.storage == .atomic) return self.executableAtomicPlaceComplete(place);
         if (place.projection_count == 0) return true;
         if (place.projection_count != 1 and place.projection_count != 2) return false;
         if (place.projections[0] != .deref) return false;
@@ -6994,6 +7007,66 @@ const FunctionBuilder = struct {
             sameValueType(pointee.ty, aggregate_ty) and
             sameValueType(place.ty, pointee.field_types[field_index]) and
             place.type_id.eql(pointee.field_type_ids[field_index]);
+    }
+
+    fn executableAtomicPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
+        if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid() or
+            mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        switch (place.ty) {
+            .bool, .integer => {},
+            else => return false,
+        }
+        if (place.projection_count == 0) return switch (place.root) {
+            .local => false,
+            .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
+                self.executable_symbols.items[id.index()].kind == .global and
+                self.executable_symbols.items[id.index()].atomic_payload_type_id.eql(place.type_id),
+            .value => false,
+        };
+        if (place.projection_count != 1) return false;
+        if (place.projections[0] != .deref) return false;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return false,
+        };
+        var parameter: ?mir_model.ExecutableParameter = null;
+        for (self.executable_parameters.items) |candidate| if (candidate.local.eql(local_id)) {
+            parameter = candidate;
+            break;
+        };
+        const root = parameter orelse return false;
+        if (!sameValueType(root.ty, place.root_ty) or !root.type_id.eql(place.root_type_id) or
+            !root.atomic_payload_type_id.eql(place.type_id)) return false;
+        const pointer = switch (root.ty) {
+            .pointer => |shape| shape,
+            else => return false,
+        };
+        if (pointer.kind != .single) return false;
+        return true;
+    }
+
+    fn executableAtomicLoadComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        load: @FieldType(ExecutableExpression.Operation, "atomic_load"),
+    ) bool {
+        if (!load.ordering.validForLoad() or !load.place.isValid() or load.place.index() >= self.executable_places.items.len)
+            return false;
+        const place = self.executable_places.items[load.place.index()];
+        if (!self.executableAtomicPlaceComplete(place) or !sameValueType(place.ty, expression.result_ty) or
+            !place.type_id.eql(expression.type_id)) return false;
+        const guarded = self.executablePlaceNeedsRepresentationGuard(place);
+        if (guarded != (load.representation_source != null and load.representation_span_id.isValid())) return false;
+        var owned: usize = 0;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .expression => |id| if (id.eql(expression.id)) {
+                if (!guarded or edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+                    !edge.from_block.eql(expression.block_id)) return false;
+                owned += 1;
+            },
+            .statement => {},
+        };
+        return owned == @as(usize, @intFromBool(guarded));
     }
 
     fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
@@ -7112,6 +7185,7 @@ const FunctionBuilder = struct {
                     const owner = self.executable_expressions.items[id.index()];
                     const owner_span_id = switch (owner.operation) {
                         .load => |load| load.representation_span_id,
+                        .atomic_load => |load| load.representation_span_id,
                         .address_of => |address| address.representation_span_id,
                         .builtin_call => |call| call.representation_span_id,
                         else => owner.span_id,
@@ -7200,6 +7274,12 @@ const FunctionBuilder = struct {
         if (identity.kind != .unknown and identity.kind != .global) self.executable_supported = false;
         identity.kind = .global;
         identity.mutable = self.mutable_globals.contains(spelling);
+        if (self.global_type_exprs.get(spelling)) |global_ty| {
+            if (directAtomicPayloadTypeExprAlias(global_ty, self.aliases, false)) |payload| {
+                const payload_ty = valueTypeFromTypeAlias(payload, self.enums, self.structs, self.packed_bits, self.aliases);
+                identity.atomic_payload_type_id = try self.internTypeId(payload_ty);
+            }
+        }
         return id;
     }
 
@@ -7461,6 +7541,36 @@ const FunctionBuilder = struct {
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     result_ty = .{ .integer = "usize" };
                     break :call .{ .literal = .{ .integer = value } };
+                }
+                if (self.atomicCallTargetKind(node.callee.*) == .atomic_load) {
+                    if (node.args.len != 1)
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const ordering = executableAtomicOrdering(node.args[0]) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (!ordering.validForLoad())
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const member = memberExpr(node.callee.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const receiver_type_expr = self.typeExprForExpr(member.base.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const payload_type_expr = directAtomicPayloadTypeExprAlias(receiver_type_expr, self.aliases, true) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    result_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+                    if (!executableAtomicPayloadSupported(result_ty))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const place_id = try self.appendExecutableAtomicPlace(member.base.*, result_ty);
+                    const place = self.executable_places.items[place_id.index()];
+                    const guard_source: ?SourcePoint = if (self.executablePlaceNeedsRepresentationGuard(place))
+                        self.executableDerefOperandSource(member.base.*) orelse
+                            self.sourcePoint(canonicalOperatorOperand(member.base.*).span)
+                    else
+                        null;
+                    break :call .{ .atomic_load = .{
+                        .place = place_id,
+                        .ordering = ordering,
+                        .representation_source = guard_source,
+                        .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
+                    } };
                 }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
                     const raw_target = self.rawCallTarget(node);
@@ -7919,6 +8029,29 @@ const FunctionBuilder = struct {
         }
         try self.executable_places.append(self.allocator, place);
         return place.id;
+    }
+
+    fn appendExecutableAtomicPlace(self: *FunctionBuilder, receiver: ast.Expr, payload_ty: ValueType) anyerror!PlaceId {
+        const place_id = try self.appendExecutablePlace(receiver);
+        const payload_type_id = try self.internTypeId(payload_ty);
+        const place = &self.executable_places.items[place_id.index()];
+        place.storage = .atomic;
+        place.ty = payload_ty;
+        place.type_id = payload_type_id;
+
+        // A direct `*atomic<T>` receiver is already the storage address. Model
+        // that address as one dereference projection so renderers never take
+        // the address of the pointer local itself. Global/by-value storage has
+        // no projection and is addressed by the backend.
+        if (std.meta.activeTag(self.exprType(receiver)) == .pointer and place.projection_count == 0) {
+            if (place.projection_count >= mir_model.max_executable_projections) {
+                place.projection_count = mir_model.max_executable_projections;
+                return place_id;
+            }
+            place.projections[0] = .deref;
+            place.projection_count = 1;
+        }
+        return place_id;
     }
 
     fn executableRawManyOffsetDerefOperand(self: *FunctionBuilder, input: ast.Expr) ?ast.Expr {
@@ -12094,6 +12227,7 @@ const FunctionBuilder = struct {
             const Representation = struct { place: PlaceId, span_id: SpanId };
             const representation: Representation = switch (expression.operation) {
                 .load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
+                .atomic_load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 .address_of => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 else => continue,
             };
@@ -15438,16 +15572,38 @@ fn isAtomicTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMa
 }
 
 fn atomicPayloadTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ast.TypeExpr {
-    return atomicPayloadTypeExprAliasDepth(ty, aliases, 0);
+    return directAtomicPayloadTypeExprAlias(ty, aliases, true);
 }
 
-fn atomicPayloadTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {
+fn directAtomicPayloadTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), allow_pointer: bool) ?ast.TypeExpr {
+    return atomicPayloadTypeExprAliasDepth(ty, aliases, 0, allow_pointer);
+}
+
+fn executableAtomicOrdering(expr: ast.Expr) ?mir_model.ExecutableAtomicOrdering {
+    const spelling = enumLiteralText(expr) orelse return null;
+    if (std.mem.eql(u8, spelling, "relaxed")) return .relaxed;
+    if (std.mem.eql(u8, spelling, "acquire")) return .acquire;
+    if (std.mem.eql(u8, spelling, "release")) return .release;
+    if (std.mem.eql(u8, spelling, "acq_rel")) return .acq_rel;
+    if (std.mem.eql(u8, spelling, "seq_cst")) return .seq_cst;
+    return null;
+}
+
+fn executableAtomicPayloadSupported(ty: ValueType) bool {
+    return switch (ty) {
+        .bool => true,
+        .integer => mir_model.ExecutableMemoryAccess.scalarAlignment(ty) != null,
+        else => false,
+    };
+}
+
+fn atomicPayloadTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize, allow_pointer: bool) ?ast.TypeExpr {
     if (depth > 64) return null;
     return switch (ty.kind) {
-        .name => |name| if (aliases.get(name.text)) |resolved| atomicPayloadTypeExprAliasDepth(resolved, aliases, depth + 1) else null,
+        .name => |name| if (aliases.get(name.text)) |resolved| atomicPayloadTypeExprAliasDepth(resolved, aliases, depth + 1, allow_pointer) else null,
         .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) node.args[0] else null,
-        .pointer => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
-        .qualified => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
+        .pointer => |node| if (!allow_pointer) null else atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1, false),
+        .qualified => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1, allow_pointer),
         else => null,
     };
 }
