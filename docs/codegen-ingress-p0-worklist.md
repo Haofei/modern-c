@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-22
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 868 C and 930 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 867 C and 929 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-22)
 
-The 522-root sweep found C **828/1696 admitted (48.8%)**, 868 fallback, and
-LLVM **832/1762 admitted (47.2%)**, 930 fallback. There were no unsupported
+The 522-root sweep found C **829/1696 admitted (48.9%)**, 867 fallback, and
+LLVM **833/1762 admitted (47.3%)**, 929 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes `raw_many_offset` a typed executable-MIR builtin with an explicit receiver,
 `usize` index, exact raw-many pointer result, evaluation order, and lexical
@@ -36,14 +36,17 @@ unsafe authorization. Both mechanical renderers consume that contract; the
 focused raw-many corpus moved from C 9/40 and LLVM 12/40 to C 20/40 and LLVM
 21/40. Offset-result dereference/address operations remain closed until MIR owns
 an expression-root memory access with its race/representation semantics.
+`phys(...)` now also owns its fixed `PAddr` result type, so nested checked
+arithmetic such as `phys((address as usize) + amount)` preserves its overflow
+edge and lowers mechanically instead of ending in an unknown producer type.
 
-The census also ranks the canonical stopping layer. For C the remaining 868
-fallbacks are 824 `producer_incomplete`, 41 `renderer_unsupported`, 1
-`ingress_mismatch`, and 2 `ready`; LLVM is 862/56/9/3. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 867
+fallbacks are 823 `producer_incomplete`, 41 `renderer_unsupported`, 1
+`ingress_mismatch`, and 2 `ready`; LLVM is 861/56/9/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (171), `trap_projection` (164),
+The leading C reasons are `producer_invariant` (170), `trap_projection` (164),
 `noncanonical_literal` (116), `unsupported_member` (49), and `unlowered_index`
-(46); LLVM has 171/174/119/49/60 respectively. By-value struct member
+(46); LLVM has 170/174/119/49/60 respectively. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be

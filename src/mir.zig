@@ -7296,6 +7296,7 @@ const FunctionBuilder = struct {
                     break :call .{ .literal = .{ .integer = value } };
                 }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
+                    if (kind == .phys) result_ty = .{ .address = .paddr };
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     const receiver = if (kind == .raw_many_offset)
                         (memberExpr(node.callee.*) orelse

@@ -2993,7 +2993,9 @@ test "lower-c typed unary fast path never substitutes an operand descendant" {
     try expectNotContains(masked_bits, "__builtin_memcpy");
 
     const masked_phys = try cFunctionBody(output.items, "static uintptr_t masked_phys(uintptr_t x, uintptr_t y)");
-    try expectContains(masked_phys, "return ((uintptr_t)((x & y)));");
+    try expectContains(masked_phys, "/* canonical executable MIR */");
+    try expectContains(masked_phys, " = (mc_exec_tmp_0 & mc_exec_tmp_1);");
+    try expectContains(masked_phys, " = ((uintptr_t)(mc_exec_tmp_2));");
 }
 
 test "lower-c emits typed binary domain calls from MIR without body fallback" {
@@ -9254,7 +9256,8 @@ test "lower-c inferred local phys calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uintptr_t address = ((uintptr_t)(value))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uintptr_t address = mc_exec_tmp_1") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -12380,6 +12383,9 @@ test "lower-c admits phys address-constructor returns from MIR" {
     // same transparent `((uintptr_t)(v))` cast the conversion path emits.
     const source =
         \\fn to_pa(v: usize) -> PAddr { return phys(v); }
+        \\fn offset(address: PAddr, amount: usize) -> PAddr {
+        \\    return phys((address as usize) + amount);
+        \\}
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "phys.mc", source);
     defer reporter.deinit();
@@ -12394,7 +12400,14 @@ test "lower-c admits phys address-constructor returns from MIR" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return ((uintptr_t)(v));");
+    const constructor = try cFunctionBody(output.items, "static uintptr_t to_pa(uintptr_t v)");
+    try expectContains(constructor, "/* canonical executable MIR */");
+    try expectContains(constructor, "((uintptr_t)(");
+    try expectContains(constructor, "return mc_exec_tmp_");
+    const offset = try cFunctionBody(output.items, "static uintptr_t offset(uintptr_t address, uintptr_t amount)");
+    try expectContains(offset, "/* canonical executable MIR */");
+    try expectContains(offset, "mc_checked_add_usize(");
+    try expectContains(offset, "mc_trap_IntegerOverflow();");
 }
 
 test "lower-c source map records defer cleanup spans" {

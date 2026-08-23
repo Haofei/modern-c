@@ -399,6 +399,42 @@ test "raw many offset owns its receiver and index operands" {
     try executable.verify(function);
 }
 
+test "physical address construction owns nested checked arithmetic" {
+    const source =
+        \\fn offset(address: PAddr, amount: usize) -> PAddr {
+        \\    return phys((address as usize) + amount);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_phys_checked_add.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    var saw_phys = false;
+    for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .builtin_call => |call| if (call.kind == .phys) {
+            saw_phys = true;
+            try std.testing.expect(expression.result_ty == .address and expression.result_ty.address == .paddr);
+            const saved = expression.result_ty;
+            expression.result_ty = .{ .integer = "usize" };
+            try std.testing.expectError(error.InvalidTypeReference, executable.verify(function));
+            expression.result_ty = saved;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_phys);
+    try executable.verify(function);
+}
+
 test "float literal carries canonical width-specific IEEE bits" {
     const source =
         \\fn small() -> f32 { return 1.5; }

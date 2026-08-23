@@ -3144,8 +3144,9 @@ test "LLVM typed unary fast path never substitutes an operand descendant" {
     const masked_bits = try llvmFunctionBody(output.items, "define internal float @masked_bits");
     try expectContains(masked_bits, "and i32 %mc_arg_0, %mc_arg_1");
 
-    const masked_phys = try llvmFunctionBody(output.items, "define internal i64 @masked_phys(i64 %x, i64 %y)");
-    try expectContains(masked_phys, "and i64 %x, %y");
+    const masked_phys = try llvmFunctionBody(output.items, "define internal i64 @masked_phys");
+    try expectContains(masked_phys, "; canonical executable MIR");
+    try expectContains(masked_phys, "and i64 %mc_arg_0, %mc_arg_1");
 }
 
 test "LLVM emits typed binary domain calls from MIR without body fallback" {
@@ -9667,7 +9668,8 @@ test "LLVM inferred local phys calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_phys_local_type.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%address") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%mc_local_1 = alloca i64") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -10960,15 +10962,23 @@ test "LLVM admits phys address-constructor returns from MIR" {
     // `phys(v)` (usize -> PAddr, both i64) is a no-op cast: `ret i64 %v`.
     const source =
         \\fn to_pa(v: usize) -> PAddr { return phys(v); }
+        \\fn offset(address: PAddr, amount: usize) -> PAddr {
+        \\    return phys((address as usize) + amount);
+        \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_phys.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @to_pa");
-    try expectContains(body, "ret i64 %v");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "ret i64 %mc_arg_0");
     // Fast-path admission (not the fallback, which emits param dbg.value).
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
+    const offset = try llvmFunctionBody(output.items, "define internal i64 @offset");
+    try expectContains(offset, "; canonical executable MIR");
+    try expectContains(offset, "call { i64, i1 } @llvm.uadd.with.overflow.i64");
+    try expectContains(offset, "call void @mc_trap_IntegerOverflow()");
 }
 
 test "LLVM emits global address direct-call args from MIR without body fallback" {
