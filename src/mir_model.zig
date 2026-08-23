@@ -571,6 +571,13 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             .address => |class| class == .paddr,
             else => false,
         },
+        .raw_ptr => operands.len == 1 and switch (result) {
+            .pointer => |shape| shape.kind == .single,
+            else => false,
+        } and switch (operands[0]) {
+            .address => |class| class == .paddr,
+            else => false,
+        },
         .raw_store => operands.len == 2 and result == .void and isExecutableRawScalar(operands[1]) and switch (operands[0]) {
             .address => |class| class == .paddr,
             else => false,
@@ -582,7 +589,7 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
 
 pub fn executableBuiltinRequiresUnsafe(kind: CallTargetKind) bool {
     return switch (kind) {
-        .raw_many_offset, .raw_load, .raw_store => true,
+        .raw_many_offset, .raw_load, .raw_ptr, .raw_store => true,
         else => false,
     };
 }
@@ -721,6 +728,11 @@ pub const ExecutableExpression = struct {
             unsafe_authorized: bool = false,
             callee_source: SourcePoint,
             callee_span_id: SpanId = .invalid,
+            /// Exact source location of a constrained builtin result
+            /// representation check. `raw.ptr<T>` uses this to own its
+            /// non-null pointer obligation in MIR rather than in a backend.
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },

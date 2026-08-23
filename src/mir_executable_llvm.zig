@@ -38,7 +38,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
-                    .load, .address_of => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .load, .address_of, .builtin_call => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     else => return false,
                 }
             },
@@ -710,6 +710,16 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ result, result_ty, pointer });
                 return .{ .ty = result_ty, .spelling = result };
             },
+            .raw_ptr => {
+                const address = operands[0];
+                if (!std.mem.eql(u8, address.ty, "i64") or !std.mem.eql(u8, result_ty, "ptr")) return error.InvalidBody;
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, address.spelling });
+                const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+                const continuation = try std.fmt.allocPrint(self.allocator, "mc_raw_ptr_ready_{d}", .{expression.id.raw});
+                try self.emitPointerRepresentationGuard(result, edge, continuation);
+                return .{ .ty = "ptr", .spelling = result };
+            },
             .raw_store => {
                 const address = operands[0];
                 const value = operands[1];
@@ -1008,7 +1018,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -1018,6 +1028,11 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         operand_types[index] = body.expressions[id.index()].result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    if (call.kind == .raw_ptr) {
+        if (call.representation_source == null or !call.representation_span_id.isValid() or
+            !representationTrapEdgeIsExact(body, expression)) return false;
+    } else if (call.representation_source != null or call.representation_span_id.isValid() or
+        ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
         (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
 }

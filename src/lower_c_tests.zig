@@ -12242,6 +12242,7 @@ test "lower-c emits raw-many offset from typed MIR without body fallback" {
 test "lower-c emits raw scalar load and store from typed MIR without body fallback" {
     const source =
         \\fn load(address: PAddr) -> u32 { unsafe { return raw.load<u32>(address); } }
+        \\fn pointer(address: PAddr) -> *mut u32 { unsafe { return raw.ptr<u32>(address); } }
         \\fn store(address: PAddr, value: u32) -> void { unsafe { raw.store<u32>(address, value); } }
         \\fn sync() -> void { fence.release(); fence.acquire(); fence.full(); }
     ;
@@ -12262,6 +12263,9 @@ test "lower-c emits raw scalar load and store from typed MIR without body fallba
     const load = try cFunctionBody(output.items, "static uint32_t load(uintptr_t address)");
     try expectContains(load, "/* canonical executable MIR */");
     try expectContains(load, "mc_raw_load_u32(");
+    const pointer = try cFunctionBody(output.items, "static uint32_t * pointer(uintptr_t address)");
+    try expectContains(pointer, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(pointer, &.{ "((uint32_t *)((uintptr_t)(mc_exec_tmp_", "== NULL) mc_trap_InvalidRepresentation();", "return mc_exec_tmp_" });
     const store = try cFunctionBody(output.items, "static void store(uintptr_t address, uint32_t value)");
     try expectContains(store, "/* canonical executable MIR */");
     try expectContains(store, "mc_raw_store_u32(");

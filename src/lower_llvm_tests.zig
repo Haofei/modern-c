@@ -14335,6 +14335,7 @@ test "LLVM canonical executable MIR lowers pure scalar bitcasts without body fal
 test "LLVM canonical executable MIR emits raw scalar load and store without AST fallback" {
     const source =
         \\fn load(address: PAddr) -> u32 { unsafe { return raw.load<u32>(address); } }
+        \\fn pointer(address: PAddr) -> *mut u32 { unsafe { return raw.ptr<u32>(address); } }
         \\fn store(address: PAddr, value: u32) -> void { unsafe { raw.store<u32>(address, value); } }
         \\fn sync() -> void { fence.release(); fence.acquire(); fence.full(); }
     ;
@@ -14346,6 +14347,10 @@ test "LLVM canonical executable MIR emits raw scalar load and store without AST 
     try expectContains(load, "; canonical executable MIR");
     try expectContains(load, "inttoptr i64 %mc_arg_0 to ptr");
     try expectContains(load, "load volatile i32, ptr");
+    const pointer = try llvmFunctionBody(output.items, "define internal ptr @pointer");
+    try expectContains(pointer, "; canonical executable MIR");
+    try expectNeedlesInOrder(pointer, &.{ "inttoptr i64 %mc_arg_0 to ptr", "icmp eq ptr %mc_expr_tmp_", "ret ptr %mc_expr_tmp_" });
+    try expectContains(pointer, "call void @mc_trap_InvalidRepresentation()");
     const store = try llvmFunctionBody(output.items, "define internal void @store");
     try expectContains(store, "; canonical executable MIR");
     try expectContains(store, "inttoptr i64 %mc_arg_0 to ptr");

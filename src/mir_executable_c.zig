@@ -478,7 +478,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -487,7 +487,13 @@ fn builtinCallSupported(
         const operand = expressionById(body, argument) orelse return false;
         operand_types[index] = operand.result_ty;
     }
-    return mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count]);
+    if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    return if (call.kind == .raw_ptr)
+        call.representation_source != null and call.representation_span_id.isValid() and
+            representationOperationHasExactTrapEdge(body, expression)
+    else
+        call.representation_source == null and !call.representation_span_id.isValid() and
+            ownedTrapEdgeCount(body, expression.id) == 0;
 }
 
 fn emitBuiltinCall(
@@ -546,6 +552,13 @@ fn emitBuiltinCall(
             try out.print(allocator, "mc_raw_load_{s}(", .{scalar.helper_suffix});
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.append(allocator, ')');
+        },
+        .raw_ptr => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, ")((uintptr_t)(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ")))");
         },
         .raw_store => {
             const value = expressionById(body, call.arguments[1]) orelse return error.InvalidExpression;
@@ -800,7 +813,7 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
 fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return switch (expression.operation) {
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
-        .load, .address_of => representationOperationHasExactTrapEdge(body, expression),
+        .load, .address_of, .builtin_call => representationOperationHasExactTrapEdge(body, expression),
         else => false,
     };
 }
@@ -821,6 +834,10 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
             const place = placeById(body, address.place) orelse return false;
             if (!singleParameterScalarDerefPlaceSupported(body, place.*)) return false;
             break :blk .{ .source = address.representation_source, .span_id = address.representation_span_id };
+        },
+        .builtin_call => |call| blk: {
+            if (call.kind != .raw_ptr) return false;
+            break :blk .{ .source = call.representation_source, .span_id = call.representation_span_id };
         },
         else => return false,
     };
@@ -931,6 +948,11 @@ fn prepareStatementExpressions(
         if (expressionNeedsTemporary(expression)) try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
+        if (builtinResultRepresentationSource(expression)) |guard_source| {
+            try writeSourceLineDirective(allocator, out, source_path, guard_source);
+            try writeIndent(allocator, out, indent);
+            try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw});
+        }
     }
 }
 
@@ -943,6 +965,13 @@ fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuar
     return switch (expression.operation) {
         .load => |load| if (load.representation_source) |source| .{ .place = load.place, .source = source } else null,
         .address_of => |address| if (address.representation_source) |source| .{ .place = address.place, .source = source } else null,
+        else => null,
+    };
+}
+
+fn builtinResultRepresentationSource(expression: mir.ExecutableExpression) ?mir.SourcePoint {
+    return switch (expression.operation) {
+        .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_source else null,
         else => null,
     };
 }

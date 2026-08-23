@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **829/1696 C** and **894/1762 LLVM** distinct functions using the AST
-  body (C admits 51.1%, LLVM 49.3%). Report mode intentionally preserves
+  finds **828/1696 C** and **893/1762 LLVM** distinct functions using the AST
+  body (C admits 51.2%, LLVM 49.3%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -62,12 +62,12 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-836 to an incomplete MIR producer, 40 to renderer support, 6 to final ingress
-checks and 2 nominally ready; LLVM attributes 874/56/9/3 respectively. The
+784 to an incomplete MIR producer, 41 to renderer support, 1 to final ingress
+checks and 2 nominally ready; LLVM attributes 822/57/11/3 respectively. The
 producer bucket is now classified by its first stable canonical-model gap. The
-largest C reasons are producer invariants (183), trap projection (164),
+largest C reasons are trap projection (163), producer invariants (132),
 non-canonical literals (116), unsupported members (49), and unresolved indexing
-(46); LLVM records 183/174/119/49/60 respectively. Direct pointer-member scalar
+(46); LLVM records 173/132/119/49/60 respectively. Direct pointer-member scalar
 access is canonical in the targeted census; the remaining `unlowered_member`
 reason count is 22 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
@@ -305,8 +305,11 @@ while LLVM emits a volatile access and declines the canonical path when a
 sanitizer profile needs legacy instrumentation. Aggregate payloads remain
 fail-closed. `fence.release/acquire/full` also carry an explicit typed void
 effect and lower mechanically to the existing C barriers or LLVM fence
-orderings. The broad census moved to C 867/1696 and LLVM 868/1762 admitted,
-removing 38 and 35 fallbacks across the two machine-effect slices.
+orderings. `raw.ptr<T>` now owns its typed address operand, unsafe authority,
+non-null result check and exact representation trap edge. Both backends consume
+that edge mechanically after materializing the pointer. The broad census moved
+to C 868/1696 and LLVM 869/1762 admitted, removing 39 and 36 fallbacks across
+the machine-effect slices.
 
 The raw-many offset slice is canonical for direct values and nested call
 arguments. `ExecutableExpression.builtin_call` owns the receiver, coerced

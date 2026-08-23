@@ -6624,6 +6624,10 @@ const FunctionBuilder = struct {
                 .builtin_call => |*call| {
                     call.callee_span_id = self.span_ids.get(call.callee_source) orelse SpanId.invalid;
                     if (!call.callee_span_id.isValid()) complete = false;
+                    if (call.representation_source) |source| {
+                        call.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                        if (!call.representation_span_id.isValid()) complete = false;
+                    }
                 },
                 else => {},
             }
@@ -6965,7 +6969,11 @@ const FunctionBuilder = struct {
             if (!argument.isValid() or argument.index() >= self.executable_expressions.items.len) return false;
             operand_types[index] = self.executable_expressions.items[argument.index()].result_ty;
         }
-        return mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count]);
+        if (!mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+        return if (call.kind == .raw_ptr)
+            call.representation_source != null and call.representation_span_id.isValid()
+        else
+            call.representation_source == null and !call.representation_span_id.isValid();
     }
 
     fn executableTrapProjectionComplete(self: *const FunctionBuilder, legacy_edges: []const TrapEdge) bool {
@@ -6982,6 +6990,7 @@ const FunctionBuilder = struct {
                     const owner_span_id = switch (owner.operation) {
                         .load => |load| load.representation_span_id,
                         .address_of => |address| address.representation_span_id,
+                        .builtin_call => |call| call.representation_span_id,
                         else => owner.span_id,
                     };
                     break :expression .{ .block_id = owner.block_id, .span_id = owner_span_id };
@@ -7302,7 +7311,7 @@ const FunctionBuilder = struct {
                     } else if (kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
-                        if (target.kind == .raw_load or target.kind == .raw_store) result_ty = target.result_ty;
+                        if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store) result_ty = target.result_ty;
                     }
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     const receiver = if (kind == .raw_many_offset)
@@ -7318,6 +7327,8 @@ const FunctionBuilder = struct {
                         .unsafe_authorized = mir_model.executableBuiltinRequiresUnsafe(kind) and self.active_unsafe,
                         .callee_source = callee_source,
                         .callee_span_id = try self.internSpanId(callee_source),
+                        .representation_source = if (kind == .raw_ptr) source else null,
+                        .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
                         .argument_count = argument_count,
                     };
                     var argument_index: usize = 0;
@@ -7329,7 +7340,7 @@ const FunctionBuilder = struct {
                         call_value.arguments[argument_index] = if (kind == .raw_many_offset)
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
                         else if (raw_target) |target|
-                            if (target.kind == .raw_load or target.kind == .raw_store)
+                            if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store)
                                 try self.ensureExecutableExprAs(argument, if (source_index == 0) target.address_ty else target.payload_ty)
                             else
                                 try self.ensureExecutableExpr(argument)
@@ -11808,6 +11819,21 @@ const FunctionBuilder = struct {
             index -= 1;
             const expression = self.executable_expressions.items[index];
             if (!expression.block_id.eql(BlockId.fromIndex(self.current))) continue;
+            if (expression.operation == .builtin_call) {
+                const call = expression.operation.builtin_call;
+                if (call.kind != .raw_ptr or !call.representation_span_id.eql(span_id)) continue;
+                const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+                if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
+                    legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+                try self.executable_trap_edges.append(self.allocator, .{
+                    .owner = .{ .expression = expression.id },
+                    .from_block = BlockId.fromIndex(legacy.from_block),
+                    .trap_block = BlockId.fromIndex(legacy.trap_block),
+                    .kind = legacy.kind,
+                    .source = legacy.source,
+                });
+                return;
+            }
             const Representation = struct { place: PlaceId, span_id: SpanId };
             const representation: Representation = switch (expression.operation) {
                 .load => |value| .{ .place = value.place, .span_id = value.representation_span_id },

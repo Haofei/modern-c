@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-23
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 829 C and 894 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 828 C and 893 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-23)
 
-The 522-root sweep found C **867/1696 admitted (51.1%)**, 829 fallback, and
-LLVM **868/1762 admitted (49.3%)**, 894 fallback. There were no unsupported
+The 522-root sweep found C **868/1696 admitted (51.2%)**, 828 fallback, and
+LLVM **869/1762 admitted (49.3%)**, 893 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
 makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
@@ -38,17 +38,20 @@ runtime helper (preserving sanitizer hooks); LLVM emits volatile load/store and
 keeps sanitizer profiles on the instrumented legacy path. Aggregate raw access
 remains fail-closed until canonical layout and instrumentation policy cross the
 boundary. Fences carry a typed void effect and preserve release/acquire/full
-order in both renderers. Together these slices admitted 38 additional C
-functions and 35 LLVM functions.
+order in both renderers. `raw.ptr<T>` now owns its typed `PAddr` operand,
+lexical unsafe authority, non-null pointer result and exact
+`InvalidRepresentation` edge. C materializes and guards the result; LLVM emits
+`inttoptr` and branches through the same MIR trap block. Together these machine
+effect slices admitted 39 additional C functions and 36 LLVM functions.
 `raw_many_offset` and `phys(...)` remain canonical as described below.
 
-The census also ranks the canonical stopping layer. For C the remaining 829
-fallbacks are 785 `producer_incomplete`, 41 `renderer_unsupported`, 1
-`ingress_mismatch`, and 2 `ready`; LLVM is 823/57/11/3. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 828
+fallbacks are 784 `producer_incomplete`, 41 `renderer_unsupported`, 1
+`ingress_mismatch`, and 2 `ready`; LLVM is 822/57/11/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `trap_projection` (164), `producer_invariant` (132),
+The leading C reasons are `trap_projection` (163), `producer_invariant` (132),
 `noncanonical_literal` (116), `unsupported_member` (49), and `unlowered_index`
-(46); LLVM has 174/132/119/49/60 respectively. By-value struct member
+(46); LLVM has 173/132/119/49/60 respectively. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 22 in each backend.
 Therefore producer work is the dominant next step and renderer work can be

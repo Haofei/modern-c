@@ -441,6 +441,54 @@ test "raw scalar load and store carry typed operands and unsafe authority" {
     }
 }
 
+test "raw pointer construction owns its nonnull trap and unsafe authority" {
+    const source =
+        \\fn pointer(address: PAddr) -> *mut u32 {
+        \\    unsafe { return raw.ptr<u32>(address); }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_raw_ptr.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    var call_index: ?usize = null;
+    for (function.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .builtin_call => |call| if (call.kind == .raw_ptr) {
+            call_index = index;
+            try std.testing.expect(call.unsafe_authorized);
+            try std.testing.expect(call.representation_source != null);
+            try std.testing.expect(call.representation_span_id.isValid());
+        },
+        else => {},
+    };
+    const index = call_index orelse return error.TestUnexpectedResult;
+    const saved_authority = function.executable_body.expressions[index].operation.builtin_call.unsafe_authorized;
+    function.executable_body.expressions[index].operation.builtin_call.unsafe_authorized = false;
+    try std.testing.expectError(error.InvalidUnsafeAuthorization, executable.verify(function));
+    function.executable_body.expressions[index].operation.builtin_call.unsafe_authorized = saved_authority;
+
+    const saved_span = function.executable_body.expressions[index].operation.builtin_call.representation_span_id;
+    function.executable_body.expressions[index].operation.builtin_call.representation_span_id = .invalid;
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
+    function.executable_body.expressions[index].operation.builtin_call.representation_span_id = saved_span;
+
+    const saved_source = function.executable_body.trap_edges[0].source;
+    function.executable_body.trap_edges[0].source = .checked_arithmetic;
+    try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
+    function.executable_body.trap_edges[0].source = saved_source;
+    try executable.verify(function);
+}
+
 test "fences are explicit typed void effects" {
     const source =
         \\fn sync() -> void {

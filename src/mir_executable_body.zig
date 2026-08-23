@@ -241,7 +241,20 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             for (call.arguments[0..call.argument_count], 0..) |argument, index| {
                 operand_types[index] = (expression(body, argument) orelse return error.InvalidExpressionReference).result_ty;
             }
-            if (body.complete and !mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return error.InvalidBuiltinCall;
+            if (body.complete) {
+                if (!mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return error.InvalidBuiltinCall;
+                if (call.kind == .raw_ptr) {
+                    const source = call.representation_source orelse return error.InvalidMemoryAccessTrap;
+                    try verifySpan(function, call.representation_span_id, source);
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                        ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
+                        return error.InvalidMemoryAccessTrap;
+                } else if (call.representation_source != null or call.representation_span_id.isValid() or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                {
+                    return error.InvalidMemoryAccessTrap;
+                }
+            }
         },
         .indirect_call => |call| {
             try verifyOperand(body, value, call.callee);
@@ -305,11 +318,17 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
+                    .builtin_call => |call| {
+                        if (call.kind != .raw_ptr or call.representation_source == null or
+                            !call.representation_span_id.isValid() or edge.kind != .InvalidRepresentation or
+                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                    },
                     else => return error.InvalidTrapEdge,
                 }
                 const span_id = switch (owner.operation) {
                     .load => |load| load.representation_span_id,
                     .address_of => |address| address.representation_span_id,
+                    .builtin_call => |call| call.representation_span_id,
                     else => owner.span_id,
                 };
                 break :expression_owner .{ .block_id = owner.block_id, .span_id = span_id };
