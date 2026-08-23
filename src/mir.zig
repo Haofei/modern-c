@@ -7813,7 +7813,16 @@ const FunctionBuilder = struct {
                 }
                 for (local.names) |name| {
                     const executable_local = try self.internExecutableLocal(name.text);
-                    const executable_initializer = if (local.names.len == 1) if (local.init) |initializer| try self.ensureExecutableExprAs(initializer, ty) else null else null;
+                    // `uninit` is a storage-initialization policy, not a value
+                    // expression.  Canonical MIR represents it by omitting the
+                    // local initializer; a later assignment creates the first
+                    // executable value generation.  This also removes raw
+                    // `uninit` syntax from the renderer boundary.
+                    const initializer_expr: ?ast.Expr = if (local.names.len == 1) if (local.init) |initializer|
+                        if (ast_query.isUninitLiteral(initializer) and mir_model.ExecutableMemoryAccess.scalarAlignment(ty) != null) null else initializer
+                    else
+                        null else null;
+                    const executable_initializer = if (initializer_expr) |initializer| try self.ensureExecutableExprAs(initializer, ty) else null;
                     if (executable_initializer) |initializer| self.contextualizeExecutableLiteral(initializer, ty);
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
@@ -7822,10 +7831,10 @@ const FunctionBuilder = struct {
                         .mutable = mutable,
                     } });
                     try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
-                    if (local.names.len == 1) if (local.init) |initializer| {
+                    if (initializer_expr) |initializer| {
                         self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
                             try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(initializer).span));
-                    };
+                    }
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
                     try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);

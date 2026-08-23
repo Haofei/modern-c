@@ -51,6 +51,13 @@ checks and 2 nominally ready; LLVM attributes 996/52/16/2 respectively. This
 turns the remaining migration into a ranked producer/renderer/ingress worklist
 and prevents work on the wrong layer.
 
+Explicit scalar `uninit` locals are now represented as storage without an
+initializer expression. A following assignment creates the executable value;
+the front-end definite-initialization rules still reject reads before that
+store. Grouping does not change the representation, while aggregate `uninit`
+continues through its existing aggregate plan. Both scalar initialization
+fixtures now lower through canonical MIR in C and LLVM.
+
 ## The three goals, precisely
 
 1. **P0**: C (`src/lower_c_emitter.zig`) and LLVM (`src/lower_llvm.zig`) codegen

@@ -14182,6 +14182,35 @@ test "LLVM canonical executable MIR lowers broad local bodies without AST fallba
     try expectContains(pipeline, " = xor i32 ");
 }
 
+test "LLVM canonical executable MIR models explicit uninit as storage without a value" {
+    const source =
+        \\fn explicit_uninit(value: u32) -> u32 {
+        \\    var x: u32 = uninit;
+        \\    x = value;
+        \\    return x;
+        \\}
+        \\fn grouped_uninit(value: u32) -> u32 {
+        \\    var x: u32 = (uninit);
+        \\    x = value;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_uninit_local.mc", source, &output);
+
+    for ([_][]const u8{
+        "define internal i32 @explicit_uninit",
+        "define internal i32 @grouped_uninit",
+    }) |signature| {
+        const body = try llvmFunctionBody(output.items, signature);
+        try expectContains(body, "; canonical executable MIR");
+        try expectContains(body, "alloca i32");
+        try expectContains(body, "store i32 %mc_arg_0");
+        try expectContains(body, "ret i32");
+    }
+}
+
 test "LLVM canonical executable MIR precedes legacy specialized plans" {
     const source =
         \\fn identity(value: u32) -> u32 {

@@ -11843,6 +11843,36 @@ test "lower-c prefers canonical executable MIR for direct and local checked arit
     try expectContains(folded, "uint32_t y = mc_exec_tmp_");
 }
 
+test "lower-c canonical executable MIR models explicit uninit as storage without a value" {
+    const source =
+        \\fn explicit_uninit(value: u32) -> u32 {
+        \\    var x: u32 = uninit;
+        \\    x = value;
+        \\    return x;
+        \\}
+        \\fn grouped_uninit(value: u32) -> u32 {
+        \\    var x: u32 = (uninit);
+        \\    x = value;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_executable_uninit_local.mc", source, &output);
+
+    for ([_][]const u8{
+        "static uint32_t explicit_uninit(uint32_t value)",
+        "static uint32_t grouped_uninit(uint32_t value)",
+    }) |signature| {
+        const body = try cFunctionBody(output.items, signature);
+        try expectContains(body, "/* canonical executable MIR */");
+        try expectContains(body, "uint32_t x;");
+        try expectContains(body, "x = mc_exec_tmp_");
+        try expectContains(body, "return mc_exec_tmp_");
+        try std.testing.expect(std.mem.indexOf(u8, body, " = uninit") == null);
+    }
+}
+
 test "lower-c admits bare pointer param return past its elided nonnull check, folded stays on fallback" {
     // `return p` for a pointer param carries a nonnull representation-check trap
     // the fallback elides to `return p;`. The fast path admits it (a bare param
