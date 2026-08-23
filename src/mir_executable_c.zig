@@ -7,6 +7,7 @@
 //! function signature and braces.
 
 const std = @import("std");
+const c_identifier = @import("c_identifier.zig");
 const mir = @import("mir_model.zig");
 
 pub const RenderError = error{
@@ -305,7 +306,16 @@ fn emitExpressionOperation(
             }
             try out.appendSlice(allocator, " }");
         },
-        .range_slice, .member, .array, .unsupported => return error.UnsupportedOperation,
+        .member => |member| {
+            const base = expressionById(body, member.base) orelse return error.InvalidExpression;
+            const shape = aggregateType(body, base.type_id) orelse return error.InvalidExpression;
+            if (!memberSupported(body, expression.*, member)) return error.InvalidExpression;
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, member.base, depth + 1);
+            try out.appendSlice(allocator, ").");
+            try appendIdent(allocator, out, shape.field_spellings[member.field_index]);
+        },
+        .range_slice, .array, .unsupported => return error.UnsupportedOperation,
     }
 }
 
@@ -399,8 +409,19 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .builtin_call => |call| builtinCallSupported(body, expression, call),
         .address_of => |address| addressOfSupported(body, expression, address),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
-        .deref, .index, .range_slice, .member, .array, .unsupported => false,
+        .member => |member| memberSupported(body, expression, member),
+        .deref, .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
+    const base = expressionById(body, operation.base) orelse return false;
+    const shape = aggregateType(body, base.type_id) orelse return false;
+    return shape.construction == .declared_struct and operation.field_index < shape.field_count and
+        isSafeIdentifier(shape.field_spellings[operation.field_index]) and
+        sameValueType(base.result_ty, shape.ty) and
+        sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
+        expression.type_id.eql(shape.field_type_ids[operation.field_index]);
 }
 
 fn structConstructionSupported(
@@ -986,7 +1007,7 @@ fn symbolById(body: *const mir.ExecutableBody, id: mir.SymbolId) ?*const mir.Sym
 
 fn appendIdent(allocator: std.mem.Allocator, out: *std.ArrayList(u8), spelling: []const u8) std.mem.Allocator.Error!void {
     try out.appendSlice(allocator, spelling);
-    if (isCKeyword(spelling)) try out.append(allocator, '_');
+    if (c_identifier.isReservedWord(spelling)) try out.append(allocator, '_');
 }
 
 fn expressionById(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
@@ -1105,12 +1126,6 @@ fn scalarMemoryInfo(ty: mir.ValueType) ?ScalarMemoryInfo {
         .c_type = primitiveType(suffix) orelse return null,
         .alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return null,
     };
-}
-
-fn isCKeyword(name: []const u8) bool {
-    const keywords = [_][]const u8{ "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local" };
-    for (keywords) |keyword| if (std.mem.eql(u8, name, keyword)) return true;
-    return false;
 }
 
 fn isSafeIdentifier(name: []const u8) bool {

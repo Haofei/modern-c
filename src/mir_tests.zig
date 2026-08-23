@@ -5,6 +5,7 @@ const checked_program = @import("checked_program.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
+const mir_executable_body = @import("mir_executable_body.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
 const mir_body_plan = @import("mir_body_plan.zig");
@@ -74,6 +75,61 @@ test "executable MIR owns declared struct literal field order and types" {
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
     aggregate_expression.operation.struct_.field_indices[1] = 0;
     mutable_function.executable_body.aggregate_types[0].field_type_ids[0] = mutable_function.executable_body.aggregate_types[0].field_type_ids[1];
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
+test "executable MIR owns nested by-value struct member identity and spelling" {
+    const source =
+        \\struct Inner { value: u32 }
+        \\struct Outer { inner: Inner }
+        \\fn read(outer: Outer) -> u32 {
+        \\    return outer.inner.value;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_struct_member.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const module = try source_parser.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "read") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 2), function.executable_body.aggregate_types.len);
+    const result = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    const outer_member = switch (result.operation) {
+        .member => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 0), outer_member.field_index);
+    const inner_member_expression = function.executable_body.expressions[outer_member.base.index()];
+    const inner_member = switch (inner_member_expression.operation) {
+        .member => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 0), inner_member.field_index);
+    const inner_shape = mir_executable_body.aggregateType(&function.executable_body, inner_member_expression.type_id) orelse return error.TestUnexpectedResult;
+    const outer_shape = mir_executable_body.aggregateType(&function.executable_body, function.executable_body.expressions[inner_member.base.index()].type_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", inner_shape.field_spellings[0]);
+    try std.testing.expectEqualStrings("inner", outer_shape.field_spellings[0]);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "read") orelse return error.TestUnexpectedResult;
+    const mutable_result = &mutable_function.executable_body.expressions[mutable_function.executable_body.expressions.len - 1];
+    mutable_result.operation.member.field_index = 1;
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+    mutable_result.operation.member.field_index = 0;
+    const inner_type_id = mutable_function.executable_body.expressions[mutable_result.operation.member.base.index()].type_id;
+    var inner_shape_index: ?usize = null;
+    for (mutable_function.executable_body.aggregate_types, 0..) |shape, index| if (shape.type_id.eql(inner_type_id)) {
+        inner_shape_index = index;
+        break;
+    };
+    mutable_function.executable_body.aggregate_types[inner_shape_index orelse return error.TestUnexpectedResult].field_spellings[0] = "";
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 

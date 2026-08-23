@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the 521-root broad census still finds
-  **1001/1800 C** and **1064/1866 LLVM** distinct functions using the AST body
-  (C admits 44.4%, LLVM 43.0%).
+  **988/1800 C** and **1053/1866 LLVM** distinct functions using the AST body
+  (C admits 45.1%, LLVM 43.6%).
   P0 therefore remains incomplete until the executable MIR body is general
   enough for that corpus and the artifact/branch is physically deleted.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
@@ -36,7 +36,7 @@ callee spellings. Renamed-equivalent tests enforce that property. The work also
 caught an initializer-graph parent-slot overflow and prevented a C slice path
 from silently dropping race-safe load/store operations.
 
-The latest vertical slice makes ordinary binary operands and character literals
+The latest vertical slices make ordinary binary operands and character literals
 canonical before codegen. Unsuffixed integer/character operands now adopt the
 binary operation's checked operand type for comparisons and non-trapping
 operators as well as checked arithmetic. Character source spelling is parsed
@@ -44,14 +44,23 @@ once into an integer magnitude and no longer crosses the executable-MIR
 boundary. This admitted 26 additional C functions and 21 LLVM functions in the
 broad census without adding a backend-local syntax recognizer.
 
+Resolved by-value struct members are also canonical executable-MIR operations.
+MIR owns the base value, dense field index, result type, aggregate layout shape,
+and a presentation-only field spelling. C mechanically emits the spelling and
+LLVM emits `extractvalue`; neither backend scans a declaration or expression
+AST. Nested member chains are admitted, while pointer members remain closed
+until their load/access/trap semantics are explicit. The shared C identifier
+policy keeps declarations and canonical accesses consistent for prelude names
+such as `offsetof` and `uint32_t`.
+
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-955 to an incomplete MIR producer, 38 to renderer support, 6 to final ingress
-checks and 2 nominally ready; LLVM attributes 994/52/16/2 respectively. The
+939 to an incomplete MIR producer, 41 to renderer support, 6 to final ingress
+checks and 2 nominally ready; LLVM attributes 978/55/18/2 respectively. The
 producer bucket is now classified by its first stable canonical-model gap. The
-largest C reasons are unsupported expressions (196), producer invariants (161),
-trap projection (154), unresolved member access (153), and non-canonical
-literals (110); LLVM has the same ordering within a few functions. This turns
+largest C reasons are unsupported expressions (314), producer invariants (161),
+trap projection (154), non-canonical literals (108), and unresolved indexing
+(43); LLVM has the same ordering within a few functions. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
 prevents work on the wrong layer.
 

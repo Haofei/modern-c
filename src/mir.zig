@@ -6756,7 +6756,8 @@ const FunctionBuilder = struct {
 
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
-            .unsupported, .deref, .index, .range_slice, .member, .array => false,
+            .unsupported, .deref, .index, .range_slice, .array => false,
+            .member => |operation| self.executableMemberComplete(expression, operation),
             .struct_ => |operation| self.executableStructConstructionComplete(expression, operation),
             .address_of => |address| address.place.isValid() and address.place.index() < self.executable_places.items.len and
                 self.executableAddressOfComplete(expression.result_ty, self.executable_places.items[address.place.index()]) and
@@ -6815,6 +6816,26 @@ const FunctionBuilder = struct {
         for (operation.operands[operation.operand_count..]) |operand_id| if (operand_id.isValid()) return false;
         for (operation.field_indices[operation.operand_count..]) |field_index| if (field_index != std.math.maxInt(usize)) return false;
         return true;
+    }
+
+    fn executableMemberComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "member"),
+    ) bool {
+        if (!operation.base.isValid() or operation.base.index() >= self.executable_expressions.items.len) return false;
+        const base = self.executable_expressions.items[operation.base.index()];
+        var aggregate: ?mir_model.ExecutableAggregateType = null;
+        for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(base.type_id)) {
+            aggregate = candidate;
+            break;
+        };
+        const shape = aggregate orelse return false;
+        return shape.construction == .declared_struct and operation.field_index < shape.field_count and
+            shape.field_spellings[operation.field_index].len != 0 and
+            sameValueType(base.result_ty, shape.ty) and
+            sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
+            expression.type_id.eql(shape.field_type_ids[operation.field_index]);
     }
 
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -7151,10 +7172,26 @@ const FunctionBuilder = struct {
             } },
             .member => |node| if (std.mem.eql(u8, node.name.text, "len"))
                 .{ .slice_length = try self.ensureExecutableExpr(node.base.*) }
-            else if (self.memberFieldIndex(node)) |field_index|
-                .{ .member = .{ .base = try self.ensureExecutableExpr(node.base.*), .field_index = field_index } }
-            else
-                .unsupported,
+            else member: {
+                const field_index = self.memberFieldIndex(node) orelse break :member .unsupported;
+                const base_ty = self.exprType(node.base.*);
+                const struct_name = switch (base_ty) {
+                    .struct_ => |name| name,
+                    // Pointer/member access carries memory and representation
+                    // effects. Keep it closed until it is a canonical load,
+                    // rather than silently treating it as a value projection.
+                    else => break :member .unsupported,
+                };
+                const summary = self.structs.get(struct_name) orelse break :member .unsupported;
+                if (field_index >= summary.fields.len or
+                    !try self.internExecutableAggregateType(base_ty, .declared_struct, summary.fields)) break :member .unsupported;
+                const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                if (!sameValueType(result_ty, field_ty)) break :member .unsupported;
+                break :member .{ .member = .{
+                    .base = try self.ensureExecutableExprAs(node.base.*, base_ty),
+                    .field_index = field_index,
+                } };
+            },
             .call => |node| call: {
                 if (node.args.len > mir_model.max_executable_operands) break :call .unsupported;
                 // Reflection is a compile-time semantic operation.  Legalize it
@@ -7284,6 +7321,7 @@ const FunctionBuilder = struct {
         for (fields, 0..) |field, index| {
             const field_ty = valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
             if (field_ty == .unknown or field_ty == .value) return false;
+            aggregate.field_spellings[index] = field.name.text;
             aggregate.field_types[index] = field_ty;
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
         }

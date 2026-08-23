@@ -233,7 +233,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyOperand(body, value, operation.start);
             try verifyOperand(body, value, operation.end);
         },
-        .member => |operation| try verifyOperand(body, value, operation.base),
+        .member => |operation| {
+            try verifyOperand(body, value, operation.base);
+            if (body.complete) try verifyMemberProjection(function, value, operation);
+        },
         .array => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
         .struct_ => |operation| {
             try verifyArguments(body, value, operation.operands, operation.operand_count);
@@ -444,7 +447,7 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .deref, .index, .range_slice, .member, .array => return true,
+        .unsupported, .deref, .index, .range_slice, .array => return true,
         .builtin_call => |call| {
             if (call.argument_count > mir.max_executable_operands) return true;
             var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;
@@ -483,9 +486,23 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
         if (field_ty == .unknown or field_ty == .value) return error.InvalidAggregateType;
         try verifyType(function, field_type_id, field_ty, body.complete);
     }
-    for (aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_ty, field_type_id| {
-        if (field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
+    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_spelling, field_ty, field_type_id| {
+        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
     }
+}
+
+fn verifyMemberProjection(
+    function: *const mir.Function,
+    value: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "member"),
+) !void {
+    const body = &function.executable_body;
+    const base = expression(body, operation.base) orelse return error.InvalidExpressionReference;
+    const aggregate = aggregateType(body, base.type_id) orelse return error.InvalidAggregateType;
+    if (operation.field_index >= aggregate.field_count or aggregate.field_spellings[operation.field_index].len == 0 or
+        !sameValueType(base.result_ty, aggregate.ty) or
+        !sameValueType(value.result_ty, aggregate.field_types[operation.field_index]) or
+        !value.type_id.eql(aggregate.field_type_ids[operation.field_index])) return error.InvalidAggregateType;
 }
 
 fn verifyStructConstruction(

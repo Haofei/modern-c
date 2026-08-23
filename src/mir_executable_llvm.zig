@@ -295,7 +295,8 @@ const Renderer = struct {
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
             .struct_ => |aggregate| try self.emitStruct(expression, aggregate),
-            .index, .range_slice, .member, .array, .unsupported => return error.Unsupported,
+            .member => |member| try self.emitMember(expression, member),
+            .index, .range_slice, .array, .unsupported => return error.Unsupported,
         };
         self.values[id.index()] = result;
         return result;
@@ -322,6 +323,19 @@ const Renderer = struct {
             current = result;
         }
         return .{ .ty = aggregate_ty, .spelling = current };
+    }
+
+    fn emitMember(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
+        if (!memberSupported(self.body, expression, operation)) return error.InvalidBody;
+        const base_expression = self.body.expressions[operation.base.index()];
+        const shape = aggregateType(self.body, base_expression.type_id) orelse return error.InvalidBody;
+        const base = try self.emitExpression(operation.base);
+        const aggregate_ty = try self.typeText(shape.ty);
+        const result_ty = try self.typeText(expression.result_ty);
+        if (!std.mem.eql(u8, base.ty, aggregate_ty)) return error.InvalidBody;
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ result, aggregate_ty, base.spelling, operation.field_index });
+        return .{ .ty = result_ty, .spelling = result };
     }
 
     fn literalValue(self: *Renderer, ty: []const u8, literal: mir.ExecutableLiteral) RenderError!Value {
@@ -826,8 +840,20 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         },
         .cast => |cast| castSupported(body, expression, cast),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
-        .index, .range_slice, .member, .array, .unsupported => false,
+        .member => |member| memberSupported(body, expression, member),
+        .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
+    if (!expressionValid(body, operation.base)) return false;
+    const base = body.expressions[operation.base.index()];
+    const shape = aggregateType(body, base.type_id) orelse return false;
+    return shape.construction == .declared_struct and operation.field_index < shape.field_count and
+        sameValueType(base.result_ty, shape.ty) and
+        sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
+        expression.type_id.eql(shape.field_type_ids[operation.field_index]) and
+        llvmTypeSupported(body, base.result_ty) and llvmTypeSupported(body, expression.result_ty);
 }
 
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {

@@ -1318,16 +1318,32 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectNotContains(checked_args_body, "switch");
 
     const field_cond_body = try cFunctionBody(output.items, "static void choose_void_field_cond(Flags f, SignedPair p)");
-    try expectContains(field_cond_body, "if (f.ok)");
-    try expectContains(field_cond_body, "hit(p.a);");
-    try expectContains(field_cond_body, "hit(p.b);");
+    if (isCanonicalExecutableCBody(field_cond_body)) {
+        try expectContains(field_cond_body, ").ok;");
+        try expectContains(field_cond_body, ").a;");
+        try expectContains(field_cond_body, ").b;");
+        try expectContains(field_cond_body, "if (mc_exec_tmp_");
+        try expectContains(field_cond_body, "hit(mc_exec_tmp_");
+    } else {
+        try expectContains(field_cond_body, "if (f.ok)");
+        try expectContains(field_cond_body, "hit(p.a);");
+        try expectContains(field_cond_body, "hit(p.b);");
+    }
     try expectNotContains(field_cond_body, "switch");
     try expectNotContains(field_cond_body, "mc_tmp");
 
     const field_cond_not_body = try cFunctionBody(output.items, "static void choose_void_field_cond_not(Flags f, SignedPair p)");
-    try expectContains(field_cond_not_body, "if (!f.ok)");
-    try expectContains(field_cond_not_body, "hit(p.a);");
-    try expectContains(field_cond_not_body, "hit(p.b);");
+    if (isCanonicalExecutableCBody(field_cond_not_body)) {
+        try expectContains(field_cond_not_body, ").ok;");
+        try expectContains(field_cond_not_body, ").a;");
+        try expectContains(field_cond_not_body, ").b;");
+        try expectContains(field_cond_not_body, "!mc_exec_tmp_");
+        try expectContains(field_cond_not_body, "hit(mc_exec_tmp_");
+    } else {
+        try expectContains(field_cond_not_body, "if (!f.ok)");
+        try expectContains(field_cond_not_body, "hit(p.a);");
+        try expectContains(field_cond_not_body, "hit(p.b);");
+    }
     try expectNotContains(field_cond_not_body, "switch");
     try expectNotContains(field_cond_not_body, "mc_tmp");
 
@@ -1377,9 +1393,15 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectNotContains(loop_void_cmp_body, "mc_tmp");
 
     const loop_void_field_body = try cFunctionBody(output.items, "static void loop_void_field(Flags f, SignedPair p)");
-    const loop_void_field_while = std.mem.indexOf(u8, loop_void_field_body, "while (f.ok)") orelse return error.TestUnexpectedResult;
-    const loop_void_field_call = std.mem.indexOf(u8, loop_void_field_body, "hit(p.a);") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(loop_void_field_while < loop_void_field_call);
+    if (isCanonicalExecutableCBody(loop_void_field_body)) {
+        try expectContains(loop_void_field_body, ").ok;");
+        try expectContains(loop_void_field_body, ").a;");
+        try expectContains(loop_void_field_body, "hit(mc_exec_tmp_");
+    } else {
+        const loop_void_field_while = std.mem.indexOf(u8, loop_void_field_body, "while (f.ok)") orelse return error.TestUnexpectedResult;
+        const loop_void_field_call = std.mem.indexOf(u8, loop_void_field_body, "hit(p.a);") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(loop_void_field_while < loop_void_field_call);
+    }
     try expectNotContains(loop_void_field_body, "switch");
     try expectNotContains(loop_void_field_body, "mc_tmp");
 }
@@ -1450,7 +1472,7 @@ test "lower-c emits simple sequential void direct calls from MIR" {
 
     const local_body = try cFunctionBody(output.items, "static void local_then_call(void)");
     try expectContains(local_body, "hit(2);");
-    try expectNotContains(local_body, "uint32_t x");
+    if (!isCanonicalExecutableCBody(local_body)) try expectNotContains(local_body, "uint32_t x");
     try expectNotContains(local_body, "x =");
 
     const assign_body = try cFunctionBody(output.items, "static void assign_then_call(void)");
@@ -1803,7 +1825,10 @@ test "lower-c emits simple global stores from MIR" {
     try expectNotContains(bool_literal_body, "mc_tmp");
 
     const field_body = try cFunctionBody(output.items, "static void store_field(Pair p)");
-    try expectContains(field_body, "mc_race_store_u32(&g, (uint32_t)p.a);");
+    if (isCanonicalExecutableCBody(field_body)) {
+        try expectContains(field_body, ").a;");
+        try expectContains(field_body, "mc_race_store_u32(&g, (uint32_t)mc_exec_tmp_");
+    } else try expectContains(field_body, "mc_race_store_u32(&g, (uint32_t)p.a);");
     try expectNotContains(field_body, "mc_tmp");
 
     const global_body = try cFunctionBody(output.items, "static void store_global(void)");
@@ -2018,20 +2043,23 @@ test "lower-c emits direct struct parameter field returns from MIR" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t first(Pair p)");
-    try expectContains(body, "return p.a;");
+    try expectContains(body, if (isCanonicalExecutableCBody(body)) ").a;" else "return p.a;");
+    if (isCanonicalExecutableCBody(body)) try expectContains(body, "return mc_exec_tmp_");
     try expectNotContains(body, "mc_tmp");
     try expectNotContains(body, "switch");
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_first(Pair p)");
-    try expectContains(local_body, "return p.a;");
-    try expectNotContains(local_body, "uint32_t x");
+    try expectContains(local_body, if (isCanonicalExecutableCBody(local_body)) ").a;" else "return p.a;");
+    if (isCanonicalExecutableCBody(local_body)) try expectContains(local_body, "return mc_exec_tmp_");
+    if (!isCanonicalExecutableCBody(local_body)) try expectNotContains(local_body, "uint32_t x");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static uint32_t assigned_second(Pair p)");
-    try expectContains(assigned_body, "return p.b;");
-    try expectNotContains(assigned_body, "uint32_t x");
+    try expectContains(assigned_body, if (isCanonicalExecutableCBody(assigned_body)) ").b;" else "return p.b;");
+    if (isCanonicalExecutableCBody(assigned_body)) try expectContains(assigned_body, "return mc_exec_tmp_");
+    if (!isCanonicalExecutableCBody(assigned_body)) try expectNotContains(assigned_body, "uint32_t x");
     try expectNotContains(assigned_body, "mc_tmp");
-    try expectNotContains(assigned_body, "x =");
+    if (!isCanonicalExecutableCBody(assigned_body)) try expectNotContains(assigned_body, "x =");
 }
 
 test "lower-c emits nested parameter and global field places from MIR without body fallback" {
@@ -2063,14 +2091,24 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     try expectContains(update, "mc_race_store_u32(&box.pair.left");
     try expectContains(update, "mc_race_load_u32(&box.pair.left)");
     const read = try cFunctionBody(output.items, "static uint32_t read(Box value)");
-    try expectContains(read, "return value.pair.right;");
+    if (isCanonicalExecutableCBody(read)) {
+        try expectContains(read, ").pair;");
+        try expectContains(read, ").right;");
+        try expectContains(read, "return mc_exec_tmp_");
+    } else try expectContains(read, "return value.pair.right;");
     try expectNotContains(read, "mc_tmp");
     const read_global = try cFunctionBody(output.items, "static uint32_t read_local_global(void)");
     try expectContains(read_global, "Box copy = box;");
     try expectContains(read_global, "return copy.pair.right;");
     const read_parameter = try cFunctionBody(output.items, "static uint32_t read_local_parameter(Box value)");
-    try expectContains(read_parameter, "Box copy = value;");
-    try expectContains(read_parameter, "return copy.pair.left;");
+    if (isCanonicalExecutableCBody(read_parameter)) {
+        try expectContains(read_parameter, "Box copy = mc_exec_tmp_");
+        try expectContains(read_parameter, ").pair;");
+        try expectContains(read_parameter, ").left;");
+    } else {
+        try expectContains(read_parameter, "Box copy = value;");
+        try expectContains(read_parameter, "return copy.pair.left;");
+    }
 }
 
 test "lower-c emits fixed-array constant-index places from MIR without body fallback" {
@@ -2225,11 +2263,18 @@ test "lower-c emits struct parameter field call arguments from MIR" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_call_args.mc", source, &output);
 
     const call_body = try cFunctionBody(output.items, "static uint32_t call_field(Pair p)");
-    try expectContains(call_body, "return make(p.a);");
+    if (isCanonicalExecutableCBody(call_body)) {
+        try expectContains(call_body, ").a;");
+        try expectContains(call_body, "make(mc_exec_tmp_");
+        try expectContains(call_body, "return mc_exec_tmp_");
+    } else try expectContains(call_body, "return make(p.a);");
     try expectNotContains(call_body, "mc_tmp");
 
     const void_body = try cFunctionBody(output.items, "static void void_field(Pair p)");
-    try expectContains(void_body, "hit(p.b);");
+    if (isCanonicalExecutableCBody(void_body)) {
+        try expectContains(void_body, ").b;");
+        try expectContains(void_body, "hit(mc_exec_tmp_");
+    } else try expectContains(void_body, "hit(p.b);");
     try expectNotContains(void_body, "mc_tmp");
 }
 
@@ -2248,11 +2293,17 @@ test "lower-c emits struct parameter field checked operands from MIR" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_checked_operands.mc", source, &output);
 
     const left_body = try cFunctionBody(output.items, "static uint32_t add_left(Pair p, uint32_t x)");
-    try expectContains(left_body, "return mc_checked_add_u32(p.a, x);");
+    if (isCanonicalExecutableCBody(left_body)) {
+        try expectContains(left_body, ").a;");
+        try expectContains(left_body, "mc_checked_add_u32(mc_exec_tmp_");
+    } else try expectContains(left_body, "return mc_checked_add_u32(p.a, x);");
     try expectNotContains(left_body, "mc_tmp");
 
     const right_body = try cFunctionBody(output.items, "static uint32_t add_right(Pair p, uint32_t x)");
-    try expectContains(right_body, "return mc_checked_add_u32(x, p.b);");
+    if (isCanonicalExecutableCBody(right_body)) {
+        try expectContains(right_body, ").b;");
+        try expectContains(right_body, "mc_checked_add_u32(mc_exec_tmp_");
+    } else try expectContains(right_body, "return mc_checked_add_u32(x, p.b);");
     try expectNotContains(right_body, "mc_tmp");
 }
 
@@ -2275,14 +2326,23 @@ test "lower-c emits struct parameter field comparisons from MIR" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_compare_operands.mc", source, &output);
 
     const left_body = try cFunctionBody(output.items, "static bool cmp_left(Pair p, uint32_t x)");
-    try expectContains(left_body, "return (p.a == x);");
+    if (isCanonicalExecutableCBody(left_body)) {
+        try expectContains(left_body, ").a;");
+        try expectContains(left_body, " == ");
+    } else try expectContains(left_body, "return (p.a == x);");
     try expectNotContains(left_body, "return (p == x);");
 
     const right_body = try cFunctionBody(output.items, "static bool cmp_right(Pair p, uint32_t x)");
-    try expectContains(right_body, "return (x < p.b);");
+    if (isCanonicalExecutableCBody(right_body)) {
+        try expectContains(right_body, ").b;");
+        try expectContains(right_body, " < ");
+    } else try expectContains(right_body, "return (x < p.b);");
 
     const call_body = try cFunctionBody(output.items, "static void call_cmp(Pair p, uint32_t x)");
-    try expectContains(call_body, "take_bool((p.a == x));");
+    if (isCanonicalExecutableCBody(call_body)) {
+        try expectContains(call_body, ").a;");
+        try expectContains(call_body, "take_bool(mc_exec_tmp_");
+    } else try expectContains(call_body, "take_bool((p.a == x));");
     try expectNotContains(call_body, "take_bool((p == x));");
 }
 
@@ -2384,11 +2444,18 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectNotContains(make_body, "mc_tmp");
 
     const field_body = try cFunctionBody(output.items, "static Pair return_field_pair(Pair p)");
-    try expectContains(field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    if (isCanonicalExecutableCBody(field_body)) {
+        try expectContains(field_body, ").a;");
+        try expectContains(field_body, ").b;");
+        try expectContains(field_body, "= (Pair){ mc_exec_tmp_");
+    } else try expectContains(field_body, "return (Pair){ .a = p.a, .b = p.b };");
     try expectNotContains(field_body, "mc_tmp");
 
     const bool_body = try cFunctionBody(output.items, "static Flags bool_pair(Flags f)");
-    try expectContains(bool_body, "return (Flags){ .ok = f.ok };");
+    if (isCanonicalExecutableCBody(bool_body)) {
+        try expectContains(bool_body, ").ok;");
+        try expectContains(bool_body, "= (Flags){ mc_exec_tmp_");
+    } else try expectContains(bool_body, "return (Flags){ .ok = f.ok };");
     try expectNotContains(bool_body, "mc_tmp");
 
     const choose_body = try cFunctionBody(output.items, "static Pair choose_pair(bool flag, int32_t a, int32_t b)");
@@ -2424,7 +2491,11 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectNotContains(local_body, "mc_tmp");
 
     const local_field_body = try cFunctionBody(output.items, "static Pair local_field_pair(Pair p)");
-    try expectContains(local_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    if (isCanonicalExecutableCBody(local_field_body)) {
+        try expectContains(local_field_body, ").a;");
+        try expectContains(local_field_body, ").b;");
+        try expectContains(local_field_body, "= (Pair){ mc_exec_tmp_");
+    } else try expectContains(local_field_body, "return (Pair){ .a = p.a, .b = p.b };");
     try expectNotContains(local_field_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static Pair assigned_pair(int32_t a, int32_t b)");
@@ -2433,8 +2504,14 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectNotContains(assigned_body, "mc_tmp");
 
     const assigned_field_body = try cFunctionBody(output.items, "static Pair assigned_field_pair(Pair p)");
-    try expectContains(assigned_field_body, "return (Pair){ .a = p.b, .b = p.a };");
-    try expectNotContains(assigned_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    if (isCanonicalExecutableCBody(assigned_field_body)) {
+        try expectContains(assigned_field_body, ").a;");
+        try expectContains(assigned_field_body, ").b;");
+        try expectContains(assigned_field_body, "= (Pair){ mc_exec_tmp_");
+    } else {
+        try expectContains(assigned_field_body, "return (Pair){ .a = p.b, .b = p.a };");
+        try expectNotContains(assigned_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    }
     try expectNotContains(assigned_field_body, "mc_tmp");
 
     const loop_body = try cFunctionBody(output.items, "static Pair loop_pair(bool flag, int32_t a, int32_t b)");
@@ -2474,6 +2551,24 @@ test "lower-c emits simple struct literal returns from MIR" {
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, early_body, "return mc_exec_tmp_"));
     try expectNotContains(early_body, "mc_tmp");
     try expectNotContains(early_body, "switch");
+}
+
+test "lower-c canonical executable MIR emits nested by-value struct member reads" {
+    const source =
+        \\struct Inner { value: u32 }
+        \\struct Outer { inner: Inner }
+        \\fn read(outer: Outer) -> u32 {
+        \\    return outer.inner.value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_executable_struct_member.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t read(Outer outer)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, ").inner;");
+    try expectContains(body, ").value;");
 }
 
 test "lower-c emits simple array literal returns from MIR" {
@@ -7284,7 +7379,8 @@ test "lower-c param-field copied inferred local lowers without function body fal
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_param_field_copy_return.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return box.value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ").value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
 }
 
 test "lower-c null inferred local lowers without function body fallback" {
@@ -7582,7 +7678,8 @@ test "lower-c nested struct members require MIR expression facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null);
-        try expectContains(output.items, "holder.child.value");
+        try expectContains(output.items, ").child;");
+        try expectContains(output.items, ").value;");
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
@@ -12338,8 +12435,8 @@ test "lower-c tuples desugar to one nominal struct with numeric field access" {
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
     try std.testing.expect(std.mem.count(u8, output.items, "typedef struct __tuple2_u32_u64 __tuple2_u32_u64;") == 1);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "t._0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "t._1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ")._0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ")._1") != null);
 }
 
 test "lower-c module blocks namespace functions and constants" {
@@ -12407,8 +12504,8 @@ test "lower-c tuple destructuring binds each name to temporary fields" {
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__destr0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "__destr0._0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "__destr0._1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ")._0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ")._1") != null);
 }
 
 test "lower-c backend_name attribute emits asm label" {
@@ -19297,7 +19394,9 @@ test "lower-c sanitizes C header names used as fields" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t offsetof_;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t uint32_t_;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(packet.offsetof_, packet.uint32_t_);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ").offsetof_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ").uint32_t_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(mc_exec_tmp_") != null);
 }
 
 test "lower-c emits overlay unions as byte storage" {

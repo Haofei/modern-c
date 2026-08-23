@@ -777,6 +777,10 @@ pub const ExecutableAggregateType = struct {
     type_id: TypeId,
     ty: ValueType,
     construction: AggregateConstructionKind,
+    /// Canonical presentation names for mechanical C member emission. Field
+    /// identity is still the dense index; these spellings carry no semantic
+    /// authority and LLVM does not consume them.
+    field_spellings: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
     field_types: [max_executable_operands]ValueType = [_]ValueType{.unknown} ** max_executable_operands,
     field_type_ids: [max_executable_operands]TypeId = [_]TypeId{.invalid} ** max_executable_operands,
     field_count: usize = 0,

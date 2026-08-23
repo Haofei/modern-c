@@ -1643,24 +1643,24 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(checked_args_body, "switch");
 
     const field_cond_body = try llvmFunctionBody(output.items, "define internal void @choose_void_field_cond");
-    const field_cond = std.mem.indexOf(u8, field_cond_body, "extractvalue { i1 } %f, 0") orelse return error.TestUnexpectedResult;
-    const field_branch = std.mem.indexOf(u8, field_cond_body, "br i1 %t") orelse return error.TestUnexpectedResult;
-    const field_then = std.mem.indexOf(u8, field_cond_body, "extractvalue { i32, i32 } %p, 0") orelse return error.TestUnexpectedResult;
-    const field_else = std.mem.indexOf(u8, field_cond_body, "extractvalue { i32, i32 } %p, 1") orelse return error.TestUnexpectedResult;
+    const field_cond = std.mem.indexOf(u8, field_cond_body, "extractvalue { i1 } %mc_arg_0, 0") orelse return error.TestUnexpectedResult;
+    const field_branch = std.mem.indexOf(u8, field_cond_body, "br i1 %mc_expr_tmp_") orelse return error.TestUnexpectedResult;
+    const field_then = std.mem.indexOf(u8, field_cond_body, "extractvalue { i32, i32 } %mc_arg_1, 0") orelse return error.TestUnexpectedResult;
+    const field_else = std.mem.indexOf(u8, field_cond_body, "extractvalue { i32, i32 } %mc_arg_1, 1") orelse return error.TestUnexpectedResult;
     try std.testing.expect(field_cond < field_branch);
     try std.testing.expect(field_branch < field_then);
     try std.testing.expect(field_branch < field_else);
-    try expectContains(field_cond_body, "call void @hit(i32 %t");
+    try expectContains(field_cond_body, "call void @hit(i32 %mc_expr_tmp_");
     try expectNotContains(field_cond_body, "alloca");
     try expectNotContains(field_cond_body, "store");
     try expectNotContains(field_cond_body, "switch");
 
     const field_cond_not_body = try llvmFunctionBody(output.items, "define internal void @choose_void_field_cond_not");
-    try expectContains(field_cond_not_body, "extractvalue { i1 } %f, 0");
-    try expectContains(field_cond_not_body, "br i1 %t");
-    try expectContains(field_cond_not_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(field_cond_not_body, "extractvalue { i32, i32 } %p, 1");
-    try expectNotContains(field_cond_not_body, "xor");
+    try expectContains(field_cond_not_body, "extractvalue { i1 } %mc_arg_0, 0");
+    try expectContains(field_cond_not_body, "br i1 %mc_expr_tmp_");
+    try expectContains(field_cond_not_body, "extractvalue { i32, i32 } %mc_arg_1, 0");
+    try expectContains(field_cond_not_body, "extractvalue { i32, i32 } %mc_arg_1, 1");
+    try expectContains(field_cond_not_body, "xor i1");
     try expectNotContains(field_cond_not_body, "alloca");
     try expectNotContains(field_cond_not_body, "store");
     try expectNotContains(field_cond_not_body, "switch");
@@ -1725,12 +1725,12 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(loop_void_cmp_body, "alloca");
 
     const loop_void_field_body = try llvmFunctionBody(output.items, "define internal void @loop_void_field");
-    const loop_void_field_cond = std.mem.indexOf(u8, loop_void_field_body, "extractvalue { i1 } %f, 0") orelse return error.TestUnexpectedResult;
-    const loop_void_field_branch = std.mem.indexOf(u8, loop_void_field_body, "br i1 %t") orelse return error.TestUnexpectedResult;
-    const loop_void_field_arg = std.mem.indexOf(u8, loop_void_field_body, "extractvalue { i32, i32 } %p, 0") orelse return error.TestUnexpectedResult;
+    const loop_void_field_cond = std.mem.indexOf(u8, loop_void_field_body, "extractvalue { i1 } %mc_arg_0, 0") orelse return error.TestUnexpectedResult;
+    const loop_void_field_branch = std.mem.indexOf(u8, loop_void_field_body, "br i1 %mc_expr_tmp_") orelse return error.TestUnexpectedResult;
+    const loop_void_field_arg = std.mem.indexOf(u8, loop_void_field_body, "extractvalue { i32, i32 } %mc_arg_1, 0") orelse return error.TestUnexpectedResult;
     try std.testing.expect(loop_void_field_cond < loop_void_field_branch);
     try std.testing.expect(loop_void_field_branch < loop_void_field_arg);
-    try expectContains(loop_void_field_body, "call void @hit(i32 %t");
+    try expectContains(loop_void_field_body, "call void @hit(i32 %mc_expr_tmp_");
     try expectNotContains(loop_void_field_body, "switch");
     try expectNotContains(loop_void_field_body, "alloca");
     try expectNotContains(loop_void_field_body, "store");
@@ -2364,22 +2364,22 @@ test "LLVM emits direct struct parameter field returns from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @first");
-    try expectContains(body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(body, "ret i32 %t");
+    try expectContains(body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(body, "ret i32 %mc_expr_tmp_");
     try expectNotContains(body, "alloca");
     try expectNotContains(body, "store");
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_first");
-    try expectContains(local_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(local_body, "ret i32 %t");
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "store");
+    try expectContains(local_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(local_body, "ret i32 %mc_expr_tmp_");
+    try expectContains(local_body, "alloca i32");
+    try expectContains(local_body, "store i32");
 
     const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_second");
-    try expectContains(assigned_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(assigned_body, "ret i32 %t");
-    try expectNotContains(assigned_body, "alloca");
-    try expectNotContains(assigned_body, "store");
+    try expectContains(assigned_body, "extractvalue { i32, i32 } %mc_arg_0, 1");
+    try expectContains(assigned_body, "ret i32 %mc_expr_tmp_");
+    try expectContains(assigned_body, "alloca i32");
+    try expectContains(assigned_body, "store i32");
 }
 
 test "LLVM emits nested parameter and global field places from MIR without body fallback" {
@@ -2413,8 +2413,8 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectContains(update, "store atomic i32 %value");
     try expectContains(update, "load atomic i32");
     const read = try llvmFunctionBody(output.items, "define internal i32 @read");
-    try expectContains(read, "extractvalue { { i32, i32 } } %value, 0");
-    try expectContains(read, "extractvalue { i32, i32 } %t");
+    try expectContains(read, "extractvalue { { i32, i32 } } %mc_arg_0, 0");
+    try expectContains(read, "extractvalue { i32, i32 } %mc_expr_tmp_");
     try expectContains(read, ", 1");
     try expectNotContains(read, "alloca");
     const read_global = try llvmFunctionBody(output.items, "define internal i32 @read_local_global");
@@ -2423,10 +2423,10 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectContains(read_global, ", 1");
     try expectNotContains(read_global, "alloca");
     const read_parameter = try llvmFunctionBody(output.items, "define internal i32 @read_local_parameter");
-    try expectContains(read_parameter, "extractvalue { { i32, i32 } } %value, 0");
-    try expectContains(read_parameter, "extractvalue { i32, i32 }");
+    try expectContains(read_parameter, "extractvalue { { i32, i32 } } %mc_expr_tmp_0, 0");
+    try expectContains(read_parameter, "extractvalue { i32, i32 } %mc_expr_tmp_");
     try expectContains(read_parameter, ", 0");
-    try expectNotContains(read_parameter, "alloca");
+    try expectContains(read_parameter, "alloca { { i32, i32 } }");
 }
 
 test "LLVM emits fixed-array constant-index places from MIR without body fallback" {
@@ -2550,15 +2550,15 @@ test "LLVM emits struct parameter field call arguments from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_call_args.mc", source, &output);
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @call_field");
-    try expectContains(call_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(call_body, "call i32 @make(i32 %t");
-    try expectContains(call_body, "ret i32 %t");
+    try expectContains(call_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(call_body, "call i32 @make(i32 %mc_expr_tmp_");
+    try expectContains(call_body, "ret i32 %mc_expr_tmp_");
     try expectNotContains(call_body, "alloca");
     try expectNotContains(call_body, "store");
 
     const void_body = try llvmFunctionBody(output.items, "define internal void @void_field");
-    try expectContains(void_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(void_body, "call void @hit(i32 %t");
+    try expectContains(void_body, "extractvalue { i32, i32 } %mc_arg_0, 1");
+    try expectContains(void_body, "call void @hit(i32 %mc_expr_tmp_");
     try expectNotContains(void_body, "alloca");
     try expectNotContains(void_body, "store");
 }
@@ -2578,15 +2578,15 @@ test "LLVM emits struct parameter field checked operands from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_checked_operands.mc", source, &output);
 
     const left_body = try llvmFunctionBody(output.items, "define internal i32 @add_left");
-    try expectContains(left_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(left_body, "@llvm.uadd.with.overflow.i32(i32 %t");
-    try expectContains(left_body, ", i32 %x)");
+    try expectContains(left_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(left_body, "@llvm.uadd.with.overflow.i32(i32 %mc_expr_tmp_");
+    try expectContains(left_body, ", i32 %mc_arg_1)");
     try expectNotContains(left_body, "alloca");
     try expectNotContains(left_body, "store");
 
     const right_body = try llvmFunctionBody(output.items, "define internal i32 @add_right");
-    try expectContains(right_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(right_body, "@llvm.uadd.with.overflow.i32(i32 %x, i32 %t");
+    try expectContains(right_body, "extractvalue { i32, i32 } %mc_arg_0, 1");
+    try expectContains(right_body, "@llvm.uadd.with.overflow.i32(i32 %mc_arg_1, i32 %mc_expr_tmp_");
     try expectNotContains(right_body, "alloca");
     try expectNotContains(right_body, "store");
 }
@@ -2610,20 +2610,19 @@ test "LLVM emits struct parameter field comparisons from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_compare_operands.mc", source, &output);
 
     const left_body = try llvmFunctionBody(output.items, "define internal i1 @cmp_left");
-    try expectContains(left_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(left_body, "icmp eq i32 %t");
-    try expectContains(left_body, ", %x");
-    try expectNotContains(left_body, "icmp eq i32 %p, %x");
+    try expectContains(left_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(left_body, "icmp eq i32 %mc_expr_tmp_");
+    try expectContains(left_body, ", %mc_arg_1");
 
     const right_body = try llvmFunctionBody(output.items, "define internal i1 @cmp_right");
-    try expectContains(right_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(right_body, "icmp ult i32 %x, %t");
+    try expectContains(right_body, "extractvalue { i32, i32 } %mc_arg_0, 1");
+    try expectContains(right_body, "icmp ult i32 %mc_arg_1, %mc_expr_tmp_");
 
     const call_body = try llvmFunctionBody(output.items, "define internal void @call_cmp");
-    try expectContains(call_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(call_body, "icmp eq i32 %t");
+    try expectContains(call_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(call_body, "icmp eq i32 %mc_expr_tmp_");
     try expectContains(call_body, "call void @take_bool");
-    try expectNotContains(call_body, "icmp eq i32 %p, %x");
+    try expectNotContains(call_body, "icmp eq i32 %mc_arg_0, %mc_arg_1");
 }
 
 test "LLVM emits simple struct literal returns from MIR" {
@@ -2727,17 +2726,17 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectNotContains(make_body, "store");
 
     const field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @return_field_pair");
-    try expectContains(field_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(field_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
-    try expectContains(field_body, "ret { i32, i32 } %t");
+    try expectContains(field_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(field_body, "extractvalue { i32, i32 } %mc_arg_0, 1");
+    try expectContains(field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %mc_expr_tmp_");
+    try expectContains(field_body, "ret { i32, i32 } %mc_expr_tmp_");
     try expectNotContains(field_body, "alloca");
     try expectNotContains(field_body, "store");
 
     const bool_body = try llvmFunctionBody(output.items, "define internal { i1 } @bool_pair");
-    try expectContains(bool_body, "extractvalue { i1 } %f, 0");
-    try expectContains(bool_body, "insertvalue { i1 } zeroinitializer, i1 %t");
-    try expectContains(bool_body, "ret { i1 } %t");
+    try expectContains(bool_body, "extractvalue { i1 } %mc_arg_0, 0");
+    try expectContains(bool_body, "insertvalue { i1 } zeroinitializer, i1 %mc_expr_tmp_");
+    try expectContains(bool_body, "ret { i1 } %mc_expr_tmp_");
     try expectNotContains(bool_body, "alloca");
     try expectNotContains(bool_body, "store");
 
@@ -2791,12 +2790,12 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectContains(local_body, "ret { i32, i32 } %mc_expr_tmp_");
 
     const local_field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_field_pair");
-    try expectContains(local_field_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(local_field_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(local_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
-    try expectContains(local_field_body, "ret { i32, i32 } %t");
-    try expectNotContains(local_field_body, "alloca");
-    try expectNotContains(local_field_body, "store");
+    try expectContains(local_field_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(local_field_body, "extractvalue { i32, i32 } %mc_arg_0, 1");
+    try expectContains(local_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %mc_expr_tmp_");
+    try expectContains(local_field_body, "ret { i32, i32 } %mc_expr_tmp_");
+    try expectContains(local_field_body, "alloca { i32, i32 }");
+    try expectContains(local_field_body, "store { i32, i32 }");
 
     const assigned_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_pair");
     try expectContains(assigned_body, "insertvalue { i32, i32 } zeroinitializer, i32 %b, 0");
@@ -2858,6 +2857,24 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectNotContains(early_body, "alloca");
     try expectNotContains(early_body, "store");
     try expectNotContains(early_body, "switch");
+}
+
+test "LLVM canonical executable MIR emits nested by-value struct member reads" {
+    const source =
+        \\struct Inner { value: u32 }
+        \\struct Outer { inner: Inner }
+        \\fn read(outer: Outer) -> u32 {
+        \\    return outer.inner.value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_struct_member.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @read");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "extractvalue { { i32 } }");
+    try expectContains(body, "extractvalue { i32 }");
 }
 
 test "LLVM emits simple array literal returns from MIR" {
