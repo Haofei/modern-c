@@ -13,7 +13,8 @@
 //! function each backend emits, it records whether the function took the fast
 //! path, the AST body fallback, or hit `UnsupportedEmission`, together with a
 //! compact MIR *shape descriptor* (block count, entry terminator, return value
-//! kind, trap/cleanup flags, and the set of MIR instruction kinds present).
+//! kind, trap/cleanup flags, the set of MIR instruction kinds present, and the
+//! normalized set of builtin call-target kinds).
 //! `tools/toolchain/fallback-census-report.py` aggregates the records into a
 //! ranked table so the remaining fallbacks can be attacked head-of-distribution
 //! first instead of by guesswork.
@@ -120,6 +121,8 @@ fn writeRecordJson(
     try writeJsonString(out, a, shape.ret);
     try out.print(a, ",\"traps\":{d},\"cleanup\":{s},\"instrs\":", .{ shape.traps, if (shape.cleanup) "true" else "false" });
     try writeInstrSet(out, a, fn_mir);
+    try out.appendSlice(a, ",\"call_targets\":");
+    try writeCallTargetSet(out, a, fn_mir);
     try out.appendSlice(a, "}");
 }
 
@@ -165,8 +168,8 @@ fn returnKind(fn_mir: mir.Function) []const u8 {
 
 fn normalizeReturnId(value_id: []const u8) []const u8 {
     const keywords = [_][]const u8{
-        "void",          "int",   "char",  "bool",  "float",
-        "binary",        "unary", "cast",  "null",  "deref",
+        "void",           "int",           "char",       "bool", "float",
+        "binary",         "unary",         "cast",       "null", "deref",
         "struct_literal", "array_literal", "address_of",
     };
     for (keywords) |kw| {
@@ -199,6 +202,48 @@ fn writeInstrSet(out: *std.ArrayList(u8), a: std.mem.Allocator, fn_mir: mir.Func
     try out.append(a, '"');
 }
 
+const call_target_field_count = @typeInfo(mir.CallTargetKind).@"enum".fields.len;
+
+/// Mark a verified MIR call-target detail in the normalized presence set.
+/// Unknown details are ignored: this recorder is best-effort and must never
+/// change compilation behavior. MIR verification owns rejection of malformed
+/// semantic facts.
+fn markCallTarget(present: *[call_target_field_count]bool, detail: []const u8) void {
+    const kind = std.meta.stringToEnum(mir.CallTargetKind, detail) orelse return;
+    present[@intFromEnum(kind)] = true;
+}
+
+/// The set of builtin call targets present anywhere in the function. Values
+/// are emitted in `CallTargetKind` enum order, not instruction encounter order,
+/// so repeated calls and CFG/block ordering cannot perturb census identities.
+fn writeCallTargetSet(out: *std.ArrayList(u8), a: std.mem.Allocator, fn_mir: mir.Function) !void {
+    var present = [_]bool{false} ** call_target_field_count;
+    for (fn_mir.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .call_target) markCallTarget(&present, instruction.detail);
+        }
+    }
+    try writeCallTargetPresence(out, a, present);
+}
+
+fn writeCallTargetPresence(
+    out: *std.ArrayList(u8),
+    a: std.mem.Allocator,
+    present: [call_target_field_count]bool,
+) !void {
+    const fields = @typeInfo(mir.CallTargetKind).@"enum".fields;
+    try out.append(a, '"');
+    var first = true;
+    inline for (fields, 0..) |field, i| {
+        if (present[i]) {
+            if (!first) try out.append(a, ',');
+            try out.appendSlice(a, field.name);
+            first = false;
+        }
+    }
+    try out.append(a, '"');
+}
+
 fn writeJsonString(out: *std.ArrayList(u8), a: std.mem.Allocator, s: []const u8) !void {
     try out.append(a, '"');
     for (s) |c| switch (c) {
@@ -214,4 +259,62 @@ fn writeJsonString(out: *std.ArrayList(u8), a: std.mem.Allocator, s: []const u8)
         },
     };
     try out.append(a, '"');
+}
+
+test "call-target census is de-duplicated and enum-order deterministic" {
+    const a = std.testing.allocator;
+    var present = [_]bool{false} ** call_target_field_count;
+
+    // Deliberately mark these out of enum order and repeat one occurrence.
+    markCallTarget(&present, "wrapping_add");
+    markCallTarget(&present, "phys");
+    markCallTarget(&present, "wrapping_add");
+    markCallTarget(&present, "not_a_call_target");
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    try writeCallTargetPresence(&out, a, present);
+
+    try std.testing.expectEqualStrings("\"phys,wrapping_add\"", out.items);
+}
+
+test "fallback census JSON includes normalized call targets" {
+    const a = std.testing.allocator;
+    var instructions = [_]mir.Instruction{
+        .{ .kind = .call_target, .result_ty = .void, .detail = "wrapping_add", .line = 1, .column = 1 },
+        .{ .kind = .call_target, .result_ty = .void, .detail = "phys", .line = 1, .column = 2 },
+        .{ .kind = .call_target, .result_ty = .void, .detail = "wrapping_add", .line = 1, .column = 3 },
+    };
+    var blocks = [_]mir.Block{.{
+        .id = 0,
+        .kind = "entry",
+        .instructions = &instructions,
+        .successors = &.{},
+        .terminator = .{ .return_ = .void },
+    }};
+    const function: mir.Function = .{
+        .name = "example",
+        .return_ty = .void,
+        .no_lang_trap = false,
+        .irq_context = false,
+        .blocks = &blocks,
+        .trap_edges = &.{},
+        .contract_regions = &.{},
+        .range_facts = &.{},
+        .pointer_provenance_facts = &.{},
+        .representation_facts = &.{},
+        .elided_bounds = &.{},
+    };
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    try writeRecordJson(&out, a, .c, .fallback, "module.mc", function);
+
+    try std.testing.expectEqualStrings(
+        "{\"backend\":\"c\",\"status\":\"fallback\",\"module\":\"module.mc\"," ++
+            "\"fn\":\"example\",\"blocks\":1,\"term\":\"return\",\"ret\":\"none\"," ++
+            "\"traps\":0,\"cleanup\":false,\"instrs\":\"call_target\"," ++
+            "\"call_targets\":\"phys,wrapping_add\"}",
+        out.items,
+    );
 }

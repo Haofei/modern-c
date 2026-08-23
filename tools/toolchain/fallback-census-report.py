@@ -2,15 +2,17 @@
 """Aggregate function-body fallback census JSONL into a ranked worklist.
 
 Reads the records emitted by src/fallback_census.zig (one JSON object per line:
-backend, status, module, fn, blocks, term, ret, traps, cleanup, instrs) and prints,
+backend, status, module, fn, blocks, term, ret, traps, cleanup, instrs,
+call_targets) and prints,
 per backend:
 
   * headline coverage: how many distinct functions the verified-MIR fast path
     already admits vs. how many still fall back to the transitional AST body;
   * a coarse ranked table (entry terminator x return-value kind x block/trap/cleanup
     buckets) — the actionable "family" view: attack the biggest bucket first;
-  * a fine ranked table by exact MIR instruction-kind signature — names precisely
-    which constructs a fallen-back family contains, i.e. the recognizer to build.
+  * a fine ranked table by exact MIR instruction-kind and builtin-call-target
+    signature — names precisely which constructs a fallen-back family contains,
+    i.e. the recognizer to build.
 
 A function is de-duplicated across corpus roots by (backend, fn, shape) so an std
 helper pulled in by many fixtures counts once, not once per importer.
@@ -66,6 +68,10 @@ def signature(rec):
         rec.get("traps", 0),
         bool(rec.get("cleanup", False)),
         rec.get("instrs", ""),
+        # Old census JSONL predates this dimension. Treating absence as an
+        # empty set keeps those files readable while preventing distinct
+        # builtin families from collapsing in newly generated data.
+        rec.get("call_targets", ""),
     )
 
 
@@ -168,22 +174,30 @@ def report_backend(backend, recs):
         print(f"         {'':>5} e.g. {', '.join(coarse_examples[key])}")
     print()
 
-    # --- fine ranking by exact instruction signature ---
+    # --- fine ranking by exact instruction/call-target signature ---
     fine = collections.Counter()
     fine_examples = collections.defaultdict(list)
     for sig in fb_sigs:
         r = seen[sig]
-        key = (r.get("term", ""), r.get("ret", ""), r.get("instrs", ""))
+        key = (
+            r.get("term", ""),
+            r.get("ret", ""),
+            r.get("instrs", ""),
+            r.get("call_targets", ""),
+        )
         fine[key] += 1
         if len(fine_examples[key]) < 3:
             fine_examples[key].append(r.get("fn", "?"))
 
     print("  --- ranked by exact MIR instruction signature (recognizer target) ---")
-    print(f"  {'count':>5}  {'%fb':>5}  term/ret :: instrs")
+    print(f"  {'count':>5}  {'%fb':>5}  term/ret :: instrs :: call_targets")
     for key, cnt in fine.most_common(20):
-        term, ret, instrs = key
+        term, ret, instrs, call_targets = key
         frac = cnt / not_admitted
-        print(f"  {cnt:>5}  {frac*100:4.0f}%  {term}/{ret} :: {instrs}")
+        print(
+            f"  {cnt:>5}  {frac*100:4.0f}%  "
+            f"{term}/{ret} :: {instrs} :: {call_targets}"
+        )
         print(f"         {'':>5} e.g. {', '.join(fine_examples[key])}")
     print()
 
