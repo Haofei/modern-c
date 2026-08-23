@@ -2870,7 +2870,7 @@ fn sameMaybeSpan(left: ?diagnostics.Span, right: ?diagnostics.Span) bool {
     if (left == null or right == null) return false;
     const l = left.?;
     const r = right.?;
-    return l.offset == r.offset and l.len == r.len and l.line == r.line and l.column == r.column;
+    return l.offset == r.offset and l.len == r.len and l.line == r.line and l.column == r.column and l.file_id == r.file_id;
 }
 
 fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {

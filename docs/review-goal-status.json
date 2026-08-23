@@ -78,23 +78,48 @@
     {
       "id": "real-module-graph",
       "priority": "P1",
-      "status": "incomplete",
+      "status": "complete",
       "requested_end_state": "The loader no longer compiles through textual inclusion/combined source; semantic identity is per-file/per-module, without adding incremental databases, serialized caches, or separate compilation to this goal.",
-      "current_evidence": [
+      "implemented_evidence": [
         {
-          "file": "src/loader.zig",
-          "needle": "combined",
-          "expected_min_count_while_incomplete": 1
+          "file": "src/module_graph.zig",
+          "needle": "pub const SourceDatabase = struct"
         },
         {
           "file": "src/module_parser.zig",
-          "needle": "flattened",
-          "expected_min_count_while_incomplete": 1
+          "needle": "pub const ResolvedProgram = struct"
         },
         {
           "file": "src/compiler_session.zig",
-          "needle": "pub const ParsedModule = struct",
-          "expected_min_count_while_incomplete": 1
+          "needle": "pub fn prepareResolvedProgram("
+        }
+      ],
+      "completion_evidence": [
+        {
+          "file": "src/loader.zig",
+          "needle": "retained independently in SourceDatabase"
+        },
+        {
+          "file": "src/module_parser.zig",
+          "needle": "parser.Parser.initWithFileId"
+        },
+        {
+          "file": "src/mir.zig",
+          "needle": "source_file_id: u32"
+        }
+      ],
+      "retired_evidence": [
+        {
+          "file": "src/diagnostics.zig",
+          "needle": "pub const FileBoundary = struct"
+        },
+        {
+          "file": "src/compiler_session.zig",
+          "needle": "pub const ParsedModule = struct"
+        },
+        {
+          "file": "src/loader.zig",
+          "needle": "loadCombinedSource"
         }
       ]
     }

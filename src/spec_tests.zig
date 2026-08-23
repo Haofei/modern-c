@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const compiler_session = @import("compiler_session.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const generic_precheck = @import("generic_precheck.zig");
@@ -10,6 +11,7 @@ const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
+const module_parser = @import("module_parser.zig");
 const monomorphize = @import("monomorphize.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
@@ -379,36 +381,21 @@ test "tests/spec diagnostic declarations and inline EXPECT_ERROR comments match 
         const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
         defer allocator.free(path);
 
-        var imported = false;
         var reporter = diagnostics.Reporter.init(allocator, path, source);
         defer reporter.deinit();
-        var spec = resolveSpecSource(allocator, io, path, source, &imported, &reporter) catch |err| switch (err) {
-            error.Reported => blk: {
-                imported = true;
-                break :blk null;
-            },
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const parse_allocator = arena.allocator();
+        const spec = prepareSpecProgram(parse_allocator, io, path, source, &reporter) catch |err| switch (err) {
+            error.Reported => null,
             else => return err,
         };
-        defer if (spec) |*loaded_spec| loaded_spec.deinit(allocator, imported);
 
-        if (spec) |loaded_spec| {
-            reporter.source = loaded_spec.source;
-            reporter.file_boundaries = loaded_spec.boundaries;
-
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            defer arena.deinit();
-            const parse_allocator = arena.allocator();
-
-            const module = try parseSpecModuleForExpectedDiagnostics(loaded_spec.source, parse_allocator, &reporter);
-            defer if (module) |m| m.deinit(parse_allocator);
-
-            if (module) |m| {
-                var checker = sema.Checker.init(&reporter);
-                checker.file_boundaries = loaded_spec.boundaries;
-                checker.checkDecls(m.decls, m.visibility_mode, m.qualified_owners);
-                if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-                    try mir.verifyFromDecls(allocator, m.decls, &reporter);
-                }
+        if (spec) |program| {
+            var checker = sema.Checker.init(&reporter);
+            checker.checkDecls(program.decls, program.visibility_mode, program.qualified_owners);
+            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+                try mir.verifyFromDecls(allocator, program.decls, &reporter);
             }
         }
 
@@ -840,7 +827,7 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
     const module = try p.parseModule(allocator);
     const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, null);
     const resolved = moduleWithDecls(module, resolved_decls);
-    try generic_precheck.checkDecls(allocator, resolved.decls, resolved.visibility_mode, reporter, null);
+    try generic_precheck.checkDecls(allocator, resolved.decls, resolved.visibility_mode, reporter);
     const specialized_decls = try monomorphize.transformDeclsReport(allocator, resolved.decls, reporter);
     return moduleWithDecls(resolved, specialized_decls);
 }
@@ -853,22 +840,10 @@ fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.
     };
 }
 
-// A spec fixture's effective source, plus the import-flattened file boundaries needed to
-// enforce the cross-file orphan rule (sema). Most fixtures are single-file: `source` is then
-// the raw text and `boundaries` is empty. A fixture that begins with `import "..."` (e.g. the
-// soundness fixtures that pull in std/freestanding opaque types) is expanded through the loader, with
-// `rel_path` made absolute first so the loader's ancestor walk reaches the repo root — matching
-// how the real std/freestanding validation build resolves rooted imports.
-const SpecSource = struct {
-    source: []const u8,
-    boundaries: []const loader.FileBoundary,
-
-    fn deinit(self: *SpecSource, allocator: std.mem.Allocator, imported: bool) void {
-        if (!imported) return;
-        allocator.free(self.source);
-        for (self.boundaries) |b| allocator.free(b.path);
-        allocator.free(self.boundaries);
-    }
+const PreparedSpecProgram = struct {
+    decls: []ast.Decl,
+    visibility_mode: ast.VisibilityMode,
+    qualified_owners: [][]const u8,
 };
 
 fn hasTopLevelImport(source: []const u8) bool {
@@ -882,34 +857,44 @@ fn hasTopLevelImport(source: []const u8) bool {
     return false;
 }
 
-// Resolve a spec fixture to its effective source. `raw` is the fixture's own bytes; `rel_path`
-// is its repo-relative path (`tests/spec/<name>.mc`). `imported_out` is set true when the loader
-// was used (so the caller frees with the same flag). The returned `source`/`boundaries` are
-// loader-owned when imported, else borrow `raw`. `reporter`, when present, receives loader
-// diagnostics such as missing imports while its source still points at the raw fixture; callers
-// then retarget it to the combined source before parse/sema diagnostics are added.
-fn resolveSpecSource(
+fn prepareSpecProgram(
     allocator: std.mem.Allocator,
     io: std.Io,
     rel_path: []const u8,
     raw: []const u8,
-    imported_out: *bool,
-    reporter: ?*diagnostics.Reporter,
-) !SpecSource {
+    reporter: *diagnostics.Reporter,
+) !?PreparedSpecProgram {
     if (!hasTopLevelImport(raw)) {
-        imported_out.* = false;
-        return .{ .source = raw, .boundaries = &.{} };
+        const module = try parseSpecModuleForExpectedDiagnostics(raw, allocator, reporter) orelse return null;
+        return .{
+            .decls = module.decls,
+            .visibility_mode = module.visibility_mode,
+            .qualified_owners = module.qualified_owners,
+        };
     }
-    imported_out.* = true;
     const abs = try std.fs.path.resolve(allocator, &.{rel_path});
-    defer allocator.free(abs);
-    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
-    errdefer {
-        for (boundaries.items) |b| allocator.free(b.path);
-        boundaries.deinit(allocator);
-    }
-    const combined = try loader.loadCombinedSourceWithBoundariesReport(allocator, io, abs, raw, &boundaries, null, null, reporter);
-    return .{ .source = combined, .boundaries = try boundaries.toOwnedSlice(allocator) };
+    const loaded = try loader.loadProjectOptionsReport(allocator, io, abs, raw, .{}, reporter);
+    const source_views = try loaded.source_db.diagnosticViews(allocator, loaded.graph);
+    reporter.source_views = source_views;
+
+    var session = compiler_session.CompilationSession.init(allocator, io);
+    session.module_graph = &loaded.graph;
+    session.source_views = source_views;
+    var parsed: module_parser.ParsedSourceDatabase = undefined;
+    var resolved: module_parser.ResolvedSourceDatabase = undefined;
+    try session.attachLoadedProjectSyntax(&loaded, allocator, reporter, &parsed, &resolved);
+    // `PreparedSpecProgram` stores AST spelling slices into the loaded per-file
+    // sources. The caller supplies one parse arena for the entire fixture, so
+    // these owners must remain live until semantic/MIR checks finish; the arena
+    // releases all three together after this helper's result is consumed.
+    session.visibility_mode = if (parsed.files.len != 0) parsed.files[0].module.visibility_mode else .legacy_pub_opt_in;
+    const program = try session.prepareResolvedProgram(allocator, reporter);
+    const decls = try program.astDecls(allocator);
+    return .{
+        .decls = decls,
+        .visibility_mode = program.visibility_mode,
+        .qualified_owners = program.qualified_owners,
+    };
 }
 
 fn isSupportedPhase(phase: []const u8) bool {

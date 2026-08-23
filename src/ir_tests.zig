@@ -123,8 +123,6 @@ fn resolvedSourceDatabase(allocator: std.mem.Allocator, path: []const u8, source
         .canonical_path = try allocator.dupe(u8, path),
         .display_path = try allocator.dupe(u8, path),
         .depth = 0,
-        .source_start = 0,
-        .source_len = source.len,
     };
 
     var sources = module_graph.SourceDatabase{
@@ -141,7 +139,7 @@ fn resolvedSourceDatabase(allocator: std.mem.Allocator, path: []const u8, source
     var parsed = try module_parser.parseSourceDatabase(allocator, graph, sources, &reporter);
     errdefer parsed.deinit(allocator);
     try std.testing.expect(!reporter.has_errors);
-    var resolved = try module_parser.resolveParsedSourceDatabase(allocator, parsed);
+    var resolved = try module_parser.resolveParsedSourceDatabase(allocator, parsed, graph);
     errdefer resolved.deinit(allocator);
     return .{
         .parsed = parsed,

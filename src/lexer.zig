@@ -9,11 +9,18 @@ pub const Lexer = struct {
     index: usize = 0,
     line: usize = 1,
     column: usize = 1,
+    file_id: u32 = diagnostics.invalid_file_id,
     reporter: *diagnostics.Reporter,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Lexer {
         var lexer = Lexer{ .source = source, .reporter = reporter };
         if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) lexer.index = 3;
+        return lexer;
+    }
+
+    pub fn initWithFileId(source: []const u8, reporter: *diagnostics.Reporter, file_id: u32) Lexer {
+        var lexer = init(source, reporter);
+        lexer.file_id = file_id;
         return lexer;
     }
 
@@ -297,7 +304,8 @@ pub const Lexer = struct {
             .offset = start.offset,
             .len = self.index - start.offset,
             .line = start.line,
-            .column = start.column,
+            .column = @intCast(start.column),
+            .file_id = self.file_id,
         };
     }
 

@@ -1,10 +1,16 @@
 const std = @import("std");
 
+pub const invalid_file_id = std.math.maxInt(u32);
+
 pub const Span = struct {
     offset: usize,
     len: usize,
     line: usize,
-    column: usize,
+    column: u32,
+    /// Stable per-file identity. Legacy/synthetic spans leave this invalid;
+    /// per-file parsing sets it directly so diagnostics never need a combined
+    /// source offset to recover their origin.
+    file_id: u32 = invalid_file_id,
 };
 
 pub const Severity = enum {
@@ -29,9 +35,10 @@ pub const NoteMessage = struct {
     message: []const u8,
 };
 
-pub const FileBoundary = struct {
-    start: usize,
+pub const SourceView = struct {
+    file_id: u32,
     path: []const u8,
+    source: []const u8,
 };
 
 pub const Location = struct {
@@ -58,7 +65,8 @@ pub const Reporter = struct {
     allocator: std.mem.Allocator,
     path: []const u8,
     source: []const u8,
-    file_boundaries: ?[]const FileBoundary = null,
+    source_views: ?[]const SourceView = null,
+    owned_source_views: std.ArrayList(SourceView) = .empty,
     diagnostics: std.ArrayList(Diagnostic),
     has_errors: bool = false,
     diagnostic_oom: bool = false,
@@ -78,7 +86,37 @@ pub const Reporter = struct {
             for (diag.notes) |note| self.allocator.free(note.message);
             self.allocator.free(diag.notes);
         }
+        for (self.owned_source_views.items) |view| {
+            self.allocator.free(view.path);
+            self.allocator.free(view.source);
+        }
+        self.owned_source_views.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
+    }
+
+    /// Retain a diagnostic-only source view when a producer may fail before it
+    /// can return its normal SourceDatabase owner. Successful compilation uses
+    /// the borrowed `source_views` table and pays no duplication cost.
+    pub fn captureSourceView(self: *Reporter, file_id: u32, path: []const u8, source: []const u8) void {
+        if (self.sourceView(file_id) != null) return;
+        const owned_path = self.allocator.dupe(u8, path) catch {
+            self.markDiagnosticOom();
+            return;
+        };
+        const owned_source = self.allocator.dupe(u8, source) catch {
+            self.allocator.free(owned_path);
+            self.markDiagnosticOom();
+            return;
+        };
+        self.owned_source_views.append(self.allocator, .{
+            .file_id = file_id,
+            .path = owned_path,
+            .source = owned_source,
+        }) catch {
+            self.allocator.free(owned_path);
+            self.allocator.free(owned_source);
+            self.markDiagnosticOom();
+        };
     }
 
     pub fn err(self: *Reporter, span: Span, comptime fmt: []const u8, args: anytype) void {
@@ -299,54 +337,43 @@ pub const Reporter = struct {
         return .{ .path = loc.path, .line = loc.line, .column = loc.column };
     }
 
+    pub fn pathForFileId(self: *const Reporter, file_id: u32) ?[]const u8 {
+        return (self.sourceView(file_id) orelse return null).path;
+    }
+
     fn mappedSpan(self: *const Reporter, span: Span) MappedSpan {
-        const raw = MappedSpan{
+        if (span.file_id != invalid_file_id) {
+            if (self.sourceView(span.file_id)) |view| {
+                return .{
+                    .path = view.path,
+                    .offset = span.offset,
+                    .len = span.len,
+                    .line = span.line,
+                    .column = span.column,
+                };
+            }
+        }
+        return .{
             .path = self.path,
             .offset = span.offset,
             .len = span.len,
             .line = span.line,
             .column = span.column,
         };
-        const boundaries = self.file_boundaries orelse return raw;
-        if (boundaries.len == 0) return raw;
-
-        var boundary = boundaries[0];
-        for (boundaries[1..]) |candidate| {
-            if (candidate.start > span.offset) break;
-            boundary = candidate;
-        }
-        if (span.offset < boundary.start or boundary.start > self.source.len) {
-            return raw;
-        }
-
-        var line: usize = 1;
-        var column: usize = 1;
-        const end = @min(span.offset, self.source.len);
-        for (self.source[boundary.start..end]) |byte| {
-            if (byte == '\n') {
-                line += 1;
-                column = 1;
-            } else {
-                column += 1;
-            }
-        }
-        return .{
-            .path = boundary.path,
-            .offset = span.offset - boundary.start,
-            .len = span.len,
-            .line = line,
-            .column = column,
-        };
     }
 
     pub fn sourceLine(self: *const Reporter, span: Span) ?SourceLine {
-        if (self.source.len == 0) return null;
-        const bounded_offset = @min(span.offset, self.source.len - 1);
+        const source = if (span.file_id != invalid_file_id)
+            if (self.sourceView(span.file_id)) |view| view.source else self.source
+        else
+            self.source;
+        if (source.len == 0) return null;
+        const bounded_offset = @min(span.offset, source.len - 1);
         var start = bounded_offset;
-        while (start > 0 and self.source[start - 1] != '\n') : (start -= 1) {}
+        while (start > 0 and source[start - 1] != '\n') : (start -= 1) {}
         var end = bounded_offset;
-        while (end < self.source.len and self.source[end] != '\n' and self.source[end] != '\r') : (end += 1) {}
-        const line = self.source[start..end];
+        while (end < source.len and source[end] != '\n' and source[end] != '\r') : (end += 1) {}
+        const line = source[start..end];
         if (std.mem.trim(u8, line, " \t\r").len == 0) return null;
 
         const column = if (span.offset >= start) span.offset - start + 1 else span.column;
@@ -354,6 +381,12 @@ pub const Reporter = struct {
         const remaining = if (offset_in_line < line.len) line.len - offset_in_line else 0;
         const highlight_len = @max(@as(usize, 1), @min(span.len, remaining));
         return .{ .text = line, .column = column, .highlight_len = highlight_len };
+    }
+
+    fn sourceView(self: *const Reporter, file_id: u32) ?SourceView {
+        if (self.source_views) |views| for (views) |view| if (view.file_id == file_id) return view;
+        for (self.owned_source_views.items) |view| if (view.file_id == file_id) return view;
+        return null;
     }
 };
 
@@ -413,25 +446,6 @@ test "Reporter errors fail closed when diagnostic allocation fails" {
     }
 }
 
-test "Reporter maps flattened import offsets back to source file locations" {
-    const root_source = "fn root() -> void {}\n";
-    const imported_source = "fn imported() -> void {\n    missing;\n}\n";
-    const source = root_source ++ imported_source;
-    var reporter = Reporter.init(std.testing.allocator, "root.mc", source);
-    defer reporter.deinit();
-    const boundaries = [_]FileBoundary{
-        .{ .start = 0, .path = "root.mc" },
-        .{ .start = root_source.len, .path = "lib.mc" },
-    };
-    reporter.file_boundaries = &boundaries;
-
-    const offset = std.mem.indexOf(u8, source, "missing").?;
-    const loc = reporter.location(.{ .offset = offset, .len = "missing".len, .line = 3, .column = 5 });
-    try std.testing.expectEqualStrings("lib.mc", loc.path);
-    try std.testing.expectEqual(@as(usize, 2), loc.line);
-    try std.testing.expectEqual(@as(usize, 5), loc.column);
-}
-
 test "Reporter extracts source line and caret width for a diagnostic span" {
     const source = "fn f() -> u32 {\n    return missing;\n}\n";
     var reporter = Reporter.init(std.testing.allocator, "line.mc", source);
@@ -442,6 +456,24 @@ test "Reporter extracts source line and caret width for a diagnostic span" {
     try std.testing.expectEqualStrings("    return missing;", line.text);
     try std.testing.expectEqual(@as(usize, 12), line.column);
     try std.testing.expectEqual(@as(usize, "missing".len), line.highlight_len);
+}
+
+test "Reporter retains a per-file source view across producer failure" {
+    var reporter = Reporter.init(std.testing.allocator, "root.mc", "import \"lib.mc\";\n");
+    defer reporter.deinit();
+    reporter.captureSourceView(7, "lib.mc", "import \"missing.mc\";\n");
+
+    const span = Span{ .offset = 0, .len = 6, .line = 1, .column = 1, .file_id = 7 };
+    reporter.err(span, "E_IMPORT_NOT_FOUND: missing", .{});
+    const loc = reporter.location(span);
+    try std.testing.expectEqualStrings("lib.mc", loc.path);
+    const line = reporter.sourceLine(span) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("import \"missing.mc\";", line.text);
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(std.testing.allocator);
+    try reporter.appendJson(&json);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"path\":\"lib.mc\"") != null);
 }
 
 test "Reporter omits snippets for blanked import lines" {
@@ -519,33 +551,37 @@ test "Reporter records emergency diagnostic when allocation fails" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"error_count\":1") != null);
 }
 
-test "Reporter emits boundary-aware JSON spans for imported files" {
-    const root_source = "import \"lib.mc\";\n\nexport fn main() -> u32 {\n    return imported();\n}\n";
-    const imported_source = "fn imported() -> u32 {\n    return missing;\n}\n";
-    const source = root_source ++ imported_source;
-    var reporter = Reporter.init(std.testing.allocator, "root.mc", source);
-    defer reporter.deinit();
-    const boundaries = [_]FileBoundary{
-        .{ .start = 0, .path = "root.mc" },
-        .{ .start = root_source.len, .path = "lib.mc" },
+test "Reporter uses per-file source views for diagnostics and notes" {
+    const root_source = "fn root() -> void {}\n";
+    const lib_source = "fn lib() -> void {\n    missing;\n}\n";
+    const views = [_]SourceView{
+        .{ .file_id = 3, .path = "root.mc", .source = root_source },
+        .{ .file_id = 7, .path = "lib.mc", .source = lib_source },
     };
-    reporter.file_boundaries = &boundaries;
+    var reporter = Reporter.init(std.testing.allocator, "fallback.mc", "unrelated");
+    defer reporter.deinit();
+    reporter.source_views = &views;
 
-    const offset = std.mem.indexOf(u8, source, "missing").?;
-    reporter.err(.{ .offset = offset, .len = "missing".len, .line = 7, .column = 12 }, "E_UNKNOWN_IDENTIFIER: unknown identifier `{s}`", .{"missing"});
+    const missing_offset = std.mem.indexOf(u8, lib_source, "missing").?;
+    reporter.errWithNotes(
+        .{ .offset = missing_offset, .len = "missing".len, .line = 2, .column = 5, .file_id = 7 },
+        "E_UNKNOWN_IDENTIFIER: unknown identifier missing",
+        .{},
+        &.{.{ .span = .{ .offset = 0, .len = 2, .line = 1, .column = 1, .file_id = 3 }, .message = "declared from root" }},
+    );
+
+    const location = reporter.location(reporter.diagnostics.items[0].span);
+    try std.testing.expectEqualStrings("lib.mc", location.path);
+    try std.testing.expectEqual(@as(usize, 2), location.line);
+    const line = reporter.sourceLine(reporter.diagnostics.items[0].span).?;
+    try std.testing.expectEqualStrings("    missing;", line.text);
+    try std.testing.expectEqual(@as(usize, 5), line.column);
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
     try reporter.appendJson(&out);
-
-    const file_local_offset = std.mem.indexOf(u8, imported_source, "missing").?;
-    const expected_span = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "\"span\":{{\"offset\":{d},\"length\":{d},\"line\":2,\"column\":12}}",
-        .{ file_local_offset, "missing".len },
-    );
-    defer std.testing.allocator.free(expected_span);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"lib.mc\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"line\":2,\"column\":12") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, expected_span) != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"text\":\"    missing;\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"root.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"text\":\"fn root() -> void {}\"") != null);
 }

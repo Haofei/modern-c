@@ -2,7 +2,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
-const loader = @import("loader.zig");
 const monomorphize = @import("monomorphize.zig");
 const sema = @import("sema.zig");
 
@@ -11,7 +10,6 @@ pub fn checkDecls(
     decls: []ast.Decl,
     visibility_mode: ast.VisibilityMode,
     reporter: *diagnostics.Reporter,
-    file_boundaries: ?[]const loader.FileBoundary,
 ) std.mem.Allocator.Error!void {
     var generic_fns = std.StringHashMap(void).init(allocator);
     defer generic_fns.deinit();
@@ -36,7 +34,6 @@ pub fn checkDecls(
     if (!needs_check) return;
 
     var checker = sema.Checker.init(reporter);
-    checker.file_boundaries = file_boundaries;
     checker.generic_template_precheck = true;
     checker.generic_template_fns = &generic_fns;
     checker.checkDecls(decls, visibility_mode, &.{});

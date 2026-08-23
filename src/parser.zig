@@ -54,6 +54,17 @@ pub const Parser = struct {
         };
     }
 
+    pub fn initWithFileId(source: []const u8, reporter: *diagnostics.Reporter, file_id: u32) Parser {
+        var lx = lexer.Lexer.initWithFileId(source, reporter, file_id);
+        const first = lx.next();
+        return .{
+            .lx = lx,
+            .previous = first,
+            .current = first,
+            .reporter = reporter,
+        };
+    }
+
     pub fn parseModule(self: *Parser, allocator: std.mem.Allocator) !ast.Module {
         self.allocator = allocator;
         self.tokens = .empty;
@@ -2354,5 +2365,5 @@ fn joinSpan(first: diagnostics.Span, last: diagnostics.Span) diagnostics.Span {
     const first_end = first.offset + first.len;
     const last_end = last.offset + last.len;
     const end = if (last_end > first_end) last_end else first_end;
-    return .{ .offset = first.offset, .len = end - first.offset, .line = first.line, .column = first.column };
+    return .{ .offset = first.offset, .len = end - first.offset, .line = first.line, .column = first.column, .file_id = first.file_id };
 }

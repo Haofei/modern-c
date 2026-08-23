@@ -60,22 +60,35 @@ fn parseWithAllocator(source: []const u8, allocator: std.mem.Allocator, reporter
     return p.parseModule(allocator);
 }
 
-fn checkVisibilityMode(source: []const u8, imported_offset: usize, mode: ast.VisibilityMode) !bool {
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "visibility_root.mc", source);
+fn parseFileDecls(source: []const u8, file_id: u32, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) ![]ast.Decl {
+    var p = parser.Parser.initWithFileId(source, reporter, file_id);
+    const module = try p.parseModule(allocator);
+    return module.decls;
+}
+
+fn joinDecls(allocator: std.mem.Allocator, a: []const ast.Decl, b: []const ast.Decl) ![]ast.Decl {
+    const decls = try allocator.alloc(ast.Decl, a.len + b.len);
+    @memcpy(decls[0..a.len], a);
+    @memcpy(decls[a.len..], b);
+    return decls;
+}
+
+fn checkVisibilityMode(importer: []const u8, library: []const u8, mode: ast.VisibilityMode) !bool {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "visibility_root.mc", importer);
     defer reporter.deinit();
+    const views = [_]diagnostics.SourceView{
+        .{ .file_id = 0, .path = "visibility_root.mc", .source = importer },
+        .{ .file_id = 1, .path = "visibility_lib.mc", .source = library },
+    };
+    reporter.source_views = &views;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var module = try parseWithAllocator(source, arena.allocator(), &reporter);
-    defer module.deinit(arena.allocator());
-    module.visibility_mode = mode;
-    const boundaries = [_]diagnostics.FileBoundary{
-        .{ .start = 0, .path = "visibility_root.mc" },
-        .{ .start = imported_offset, .path = "visibility_lib.mc" },
-    };
+    const root_decls = try parseFileDecls(importer, 0, arena.allocator(), &reporter);
+    const library_decls = try parseFileDecls(library, 1, arena.allocator(), &reporter);
+    const decls = try joinDecls(arena.allocator(), root_decls, library_decls);
     var checker = sema.Checker.init(&reporter);
-    checker.file_boundaries = &boundaries;
-    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    checker.checkDecls(decls, mode, &.{});
     return hasDiagnosticCode(&reporter, "E_PRIVATE_IMPORT");
 }
 
@@ -85,12 +98,12 @@ test "explicit visibility is independent of unrelated pub declarations" {
     const private_library_with_unrelated_pub = private_library ++ "pub fn unrelated() -> u32 { return 2; }\n";
     const public_library = "pub fn hidden() -> u32 { return 1; }\n";
 
-    try std.testing.expect(!try checkVisibilityMode(importer ++ private_library, importer.len, .legacy_pub_opt_in));
-    try std.testing.expect(try checkVisibilityMode(importer ++ private_library_with_unrelated_pub, importer.len, .legacy_pub_opt_in));
+    try std.testing.expect(!try checkVisibilityMode(importer, private_library, .legacy_pub_opt_in));
+    try std.testing.expect(try checkVisibilityMode(importer, private_library_with_unrelated_pub, .legacy_pub_opt_in));
 
-    try std.testing.expect(try checkVisibilityMode(importer ++ private_library, importer.len, .explicit_public));
-    try std.testing.expect(try checkVisibilityMode(importer ++ private_library_with_unrelated_pub, importer.len, .explicit_public));
-    try std.testing.expect(!try checkVisibilityMode(importer ++ public_library, importer.len, .explicit_public));
+    try std.testing.expect(try checkVisibilityMode(importer, private_library, .explicit_public));
+    try std.testing.expect(try checkVisibilityMode(importer, private_library_with_unrelated_pub, .explicit_public));
+    try std.testing.expect(!try checkVisibilityMode(importer, public_library, .explicit_public));
 }
 
 test "trait orphan ownership keeps double-underscore type names exact" {
@@ -103,21 +116,20 @@ test "trait orphan ownership keeps double-underscore type names exact" {
         \\    fn mark(self: *Vault__Inner) -> u32 { return self.value; }
         \\}
     ;
-    const source = defining_file ++ peer_file;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "owner_exact_a.mc", source);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "owner_exact_a.mc", defining_file);
     defer reporter.deinit();
+    const views = [_]diagnostics.SourceView{
+        .{ .file_id = 0, .path = "owner_exact_a.mc", .source = defining_file },
+        .{ .file_id = 1, .path = "owner_exact_b.mc", .source = peer_file },
+    };
+    reporter.source_views = &views;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    const boundaries = [_]diagnostics.FileBoundary{
-        .{ .start = 0, .path = "owner_exact_a.mc" },
-        .{ .start = defining_file.len, .path = "owner_exact_b.mc" },
-    };
+    const defining_decls = try parseFileDecls(defining_file, 0, arena.allocator(), &reporter);
+    const peer_decls = try parseFileDecls(peer_file, 1, arena.allocator(), &reporter);
+    const decls = try joinDecls(arena.allocator(), defining_decls, peer_decls);
     var checker = sema.Checker.init(&reporter);
-    checker.file_boundaries = &boundaries;
-    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    checker.checkDecls(decls, .legacy_pub_opt_in, &.{});
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_ORPHAN_IMPL"));
 }
 

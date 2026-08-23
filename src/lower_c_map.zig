@@ -10,6 +10,7 @@ const artifact_model = @import("artifact_model.zig");
 const ast_bridge = @import("ast_bridge.zig");
 const backend = @import("backend.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
+const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
 const mir_syntax = @import("mir_syntax.zig");
 
@@ -36,7 +37,7 @@ pub fn appendSourceMap(
         .generated_c_path = generated_c_path orelse "-",
         .line_index = line_index.items,
         .mir_module = mir_module,
-        .module_name = moduleNameFromPath(source_path),
+        .reporter = opts.reporter,
     };
     defer mapper.deinit();
     try mapper.collectRowArtifacts(source_map_artifacts);
@@ -240,15 +241,16 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
 }
 
 fn appendSourcePointForDigest(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source: mir.SourcePoint) !void {
-    try out.print(allocator, "line={} column={} offset={} len={}\n", .{ source.line, source.column, source.offset, source.len });
+    try out.print(allocator, "file={} line={} column={} offset={} len={}\n", .{ source.file_id, source.line, source.column, source.offset, source.len });
 }
 
-fn sourcePointAsSpan(line: usize, column: usize, offset: usize, len: usize) mir.SourcePoint {
+fn sourcePointAsSpan(line: usize, column: usize, offset: usize, len: usize, file_id: u32) mir.SourcePoint {
     return .{
         .line = line,
         .column = column,
         .offset = offset,
         .len = len,
+        .file_id = file_id,
     };
 }
 
@@ -258,6 +260,7 @@ fn astSpanAsSourcePoint(span: ast_bridge.Span) mir.SourcePoint {
         .column = span.column,
         .offset = span.offset,
         .len = span.len,
+        .file_id = span.file_id,
     };
 }
 
@@ -395,8 +398,8 @@ const SourceMapEmitter = struct {
     generated_c_path: []const u8,
     line_index: []const GeneratedLine,
     mir_module: *const mir.Module,
+    reporter: ?*diagnostics.Reporter = null,
     current_function: ?[]const u8 = null,
-    module_name: []const u8 = "-",
     // SymbolMeta for the declaration whose rows are currently being emitted; expression
     // rows inherit the owning declaration's identity/provenance.
     symbol_kind: []const u8 = "value",
@@ -454,6 +457,7 @@ const SourceMapEmitter = struct {
 
     fn emitFunctionMirRows(self: *SourceMapEmitter, symbol: []const u8) !void {
         const function = self.mirFunctionByName(symbol) orelse return;
+        const file_id = self.fileIdForFunction(function);
         var emitted: std.StringHashMap(void) = .init(self.allocator);
         defer {
             var it = emitted.keyIterator();
@@ -463,7 +467,7 @@ const SourceMapEmitter = struct {
         for (function.blocks) |block| {
             for (block.instructions, 0..) |instruction, instruction_index| {
                 if (instruction.line == 0) continue;
-                const span = sourcePointAsSpan(instruction.line, instruction.column, instruction.source_offset, instruction.source_len);
+                const span = sourcePointAsSpan(instruction.line, instruction.column, instruction.source_offset, instruction.source_len, file_id);
                 const mir_block = try std.fmt.allocPrint(
                     self.allocator,
                     "mir:{s}:block:{d}:instr:{d}:{s}",
@@ -496,7 +500,8 @@ const SourceMapEmitter = struct {
             span.len,
             self.generatedLineForSource(span.line),
         });
-        try appendMapString(self.out, self.allocator, self.source_path);
+        const row_source_path = self.pathForSourcePoint(span);
+        try appendMapString(self.out, self.allocator, row_source_path);
         try self.out.appendSlice(self.allocator, " generated_c_path=");
         try appendMapString(self.out, self.allocator, self.generated_c_path);
         try self.out.appendSlice(self.allocator, " typed_ast_node=");
@@ -516,7 +521,7 @@ const SourceMapEmitter = struct {
         // mcmap v1: SymbolMeta provenance. backend_name defaults to the object symbol until a
         // per-symbol override exists; source_qualname is the symbol name (MC is flat today).
         try self.out.appendSlice(self.allocator, " source_module=");
-        try appendMapString(self.out, self.allocator, self.module_name);
+        try appendMapString(self.out, self.allocator, moduleNameFromPath(row_source_path));
         try self.out.appendSlice(self.allocator, " source_qualname=");
         try appendMapString(self.out, self.allocator, symbol);
         try self.out.appendSlice(self.allocator, " symbol_kind=");
@@ -541,6 +546,21 @@ const SourceMapEmitter = struct {
             if (std.mem.eql(u8, function.name, name)) return function;
         }
         return null;
+    }
+
+    fn fileIdForFunction(self: *const SourceMapEmitter, function: mir.Function) u32 {
+        if (!function.typed_source_id.isValid()) return diagnostics.invalid_file_id;
+        for (self.mir_module.source_identities) |identity| {
+            if (identity.id.eql(function.typed_source_id)) return identity.file_id;
+        }
+        return diagnostics.invalid_file_id;
+    }
+
+    fn pathForSourcePoint(self: *const SourceMapEmitter, span: mir.SourcePoint) []const u8 {
+        if (span.file_id != diagnostics.invalid_file_id) {
+            if (self.reporter) |reporter| if (reporter.pathForFileId(span.file_id)) |path| return path;
+        }
+        return self.source_path;
     }
 
     fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: mir.SourcePoint, exact_column: bool) !?[]const u8 {

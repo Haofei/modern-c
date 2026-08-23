@@ -116,7 +116,7 @@ fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
         .offset = source.offset,
         .len = source.len,
         .line = source.line,
-        .column = source.column,
+        .column = @intCast(source.column),
     };
 }
 

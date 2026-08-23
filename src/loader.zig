@@ -7,13 +7,10 @@ const path_policy = @import("path_policy.zig");
 const string_literal = @import("string_literal.zig");
 const token = @import("token.zig");
 
-// Module loader for `import "path";` (section 22 / toolchain). MC has no
-// separate module/object model in the front end, so an import is resolved by
-// *textual inclusion*: the loader produces a single combined source containing
-// the root file followed by each transitively-imported file (deduped by
-// resolved path). Each `import` statement is blanked in place — replaced by
-// spaces, preserving newlines — so the root file's byte offsets and line
-// numbers are unchanged and diagnostics in user code stay accurate.
+// Module loader for `import "path";` (section 22 / toolchain). Every file is
+// retained independently in SourceDatabase and connected through ModuleGraph.
+// Import statements are blanked only in that file's parser view, preserving
+// its local offsets without creating a whole-program textual projection.
 //
 // Import path resolution:
 //   - An *explicitly relative* path (`./foo.mc`, `../bar.mc`, or absolute) is
@@ -30,9 +27,8 @@ const token = @import("token.zig");
 //     These installed roots never apply to explicit relative or absolute imports.
 //
 // `import` is recognized lexically (an `import` identifier followed by a string
-// literal and `;` at brace-depth 0), so no parser/sema/backend changes are
-// needed: the combined source the rest of the pipeline sees contains only
-// ordinary declarations.
+// literal and `;` at brace-depth 0); parser/sema consume the resulting per-file
+// parser views.
 
 pub const LoadError = error{ Reported, ImportNotFound, ImportBudgetExceeded, AccessDenied, InputOutput } || std.mem.Allocator.Error;
 
@@ -40,7 +36,6 @@ pub const LoadLimits = struct {
     max_files: usize = 10_000,
     max_total_input_bytes: usize = 512 * 1024 * 1024,
     max_import_depth: usize = 256,
-    max_expanded_source_bytes: usize = 512 * 1024 * 1024,
 };
 
 pub const LoadOptions = struct {
@@ -54,17 +49,16 @@ const LoadBudget = struct {
     limits: LoadLimits,
     file_count: usize = 0,
     total_input_bytes: usize = 0,
-    expanded_source_bytes: usize = 0,
     exhausted: bool = false,
 };
 
 const ImportOrigin = struct {
-    file_start: usize,
     span: diagnostics.Span,
     requested: []const u8,
+    path: []const u8,
+    source: []const u8,
 };
 
-pub const FileBoundary = module_graph.FileBoundary;
 pub const FileId = module_graph.FileId;
 pub const ModuleFile = module_graph.ModuleFile;
 pub const ImportEdge = module_graph.ImportEdge;
@@ -114,76 +108,6 @@ const ResolvedImport = struct {
     outside_sandbox: bool = false,
 };
 
-// One entry per file that contributes to the import-flattened source, in append order.
-// `start` is the byte offset in the combined source where this file's text begins; `path`
-// is its resolved (canonical) path. A span into the combined source is mapped back to its
-// origin file by taking the last boundary whose `start <= span.offset`. The orphan rule in
-// sema uses this to compare the defining file of an `opaque struct` against the file of a
-// peer `impl` accessor, so a cross-file `impl` can no longer forge access to private fields.
-pub fn loadCombinedSource(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    root_path: []const u8,
-    root_source: []const u8,
-) LoadError![]u8 {
-    return loadCombinedSourceWithBoundaries(allocator, io, root_path, root_source, null, null, null);
-}
-
-// As `loadCombinedSource`, but if `boundaries` is non-null it is filled (appended) with one
-// `FileBoundary` per contributing file. The boundary `path` strings are allocated with
-// `allocator` and owned by the caller (free each `.path`, then the list). `arch` and
-// `platform` are retained for CLI/API compatibility; imports name concrete support
-// files directly.
-pub fn loadCombinedSourceWithBoundaries(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    root_path: []const u8,
-    root_source: []const u8,
-    boundaries: ?*std.ArrayList(FileBoundary),
-    arch: ?[]const u8,
-    _: ?[]const u8,
-) LoadError![]u8 {
-    return loadCombinedSourceWithBoundariesOptionsReport(allocator, io, root_path, root_source, boundaries, .{
-        .arch = arch,
-    }, null);
-}
-
-pub fn loadCombinedSourceWithBoundariesReport(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    root_path: []const u8,
-    root_source: []const u8,
-    boundaries: ?*std.ArrayList(FileBoundary),
-    arch: ?[]const u8,
-    _: ?[]const u8,
-    reporter: ?*diagnostics.Reporter,
-) LoadError![]u8 {
-    return loadCombinedSourceWithBoundariesOptionsReport(allocator, io, root_path, root_source, boundaries, .{
-        .arch = arch,
-    }, reporter);
-}
-
-pub fn loadCombinedSourceWithBoundariesOptionsReport(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    root_path: []const u8,
-    root_source: []const u8,
-    boundaries: ?*std.ArrayList(FileBoundary),
-    options: LoadOptions,
-    reporter: ?*diagnostics.Reporter,
-) LoadError![]u8 {
-    const initial_boundary_len = if (boundaries) |b| b.items.len else 0;
-    errdefer if (boundaries) |b| trimBoundariesTo(allocator, b, initial_boundary_len);
-    const initial_reported_diagnostics = if (reporter) |r| r.diagnostics.items.len else 0;
-    const initial_diagnostic_oom = if (reporter) |r| r.diagnostic_oom else false;
-    const source = try loadCombinedSourceGraph(allocator, io, root_path, root_source, boundaries, options, reporter, null);
-    errdefer allocator.free(source);
-    if (reporter) |r| {
-        if (reporterHasNewImportDiagnostic(r, initial_reported_diagnostics) or (!initial_diagnostic_oom and r.diagnostic_oom)) return error.Reported;
-    }
-    return source;
-}
-
 pub fn loadProjectOptionsReport(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -192,11 +116,6 @@ pub fn loadProjectOptionsReport(
     options: LoadOptions,
     reporter: ?*diagnostics.Reporter,
 ) LoadError!LoadedProject {
-    var boundaries: std.ArrayList(FileBoundary) = .empty;
-    errdefer {
-        for (boundaries.items) |boundary| allocator.free(boundary.path);
-        boundaries.deinit(allocator);
-    }
     var graph_builder = GraphBuilder{};
     errdefer {
         for (graph_builder.files.items) |file| {
@@ -213,15 +132,9 @@ pub fn loadProjectOptionsReport(
     }
     const initial_reported_diagnostics = if (reporter) |r| r.diagnostics.items.len else 0;
     const initial_diagnostic_oom = if (reporter) |r| r.diagnostic_oom else false;
-    const source = try loadCombinedSourceGraph(allocator, io, root_path, root_source, &boundaries, options, reporter, &graph_builder);
-    errdefer allocator.free(source);
+    try loadModuleGraph(allocator, io, root_path, root_source, options, reporter, &graph_builder);
     if (reporter) |r| {
         if (reporterHasNewImportDiagnostic(r, initial_reported_diagnostics) or (!initial_diagnostic_oom and r.diagnostic_oom)) return error.Reported;
-    }
-    const boundary_slice = try boundaries.toOwnedSlice(allocator);
-    errdefer {
-        for (boundary_slice) |boundary| allocator.free(boundary.path);
-        allocator.free(boundary_slice);
     }
     const files = try graph_builder.files.toOwnedSlice(allocator);
     errdefer {
@@ -240,8 +153,6 @@ pub fn loadProjectOptionsReport(
         allocator.free(source_files);
     }
     return .{
-        .source = source,
-        .boundaries = boundary_slice,
         .graph = .{
             .files = files,
             .imports = try graph_builder.imports.toOwnedSlice(allocator),
@@ -250,18 +161,15 @@ pub fn loadProjectOptionsReport(
     };
 }
 
-fn loadCombinedSourceGraph(
+fn loadModuleGraph(
     allocator: std.mem.Allocator,
     io: std.Io,
     root_path: []const u8,
     root_source: []const u8,
-    boundaries: ?*std.ArrayList(FileBoundary),
     options: LoadOptions,
     reporter: ?*diagnostics.Reporter,
-    graph: ?*GraphBuilder,
-) LoadError![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
+    graph: *GraphBuilder,
+) LoadError!void {
     const canon_root = (try realPathFileDupe(allocator, io, root_path)) orelse try canonicalize(allocator, root_path, ".");
     defer allocator.free(canon_root);
     const sandbox_root = try defaultSandboxRoot(allocator, io, canon_root);
@@ -294,22 +202,12 @@ fn loadCombinedSourceGraph(
         canon_root,
         root_path,
         root_source,
-        &out,
-        boundaries,
         sandbox_root,
         installed_roots.items,
         reporter,
         &budget,
         graph,
     );
-    return out.toOwnedSlice(allocator);
-}
-
-fn trimBoundariesTo(allocator: std.mem.Allocator, boundaries: *std.ArrayList(FileBoundary), len: usize) void {
-    while (boundaries.items.len > len) {
-        const boundary = boundaries.pop().?;
-        allocator.free(boundary.path);
-    }
 }
 
 fn reporterHasNewImportDiagnostic(reporter: *const diagnostics.Reporter, start: usize) bool {
@@ -329,13 +227,11 @@ fn expandAll(
     path: []const u8,
     display_path: []const u8,
     source: []const u8,
-    out: *std.ArrayList(u8),
-    boundaries: ?*std.ArrayList(FileBoundary),
     sandbox_root: []const u8,
     installed_roots: []const InstalledRoot,
     reporter: ?*diagnostics.Reporter,
     budget: *LoadBudget,
-    graph: ?*GraphBuilder,
+    graph: *GraphBuilder,
 ) LoadError!void {
     var graph_arena = std.heap.ArenaAllocator.init(allocator);
     defer graph_arena.deinit();
@@ -360,22 +256,16 @@ fn expandAll(
         if (budget.exhausted) break;
 
         const file_source = stripUtf8Bom(item.source);
-        const file_start = out.items.len;
-        setSourceRange(graph, item.id, file_start, file_source.len);
-        if (boundaries) |b| {
-            const boundary_path = try allocator.dupe(u8, item.display_path);
-            errdefer allocator.free(boundary_path);
-            try b.append(allocator, .{ .start = file_start, .path = boundary_path });
-        }
         const imports = try scanImports(
             graph_allocator,
             io,
             item.path,
+            item.display_path,
             file_source,
             sandbox_root,
             installed_roots,
             reporter,
-            file_start,
+            item.id,
         );
 
         const blanked = try allocator.dupe(u8, file_source);
@@ -387,8 +277,6 @@ fn expandAll(
             }
         }
         try recordSourceFile(allocator, graph, item.id, file_source, blanked);
-        try out.appendSlice(allocator, blanked);
-        try out.append(allocator, '\n');
 
         var children: std.ArrayList(PendingFile) = .empty;
         defer {
@@ -396,14 +284,16 @@ fn expandAll(
             children.deinit(allocator);
         }
         for (imports) |imp| {
-            const origin = ImportOrigin{ .file_start = file_start, .span = imp.span, .requested = imp.requested };
+            const origin = ImportOrigin{ .span = imp.span, .requested = imp.requested, .path = item.display_path, .source = file_source };
             if (imp.outside_sandbox) {
                 if (reporter) |r| {
+                    r.captureSourceView(@intFromEnum(item.id), item.display_path, file_source);
                     r.err(.{
-                        .offset = file_start + imp.span.offset,
+                        .offset = imp.span.offset,
                         .len = imp.span.len,
                         .line = imp.span.line,
                         .column = imp.span.column,
+                        .file_id = @intFromEnum(item.id),
                     }, "E_IMPORT_OUTSIDE_SANDBOX: import \"{s}\" resolves to {s}, outside the import sandbox rooted at {s}", .{ imp.requested, imp.path, sandbox_root });
                     continue;
                 }
@@ -430,11 +320,13 @@ fn expandAll(
             ) catch |err| {
                 if (err == error.OutOfMemory) return error.OutOfMemory;
                 if (reporter) |r| {
+                    r.captureSourceView(@intFromEnum(item.id), item.display_path, file_source);
                     r.err(.{
-                        .offset = file_start + imp.span.offset,
+                        .offset = imp.span.offset,
                         .len = imp.span.len,
                         .line = imp.span.line,
                         .column = imp.span.column,
+                        .file_id = @intFromEnum(item.id),
                     }, "E_IMPORT_NOT_FOUND: cannot find import \"{s}\" (resolved candidate: {s})", .{ imp.requested, imp.path });
                     continue;
                 }
@@ -538,13 +430,6 @@ fn recordImport(
     if (graph) |builder| try builder.imports.append(allocator, .{ .importer = importer, .imported = imported, .span = span });
 }
 
-fn setSourceRange(graph: ?*GraphBuilder, id: FileId, source_start: usize, source_len: usize) void {
-    if (graph) |builder| {
-        builder.files.items[@intFromEnum(id)].source_start = source_start;
-        builder.files.items[@intFromEnum(id)].source_len = source_len;
-    }
-}
-
 fn recordSourceFile(
     allocator: std.mem.Allocator,
     graph: ?*GraphBuilder,
@@ -578,18 +463,8 @@ fn reserveFile(reporter: ?*diagnostics.Reporter, budget: *LoadBudget, origin: ?I
     if (next_total > budget.limits.max_total_input_bytes) {
         return rejectBudget(reporter, budget, origin, "E_IMPORT_TOTAL_BYTES_LIMIT", "import graph exceeds configured cumulative input limit {d} bytes", .{budget.limits.max_total_input_bytes});
     }
-    const contribution = std.math.add(usize, input_bytes, 1) catch {
-        return rejectBudget(reporter, budget, origin, "E_IMPORT_EXPANDED_SOURCE_LIMIT", "expanded source exceeds configured limit {d} bytes", .{budget.limits.max_expanded_source_bytes});
-    };
-    const next_expanded = std.math.add(usize, budget.expanded_source_bytes, contribution) catch {
-        return rejectBudget(reporter, budget, origin, "E_IMPORT_EXPANDED_SOURCE_LIMIT", "expanded source exceeds configured limit {d} bytes", .{budget.limits.max_expanded_source_bytes});
-    };
-    if (next_expanded > budget.limits.max_expanded_source_bytes) {
-        return rejectBudget(reporter, budget, origin, "E_IMPORT_EXPANDED_SOURCE_LIMIT", "expanded source exceeds configured limit {d} bytes", .{budget.limits.max_expanded_source_bytes});
-    }
     budget.file_count += 1;
     budget.total_input_bytes = next_total;
-    budget.expanded_source_bytes = next_expanded;
 }
 
 fn rejectBudget(
@@ -602,12 +477,14 @@ fn rejectBudget(
 ) LoadError!void {
     if (reporter) |r| {
         const where = if (origin) |value| diagnostics.Span{
-            .offset = value.file_start + value.span.offset,
+            .offset = value.span.offset,
             .len = value.span.len,
             .line = value.span.line,
             .column = value.span.column,
+            .file_id = value.span.file_id,
         } else diagnostics.Span{ .offset = 0, .len = 0, .line = 1, .column = 1 };
         const requested = if (origin) |value| value.requested else "<root>";
+        if (origin) |value| r.captureSourceView(value.span.file_id, value.path, value.source);
         r.err(where, "{s}: import \"{s}\": " ++ message, .{ code, requested } ++ args);
         budget.exhausted = true;
         return;
@@ -621,16 +498,17 @@ fn scanImports(
     arena: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
+    display_path: []const u8,
     source: []const u8,
     sandbox_root: []const u8,
     installed_roots: []const InstalledRoot,
     outer_reporter: ?*diagnostics.Reporter,
-    file_start: usize,
+    file_id: FileId,
 ) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
     var lex_reporter = diagnostics.Reporter.init(arena, path, source);
     defer lex_reporter.deinit();
-    var lx = lexer.Lexer.init(source, &lex_reporter);
+    var lx = lexer.Lexer.initWithFileId(source, &lex_reporter, @intFromEnum(file_id));
     var depth: i32 = 0;
     while (true) {
         const t = lx.next();
@@ -650,11 +528,13 @@ fn scanImports(
                 const storage = try arena.alloc(u8, str.lexeme.len - 2);
                 const rel = string_literal.decodeInto(storage, str.lexeme) catch {
                     if (outer_reporter) |r| {
+                        r.captureSourceView(@intFromEnum(file_id), display_path, source);
                         r.err(.{
-                            .offset = file_start + str.span.offset,
+                            .offset = str.span.offset,
                             .len = str.span.len,
                             .line = str.span.line,
                             .column = str.span.column,
+                            .file_id = @intFromEnum(file_id),
                         }, "E_IMPORT_INVALID_STRING: import path must be a valid string literal", .{});
                     } else {
                         return error.ImportNotFound;
@@ -663,11 +543,13 @@ fn scanImports(
                 };
                 if (std.mem.indexOfScalar(u8, rel, 0) != null) {
                     if (outer_reporter) |r| {
+                        r.captureSourceView(@intFromEnum(file_id), display_path, source);
                         r.err(.{
-                            .offset = file_start + str.span.offset,
+                            .offset = str.span.offset,
                             .len = str.span.len,
                             .line = str.span.line,
                             .column = str.span.column,
+                            .file_id = @intFromEnum(file_id),
                         }, "E_IMPORT_INVALID_STRING: import path cannot contain NUL", .{});
                     } else {
                         return error.ImportNotFound;
@@ -688,12 +570,14 @@ fn scanImports(
         }
     }
     if (outer_reporter) |r| {
+        if (lex_reporter.has_errors) r.captureSourceView(@intFromEnum(file_id), display_path, source);
         for (lex_reporter.diagnostics.items) |diag| {
             r.err(.{
-                .offset = file_start + diag.span.offset,
+                .offset = diag.span.offset,
                 .len = diag.span.len,
                 .line = diag.span.line,
                 .column = diag.span.column,
+                .file_id = @intFromEnum(file_id),
             }, "{s}", .{diag.message});
         }
     } else if (lex_reporter.has_errors) {

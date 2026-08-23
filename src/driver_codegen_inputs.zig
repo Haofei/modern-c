@@ -49,6 +49,9 @@ pub fn buildCArtifactInputs(
 }
 
 fn collectResolvedDecls(session: *CompilationSession) ![]const module_parser.ResolvedDecl {
+    if (session.resolved_program) |program| {
+        return session.allocator.dupe(module_parser.ResolvedDecl, program.decls);
+    }
     if (session.resolved_sources) |resolved_sources| {
         return resolved_sources.collectDecls(session.allocator);
     }

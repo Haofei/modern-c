@@ -8,7 +8,6 @@ const error_from = @import("error_from.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const numeric = @import("numeric.zig");
 const eval = @import("eval.zig");
-const loader = @import("loader.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const sema_move = @import("sema_move.zig");
 const target_layout = @import("target_layout.zig");
@@ -432,12 +431,6 @@ pub const Checker = struct {
     // Definite-init owns synthetic place keys used for proven initialized array elements
     // while a surrounding `var arr: [N]T = uninit` aggregate is still pending.
     di_place_keys: std.ArrayListUnmanaged([]const u8) = .empty,
-    // Origin-file boundaries of the import-flattened source (loader.FileBoundary), in append
-    // order by start offset. Maps a decl's span offset back to the file it came from, which the
-    // orphan rule (`checkOrphanImpls`) uses to require that an `impl` of an `opaque struct`
-    // live in the SAME file as the type's definition. Null for single-file/standalone checks
-    // (no imports, nothing cross-file to forge), where the orphan rule is a no-op.
-    file_boundaries: ?[]const loader.FileBoundary = null,
     // Opt-in module visibility (§30): names that are file-private — a non-`pub` top-level
     // declaration in a "strict" file (one that has at least one `pub` declaration). Maps the
     // name to its defining file; a reference from a DIFFERENT file is E_PRIVATE_IMPORT. Empty
@@ -701,19 +694,19 @@ pub const Checker = struct {
         // the original rule where a file becomes strict only after declaring some `pub` item.
         var private_items = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer private_items.deinit();
-        if (self.file_boundaries != null) {
+        if (self.reporter.source_views != null) {
             var strict_files = std.StringHashMap(void).init(self.reporter.allocator);
             defer strict_files.deinit();
             if (visibility_mode == .explicit_public) {
-                for (self.file_boundaries.?) |boundary| {
-                    strict_files.put(boundary.path, {}) catch {
+                for (self.reporter.source_views.?) |view| {
+                    strict_files.put(view.path, {}) catch {
                         self.oom = true;
                     };
                 }
             } else {
                 for (decls) |decl| {
                     if (decl.is_pub) {
-                        if (self.originFile(decl.span.offset)) |f| strict_files.put(f, {}) catch {
+                        if (self.originFile(decl.span)) |f| strict_files.put(f, {}) catch {
                             self.oom = true;
                         };
                     }
@@ -723,7 +716,7 @@ pub const Checker = struct {
                 for (decls) |decl| {
                     if (decl.kind == .impl_trait) continue; // no own importable name
                     if (declIsPublic(decl)) continue;
-                    const file = self.originFile(decl.span.offset) orelse continue;
+                    const file = self.originFile(decl.span) orelse continue;
                     if (!strict_files.contains(file)) continue;
                     private_items.put(declName(decl).text, file) catch {
                         self.oom = true;
@@ -7631,15 +7624,15 @@ pub const Checker = struct {
         };
     }
 
-    // The origin file of a span (its byte offset) in the import-flattened source: the last
-    // boundary whose start <= offset. Null when no boundaries are tracked (single-file check).
-    fn originFile(self: *Checker, offset: usize) ?[]const u8 {
-        const b = self.file_boundaries orelse return null;
-        var origin: ?[]const u8 = null;
-        for (b) |entry| {
-            if (entry.start <= offset) origin = entry.path else break;
+    // The origin file is part of the per-file span identity. Standalone spans intentionally
+    // have no module origin, so cross-file visibility and orphan checks become no-ops.
+    fn originFile(self: *Checker, span: diagnostics.Span) ?[]const u8 {
+        if (span.file_id != diagnostics.invalid_file_id) {
+            if (self.reporter.source_views) |views| {
+                for (views) |view| if (view.file_id == span.file_id) return view.path;
+            }
         }
-        return origin;
+        return null;
     }
 
     // Reject a cross-file reference to a declaration private under the active visibility
@@ -7647,7 +7640,7 @@ pub const Checker = struct {
     fn checkImportVisibility(self: *Checker, name: []const u8, use_span: diagnostics.Span) void {
         const private = self.private_items orelse return;
         const def_file = private.get(name) orelse return;
-        const use_file = self.originFile(use_span.offset) orelse return;
+        const use_file = self.originFile(use_span) orelse return;
         if (!std.mem.eql(u8, use_file, def_file)) {
             self.errorCode(use_span, "E_PRIVATE_IMPORT", "this name is private under the active visibility mode; only `pub`/`export` items are visible to importing files");
         }
@@ -7662,7 +7655,7 @@ pub const Checker = struct {
     // stdlib/kernel impls (the legitimate case) are accepted. No-op without file boundaries
     // (single-file/standalone check — nothing cross-file to forge).
     fn checkOrphanImpls(self: *Checker, decls: []const ast.Decl) void {
-        if (self.file_boundaries == null) return;
+        if (self.reporter.source_views == null) return;
         // Map each opaque struct's stable semantic identity to its defining file. Generic
         // specializations retain the source identity, so this does not parse emitted names.
         var opaque_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -7672,7 +7665,7 @@ pub const Checker = struct {
         for (decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |sd| {
-                    const file = self.originFile(sd.name.span.offset) orelse continue;
+                    const file = self.originFile(sd.name.span) orelse continue;
                     self.recordTypeFile(&type_files, sd.name, file);
                     if (sd.semantic_identity) |identity| self.recordTypeFile(&type_files, identity, file);
                     if (sd.is_opaque) {
@@ -7683,12 +7676,12 @@ pub const Checker = struct {
                         };
                     }
                 },
-                .enum_decl => |ed| if (self.originFile(ed.name.span.offset)) |file| self.recordTypeFile(&type_files, ed.name, file),
-                .union_decl => |ud| if (self.originFile(ud.name.span.offset)) |file| self.recordTypeFile(&type_files, ud.name, file),
-                .packed_bits_decl => |pd| if (self.originFile(pd.name.span.offset)) |file| self.recordTypeFile(&type_files, pd.name, file),
-                .overlay_union_decl => |od| if (self.originFile(od.name.span.offset)) |file| self.recordTypeFile(&type_files, od.name, file),
-                .opaque_decl => |name| if (self.originFile(name.span.offset)) |file| self.recordTypeFile(&type_files, name, file),
-                .type_alias => |alias| if (self.originFile(alias.name.span.offset)) |file| self.recordTypeFile(&type_files, alias.name, file),
+                .enum_decl => |ed| if (self.originFile(ed.name.span)) |file| self.recordTypeFile(&type_files, ed.name, file),
+                .union_decl => |ud| if (self.originFile(ud.name.span)) |file| self.recordTypeFile(&type_files, ud.name, file),
+                .packed_bits_decl => |pd| if (self.originFile(pd.name.span)) |file| self.recordTypeFile(&type_files, pd.name, file),
+                .overlay_union_decl => |od| if (self.originFile(od.name.span)) |file| self.recordTypeFile(&type_files, od.name, file),
+                .opaque_decl => |name| if (self.originFile(name.span)) |file| self.recordTypeFile(&type_files, name, file),
+                .type_alias => |alias| if (self.originFile(alias.name.span)) |file| self.recordTypeFile(&type_files, alias.name, file),
                 .fn_decl, .extern_fn, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
@@ -7701,7 +7694,7 @@ pub const Checker = struct {
                 };
                 const owner = if (fd.associated_owner) |associated| associated.text else continue;
                 const type_file = opaque_files.get(owner) orelse continue; // owner isn't an opaque type
-                const member_file = self.originFile(fd.name.span.offset) orelse continue;
+                const member_file = self.originFile(fd.name.span) orelse continue;
                 if (!std.mem.eql(u8, member_file, type_file)) {
                     self.errorCode(fd.name.span, "E_ORPHAN_IMPL", "impl of an opaque type must be in its defining module (file); a peer impl in another file cannot reach its private fields");
                 }
@@ -7717,7 +7710,7 @@ pub const Checker = struct {
                     else => continue,
                 };
                 const type_file = type_files.get(it.type_name.text) orelse continue;
-                const impl_file = self.originFile(it.type_name.span.offset) orelse continue;
+                const impl_file = self.originFile(it.type_name.span) orelse continue;
                 if (!std.mem.eql(u8, impl_file, type_file)) {
                     self.errorCode(it.type_name.span, "E_ORPHAN_IMPL", "trait impl for a type must be in the file that declares the type");
                 }

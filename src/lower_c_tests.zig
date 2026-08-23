@@ -87,6 +87,25 @@ test "lower-c function symbol returns lower from MIR without body fallback" {
     try expectContains(body, "return tick;");
 }
 
+test "lower-c emits slice length returns from MIR without body fallback" {
+    const source =
+        \\fn const_slice_len(values: []const u8) -> usize {
+        \\    return values.len;
+        \\}
+        \\fn mutable_slice_len(values: []mut u32) -> usize {
+        \\    return values.len;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_slice_length_return.mc", source, &output);
+
+    const const_body = try cFunctionBody(output.items, "static uintptr_t const_slice_len(mc_slice_const_u8 values)");
+    try expectContains(const_body, "return values.len;");
+    const mutable_body = try cFunctionBody(output.items, "static uintptr_t mutable_slice_len(mc_slice_mut_u32 values)");
+    try expectContains(mutable_body, "return values.len;");
+}
+
 test "lower-c nullable narrowing with long identifiers never falls back to constants" {
     var long_name: std.ArrayList(u8) = .empty;
     defer long_name.deinit(std.testing.allocator);

@@ -61,14 +61,14 @@ const Builder = struct {
     refs: std.ArrayList(Ref),
     fields: std.ArrayList(FieldInfo),
     frames: std.ArrayList(std.ArrayList(Local)),
-    span_offset: usize = 0,
-
     fn shiftSpan(self: *const Builder, span: Span) Span {
+        _ = self;
         return .{
-            .offset = span.offset + self.span_offset,
+            .offset = span.offset,
             .len = span.len,
             .line = span.line,
             .column = span.column,
+            .file_id = span.file_id,
         };
     }
 
@@ -501,13 +501,6 @@ fn initBuilder(arena_allocator: std.mem.Allocator) Builder {
     };
 }
 
-fn sourceStartForFile(graph: module_graph.ModuleGraph, id: module_graph.FileId) usize {
-    for (graph.files) |file| {
-        if (file.id == id) return file.source_start;
-    }
-    return 0;
-}
-
 pub fn emitJsonFromResolvedSources(
     allocator: std.mem.Allocator,
     graph: module_graph.ModuleGraph,
@@ -515,6 +508,7 @@ pub fn emitJsonFromResolvedSources(
     reporter: *const diagnostics.Reporter,
     out: *std.ArrayList(u8),
 ) !void {
+    _ = graph;
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
@@ -523,11 +517,10 @@ pub fn emitJsonFromResolvedSources(
 
     const decls = try sources.collectDecls(a);
     for (decls) |entry| {
-        b.span_offset = sourceStartForFile(graph, entry.file_id);
+        _ = entry.file_id;
         try collectDecl(&b, entry.decl);
     }
     for (decls) |entry| {
-        b.span_offset = sourceStartForFile(graph, entry.file_id);
         try walkDeclBody(&b, entry.decl);
     }
     try writeJson(allocator, &b, reporter, out);

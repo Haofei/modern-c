@@ -12,16 +12,18 @@ const mangle_private = @import("mangle_private.zig");
 const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
 const monomorphize = @import("monomorphize.zig");
-const name_resolve = @import("name_resolve.zig");
-const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
 pub const max_artifact_metadata_bytes = artifact_publisher.max_metadata_bytes;
 
 pub const StageFailure = error{
     CheckFailed,
+    RunTrapFailed,
+    LowerHirFailed,
+    VerifyHirFailed,
     LowerMirFailed,
     VerifyFailed,
+    LowerCFailed,
     EmitCFailed,
     BuildFailed,
     EmitLlvmFailed,
@@ -29,31 +31,15 @@ pub const StageFailure = error{
     EmitCStructFailed,
 };
 
-pub const ParsedModule = struct {
-    decls_slice: []ast.Decl,
-    visibility_mode: ast.VisibilityMode,
-    qualified_owners: [][]const u8,
-    qualified_symbols: []const ast.QualifiedSymbol,
-
-    pub fn decls(self: ParsedModule) []ast.Decl {
-        return self.decls_slice;
-    }
-
-    pub fn deinit(self: ParsedModule, allocator: std.mem.Allocator) void {
-        allocator.free(self.decls_slice);
-    }
-};
-
 pub const CompilationSession = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
-    // File-origin boundaries of the import-flattened source
-    // (loader.loadCombinedSourceWithBoundaries), set once per source-loading
-    // invocation and consumed by diagnostics/sema/name transforms. Null when no
-    // module was loaded (e.g. `fmt`, which bypasses the loader).
-    file_boundaries: ?[]const loader.FileBoundary = null,
+    source_views: ?[]const diagnostics.SourceView = null,
     module_graph: ?*const loader.ModuleGraph = null,
+    source_db: ?*const loader.SourceDatabase = null,
     resolved_sources: ?*const module_parser.ResolvedSourceDatabase = null,
+    resolved_program: ?*const module_parser.ResolvedProgram = null,
+    project_source_digest: ?artifact_model.Sha256Digest = null,
     visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) CompilationSession {
@@ -118,8 +104,12 @@ pub const CompilationSession = struct {
 
     pub fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {
         var reporter = diagnostics.Reporter.init(self.allocator, path, source);
-        reporter.file_boundaries = self.file_boundaries;
+        reporter.source_views = self.source_views;
         return reporter;
+    }
+
+    pub fn sourceDigest(self: *const CompilationSession, fallback_source: []const u8) artifact_model.Sha256Digest {
+        return self.project_source_digest orelse artifact_model.sha256Bytes(fallback_source);
     }
 
     pub fn attachLoadedProjectSyntax(
@@ -133,93 +123,72 @@ pub const CompilationSession = struct {
         parsed_out.* = try module_parser.parseSourceDatabase(parse_allocator, project.graph, project.source_db, reporter);
         var parsed_ready = true;
         errdefer if (parsed_ready) parsed_out.deinit(parse_allocator);
-        resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*);
+        resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*, project.graph);
         self.resolved_sources = resolved_out;
         parsed_ready = false;
     }
 
-    pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {
-        return try parseModuleOrReportMode(self, source, allocator, diag, true);
-    }
-
-    fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ParsedModule {
-        var p = parser.Parser.init(source, diag);
-        var module = p.parseModule(allocator) catch |err| {
-            if (render_errors) diag.render();
-            return err;
-        };
-        module.visibility_mode = self.visibility_mode;
-        var decls = module.decls;
-        var qualified_owners = module.qualified_owners;
-        const qualified_symbols = module.qualified_symbols;
-        const visibility_mode = module.visibility_mode;
-        decls = name_resolve.transformDeclsWithSymbols(allocator, decls, qualified_symbols, self.module_graph) catch |err| {
-            if (render_errors) diag.render();
-            return err;
-        };
-        // Lower `async fn` / `await` to stackless Future state machines BEFORE
-        // monomorphize/sema, so the move/borrow checker and both backends only
-        // ever see ordinary MC. No-op for modules without any `async fn`
-        // (passes the module through untouched).
-        const lowered_result = async_lower.transformDecls(allocator, decls, qualified_owners, diag) catch |err| {
-            if (render_errors) diag.render();
-            return err;
-        };
-        decls = lowered_result.decls;
-        qualified_owners = lowered_result.qualified_owners;
-        try generic_precheck.checkDecls(allocator, decls, visibility_mode, diag, self.file_boundaries);
-        if (diag.has_errors) {
-            if (render_errors) diag.render();
-            return error.ParseFailed;
-        }
-        decls = monomorphize.transformDeclsReport(allocator, decls, diag) catch |err| {
-            if (render_errors) diag.render();
-            return err;
-        };
-        if (diag.has_errors) {
-            if (render_errors) diag.render();
-            return error.ParseFailed;
-        }
-        decls = mangle_private.transformDecls(allocator, decls, visibility_mode, self.file_boundaries) catch |err| {
-            if (render_errors) diag.render();
-            return err;
-        };
-        return .{
-            .decls_slice = decls,
-            .visibility_mode = visibility_mode,
-            .qualified_owners = qualified_owners,
-            .qualified_symbols = qualified_symbols,
-        };
-    }
-
-    fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {
-        var checker = sema.Checker.init(diag);
-        checker.file_boundaries = self.file_boundaries;
-        checker.optimize = optimize;
-        checker.checkDecls(decls, visibility_mode, qualified_owners);
-    }
-
-    pub fn parseCheckedModuleOrReport(
+    pub fn prepareResolvedProgram(
         self: *CompilationSession,
-        source: []const u8,
+        allocator: std.mem.Allocator,
+        diag: *diagnostics.Reporter,
+    ) !module_parser.ResolvedProgram {
+        const sources = self.resolved_sources orelse return error.MissingResolvedSources;
+        const graph = self.module_graph orelse return error.MissingModuleGraph;
+        const resolved = try sources.collectDecls(allocator);
+        defer allocator.free(resolved);
+        var decls = try allocator.alloc(ast.Decl, resolved.len);
+        for (resolved, 0..) |entry, index| decls[index] = entry.decl;
+
+        var qualified_owners = try sources.collectQualifiedOwners(allocator);
+        const lowered = try async_lower.transformDecls(allocator, decls, qualified_owners, diag);
+        decls = lowered.decls;
+        qualified_owners = lowered.qualified_owners;
+        try generic_precheck.checkDecls(allocator, decls, self.visibility_mode, diag);
+        if (diag.has_errors) return error.ParseFailed;
+        decls = try monomorphize.transformDeclsReport(allocator, decls, diag);
+        if (diag.has_errors) return error.ParseFailed;
+        decls = try mangle_private.transformDeclsForFiles(allocator, decls, self.visibility_mode, graph.files.len);
+
+        const root_id = if (graph.files.len != 0) graph.files[0].id else return error.MissingModuleGraph;
+        const output = try allocator.alloc(module_parser.ResolvedDecl, decls.len);
+        errdefer allocator.free(output);
+        for (decls, 0..) |decl, index| {
+            const file_id: loader.FileId = if (decl.span.file_id != diagnostics.invalid_file_id)
+                @enumFromInt(decl.span.file_id)
+            else if (graph.files.len == 1)
+                root_id
+            else
+                return error.GeneratedDeclarationMissingFileIdentity;
+            if (graph.fileById(file_id) == null) return error.InvalidModuleGraph;
+            output[index] = .{ .file_id = file_id, .decl = decl };
+        }
+        return .{
+            .decls = output,
+            .visibility_mode = self.visibility_mode,
+            .qualified_owners = qualified_owners,
+        };
+    }
+
+    pub fn checkResolvedProgram(
+        self: *CompilationSession,
+        program: module_parser.ResolvedProgram,
         allocator: std.mem.Allocator,
         diag: *diagnostics.Reporter,
         optimize: bool,
-        render_errors: bool,
         failure_error: StageFailure,
-    ) !ParsedModule {
-        const parsed = try parseModuleOrReportMode(self, source, allocator, diag, render_errors);
-        errdefer parsed.deinit(allocator);
-        if (diag.has_errors) {
-            if (render_errors) diag.render();
-            return failure_error;
-        }
-        self.checkDecls(parsed.decls(), parsed.visibility_mode, parsed.qualified_owners, diag, optimize);
-        if (diag.has_errors) {
-            if (render_errors) diag.render();
-            return failure_error;
-        }
-        return parsed;
+    ) !void {
+        const decls = try program.astDecls(allocator);
+        defer allocator.free(decls);
+        self.checkDecls(decls, program.visibility_mode, program.qualified_owners, diag, optimize);
+        if (diag.has_errors) return failure_error;
+    }
+
+    fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {
+        _ = self;
+        var checker = sema.Checker.init(diag);
+        checker.optimize = optimize;
+        checker.checkDecls(decls, visibility_mode, qualified_owners);
     }
 
     pub fn buildVerifiedProgramFromDecls(
@@ -272,37 +241,6 @@ pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u
     return artifact_publisher.metadataPath(allocator, output_path);
 }
 
-test "CompilationSession keeps parse context request scoped" {
-    const source = "fn answer() -> u32 { return 1; }\n";
-
-    var boundaries_a = [_]loader.FileBoundary{.{ .start = 0, .path = "a.mc" }};
-    var session_a = CompilationSession.init(std.testing.allocator, std.testing.io);
-    session_a.visibility_mode = .explicit_public;
-    session_a.file_boundaries = boundaries_a[0..];
-    try std.testing.expect(session_a.resolved_sources == null);
-    var diag_a = session_a.initReporter("root_a.mc", source);
-    defer diag_a.deinit();
-    try std.testing.expectEqualStrings("a.mc", diag_a.file_boundaries.?[0].path);
-    var arena_a = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_a.deinit();
-    const parsed_a = try session_a.parseModuleOrReport(source, arena_a.allocator(), &diag_a);
-    defer parsed_a.deinit(arena_a.allocator());
-    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.visibility_mode);
-
-    var boundaries_b = [_]loader.FileBoundary{.{ .start = 0, .path = "b.mc" }};
-    var session_b = CompilationSession.init(std.testing.allocator, std.testing.io);
-    session_b.file_boundaries = boundaries_b[0..];
-    try std.testing.expect(session_b.resolved_sources == null);
-    var diag_b = session_b.initReporter("root_b.mc", source);
-    defer diag_b.deinit();
-    try std.testing.expectEqualStrings("b.mc", diag_b.file_boundaries.?[0].path);
-    var arena_b = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_b.deinit();
-    const parsed_b = try session_b.parseModuleOrReport(source, arena_b.allocator(), &diag_b);
-    defer parsed_b.deinit(arena_b.allocator());
-    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.visibility_mode);
-}
-
 test "CompilationSession attaches per-file resolved module syntax" {
     const root_path = "tests/spec_support/import_wide_root.mc";
     const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
@@ -311,8 +249,12 @@ test "CompilationSession attaches per-file resolved module syntax" {
     var loaded = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, root_path, root_source, .{}, null);
     defer loaded.deinit(std.testing.allocator);
 
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, loaded.source);
+    const root_parser_source = loaded.source_db.parserSourceForFile(loaded.graph.files[0].id).?;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, root_parser_source);
     defer reporter.deinit();
+    const source_views = try loaded.source_db.diagnosticViews(std.testing.allocator, loaded.graph);
+    defer std.testing.allocator.free(source_views);
+    reporter.source_views = source_views;
     var session = CompilationSession.init(std.testing.allocator, std.testing.io);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

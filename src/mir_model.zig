@@ -154,6 +154,10 @@ pub const ValueType = union(enum) {
 };
 
 pub const Instruction = struct {
+    pub const BuiltinMember = enum {
+        slice_length,
+    };
+
     pub const max_aggregate_operands: usize = 8;
     pub const max_switch_patterns: usize = 8;
 
@@ -195,6 +199,7 @@ pub const Instruction = struct {
     // reconstruct places without source-position arithmetic or an AST body.
     typed_base_operand_span_id: SpanId = .invalid,
     member_field_index: ?usize = null,
+    builtin_member: ?BuiltinMember = null,
     // Fixed-array index expressions name both operands and carry the checked
     // constant/static-bound pair when it is known. This lets shared MIR plans
     // preserve the bounds trap without reading the source expression.
@@ -613,6 +618,7 @@ pub const SourcePoint = struct {
     column: usize,
     offset: usize = 0,
     len: usize = 0,
+    file_id: u32 = std.math.maxInt(u32),
 };
 
 pub const max_ownership_place_projections = 16;

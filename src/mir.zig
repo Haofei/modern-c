@@ -166,7 +166,7 @@ pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInf
 pub const SourcePoint = mir_model.SourcePoint;
 
 pub fn sourcePointFromSpan(span: ast.Span) SourcePoint {
-    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
+    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len, .file_id = span.file_id };
 }
 
 fn canonicalOperatorOperand(expr: ast.Expr) ast.Expr {
@@ -588,7 +588,7 @@ fn deferCleanupEdgeActionRefEquivalent(a: DeferCleanupEdgeActionRef, b: DeferCle
 }
 
 fn sourcePointEquivalent(a: SourcePoint, b: SourcePoint) bool {
-    return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
+    return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len and a.file_id == b.file_id;
 }
 
 pub fn deferCleanupEdgeTableValid(function: Function, table: DeferCleanupEdgeTable) bool {
@@ -2244,11 +2244,13 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     if (instruction.typed_base_operand_span_id.isValid()) {
         if (instruction.typed_base_operand_span_id.index() >= function.span_identities.len) return false;
         if (instruction.kind == .expr) {
-            if (instruction.member_field_index == null or instruction.typed_index_operand_span_id.isValid()) return false;
+            if ((instruction.member_field_index == null) == (instruction.builtin_member == null) or
+                instruction.typed_index_operand_span_id.isValid()) return false;
         } else if (instruction.kind == .index) {
-            if (instruction.member_field_index != null or !instruction.typed_index_operand_span_id.isValid()) return false;
+            if (instruction.member_field_index != null or instruction.builtin_member != null or
+                !instruction.typed_index_operand_span_id.isValid()) return false;
         } else return false;
-    } else if (instruction.member_field_index != null or instruction.typed_index_operand_span_id.isValid()) {
+    } else if (instruction.member_field_index != null or instruction.builtin_member != null or instruction.typed_index_operand_span_id.isValid()) {
         return false;
     }
     if (instruction.typed_index_operand_span_id.isValid()) {
@@ -5691,6 +5693,7 @@ const AggregatePointerAliasFieldPath = struct {
 const FunctionBuilder = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
+    source_file_id: u32,
     return_ty: ValueType,
     return_type_expr: ?ast.TypeExpr,
     param_count: usize = 0,
@@ -5801,6 +5804,7 @@ const FunctionBuilder = struct {
         var builder = FunctionBuilder{
             .allocator = allocator,
             .name = fn_decl.name.text,
+            .source_file_id = fn_decl.name.span.file_id,
             .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, enums, structs, packed_bits, aliases) else .void,
             .return_type_expr = fn_decl.return_type,
             .param_count = fn_decl.params.len,
@@ -5889,6 +5893,7 @@ const FunctionBuilder = struct {
         var builder = FunctionBuilder{
             .allocator = allocator,
             .name = name,
+            .source_file_id = span.file_id,
             .return_ty = .void,
             .return_type_expr = null,
             .param_count = 0,
@@ -6195,14 +6200,14 @@ const FunctionBuilder = struct {
     fn addBodyTypeArtifactFact(self: *FunctionBuilder, ty: ast.TypeExpr) !void {
         try self.body_type_artifact_facts.append(self.allocator, .{
             .ty = ty,
-            .source = sourcePointFromSpan(ty.span),
+            .source = self.sourcePoint(ty.span),
         });
     }
 
     fn addDeferCleanupExprFact(self: *FunctionBuilder, expr: ast.Expr, stmt_span: ast.Span) !void {
         try self.defer_cleanup_expr_facts.append(self.allocator, .{
             .expr = expr,
-            .source = sourcePointFromSpan(stmt_span),
+            .source = self.sourcePoint(stmt_span),
         });
     }
 
@@ -6444,7 +6449,7 @@ const FunctionBuilder = struct {
                     try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
                     if (local.names.len == 1) if (local.init) |initializer| {
                         self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
-                            try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(initializer).span));
+                            try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(initializer).span));
                     };
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
@@ -6503,8 +6508,8 @@ const FunctionBuilder = struct {
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
                 const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
-                assignment_instruction.typed_target_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.target).span));
-                assignment_instruction.typed_value_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.value).span));
+                assignment_instruction.typed_target_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.target).span));
+                assignment_instruction.typed_value_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.value).span));
                 // Escape analysis: a reassignment updates the target local's
                 // address provenance (e.g. `out = p` drops a prior `&local`).
                 if (assignmentTargetIdentName(node.target)) |target_name| {
@@ -6607,7 +6612,7 @@ const FunctionBuilder = struct {
                 try self.addInstrWithValue(.return_value, if (maybe) |_| "value" else "void", self.return_ty, stmt.span, if (maybe) |expr| exprText(expr) else null);
                 if (maybe) |expr| {
                     self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
-                        try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(expr).span));
+                        try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(expr).span));
                 }
                 self.setTerminator(.{ .return_ = self.return_ty });
                 return true;
@@ -7685,7 +7690,7 @@ const FunctionBuilder = struct {
                     const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                     instruction.typed_aggregate_operand_count = items.len;
                     for (items, 0..) |item, index| {
-                        instruction.typed_aggregate_operand_span_ids[index] = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(item).span));
+                        instruction.typed_aggregate_operand_span_ids[index] = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(item).span));
                     }
                 }
                 const child_ty = if (self.aggregateLiteralTargetTypeExpr()) |target_ty| arrayElementTypeAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
@@ -7717,7 +7722,7 @@ const FunctionBuilder = struct {
                         const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                         instruction.typed_aggregate_operand_count = fields.len;
                         for (fields, 0..) |field, index| {
-                            instruction.typed_aggregate_operand_span_ids[index] = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(field.value).span));
+                            instruction.typed_aggregate_operand_span_ids[index] = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(field.value).span));
                             instruction.typed_aggregate_field_indices[index] = field_indices[index];
                         }
                     }
@@ -7824,7 +7829,7 @@ const FunctionBuilder = struct {
             .unary => |node| {
                 try self.addInstr(.unary, @tagName(node.op), .value, expr.span);
                 self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_left_operand_span_id =
-                    try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.expr.*).span));
+                    try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.expr.*).span));
                 try self.addUnaryOperatorChecks(node, expr.span);
                 if (node.op == .bit_not and self.exprType(node.expr.*) == .address) {
                     try self.addInstr(.address_operation, @tagName(node.op), self.exprType(node.expr.*), expr.span);
@@ -7841,8 +7846,8 @@ const FunctionBuilder = struct {
             .binary => |node| {
                 try self.addInstr(.binary, @tagName(node.op), .value, expr.span);
                 const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
-                instruction.typed_left_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.left.*).span));
-                instruction.typed_right_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.right.*).span));
+                instruction.typed_left_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.left.*).span));
+                instruction.typed_right_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.right.*).span));
                 try self.addBinaryOperatorChecks(node, expr.span);
                 if (binaryChecksAddressClass(node.op) and (self.exprType(node.left.*) == .address or self.exprType(node.right.*) == .address)) {
                     try self.addInstr(.address_operation, @tagName(node.op), .value, expr.span);
@@ -8001,12 +8006,7 @@ const FunctionBuilder = struct {
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 var direct_callee_span_id: ?SpanId = null;
                 if (instr_kind == .call or instr_kind == .indirect_call) {
-                    const callee_span_id = try self.internSpanId(.{
-                        .line = node.callee.*.span.line,
-                        .column = node.callee.*.span.column,
-                        .offset = node.callee.*.span.offset,
-                        .len = node.callee.*.span.len,
-                    });
+                    const callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span));
                     self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_callee_span_id = callee_span_id;
                     if (instr_kind == .call) direct_callee_span_id = callee_span_id;
                 }
@@ -8078,7 +8078,7 @@ const FunctionBuilder = struct {
                     } else true;
                     if (indirect_callee_place_recorded and node.args.len == target.params.len and all_args_are_direct_values) {
                         const callee_place = exprText(node.callee.*);
-                        const callee_span_id = try self.internSpanId(sourcePointFromSpan(node.callee.*.span));
+                        const callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span));
                         for (node.args, target.params, 0..) |arg, param_ty, index| {
                             try self.appendIndirectCallArgumentFact(param_ty, arg.span, directIdentName(arg).?, callee_place, callee_span_id, index);
                         }
@@ -8415,15 +8415,15 @@ const FunctionBuilder = struct {
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .index,
-                        .source = sourcePointFromSpan(canonicalOperatorOperand(node.index.*).span),
-                        .typed_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.index.*).span)),
+                        .source = self.sourcePoint(canonicalOperatorOperand(node.index.*).span),
+                        .typed_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
                     });
                 }
                 const ty = self.exprType(expr);
                 try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
                 const index_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
-                index_instruction.typed_base_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.base.*).span));
-                index_instruction.typed_index_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.index.*).span));
+                index_instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
+                index_instruction.typed_index_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span));
                 index_instruction.constant_index_value = switch (node.index.kind) {
                     .int_literal => self.constUsizeValue(node.index.*),
                     else => null,
@@ -8463,8 +8463,8 @@ const FunctionBuilder = struct {
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .slice,
-                        .source = sourcePointFromSpan(expr.span),
-                        .typed_span_id = try self.internSpanId(sourcePointFromSpan(expr.span)),
+                        .source = self.sourcePoint(expr.span),
+                        .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     });
                 }
                 try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
@@ -8484,8 +8484,16 @@ const FunctionBuilder = struct {
                 try self.addInstr(.expr, node.name.text, ty, expr.span);
                 if (self.memberFieldIndex(node)) |field_index| {
                     const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
-                    instruction.typed_base_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.base.*).span));
+                    instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
                     instruction.member_field_index = field_index;
+                } else if (std.mem.eql(u8, node.name.text, "len")) {
+                    if (self.typeExprForExpr(node.base.*)) |base_ty| {
+                        if (std.meta.activeTag(aggregateTargetTypeAlias(base_ty, self.aliases).kind) == .slice) {
+                            const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                            instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
+                            instruction.builtin_member = .slice_length;
+                        }
+                    }
                 }
                 try self.buildExpr(node.base.*);
             },
@@ -8984,7 +8992,7 @@ const FunctionBuilder = struct {
             .column = span.column,
             .source_offset = span.offset,
             .source_len = span.len,
-            .typed_span_id = try self.internSpanId(sourcePointFromSpan(span)),
+            .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
         });
     }
 
@@ -9040,7 +9048,7 @@ const FunctionBuilder = struct {
     }
 
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
-        const source = SourcePoint{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
+        const source = self.sourcePoint(span);
         try self.call_target_facts.append(self.allocator, .{
             .kind = kind,
             .result_ty = result_ty,
@@ -9058,7 +9066,7 @@ const FunctionBuilder = struct {
         const target_fn = calleeIdentName(call.args[1]) orelse return;
         try self.bind_thunk_facts.append(self.allocator, .{
             .target_fn = target_fn,
-            .source = sourcePointFromSpan(expr.span),
+            .source = self.sourcePoint(expr.span),
         });
     }
 
@@ -9885,7 +9893,7 @@ const FunctionBuilder = struct {
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {
         const resolved_value_id = value_id orelse defaultInstructionValueId(kind, detail);
-        const source = SourcePoint{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
+        const source = self.sourcePoint(span);
         const typed_span_id = try self.internSpanId(source);
         const typed_result_ty = try self.internTypeId(ty);
         const typed_value_id = if (resolved_value_id) |id| try self.internValueId(id) else null;
@@ -9915,6 +9923,12 @@ const FunctionBuilder = struct {
                 .source = source,
             });
         }
+    }
+
+    fn sourcePoint(self: *const FunctionBuilder, span: ast.Span) SourcePoint {
+        var source = sourcePointFromSpan(span);
+        if (source.file_id == diagnostics.invalid_file_id) source.file_id = self.source_file_id;
+        return source;
     }
 
     fn internSpanId(self: *FunctionBuilder, source: SourcePoint) !SpanId {
@@ -12394,7 +12408,7 @@ const FunctionBuilder = struct {
             else => null,
         };
         const root_id = try self.internValueId(root.name);
-        const root_span_id = try self.internSpanId(sourcePointFromSpan(root.span));
+        const root_span_id = try self.internSpanId(self.sourcePoint(root.span));
         const instructions = &self.blocks.items[self.current].instructions;
         const instruction = &instructions.items[instructions.items.len - 1];
         instruction.target_owner = place;
@@ -13063,7 +13077,7 @@ fn blockLastSpan(block: Block) SourcePoint {
 }
 
 fn sourcePointSpan(point: SourcePoint) diagnostics.Span {
-    return .{ .offset = 0, .len = 0, .line = point.line, .column = point.column };
+    return .{ .offset = 0, .len = 0, .line = point.line, .column = @intCast(point.column), .file_id = point.file_id };
 }
 
 fn functionByName(module: Module, name: []const u8) ?Function {

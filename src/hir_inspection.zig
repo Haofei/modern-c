@@ -197,7 +197,7 @@ pub fn verifyFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl, re
             for (block.instructions) |instruction| {
                 if (!std.mem.eql(u8, instruction.kind, "trap_edge")) continue;
                 reporter.err(
-                    .{ .offset = 0, .len = 0, .line = instruction.line, .column = instruction.column },
+                    .{ .offset = 0, .len = 0, .line = instruction.line, .column = @intCast(instruction.column) },
                     "E_NO_LANG_TRAP_EDGE: HIR verifier found language trap edge {s} before C emission",
                     .{instruction.detail},
                 );
@@ -600,7 +600,7 @@ fn blockLastSpan(block: Block) SourcePoint {
 }
 
 fn sourcePointSpan(point: SourcePoint) diagnostics.Span {
-    return .{ .offset = 0, .len = 0, .line = point.line, .column = point.column };
+    return .{ .offset = 0, .len = 0, .line = point.line, .column = @intCast(point.column) };
 }
 
 fn binaryMayTrap(op: ast.BinaryOp) bool {

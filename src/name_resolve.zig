@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const diagnostics = @import("diagnostics.zig");
 const loader = @import("loader.zig");
 
 const QualifiedKey = struct {
@@ -33,7 +34,7 @@ pub fn transformDeclsWithSymbols(
 ) ![]ast.Decl {
     if (graph) |module_graph| {
         for (qualified_symbols) |symbol| {
-            if (fileForOffset(module_graph.*, symbol.owner.span.offset) == null) return error.InvalidModuleGraph;
+            if (fileForSpan(module_graph.*, symbol.owner.span) == null) return error.InvalidModuleGraph;
         }
     }
     var symbols = QualifiedMap.init(allocator);
@@ -45,17 +46,13 @@ pub fn transformDeclsWithSymbols(
     return decls;
 }
 
-fn fileForOffset(graph: loader.ModuleGraph, offset: usize) ?loader.FileId {
-    var found: ?loader.FileId = null;
-    var best_start: usize = 0;
-    for (graph.files) |file| {
-        const source_end = std.math.add(usize, file.source_start, file.source_len) catch continue;
-        if (file.source_start <= offset and offset < source_end and (found == null or file.source_start >= best_start)) {
-            found = file.id;
-            best_start = file.source_start;
-        }
+fn fileForSpan(graph: loader.ModuleGraph, span: diagnostics.Span) ?loader.FileId {
+    if (span.file_id != diagnostics.invalid_file_id) {
+        const id: loader.FileId = @enumFromInt(span.file_id);
+        if (graph.fileById(id) != null) return id;
+        return null;
     }
-    return found;
+    return null;
 }
 
 fn resolveDecls(symbols: *const QualifiedMap, decls: []ast.Decl) std.mem.Allocator.Error!void {
@@ -230,5 +227,6 @@ fn joinSpan(start: ast.Span, end: ast.Span) ast.Span {
         .len = if (finish >= start.offset) finish - start.offset else start.len,
         .line = start.line,
         .column = start.column,
+        .file_id = start.file_id,
     };
 }

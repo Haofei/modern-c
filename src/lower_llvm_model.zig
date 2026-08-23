@@ -139,6 +139,7 @@ pub const StringLiteralGlobal = struct {
 pub const DebugFunction = struct {
     id: usize,
     name: []const u8,
+    source_path: []const u8,
     line: usize,
     column: usize,
 };

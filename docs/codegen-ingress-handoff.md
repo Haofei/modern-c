@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the nullable-pointer try and checked pointer-root place slices.
+2026-08-22 after the per-file module cutover and slice-length MIR plan.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **125/160 C** and **126/160 LLVM**
+  The current strict ratchet corpus admits **127/160 C** and **128/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
@@ -15,12 +15,13 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   `VerifiedProgram` independently admits it against the completed MIR. The
   table contains no AST or expression tree; executable bodies remain canonical
   MIR, so this did not add a full Typed HIR.
-- **P1 `real-module-graph`** — frozen. `module_graph.zig` / `module_parser.zig`
-  exist and `ir_inspection.zig` consumes a `ResolvedSourceDatabase`, but the main
-  sema→MIR→codegen pipeline still uses the combined-source text. Cutover undone.
+- **P1 `real-module-graph`** — complete. The loader owns independent source
+  buffers, parses and resolves each FileId independently, and the production
+  sema→MIR→codegen pipeline consumes `ResolvedProgram`. Combined-source loading,
+  offset boundary recovery and the legacy session parse carrier were deleted.
 
-One of the three goals is complete. P0 and the module-graph cutover remain
-incomplete; do not report either complete until its deletion anchors are gone.
+Two of the three goals are complete. Only P0 remains; do not report it complete
+until the AST body artifact and fallback branch are deleted.
 
 ## The three goals, precisely
 
@@ -34,9 +35,9 @@ incomplete; do not report either complete until its deletion anchors are gone.
    identity, signature representation, ABI and effect summaries. It must not
    duplicate MIR expressions or control flow. The first callable/body table is
    present; remaining syntax-shaped declaration artifacts still need cutover.
-3. **P1 module-graph**: loader stops textual inclusion / combined source; per-file
-   / per-module identity through the whole pipeline. Consumers partly migrated;
-   cutover not done.
+3. **P1 module-graph**: complete. Source, diagnostics, visibility, source maps,
+   debug metadata and MIR source identity now use per-file identity through the
+   production pipeline.
 
 ### Goal dependencies (established, corrected)
 

@@ -71,16 +71,15 @@ fn expectImportBudgetResult(root_path: []const u8, limits: loader.LoadLimits, ex
         }
         try std.testing.expect(found);
     } else {
-        const combined = try loader.loadCombinedSourceWithBoundariesOptionsReport(
+        var loaded = try loader.loadProjectOptionsReport(
             std.testing.allocator,
             std.testing.io,
             root_path,
             root_source,
-            null,
             .{ .limits = limits },
             &reporter,
         );
-        defer std.testing.allocator.free(combined);
+        defer loaded.deinit(std.testing.allocator);
         try std.testing.expect(!reporter.has_errors);
     }
 }
@@ -349,8 +348,6 @@ test "qualified resolver validates symbol origins against the module graph" {
         .canonical_path = "qualified_graph.mc",
         .display_path = "qualified_graph.mc",
         .depth = 0,
-        .source_start = 0,
-        .source_len = 1,
     }};
     var imports = [_]loader.ImportEdge{};
     const graph = loader.ModuleGraph{ .files = files[0..], .imports = imports[0..] };
@@ -383,24 +380,33 @@ test "qualified resolution is independent of declaration order and unrelated gen
     try expectForwardQualifiedBindings(declarations ++ unrelated_generic ++ uses);
 }
 
-test "imported qualified references resolve after loader flattening" {
+test "imported qualified references resolve through the module graph" {
     const root_path = "tests/spec_support/qualified_forward_root.mc";
     const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(root_source);
-    const combined = try loader.loadCombinedSource(std.testing.allocator, std.testing.io, root_path, root_source);
-    defer std.testing.allocator.free(combined);
+    var loaded = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, root_path, root_source, .{}, null);
+    defer loaded.deinit(std.testing.allocator);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, root_source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var parsed = try module_parser.parseSourceDatabase(arena.allocator(), loaded.graph, loaded.source_db, &reporter);
+    defer parsed.deinit(arena.allocator());
+    var resolved = try module_parser.resolveParsedSourceDatabase(arena.allocator(), parsed, loaded.graph);
+    defer resolved.deinit(arena.allocator());
 
-    try std.testing.expect(std.mem.indexOf(u8, combined, "fn call_module") != null);
-    try std.testing.expect(std.mem.indexOf(u8, combined, "module Util") != null);
-    try std.testing.expect(std.mem.indexOf(u8, combined, "fn call_module").? < std.mem.indexOf(u8, combined, "module Util").?);
-    try expectForwardQualifiedBindings(combined);
+    const root_id = loaded.graph.files[0].id;
+    const root_decls = resolved.declsForFile(root_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), root_decls.len);
+    try std.testing.expectEqualStrings("Util__answer", root_decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.kind.ident.text);
+    try std.testing.expectEqualStrings("Util__LIMIT", root_decls[1].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.ident.text);
+    try std.testing.expectEqualStrings("Widget__make", root_decls[2].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.kind.ident.text);
 }
 
 test "loader enforces exact graph-wide import budgets" {
     // DIAGNOSTIC_UNIT: E_IMPORT_FILE_LIMIT
     // DIAGNOSTIC_UNIT: E_IMPORT_TOTAL_BYTES_LIMIT
     // DIAGNOSTIC_UNIT: E_IMPORT_DEPTH_LIMIT
-    // DIAGNOSTIC_UNIT: E_IMPORT_EXPANDED_SOURCE_LIMIT
     const root_path = "tests/spec_support/qualified_forward_root.mc";
     const imported_path = "tests/spec_support/qualified_forward_module.mc";
     const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
@@ -408,7 +414,6 @@ test "loader enforces exact graph-wide import budgets" {
     const imported_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, imported_path, std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(imported_source);
     const total_input = root_source.len + imported_source.len;
-    const total_expanded = total_input + 2;
 
     try expectImportBudgetResult(root_path, .{ .max_files = 2 }, null);
     try expectImportBudgetResult(root_path, .{ .max_files = 1 }, "E_IMPORT_FILE_LIMIT");
@@ -416,15 +421,11 @@ test "loader enforces exact graph-wide import budgets" {
     try expectImportBudgetResult(root_path, .{ .max_import_depth = 0 }, "E_IMPORT_DEPTH_LIMIT");
     try expectImportBudgetResult(root_path, .{ .max_total_input_bytes = total_input }, null);
     try expectImportBudgetResult(root_path, .{ .max_total_input_bytes = total_input - 1 }, "E_IMPORT_TOTAL_BYTES_LIMIT");
-    try expectImportBudgetResult(root_path, .{ .max_expanded_source_bytes = total_expanded }, null);
-    try expectImportBudgetResult(root_path, .{ .max_expanded_source_bytes = total_expanded - 1 }, "E_IMPORT_EXPANDED_SOURCE_LIMIT");
-
-    try std.testing.expectError(error.ImportBudgetExceeded, loader.loadCombinedSourceWithBoundariesOptionsReport(
+    try std.testing.expectError(error.ImportBudgetExceeded, loader.loadProjectOptionsReport(
         std.testing.allocator,
         std.testing.io,
         root_path,
         root_source,
-        null,
         .{ .limits = .{ .max_files = 1 } },
         null,
     ));
@@ -454,29 +455,21 @@ test "loader rejects decoded import paths containing NUL" {
     try std.testing.expect(found);
 }
 
-test "loader combined-source reporter API fails closed on import diagnostics" {
+test "module-graph loader reporter API fails closed on import diagnostics" {
     // DIAGNOSTIC_UNIT: E_IMPORT_NOT_FOUND
     const root_path = "tests/spec_support/qualified_forward_root.mc";
     const source = "import \"./definitely_missing_loader_fail_closed.mc\";\nfn root() -> u32 { return 1; }\n";
     var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, source);
     defer reporter.deinit();
-    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
-    defer {
-        for (boundaries.items) |boundary| std.testing.allocator.free(boundary.path);
-        boundaries.deinit(std.testing.allocator);
-    }
-
-    try std.testing.expectError(error.Reported, loader.loadCombinedSourceWithBoundariesOptionsReport(
+    try std.testing.expectError(error.Reported, loader.loadProjectOptionsReport(
         std.testing.allocator,
         std.testing.io,
         root_path,
         source,
-        &boundaries,
         .{},
         &reporter,
     ));
     try std.testing.expect(reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 0), boundaries.items.len);
     var found = false;
     for (reporter.diagnostics.items) |diagnostic| {
         if (std.mem.indexOf(u8, diagnostic.message, "E_IMPORT_NOT_FOUND") != null) found = true;
@@ -488,27 +481,18 @@ test "loader handles cycles wide DAGs and deep chains iteratively" {
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(cycle_source);
-    const cycle_combined = try loader.loadCombinedSource(std.testing.allocator, std.testing.io, cycle_path, cycle_source);
-    defer std.testing.allocator.free(cycle_combined);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, cycle_combined, "CYCLE_A"));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, cycle_combined, "CYCLE_B"));
+    var cycle = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, cycle_path, cycle_source, .{}, null);
+    defer cycle.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), cycle.graph.files.len);
+    try std.testing.expectEqual(@as(usize, 2), cycle.graph.imports.len);
 
     const wide_path = "tests/spec_support/import_wide_root.mc";
     const wide_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, wide_path, std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(wide_source);
-    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
-    defer {
-        for (boundaries.items) |boundary| std.testing.allocator.free(boundary.path);
-        boundaries.deinit(std.testing.allocator);
-    }
-    const wide_combined = try loader.loadCombinedSourceWithBoundaries(std.testing.allocator, std.testing.io, wide_path, wide_source, &boundaries, null, null);
-    defer std.testing.allocator.free(wide_combined);
-    try std.testing.expectEqual(@as(usize, 4), boundaries.items.len);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, wide_combined, "WIDE_COMMON"));
-    const left_offset = std.mem.indexOf(u8, wide_combined, "WIDE_LEFT").?;
-    const common_offset = std.mem.indexOf(u8, wide_combined, "WIDE_COMMON").?;
-    const right_offset = std.mem.indexOf(u8, wide_combined, "WIDE_RIGHT").?;
-    try std.testing.expect(left_offset < common_offset and common_offset < right_offset);
+    var wide = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, wide_path, wide_source, .{}, null);
+    defer wide.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 4), wide.graph.files.len);
+    try std.testing.expectEqual(@as(usize, 4), wide.source_db.files.len);
 
     const deep_path = "tests/spec_support/import_deep_0.mc";
     try expectImportBudgetResult(deep_path, .{ .max_import_depth = 3 }, null);
@@ -552,31 +536,17 @@ test "loader publishes stable module graph identities and edges" {
     try std.testing.expect(graphHasEdge(wide.graph, root, right));
     try std.testing.expect(graphHasEdge(wide.graph, left, common));
     try std.testing.expect(graphHasEdge(wide.graph, right, common));
-    try std.testing.expect(wide.graph.files[@intFromEnum(left)].source_start < wide.graph.files[@intFromEnum(common)].source_start);
-    try std.testing.expect(wide.graph.files[@intFromEnum(common)].source_start < wide.graph.files[@intFromEnum(right)].source_start);
     try std.testing.expectEqual(wide.graph.files.len, wide.source_db.files.len);
     for (wide.graph.files) |file| {
         const file_source = wide.source_db.sourceForFile(file.id) orelse return error.TestUnexpectedResult;
         const parser_source = wide.source_db.parserSourceForFile(file.id) orelse return error.TestUnexpectedResult;
         try std.testing.expect(file_source.len > 0);
         try std.testing.expect(parser_source.len == file_source.len);
-        try std.testing.expect(file.source_len > 0);
-        var found_boundary = false;
-        for (wide.boundaries) |boundary| {
-            if (std.mem.eql(u8, std.fs.path.basename(boundary.path), std.fs.path.basename(file.display_path))) {
-                try std.testing.expectEqual(file.source_start, boundary.start);
-                found_boundary = true;
-            }
-        }
-        try std.testing.expect(found_boundary);
     }
-    const root_file = wide.graph.files[@intFromEnum(root)];
     const root_raw_source = wide.source_db.sourceForFile(root).?;
     const root_parser_source = wide.source_db.parserSourceForFile(root).?;
-    const root_combined_source = wide.source[root_file.source_start..][0..root_file.source_len];
     try std.testing.expect(std.mem.indexOf(u8, root_raw_source, "import \"./import_wide_left.mc\";") != null);
     try std.testing.expect(std.mem.indexOf(u8, root_parser_source, "import \"./import_wide_left.mc\";") == null);
-    try std.testing.expect(std.mem.indexOf(u8, root_combined_source, "import \"./import_wide_left.mc\";") == null);
 
     var per_file_reporter = diagnostics.Reporter.init(std.testing.allocator, "import_wide_root.mc", root_parser_source);
     defer per_file_reporter.deinit();
@@ -593,7 +563,7 @@ test "loader publishes stable module graph identities and edges" {
     defer module_db_arena.deinit();
     var parsed_sources = try module_parser.parseSourceDatabase(module_db_arena.allocator(), wide.graph, wide.source_db, &module_db_reporter);
     defer parsed_sources.deinit(module_db_arena.allocator());
-    var resolved_sources = try module_parser.resolveParsedSourceDatabase(module_db_arena.allocator(), parsed_sources);
+    var resolved_sources = try module_parser.resolveParsedSourceDatabase(module_db_arena.allocator(), parsed_sources, wide.graph);
     defer resolved_sources.deinit(module_db_arena.allocator());
     try std.testing.expect(!module_db_reporter.has_errors);
     try std.testing.expectEqual(wide.graph.files.len, parsed_sources.files.len);

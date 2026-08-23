@@ -679,6 +679,7 @@ const LlvmEmitter = struct {
             try self.debug_functions.append(self.allocator, .{
                 .id = id,
                 .name = function.signature.name.text,
+                .source_path = self.sourcePathForSpan(function.signature.name.span),
                 .line = debugLine(function.signature.name.span.line),
                 .column = debugColumn(function.signature.name.span.column),
             });
@@ -813,6 +814,9 @@ const LlvmEmitter = struct {
             };
             if (function.signature.is_extern) continue;
             const render_attrs = function.render_attrs;
+            const previous_source_path = self.source_path;
+            self.source_path = self.sourcePathForSpan(function.signature.name.span);
+            defer self.source_path = previous_source_path;
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
                 fallback_census.record(.llvm, .admitted, self.source_path, fn_mir);
                 continue;
@@ -835,6 +839,13 @@ const LlvmEmitter = struct {
             }
         }
         return null;
+    }
+
+    fn sourcePathForSpan(self: *const LlvmEmitter, span: diagnostics.Span) []const u8 {
+        if (span.file_id != diagnostics.invalid_file_id) {
+            if (self.reporter) |reporter| if (reporter.pathForFileId(span.file_id)) |path| return path;
+        }
+        return self.source_path;
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) ![]const u8 {
@@ -1742,7 +1753,14 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const slice_length_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildSliceLengthReturn(fn_mir)) |plan|
+                if (self.mirSliceLengthReturnPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (slice_length_return_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1787,7 +1805,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and slice_length_return_plan == null and place_store_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1879,6 +1897,8 @@ const LlvmEmitter = struct {
             try self.emitMirPointerToIntegerCastPlan(plan);
         } else if (scalar_local_checked_binary_return_plan) |plan| {
             try self.emitMirScalarLocalCheckedBinaryReturnPlan(plan, ret_ty);
+        } else if (slice_length_return_plan) |plan| {
+            try self.emitMirSliceLengthReturnPlan(plan, ret_ty);
         } else if (nullable_pointer_void_call_plan) |plan| {
             try self.emitMirNullablePointerVoidCallPlan(plan);
         } else if (place_store_plan) |plan| {
@@ -4112,6 +4132,31 @@ const LlvmEmitter = struct {
         const return_ty = function.signature.transitionalReturnType() orelse return false;
         if (std.meta.activeTag(self.resolveAliasType(return_ty).kind) != .fn_pointer) return false;
         return self.fn_sigs.contains(plan.name);
+    }
+
+    fn mirSliceLengthReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.SliceLengthReturnPlan) bool {
+        const declared_return = function.signature.transitionalReturnType() orelse return false;
+        const usize_ty = simpleType(declared_return.span, "usize");
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(usize_ty)) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(plan.length_fact.target_ty), self.resolveAliasType(declared_return))) return false;
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, plan.parameter_name)) continue;
+            return self.resolveAliasType(param.ty).kind == .slice and
+                type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.parameter_fact.target_ty));
+        }
+        return false;
+    }
+
+    fn emitMirSliceLengthReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.SliceLengthReturnPlan, ret_ty: anytype) !void {
+        self.current_debug_span = spanFromMirSourcePoint(plan.length_location.source);
+        const value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} %{s}, 1{s}\n", .{
+            value,
+            try self.llvmType(plan.parameter_fact.target_ty),
+            plan.parameter_name,
+            try self.debugCallSuffix(),
+        });
+        try self.emitReturnValue(ret_ty, value, spanFromMirSourcePoint(plan.return_location.source));
     }
 
     fn mirNullablePointerLocalReturnPlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.NullablePointerLocalReturnPlan) bool {
@@ -8028,7 +8073,7 @@ const LlvmEmitter = struct {
     }
 
     fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
-        return .{ .line = source.line, .column = source.column, .offset = source.offset, .len = source.len };
+        return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len };
     }
 
     fn emitFunction(self: *LlvmEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {
@@ -15832,6 +15877,17 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, "!3 = !{i32 1, !\"wchar_size\", i32 4}\n");
         try self.out.appendSlice(self.allocator, "!4 = !DISubroutineType(types: !5)\n");
         try self.out.appendSlice(self.allocator, "!5 = !{null}\n");
+        var debug_file_ids = std.StringHashMap(usize).init(self.allocator);
+        defer debug_file_ids.deinit();
+        try debug_file_ids.put(self.source_path, 1);
+        for (self.debug_functions.items) |function| {
+            if (debug_file_ids.contains(function.source_path)) continue;
+            const id = self.debug_next_id;
+            self.debug_next_id += 1;
+            try debug_file_ids.put(function.source_path, id);
+            const escaped_function_path = try escapedLlvmString(self.scratch.allocator(), function.source_path);
+            try self.out.print(self.allocator, "!{d} = !DIFile(filename: \"{s}\", directory: \".\")\n", .{ id, escaped_function_path });
+        }
         var debug_type_ids = std.StringHashMap(usize).init(self.allocator);
         defer debug_type_ids.deinit();
         var debug_types: std.ArrayList(DebugBasicType) = .empty;
@@ -15855,26 +15911,33 @@ const LlvmEmitter = struct {
         }
         for (self.debug_functions.items) |function| {
             const name = try escapedLlvmString(self.scratch.allocator(), function.name);
+            const file_id = debug_file_ids.get(function.source_path) orelse 1;
             try self.out.print(
                 self.allocator,
-                "!{d} = distinct !DISubprogram(name: \"{s}\", linkageName: \"{s}\", scope: !1, file: !1, line: {d}, type: !4, scopeLine: {d}, spFlags: DISPFlagDefinition, unit: !0)\n",
-                .{ function.id, name, name, function.line, function.line },
+                "!{d} = distinct !DISubprogram(name: \"{s}\", linkageName: \"{s}\", scope: !{d}, file: !{d}, line: {d}, type: !4, scopeLine: {d}, spFlags: DISPFlagDefinition, unit: !0)\n",
+                .{ function.id, name, name, file_id, file_id, function.line, function.line },
             );
         }
         for (self.debug_locals.items) |local| {
             const ty = self.debugBasicType(local.ty) orelse continue;
             const type_id = debug_type_ids.get(ty.name) orelse continue;
             const name = try escapedLlvmString(self.scratch.allocator(), local.name);
+            var local_file_id: usize = 1;
+            for (self.debug_functions.items) |function| {
+                if (function.id != local.scope) continue;
+                local_file_id = debug_file_ids.get(function.source_path) orelse 1;
+                break;
+            }
             switch (local.kind) {
                 .parameter => try self.out.print(
                     self.allocator,
-                    "!{d} = !DILocalVariable(name: \"{s}\", arg: {d}, scope: !{d}, file: !1, line: {d}, type: !{d})\n",
-                    .{ local.id, name, local.arg_index orelse 0, local.scope, local.line, type_id },
+                    "!{d} = !DILocalVariable(name: \"{s}\", arg: {d}, scope: !{d}, file: !{d}, line: {d}, type: !{d})\n",
+                    .{ local.id, name, local.arg_index orelse 0, local.scope, local_file_id, local.line, type_id },
                 ),
                 .variable => try self.out.print(
                     self.allocator,
-                    "!{d} = !DILocalVariable(name: \"{s}\", scope: !{d}, file: !1, line: {d}, type: !{d})\n",
-                    .{ local.id, name, local.scope, local.line, type_id },
+                    "!{d} = !DILocalVariable(name: \"{s}\", scope: !{d}, file: !{d}, line: {d}, type: !{d})\n",
+                    .{ local.id, name, local.scope, local_file_id, local.line, type_id },
                 ),
             }
         }

@@ -357,6 +357,27 @@ test "LLVM function symbol returns lower from MIR without body fallback" {
     try expectContains(body, "ret ptr @tick");
 }
 
+test "LLVM emits slice length returns from shared MIR plan without body fallback" {
+    const source =
+        \\fn const_slice_len(values: []const u8) -> usize {
+        \\    return values.len;
+        \\}
+        \\fn mutable_slice_len(values: []mut u32) -> usize {
+        \\    return values.len;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_slice_length_return.mc", source, &output);
+
+    const const_body = try llvmFunctionBody(output.items, "define internal i64 @const_slice_len");
+    try expectContains(const_body, "extractvalue { ptr, i64 } %values, 1");
+    try expectContains(const_body, "ret i64 %t");
+    const mutable_body = try llvmFunctionBody(output.items, "define internal i64 @mutable_slice_len");
+    try expectContains(mutable_body, "extractvalue { ptr, i64 } %values, 1");
+    try expectContains(mutable_body, "ret i64 %t");
+}
+
 test "LLVM emits slice foreach local updates from MIR without body fallback" {
     const source =
         \\fn sum(values: []const u32) -> u32 {

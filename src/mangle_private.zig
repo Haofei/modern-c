@@ -1,9 +1,8 @@
 //! G22 — file-private symbol uniquification.
 //!
-//! MC flattens every imported file into one translation unit (the loader concatenates
-//! sources), so all top-level names share ONE namespace. §30 module visibility makes a
-//! file's non-`pub` top-level items file-private, but the DUPLICATE-declaration check and
-//! the flat name→symbol resolution are still global: two file-private helpers with the same
+//! MC resolves per-file syntax into one whole-program declaration set. §30 module visibility
+//! makes a file's non-`pub` top-level items file-private, but duplicate-declaration checking
+//! and whole-program name resolution still share a symbol namespace: two private helpers in
 //! name in DIFFERENT files collide (`E_DUPLICATE_DECLARATION`) even though neither is visible
 //! to the other.
 //!
@@ -25,7 +24,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const loader = @import("loader.zig");
+const diagnostics = @import("diagnostics.zig");
 const sema_decl = @import("sema_decl.zig");
 
 const declName = sema_decl.declName;
@@ -43,14 +42,10 @@ fn isRenameable(decl: ast.Decl) bool {
     };
 }
 
-// Origin-file index of a span offset: the last boundary whose start <= offset. Returns the
-// index into `boundaries` (a stable per-file id) or null when no boundary covers the offset.
-fn originFileIndex(boundaries: []const loader.FileBoundary, offset: usize) ?usize {
-    var idx: ?usize = null;
-    for (boundaries, 0..) |entry, i| {
-        if (entry.start <= offset) idx = i else break;
-    }
-    return idx;
+fn originFileIndex(file_count: usize, span: ast.Span) ?usize {
+    if (span.file_id == diagnostics.invalid_file_id) return null;
+    const index: usize = @intCast(span.file_id);
+    return if (index < file_count) index else null;
 }
 
 const NameInfo = struct {
@@ -64,20 +59,19 @@ const NameInfo = struct {
 // Rewrite file-private colliding top-level names to per-file-unique mangled names, in place.
 // No-op (returns `decls` untouched) unless at least two files are involved and at least one
 // name genuinely collides across files, so single-file / non-colliding code is never changed.
-pub fn transformDecls(arena: std.mem.Allocator, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, boundaries: ?[]const loader.FileBoundary) ![]ast.Decl {
-    const b = boundaries orelse return decls;
-    if (b.len < 2) return decls;
+pub fn transformDeclsForFiles(arena: std.mem.Allocator, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, file_count: usize) ![]ast.Decl {
+    if (file_count < 2) return decls;
 
     // Explicit mode makes every file private-by-default. Legacy mode preserves the original
     // per-file opt-in rule for source compatibility.
     var strict_files = std.AutoHashMap(usize, void).init(arena);
     defer strict_files.deinit();
     if (visibility_mode == .explicit_public) {
-        for (b, 0..) |_, fi| try strict_files.put(fi, {});
+        for (0..file_count) |fi| try strict_files.put(fi, {});
     } else {
         for (decls) |decl| {
             if (!decl.is_pub) continue;
-            if (originFileIndex(b, decl.span.offset)) |fi| try strict_files.put(fi, {});
+            if (originFileIndex(file_count, decl.span)) |fi| try strict_files.put(fi, {});
         }
     }
     if (strict_files.count() == 0) return decls;
@@ -91,7 +85,7 @@ pub fn transformDecls(arena: std.mem.Allocator, decls: []ast.Decl, visibility_mo
         const nm = declName(decl).text;
         const gop = try names.getOrPut(nm);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        const fi = originFileIndex(b, decl.span.offset);
+        const fi = originFileIndex(file_count, decl.span);
         const private_here = fi != null and strict_files.contains(fi.?) and !declIsPublic(decl);
         if (isRenameable(decl) and private_here) {
             try gop.value_ptr.files.append(arena, fi.?);
@@ -135,7 +129,7 @@ pub fn transformDecls(arena: std.mem.Allocator, decls: []ast.Decl, visibility_mo
 
     // Rename the declarations themselves.
     for (decls) |*decl| {
-        const fi = originFileIndex(b, decl.span.offset) orelse continue;
+        const fi = originFileIndex(file_count, decl.span) orelse continue;
         const map = per_file.get(fi) orelse continue;
         const new = map.get(declName(decl.*).text) orelse continue;
         setDeclName(decl, new);
@@ -143,7 +137,7 @@ pub fn transformDecls(arena: std.mem.Allocator, decls: []ast.Decl, visibility_mo
 
     // Rewrite file-local references (scope-aware) in every decl that lives in a renaming file.
     for (decls) |*decl| {
-        const fi = originFileIndex(b, decl.span.offset) orelse continue;
+        const fi = originFileIndex(file_count, decl.span) orelse continue;
         const map = per_file.get(fi) orelse continue;
         var w = Walker{ .arena = arena, .map = map };
         try w.walkDecl(decl);

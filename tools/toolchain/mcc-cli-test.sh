@@ -205,9 +205,7 @@ assert_stderr_contains "usage:" "--help extra-arg usage"
 
 printf 'export fn main() -> u32 { return 0; }\n' >"$WORK/ok.mc"
 LOADED_OK="$WORK/loaded-ok.mc"
-# loader.loadCombinedSource appends a separator newline for this no-import root.
 cat "$WORK/ok.mc" >"$LOADED_OK"
-printf '\n' >>"$LOADED_OK"
 
 printf 'fn hidden() -> u32 { return 1; }\n' >"$WORK/visibility_lib.mc"
 printf 'import "./visibility_lib.mc";\nfn use_hidden() -> u32 { return hidden(); }\n' >"$WORK/visibility_root.mc"

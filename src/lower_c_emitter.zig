@@ -625,6 +625,9 @@ pub const CEmitter = struct {
             };
             if (function.signature.is_extern) continue;
             const render_attrs = function.render_attrs;
+            const previous_source_path = self.source_path;
+            self.source_path = self.sourcePathForSpan(function.signature.name.span);
+            defer self.source_path = previous_source_path;
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
                 fallback_census.record(.c, .admitted, self.source_path, fn_mir);
                 continue;
@@ -651,9 +654,21 @@ pub const CEmitter = struct {
 
     fn emitGlobal(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const previous_function = self.current_function;
+        const previous_source_path = self.source_path;
         self.current_function = global.signature.name.text;
-        defer self.current_function = previous_function;
+        self.source_path = self.sourcePathForSpan(global.signature.name.span);
+        defer {
+            self.current_function = previous_function;
+            self.source_path = previous_source_path;
+        }
         try emitGlobalDecl(self.globalEmitContext(), global);
+    }
+
+    fn sourcePathForSpan(self: *const CEmitter, span: diagnostics.Span) ?[]const u8 {
+        if (span.file_id != diagnostics.invalid_file_id) {
+            if (self.reporter) |reporter| if (reporter.pathForFileId(span.file_id)) |path| return path;
+        }
+        return self.source_path;
     }
 
     // Fold a `const` global initializer to its C constant text (section 22).
@@ -1686,7 +1701,14 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const slice_length_return_plan = if (simple_trap == null and simple_assert == null)
+            if (mir_statement_plan.buildSliceLengthReturn(fn_mir)) |plan|
+                if (self.mirSliceLengthReturnPlanSupported(function, plan)) plan else null
+            else
+                null
+        else
+            null;
+        const simple_return = if (slice_length_return_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1732,7 +1754,7 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and scalar_local_checked_binary_return_plan == null and place_store_plan == null and slice_length_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1781,6 +1803,8 @@ pub const CEmitter = struct {
             try self.emitMirPointerToIntegerCastPlan(plan);
         } else if (scalar_local_checked_binary_return_plan) |plan| {
             try self.emitMirScalarLocalCheckedBinaryReturnPlan(plan);
+        } else if (slice_length_return_plan) |plan| {
+            try self.emitMirSliceLengthReturnPlan(plan);
         } else if (nullable_pointer_void_call_plan) |plan| {
             try self.emitMirNullablePointerVoidCallPlan(plan);
         } else if (place_store_plan) |plan| {
@@ -4161,6 +4185,25 @@ pub const CEmitter = struct {
         const return_ty = function.signature.transitionalReturnType() orelse return false;
         if (std.meta.activeTag(self.resolveAliasType(return_ty).kind) != .fn_pointer) return false;
         return self.functions.contains(plan.name);
+    }
+
+    fn mirSliceLengthReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.SliceLengthReturnPlan) bool {
+        const declared_return = function.signature.transitionalReturnType() orelse return false;
+        const usize_ty = type_bridge.simpleNameType("usize", declared_return.span);
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(usize_ty)) or
+            !type_bridge.sameTypeSyntax(self.resolveAliasType(plan.length_fact.target_ty), self.resolveAliasType(declared_return))) return false;
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, plan.parameter_name)) continue;
+            return self.resolveAliasType(param.ty).kind == .slice and
+                type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.parameter_fact.target_ty));
+        }
+        return false;
+    }
+
+    fn emitMirSliceLengthReturnPlan(self: *CEmitter, plan: mir_statement_plan.SliceLengthReturnPlan) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s}.len;\n", .{try self.cIdent(plan.parameter_name)});
     }
 
     fn mirNullablePointerLocalReturnPlanSupported(self: *CEmitter, plan: mir_statement_plan.NullablePointerLocalReturnPlan) bool {
@@ -7693,7 +7736,7 @@ pub const CEmitter = struct {
     }
 
     fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
-        return .{ .line = source.line, .column = source.column, .offset = source.offset, .len = source.len };
+        return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len };
     }
 
     fn emitIndentedFunctionBlock(self: *CEmitter, body: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
@@ -15251,6 +15294,6 @@ fn spanFromSourcePoint(source: mir.SourcePoint) ast_bridge.Span {
         .offset = source.offset,
         .len = source.len,
         .line = source.line,
-        .column = source.column,
+        .column = @intCast(source.column),
     };
 }

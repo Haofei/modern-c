@@ -2,9 +2,24 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
-const loader = @import("loader.zig");
 const mangle_private = @import("mangle_private.zig");
 const parser = @import("parser.zig");
+
+fn parseFiles(
+    allocator: std.mem.Allocator,
+    reporter: *diagnostics.Reporter,
+    file_a: []const u8,
+    file_b: []const u8,
+) ![]ast.Decl {
+    var parser_a = parser.Parser.initWithFileId(file_a, reporter, 0);
+    const module_a = try parser_a.parseModule(allocator);
+    var parser_b = parser.Parser.initWithFileId(file_b, reporter, 1);
+    const module_b = try parser_b.parseModule(allocator);
+    const decls = try allocator.alloc(ast.Decl, module_a.decls.len + module_b.decls.len);
+    @memcpy(decls[0..module_a.decls.len], module_a.decls);
+    @memcpy(decls[module_a.decls.len..], module_b.decls);
+    return decls;
+}
 
 fn expectPrivateMangle(mode: ast.VisibilityMode, expected_a: []const u8, expected_b: []const u8) !void {
     const file_a =
@@ -15,21 +30,13 @@ fn expectPrivateMangle(mode: ast.VisibilityMode, expected_a: []const u8, expecte
         \\fn helper() -> u32 { return 2; }
         \\fn call_b() -> u32 { return helper(); }
     ;
-    const source = file_a ++ file_b;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_a.mc", source);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_a.mc", file_a);
     defer reporter.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var p = parser.Parser.init(source, &reporter);
-    var module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    module.visibility_mode = mode;
-    const boundaries = [_]loader.FileBoundary{
-        .{ .start = 0, .path = "private_a.mc" },
-        .{ .start = file_a.len, .path = "private_b.mc" },
-    };
-    const transformed_decls = try mangle_private.transformDecls(arena.allocator(), module.decls, module.visibility_mode, &boundaries);
+    const decls = try parseFiles(arena.allocator(), &reporter, file_a, file_b);
+    const transformed_decls = try mangle_private.transformDeclsForFiles(arena.allocator(), decls, mode, 2);
 
     var helper_a: ?[]const u8 = null;
     var helper_b: ?[]const u8 = null;
@@ -61,20 +68,12 @@ test "private mangling rewrites declaration-level value references" {
         \\const N: usize = 8;
         \\struct B { bytes: [N]u8 }
     ;
-    const source = file_a ++ file_b;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_decl_a.mc", source);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_decl_a.mc", file_a);
     defer reporter.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    var module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    module.visibility_mode = .explicit_public;
-    const boundaries = [_]loader.FileBoundary{
-        .{ .start = 0, .path = "private_decl_a.mc" },
-        .{ .start = file_a.len, .path = "private_decl_b.mc" },
-    };
-    const transformed_decls = try mangle_private.transformDecls(arena.allocator(), module.decls, module.visibility_mode, &boundaries);
+    const decls = try parseFiles(arena.allocator(), &reporter, file_a, file_b);
+    const transformed_decls = try mangle_private.transformDeclsForFiles(arena.allocator(), decls, .explicit_public, 2);
 
     var lengths: [2]?[]const u8 = .{ null, null };
     var index: usize = 0;
@@ -102,20 +101,12 @@ test "private mangling avoids user names and rewrites statement contracts" {
         \\    #[unsafe_contract(no_overflow, LIMIT)] { return LIMIT; }
         \\}
     ;
-    const source = file_a ++ file_b;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_contract_a.mc", source);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_contract_a.mc", file_a);
     defer reporter.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    var module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    module.visibility_mode = .explicit_public;
-    const boundaries = [_]loader.FileBoundary{
-        .{ .start = 0, .path = "private_contract_a.mc" },
-        .{ .start = file_a.len, .path = "private_contract_b.mc" },
-    };
-    const transformed_decls = try mangle_private.transformDecls(arena.allocator(), module.decls, module.visibility_mode, &boundaries);
+    const decls = try parseFiles(arena.allocator(), &reporter, file_a, file_b);
+    const transformed_decls = try mangle_private.transformDeclsForFiles(arena.allocator(), decls, .explicit_public, 2);
 
     var contract_names: [2]?[]const u8 = .{ null, null };
     var contract_index: usize = 0;

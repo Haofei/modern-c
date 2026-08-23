@@ -28,9 +28,7 @@ LLC="${LLC:-llc}"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 LOADED_SRC="$W/loaded-source.mc"
 MCMAP_VERIFY="$HERE/tools/toolchain/mcmap-verify.py"
-# loader.loadCombinedSource appends a separator newline for this no-import root.
 cat "$SRC" > "$LOADED_SRC"
-printf '\n' >> "$LOADED_SRC"
 
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then

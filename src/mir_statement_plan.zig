@@ -441,6 +441,19 @@ pub const IdentityReturnPlan = struct {
     return_location: Location,
 };
 
+/// A direct projection of the length member of one slice parameter. The
+/// non-null representation check is proven by the plan and is statically
+/// elided by both backends: reading a slice's stored length never dereferences
+/// its data pointer.
+pub const SliceLengthReturnPlan = struct {
+    parameter_name: []const u8,
+    parameter_id: mir.ValueId,
+    parameter_fact: mir.TargetTypeFact,
+    length_fact: mir.TargetTypeFact,
+    length_location: Location,
+    return_location: Location,
+};
+
 pub const SequenceForEachUpdatePlan = struct {
     pub const Update = union(enum) {
         replace_with_element,
@@ -657,6 +670,88 @@ pub fn buildIdentityReturn(function: mir.Function) ?IdentityReturnPlan {
         .value_id = value_id,
         .value_location = locationFromInstruction(value),
         .return_location = locationFromInstruction(returned),
+    };
+}
+
+/// Admit `return values.len` for one direct slice parameter. The plan owns the
+/// complete MIR identity chain (parameter → member projection → return) and
+/// the elided non-null representation check/trap edge. Backends still verify
+/// their declared parameter and `usize` return spellings before rendering.
+pub fn buildSliceLengthReturn(function: mir.Function) ?SliceLengthReturnPlan {
+    if (function.blocks.len != 2 or function.trap_edges.len != 1 or
+        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
+        function.return_ty != .integer) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const entry = function.blocks[0];
+    const trap = function.blocks[1];
+    if (entry.terminator != .return_ or entry.successors.len != 1 or entry.successors[0] != trap.id or
+        trap.instructions.len != 0 or trap.successors.len != 0) return null;
+    switch (trap.terminator) {
+        .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
+        else => return null,
+    }
+
+    var parameter: ?mir.Instruction = null;
+    var parameter_expr: ?mir.Instruction = null;
+    var length: ?mir.Instruction = null;
+    var returned: ?mir.Instruction = null;
+    var typed_load_count: usize = 0;
+    var representation_check_count: usize = 0;
+    for (entry.instructions) |instruction| switch (instruction.kind) {
+        .param => {
+            if (parameter != null or !instruction.typed_span_id.isValid()) return null;
+            parameter = instruction;
+        },
+        .target_type => {},
+        .expr => {
+            if (std.mem.eql(u8, instruction.detail, "len")) {
+                if (length != null or !instruction.typed_span_id.isValid() or !instruction.typed_base_operand_span_id.isValid() or
+                    instruction.builtin_member != .slice_length) return null;
+                length = instruction;
+            } else {
+                if (parameter_expr != null or !instruction.typed_span_id.isValid()) return null;
+                parameter_expr = instruction;
+            }
+        },
+        .typed_load => typed_load_count += 1,
+        .representation_check => representation_check_count += 1,
+        .return_value => {
+            if (returned != null or !instruction.typed_value_operand_span_id.isValid()) return null;
+            returned = instruction;
+        },
+        else => return null,
+    };
+    if (typed_load_count != 1 or representation_check_count != 1) return null;
+
+    const parameter_instruction = parameter orelse return null;
+    const parameter_expression = parameter_expr orelse return null;
+    const length_instruction = length orelse return null;
+    const return_instruction = returned orelse return null;
+    const parameter_name = parameter_instruction.detail;
+    const parameter_id = valueIdentityId(function, parameter_name) orelse return null;
+    if (!parameter_id.isValid() or !std.mem.eql(u8, valueIdentityName(function, parameter_id) orelse return null, parameter_name) or
+        !std.mem.eql(u8, parameter_expression.detail, parameter_name) or
+        parameter_expression.typed_value_id == null or !parameter_expression.typed_value_id.?.eql(parameter_id) or
+        !length_instruction.typed_base_operand_span_id.eql(parameter_expression.typed_span_id) or
+        !return_instruction.typed_value_operand_span_id.eql(length_instruction.typed_span_id) or
+        !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
+
+    const parameter_fact = targetFactBySpan(function, .expression_result, parameter_expression.typed_span_id) orelse return null;
+    const length_fact = targetFactBySpan(function, .expression_result, length_instruction.typed_span_id) orelse return null;
+    if (std.meta.activeTag(parameter_fact.target_ty.kind) != .slice or length_fact.result_ty != .integer or
+        !sameRepresentationType(parameter_fact.result_ty, parameter_instruction.result_ty) or
+        !sameRepresentationType(length_fact.result_ty, function.return_ty)) return null;
+    if (!validateNonnullRepresentationPromotion(function, entry, parameter_expression.typed_span_id, parameter_id, parameter_fact.result_ty)) return null;
+
+    return .{
+        .parameter_name = parameter_name,
+        .parameter_id = parameter_id,
+        .parameter_fact = parameter_fact,
+        .length_fact = length_fact,
+        .length_location = locationFromInstruction(length_instruction),
+        .return_location = locationFromInstruction(return_instruction),
     };
 }
 
@@ -3279,6 +3374,9 @@ fn sameLocation(location: Location, fact: mir.TargetTypeFact) bool {
 }
 
 fn sameSource(a: mir.SourcePoint, b: mir.SourcePoint) bool {
+    // Plans are scoped to one MIR function, whose source identity is already
+    // fixed by Function.typed_source_id. Compare only the local coordinates so
+    // synthetic plan points remain compatible with interned per-file spans.
     return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
 }
 
@@ -3455,6 +3553,26 @@ fn valueIdentityId(function: mir.Function, name: []const u8) ?mir.ValueId {
         found = identity.id;
     }
     return found;
+}
+
+test "slice length plan admits direct slice parameter projection" {
+    const diagnostics = @import("diagnostics.zig");
+    const parser = @import("parser.zig");
+    const source =
+        \\fn slice_len(values: []const u8) -> usize {
+        \\    return values.len;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "slice_len.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const module = try source_parser.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+    try std.testing.expect(buildSliceLengthReturn(module_mir.functions[0]) != null);
 }
 
 fn sameRepresentationType(left: mir.ValueType, right: mir.ValueType) bool {
