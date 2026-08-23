@@ -105,6 +105,7 @@ pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
 pub const ExecutableCastKind = mir_model.ExecutableCastKind;
 pub const ExecutableIncompleteReason = mir_model.ExecutableIncompleteReason;
+pub const IntegerDomainKind = mir_model.IntegerDomainKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
 pub const FfiParamContract = mir_model.FfiParamContract;
 
@@ -7178,7 +7179,11 @@ const FunctionBuilder = struct {
                 else
                     try self.ensureExecutableExprAs(node.right.*, operand_ty);
                 const optimized_safe_div_mod = (node.op == .div or node.op == .mod) and self.optimize and self.divModProvablySafe(node);
-                const arithmetic: mir_model.ExecutableArithmeticSemantics = if (binaryMayOverflow(node.op) and
+                const arithmetic: mir_model.ExecutableArithmeticSemantics = if (isWrapPreservingBinary(node.op) and self.exprIsWrap(node.left.*) and self.exprIsWrap(node.right.*))
+                    .wrapping
+                else if (isSatPreservingBinary(node.op) and self.exprIsSat(node.left.*) and self.exprIsSat(node.right.*))
+                    .saturating
+                else if (binaryMayOverflow(node.op) and
                     std.meta.activeTag(result_ty) == .integer and !self.binaryIsNoTrapArithmeticDomain(node) and
                     !self.binaryIsFloat(node) and !optimized_safe_div_mod) .checked else .ordinary;
                 // Unsuffixed integer and character literals are semantically

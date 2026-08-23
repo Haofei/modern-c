@@ -2169,7 +2169,7 @@ test "MIR owns all scalar conversion builtin call targets" {
         .{ .name = "trap_value", .kind = .conversion_trap_from, .result_name = "u8" },
         .{ .name = "wrap_value", .kind = .conversion_wrap_from, .result_name = "u8" },
         .{ .name = "sat_value", .kind = .conversion_sat_from, .result_name = "u8" },
-        .{ .name = "mod_value", .kind = .conversion_from_mod, .result_name = "value" },
+        .{ .name = "mod_value", .kind = .conversion_from_mod, .result_name = "u8" },
         .{ .name = "adapted_binary", .kind = .conversion_trap_from, .result_name = "u8" },
     };
     for (cases) |case| {
@@ -2181,6 +2181,9 @@ test "MIR owns all scalar conversion builtin call targets" {
         try std.testing.expect(targetTypeFactByKind(function, .conversion_source) != null);
         try std.testing.expect(targetTypeFactByKind(function, .conversion_target) != null);
     }
+    const mod_result = functionByName(typed_mir, "mod_value").?.call_target_facts[0].result_ty;
+    try std.testing.expect(mod_result == .domain_integer);
+    try std.testing.expectEqual(mir.IntegerDomainKind.wrap, mod_result.domain_integer.kind);
     try mir.validateLoweringAdmission(typed_mir);
     try std.testing.expectEqualStrings("u32", valueTypeName((targetTypeFactByKind(functionByName(typed_mir, "mod_value").?, .conversion_source) orelse return error.TestUnexpectedResult).result_ty));
     try std.testing.expectEqualStrings("u64", valueTypeName((targetTypeFactByKind(functionByName(typed_mir, "adapted_binary").?, .conversion_source) orelse return error.TestUnexpectedResult).result_ty));

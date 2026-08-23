@@ -239,8 +239,29 @@ fn emitExpressionOperation(
             }
         },
         .binary => |binary| {
-            if (checkedBinaryParts(binary.op, expression.result_ty)) |helper| {
+            if (binary.arithmetic == .checked) {
+                const helper = checkedBinaryParts(binary.op, expression.result_ty) orelse return error.InvalidExpression;
                 try out.print(allocator, "mc_checked_{s}_{s}(", .{ helper.operation, helper.suffix });
+                try emitExpression(allocator, out, body, binary.left, depth + 1);
+                try out.appendSlice(allocator, ", ");
+                try emitExpression(allocator, out, body, binary.right, depth + 1);
+                try out.append(allocator, ')');
+            } else if (binary.arithmetic == .saturating) {
+                const domain = domainInteger(expression.result_ty, .sat) orelse return error.InvalidExpression;
+                const operation: []const u8 = switch (binary.op) {
+                    .add => "add",
+                    .sub => "sub",
+                    .mul => "mul",
+                    else => return error.InvalidExpression,
+                };
+                try out.print(allocator, "mc_sat_{s}_{s}(", .{ operation, domain.child });
+                try emitExpression(allocator, out, body, binary.left, depth + 1);
+                try out.appendSlice(allocator, ", ");
+                try emitExpression(allocator, out, body, binary.right, depth + 1);
+                try out.append(allocator, ')');
+            } else if (binary.arithmetic == .wrapping and (binary.op == .shl or binary.op == .shr)) {
+                const domain = domainInteger(expression.result_ty, .wrap) orelse return error.InvalidExpression;
+                try out.print(allocator, "mc_wrap_{s}_{s}(", .{ if (binary.op == .shl) "shl" else "shr", domain.child });
                 try emitExpression(allocator, out, body, binary.left, depth + 1);
                 try out.appendSlice(allocator, ", ");
                 try emitExpression(allocator, out, body, binary.right, depth + 1);
@@ -682,10 +703,31 @@ fn binarySupported(
     binary: @FieldType(mir.ExecutableExpression.Operation, "binary"),
 ) bool {
     if (binary.op == .logical_and or binary.op == .logical_or) return false;
-    if (expressionById(body, binary.left) == null or expressionById(body, binary.right) == null) return false;
+    const left = expressionById(body, binary.left) orelse return false;
+    const right = expressionById(body, binary.right) orelse return false;
+    if (!sameValueType(left.result_ty, right.result_ty)) return false;
+    if (left.result_ty == .domain_integer) {
+        const shape = left.result_ty.domain_integer;
+        if (binary.op == .eq or binary.op == .ne or binary.op == .lt or binary.op == .le or binary.op == .gt or binary.op == .ge) {
+            return binary.arithmetic == .ordinary and expression.result_ty == .bool and ownedTrapEdgeCount(body, expression.id) == 0;
+        }
+        if (!sameValueType(expression.result_ty, left.result_ty) or ownedTrapEdgeCount(body, expression.id) != 0) return false;
+        return switch (shape.kind) {
+            .wrap => binary.arithmetic == .wrapping and switch (binary.op) {
+                .add, .sub, .mul, .bit_or, .bit_xor, .bit_and, .shl, .shr => true,
+                else => false,
+            },
+            .sat => binary.arithmetic == .saturating and switch (binary.op) {
+                .add, .sub, .mul => true,
+                else => false,
+            },
+            .serial, .counter => false,
+        };
+    }
     return switch (binary.arithmetic) {
         .ordinary => ownedTrapEdgeCount(body, expression.id) == 0,
         .checked => checkedIntegerBinaryHasExactTrapEdges(body, expression),
+        .wrapping, .saturating => false,
     };
 }
 
@@ -830,6 +872,7 @@ fn supportsType(ty: mir.ValueType) bool {
     return switch (ty) {
         .void, .never, .bool, .cstr, .address => true,
         .integer, .float => |name| primitiveType(name) != null,
+        .domain_integer => |shape| primitiveType(shape.child) != null,
         .pointer, .nullable_pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
         else => false,
@@ -1064,6 +1107,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.Va
         .void, .never => try out.appendSlice(allocator, "void"),
         .bool => try out.appendSlice(allocator, "bool"),
         .integer, .float => |name| try out.appendSlice(allocator, primitiveType(name) orelse return error.UnsupportedType),
+        .domain_integer => |shape| try out.appendSlice(allocator, primitiveType(shape.child) orelse return error.UnsupportedType),
         .cstr => try out.appendSlice(allocator, "char const *"),
         .pointer, .nullable_pointer => |shape| {
             const child = primitiveType(shape.child) orelse shape.child;
@@ -1167,6 +1211,14 @@ fn integerSuffix(ty: mir.ValueType) ?[]const u8 {
     };
 }
 
+fn domainInteger(ty: mir.ValueType, expected: mir.IntegerDomainKind) ?mir.DomainIntegerShape {
+    const shape = switch (ty) {
+        .domain_integer => |value| value,
+        else => return null,
+    };
+    return if (shape.kind == expected and primitiveType(shape.child) != null) shape else null;
+}
+
 fn binaryToken(op: mir.ExecutableBinaryOp) []const u8 {
     return switch (op) {
         .logical_or => "||",
@@ -1211,6 +1263,7 @@ fn scalarMemoryInfo(ty: mir.ValueType) ?ScalarMemoryInfo {
     const suffix = switch (ty) {
         .bool => "bool",
         .integer, .float => |name| name,
+        .domain_integer => |shape| shape.child,
         .address => "usize",
         else => return null,
     };

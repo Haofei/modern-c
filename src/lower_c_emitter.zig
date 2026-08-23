@@ -2930,6 +2930,12 @@ pub const CEmitter = struct {
         return switch (value_ty) {
             .void => isCVoidType(resolved),
             .bool, .integer, .float, .address, .struct_ => self.mirScalarExpressionSourceTypeIs(resolved, value_ty.name()),
+            .domain_integer => |shape| switch (resolved.kind) {
+                .generic => |generic| generic.args.len == 1 and
+                    std.mem.eql(u8, generic.base.text, @tagName(shape.kind)) and
+                    self.mirScalarExpressionSourceTypeIs(generic.args[0], shape.child),
+                else => false,
+            },
             .pointer => |pointer| switch (resolved.kind) {
                 .pointer => |source_pointer| std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
                 else => false,

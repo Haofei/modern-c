@@ -9926,7 +9926,7 @@ test "lower-c emits global address direct-call args from MIR without body fallba
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_call_arg.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t use_global_address_arg(void)");
     try expectContains(body, "/* canonical executable MIR */");
-    try expectContains(body, "return consume_ptr(&shared_counter);");
+    try expectNeedlesInOrder(body, &.{ "= &shared_counter;", "= consume_ptr(", "return mc_exec_tmp_" });
 }
 
 test "lower-c emits global address returns from MIR without body fallback" {
@@ -9943,7 +9943,7 @@ test "lower-c emits global address returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t * returned_global_pointer(void)");
     try expectContains(body, "/* canonical executable MIR */");
-    try expectContains(body, "return &shared_counter;");
+    try expectNeedlesInOrder(body, &.{ "= &shared_counter;", "return mc_exec_tmp_" });
 }
 
 test "lower-c emits local global address returns from MIR without body fallback" {
@@ -12183,10 +12183,10 @@ test "lower-c admits multi-arg call with one nested call and pure leaves" {
     try expectNotContains(output.items, "g2(f(), k())");
 }
 
-test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
-    // `wrap<T>` is always unsigned; for a u32/u64 result the wrapping `a + b`
-    // renders as a plain `(a + b)` with no promotion, so it lowers from MIR. u8
-    // promotes to int and gets `(unsigned int)` casts, so it stays on the fallback.
+test "lower-c admits unsigned wrap binary returns from typed MIR" {
+    // The executable MIR retains the wrapping domain while the C renderer uses
+    // the underlying unsigned storage type. Integer promotion is harmless: the
+    // assignment back to uint8_t performs the specified modular reduction.
     const source =
         \\fn u_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a + b; }
         \\fn u8_add(a: wrap<u8>, b: wrap<u8>) -> wrap<u8> { return a + b; }
@@ -12204,10 +12204,12 @@ test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays o
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    // u32: inline fast-path form.
-    try expectContains(output.items, "return (a + b);");
-    // u8: fallback with the C integer-promotion casts.
-    try expectContains(output.items, "(unsigned int)");
+    const u32_body = try cFunctionBody(output.items, "static uint32_t u_add(uint32_t a, uint32_t b)");
+    try expectContains(u32_body, "/* canonical executable MIR */");
+    try expectContains(u32_body, " + ");
+    const u8_body = try cFunctionBody(output.items, "static uint8_t u8_add(uint8_t a, uint8_t b)");
+    try expectContains(u8_body, "/* canonical executable MIR */");
+    try expectContains(u8_body, " + ");
 }
 
 test "lower-c admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
@@ -12229,9 +12231,15 @@ test "lower-c admits plain unsigned bitwise binary returns from MIR (and/or/xor)
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try expectContains(output.items, "return (a & b);");
-    try expectContains(output.items, "return (a | b);");
-    try expectContains(output.items, "return (a ^ b);");
+    for ([_]struct { signature: []const u8, token: []const u8 }{
+        .{ .signature = "static uint32_t u_and(uint32_t a, uint32_t b)", .token = " & " },
+        .{ .signature = "static uint64_t u_or(uint64_t a, uint64_t b)", .token = " | " },
+        .{ .signature = "static uint32_t u_xor(uint32_t a, uint32_t b)", .token = " ^ " },
+    }) |case| {
+        const body = try cFunctionBody(output.items, case.signature);
+        try expectContains(body, "/* canonical executable MIR */");
+        try expectContains(body, case.token);
+    }
 }
 
 test "lower-c admits plain unary returns from MIR (bitwise not, wrapping negate)" {

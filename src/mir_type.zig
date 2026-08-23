@@ -165,7 +165,7 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
             .nullable_pointer => |shape| isNullPointerShape(shape),
             // A present payload value (integer/float/bool/struct/enum/address, or a
             // comptime literal). Sema validated the specific payload type.
-            .integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => true,
+            .integer, .domain_integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => true,
             else => false,
         };
     }
@@ -178,6 +178,13 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
             .integer => |source_name| source_name,
             else => unreachable,
         }, "comptime_int"),
+        .domain_integer => |target_shape| blk: {
+            const source_shape = switch (source) {
+                .domain_integer => |shape| shape,
+                else => unreachable,
+            };
+            break :blk target_shape.kind == source_shape.kind and std.mem.eql(u8, target_shape.child, source_shape.child);
+        },
         .float => |target_name| std.mem.eql(u8, target_name, switch (source) {
             .float => |source_name| source_name,
             else => unreachable,
@@ -354,7 +361,7 @@ pub fn valueTypeFromType(ty: ast.TypeExpr, enums: *const std.StringHashMap(EnumS
                 .pointer => |shape| .{ .nullable_pointer = shape },
                 // A known, sized value payload → tagged value optional. `.value`
                 // (a bare generic param / opaque) stays `.value` (may be a pointer).
-                .integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => .{ .nullable_value = typeText(child.*) },
+                .integer, .domain_integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => .{ .nullable_value = typeText(child.*) },
                 else => if (isDynTraitMirType(child.*)) ValueType.nullable_dyn_trait else .value,
             };
         },
@@ -387,7 +394,7 @@ fn valueTypeFromTypeAliasDepth(ty: ast.TypeExpr, enums: *const std.StringHashMap
             const child_ty = valueTypeFromTypeAliasDepth(child.*, enums, structs, packed_bits, aliases, depth + 1);
             break :blk switch (child_ty) {
                 .pointer => |shape| .{ .nullable_pointer = shape },
-                .integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => .{ .nullable_value = typeText(aggregateTargetTypeAlias(child.*, aliases)) },
+                .integer, .domain_integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => .{ .nullable_value = typeText(aggregateTargetTypeAlias(child.*, aliases)) },
                 else => if (isDynTraitMirType(child.*)) ValueType.nullable_dyn_trait else .value,
             };
         },
@@ -635,6 +642,7 @@ fn genericValueType(node: anytype, enums: *const std.StringHashMap(EnumSummary),
     if (std.mem.eql(u8, name, "UserPtr")) return .{ .address = .user_ptr };
     if (std.mem.eql(u8, name, "MmioPtr")) return .{ .address = .mmio_ptr };
     if (std.mem.eql(u8, name, "PhysPtr")) return .{ .address = .phys_ptr };
+    if (domainIntegerValueType(name, node.args)) |domain| return domain;
     return namedValueType(name, enums, structs);
 }
 
@@ -649,9 +657,39 @@ fn genericValueTypeAlias(node: anytype, enums: *const std.StringHashMap(EnumSumm
     if (std.mem.eql(u8, name, "UserPtr")) return .{ .address = .user_ptr };
     if (std.mem.eql(u8, name, "MmioPtr")) return .{ .address = .mmio_ptr };
     if (std.mem.eql(u8, name, "PhysPtr")) return .{ .address = .phys_ptr };
+    if (domainIntegerValueTypeAlias(name, node.args, aliases)) |domain| return domain;
     if (std.mem.eql(u8, name, "Secret") and node.args.len == 1) return valueTypeFromTypeAlias(node.args[0], enums, structs, packed_bits, aliases);
     if (aliases.get(name)) |resolved| return valueTypeFromTypeAlias(resolved, enums, structs, packed_bits, aliases);
     return namedValueTypeAlias(name, enums, structs, packed_bits);
+}
+
+fn domainIntegerValueType(name: []const u8, args: []const ast.TypeExpr) ?ValueType {
+    if (args.len != 1) return null;
+    const child = switch (args[0].kind) {
+        .name => |ident| ident.text,
+        else => return null,
+    };
+    if (checkedIntBoundsByName(child) == null) return null;
+    return .{ .domain_integer = .{ .kind = integerDomainKind(name) orelse return null, .child = child } };
+}
+
+fn domainIntegerValueTypeAlias(name: []const u8, args: []const ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ValueType {
+    if (args.len != 1) return null;
+    const child_ty = aggregateTargetTypeAlias(args[0], aliases);
+    const child = switch (child_ty.kind) {
+        .name => |ident| ident.text,
+        else => return null,
+    };
+    if (checkedIntBoundsByName(child) == null) return null;
+    return .{ .domain_integer = .{ .kind = integerDomainKind(name) orelse return null, .child = child } };
+}
+
+fn integerDomainKind(name: []const u8) ?mir_model.IntegerDomainKind {
+    if (std.mem.eql(u8, name, "wrap")) return .wrap;
+    if (std.mem.eql(u8, name, "sat")) return .sat;
+    if (std.mem.eql(u8, name, "serial")) return .serial;
+    if (std.mem.eql(u8, name, "counter")) return .counter;
+    return null;
 }
 
 pub fn addressClassFromName(name: []const u8) ?AddressClass {

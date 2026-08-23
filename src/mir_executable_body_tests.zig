@@ -558,6 +558,60 @@ test "checked div mod and shifts own their exact exceptional edges" {
     try executable.verify(mutated);
 }
 
+test "arithmetic domains are explicit verified executable MIR semantics" {
+    const source =
+        \\fn wrap_add(left: wrap<u32>, right: wrap<u32>) -> wrap<u32> { return left + right; }
+        \\fn wrap_shift(left: wrap<u32>, right: wrap<u32>) -> wrap<u32> { return left << right; }
+        \\fn sat_add(left: sat<u32>, right: sat<u32>) -> sat<u32> { return left + right; }
+        \\fn sat_sub(left: sat<u32>, right: sat<u32>) -> sat<u32> { return left - right; }
+        \\fn sat_mul(left: sat<u16>, right: sat<u16>) -> sat<u16> { return left * right; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_domains.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions, 0..) |*function, function_index| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        try std.testing.expectEqual(@as(usize, 0), function.executable_body.trap_edges.len);
+        var found = false;
+        for (function.executable_body.expressions) |value| switch (value.operation) {
+            .binary => |binary| {
+                const expected: mir.ExecutableArithmeticSemantics = if (function_index < 2) .wrapping else .saturating;
+                try std.testing.expectEqual(expected, binary.arithmetic);
+                const domain = switch (value.result_ty) {
+                    .domain_integer => |shape| shape,
+                    else => return error.TestUnexpectedResult,
+                };
+                try std.testing.expectEqual(if (function_index < 2) mir.IntegerDomainKind.wrap else mir.IntegerDomainKind.sat, domain.kind);
+                found = true;
+            },
+            else => {},
+        };
+        try std.testing.expect(found);
+    }
+
+    const mutated = &module.functions[0];
+    for (mutated.executable_body.expressions) |*value| switch (value.operation) {
+        .binary => |*binary| {
+            binary.arithmetic = .saturating;
+            try std.testing.expectError(error.InvalidDomainArithmetic, executable.verify(mutated));
+            binary.arithmetic = .wrapping;
+            try executable.verify(mutated);
+            return;
+        },
+        else => {},
+    };
+    return error.TestUnexpectedResult;
+}
+
 test "ownership cleanup obligations keep executable admission closed" {
     const source =
         \\move struct Guard { id: u32 }

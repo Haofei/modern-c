@@ -5353,6 +5353,7 @@ const LlvmEmitter = struct {
                 "i64"
             else
                 null,
+            .domain_integer => |shape| self.mirStructuralType(.{ .integer = shape.child }),
             .float => |name| if (std.mem.eql(u8, name, "f32")) "float" else if (std.mem.eql(u8, name, "f64")) "double" else null,
             .pointer => "ptr",
             .slice => "{ ptr, i64 }",

@@ -4108,16 +4108,14 @@ test "LLVM emits local global returns from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_global_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_global_return");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectContains(local_body, "load atomic i32, ptr @g unordered, align 4");
-    try expectContains(local_body, "ret i32 %t");
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "store");
+    try expectContains(local_body, "ret i32 %");
 
     const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_global_return");
+    try expectContains(assigned_body, "; canonical executable MIR");
     try expectContains(assigned_body, "load atomic i32, ptr @g unordered, align 4");
-    try expectContains(assigned_body, "ret i32 %t");
-    try expectNotContains(assigned_body, "alloca");
-    try expectNotContains(assigned_body, "store");
+    try expectContains(assigned_body, "ret i32 %");
 }
 
 test "LLVM inferred local global return lowers without function body fallback" {
@@ -4133,10 +4131,9 @@ test "LLVM inferred local global return lowers without function body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_global_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @inferred_global_return");
+    try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "load atomic i32, ptr @g unordered, align 4");
-    try expectContains(body, "ret i32 %t");
-    try expectNotContains(body, "alloca");
-    try expectNotContains(body, "store");
+    try expectContains(body, "ret i32 %");
 }
 
 test "LLVM preserves MIR void calls before global returns" {
@@ -10864,9 +10861,8 @@ test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_wrap_binary.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @u_add");
-    try expectContains(body, "add i32 %a, %b");
-    // Fast-path admission (not the fallback, which emits param dbg.value).
-    try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "add i32 %mc_arg_0, %mc_arg_1");
 }
 
 test "LLVM admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
@@ -10878,8 +10874,12 @@ test "LLVM admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_bitwise.mc", source, &output);
-    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @u_and"), "and i32 %a, %b");
-    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @u_xor"), "xor i32 %a, %b");
+    const and_body = try llvmFunctionBody(output.items, "define internal i32 @u_and");
+    try expectContains(and_body, "; canonical executable MIR");
+    try expectContains(and_body, "and i32 %mc_arg_0, %mc_arg_1");
+    const xor_body = try llvmFunctionBody(output.items, "define internal i32 @u_xor");
+    try expectContains(xor_body, "; canonical executable MIR");
+    try expectContains(xor_body, "xor i32 %mc_arg_0, %mc_arg_1");
 }
 
 test "LLVM admits plain unary returns from MIR (bitwise not, wrapping negate)" {
@@ -12736,8 +12736,8 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(local_body, " atomic ");
 
     const global_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_store");
-    try expectContains(global_store_body, "store atomic i32 %x, ptr @shared_counter unordered, align 4");
-    try expectNotContains(global_store_body, "store i32 %x, ptr @shared_counter");
+    try expectContains(global_store_body, "store atomic i32 %mc_arg_0, ptr @shared_counter unordered, align 4");
+    try expectNotContains(global_store_body, "store i32 %mc_arg_0, ptr @shared_counter");
 
     const global_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_load");
     try expectContains(global_load_body, "load atomic i32, ptr @shared_counter unordered, align 4");
@@ -17960,7 +17960,7 @@ test "LLVM ordinary bool global accesses use byte-sized atomics" {
     try expectNotContains(load_body, "load atomic i1");
 
     const store_body = try llvmFunctionBody(output.items, "define internal void @write_flag");
-    try expectContains(store_body, "zext i1 %value to i8");
+    try expectContains(store_body, "zext i1 %mc_arg_0 to i8");
     try expectContains(store_body, "store atomic i8 ");
     try expectContains(store_body, "ptr @flag unordered, align 1");
     try expectNotContains(store_body, "store atomic i1");
@@ -18037,7 +18037,7 @@ test "LLVM simple functions and race-safe globals lower from MIR without body fa
     try expectContains(add_body, "ret i32 %");
 
     const store_body = try llvmFunctionBody(output.items, "define internal void @store");
-    try expectContains(store_body, "store atomic i32 %x, ptr @shared_counter unordered, align 4");
+    try expectContains(store_body, "store atomic i32 %mc_arg_0, ptr @shared_counter unordered, align 4");
 
     const load_body = try llvmFunctionBody(output.items, "define internal i32 @load");
     try expectContains(load_body, "load atomic i32, ptr @shared_counter unordered, align 4");

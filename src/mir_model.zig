@@ -100,12 +100,25 @@ pub const ResultShape = struct {
     err: []const u8,
 };
 
+pub const IntegerDomainKind = enum {
+    wrap,
+    sat,
+    serial,
+    counter,
+};
+
+pub const DomainIntegerShape = struct {
+    kind: IntegerDomainKind,
+    child: []const u8,
+};
+
 pub const ValueType = union(enum) {
     void,
     never,
     bool,
     value,
     integer: []const u8,
+    domain_integer: DomainIntegerShape,
     float: []const u8,
     cstr,
     pointer: PointerShape,
@@ -136,6 +149,7 @@ pub const ValueType = union(enum) {
             .bool => "bool",
             .value => "value",
             .integer => |n| n,
+            .domain_integer => |shape| shape.child,
             .float => |n| n,
             .cstr => "cstr",
             .pointer => |shape| pointerShapeName(shape),
@@ -167,6 +181,7 @@ pub const TypeKey = union(enum) {
     bool,
     value,
     integer: []const u8,
+    domain_integer: DomainIntegerShape,
     float: []const u8,
     cstr,
     pointer: PointerShape,
@@ -192,6 +207,7 @@ pub const TypeKey = union(enum) {
             .bool => .bool,
             .value => .value,
             .integer => |name| .{ .integer = name },
+            .domain_integer => |shape| .{ .domain_integer = shape },
             .float => |name| .{ .float = name },
             .cstr => .cstr,
             .pointer => |shape| .{ .pointer = shape },
@@ -220,6 +236,7 @@ pub const TypeKey = union(enum) {
             .bool => .bool,
             .value => .value,
             .integer => |name| .{ .integer = name },
+            .domain_integer => |shape| .{ .domain_integer = shape },
             .float => |name| .{ .float = name },
             .cstr => .cstr,
             .pointer => |shape| .{ .pointer = shape },
@@ -244,6 +261,7 @@ pub const TypeKey = union(enum) {
         if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
         return switch (left) {
             .integer => |name| std.mem.eql(u8, name, right.integer),
+            .domain_integer => |shape| shape.kind == right.domain_integer.kind and std.mem.eql(u8, shape.child, right.domain_integer.child),
             .float => |name| std.mem.eql(u8, name, right.float),
             .pointer => |shape| pointerShapeEql(shape, right.pointer),
             .nullable_pointer => |shape| pointerShapeEql(shape, right.nullable_pointer),
@@ -426,6 +444,8 @@ pub const ExecutableBinaryOp = enum {
 pub const ExecutableArithmeticSemantics = enum {
     ordinary,
     checked,
+    wrapping,
+    saturating,
 };
 
 pub const ExecutableTrapRequirement = struct {
@@ -572,6 +592,7 @@ pub const ExecutableMemoryAccess = struct {
         return switch (ty) {
             .bool => 1,
             .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) 1 else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) 2 else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) 4 else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) 8 else null,
+            .domain_integer => |shape| if (std.mem.eql(u8, shape.child, "u8") or std.mem.eql(u8, shape.child, "i8")) 1 else if (std.mem.eql(u8, shape.child, "u16") or std.mem.eql(u8, shape.child, "i16")) 2 else if (std.mem.eql(u8, shape.child, "u32") or std.mem.eql(u8, shape.child, "i32")) 4 else if (std.mem.eql(u8, shape.child, "u64") or std.mem.eql(u8, shape.child, "i64") or std.mem.eql(u8, shape.child, "usize") or std.mem.eql(u8, shape.child, "isize")) 8 else null,
             .float => |name| if (std.mem.eql(u8, name, "f32")) 4 else if (std.mem.eql(u8, name, "f64")) 8 else null,
             .pointer, .nullable_pointer, .cstr, .address => 8,
             else => null,

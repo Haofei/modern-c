@@ -179,15 +179,47 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             // contain source-shaped operations that a legacy lowering path
             // owns.  Exact executable arithmetic invariants become mandatory
             // only when the producer claims this body is complete.
-            if (body.complete and operation.arithmetic == .checked) {
-                if (!sameValueType(value.result_ty, left.result_ty) or !sameValueType(left.result_ty, right.result_ty) or
-                    std.meta.activeTag(value.result_ty) != .integer) return error.InvalidCheckedArithmetic;
-                const requirements = mir.executableCheckedBinaryTrapRequirements(operation.op, value.result_ty) orelse return error.InvalidCheckedArithmetic;
-                if (ownedTrapCountAll(body, .{ .expression = value.id }) != requirements.count) return error.InvalidCheckedArithmetic;
-                for (requirements.items[0..requirements.count]) |requirement| {
-                    if (ownedTrapCount(body, .{ .expression = value.id }, requirement.kind, requirement.source) != 1) return error.InvalidCheckedArithmetic;
-                }
-            }
+            if (body.complete) switch (operation.arithmetic) {
+                .checked => {
+                    if (!sameValueType(value.result_ty, left.result_ty) or !sameValueType(left.result_ty, right.result_ty) or
+                        std.meta.activeTag(value.result_ty) != .integer) return error.InvalidCheckedArithmetic;
+                    const requirements = mir.executableCheckedBinaryTrapRequirements(operation.op, value.result_ty) orelse return error.InvalidCheckedArithmetic;
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != requirements.count) return error.InvalidCheckedArithmetic;
+                    for (requirements.items[0..requirements.count]) |requirement| {
+                        if (ownedTrapCount(body, .{ .expression = value.id }, requirement.kind, requirement.source) != 1) return error.InvalidCheckedArithmetic;
+                    }
+                },
+                .wrapping, .saturating => {
+                    if (!sameValueType(value.result_ty, left.result_ty) or !sameValueType(left.result_ty, right.result_ty) or
+                        ownedTrapCountAll(body, .{ .expression = value.id }) != 0) return error.InvalidDomainArithmetic;
+                    const shape = switch (value.result_ty) {
+                        .domain_integer => |domain| domain,
+                        else => return error.InvalidDomainArithmetic,
+                    };
+                    if ((operation.arithmetic == .wrapping and shape.kind != .wrap) or
+                        (operation.arithmetic == .saturating and shape.kind != .sat)) return error.InvalidDomainArithmetic;
+                    const supported = switch (operation.arithmetic) {
+                        .wrapping => switch (operation.op) {
+                            .add, .sub, .mul, .bit_or, .bit_xor, .bit_and, .shl, .shr => true,
+                            else => false,
+                        },
+                        .saturating => switch (operation.op) {
+                            .add, .sub, .mul => true,
+                            else => false,
+                        },
+                        else => unreachable,
+                    };
+                    if (!supported) return error.InvalidDomainArithmetic;
+                },
+                .ordinary => if (left.result_ty == .domain_integer) {
+                    const comparison = operation.op == .eq or operation.op == .ne or operation.op == .lt or
+                        operation.op == .le or operation.op == .gt or operation.op == .ge;
+                    if (!comparison or !sameValueType(left.result_ty, right.result_ty) or value.result_ty != .bool or
+                        ownedTrapCountAll(body, .{ .expression = value.id }) != 0) return error.InvalidDomainArithmetic;
+                } else if (right.result_ty == .domain_integer or value.result_ty == .domain_integer) {
+                    return error.InvalidDomainArithmetic;
+                },
+            };
         },
         .cast => |operation| {
             try verifyOperand(body, value, operation.operand);

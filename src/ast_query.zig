@@ -347,7 +347,7 @@ pub fn isSatPreservingBinary(op: ast.BinaryOp) bool {
 /// True for the binary operators whose result a wrapping type preserves.
 pub fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
     return switch (op) {
-        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => true,
+        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
         else => false,
     };
 }

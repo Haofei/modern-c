@@ -9,8 +9,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **920/1752 C** and **991/1818 LLVM** distinct functions using the AST
-  body (C admits 47.5%, LLVM 45.5%). Report mode intentionally preserves
+  finds **884/1696 C** and **942/1762 LLVM** distinct functions using the AST
+  body (C admits 47.9%, LLVM 46.5%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -62,14 +62,14 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-867 to an incomplete MIR producer, 45 to renderer support, 6 to final ingress
-checks and 2 nominally ready; LLVM attributes 906/59/23/3 respectively. The
+836 to an incomplete MIR producer, 40 to renderer support, 6 to final ingress
+checks and 2 nominally ready; LLVM attributes 874/56/9/3 respectively. The
 producer bucket is now classified by its first stable canonical-model gap. The
-largest C reasons are unsupported expressions (219), producer invariants (168),
-trap projection (165), non-canonical literals (113), and unresolved indexing
-(44); LLVM records 222/168/175/116/58 respectively. Direct pointer-member
-scalar access is now canonical in the targeted census; the remaining
-`unlowered_member` reason count is 23 in each backend. This turns
+largest C reasons are producer invariants (183), trap projection (164),
+non-canonical literals (116), unsupported members (49), and unresolved indexing
+(46); LLVM records 183/174/119/49/60 respectively. Direct pointer-member scalar
+access is canonical in the targeted census; the remaining `unlowered_member`
+reason count is 22 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
 prevents work on the wrong layer.
 
@@ -79,6 +79,16 @@ conversions are admitted; narrower/signed and pointer conversions remain
 closed. In the targeted `std/addr.mc` census this removed 14
 `unsupported_expression` classifications and left only 6 C / 8 LLVM
 fallbacks, all in larger control/value-graph families.
+
+Arithmetic-domain identity is now retained in `ValueType`/`TypeKey` rather than
+collapsed to the underlying integer before executable lowering. MIR marks
+wrapping and saturating binary semantics explicitly and the verifier rejects a
+domain/operation mismatch or a stray trap edge. C uses the existing saturating
+and masked-shift helpers; LLVM emits unsigned overflow intrinsics plus `select`
+for saturation and masks wrapping shift counts before `shl`/`lshr`. A mutation
+test proves that changing a wrapping operation to saturating fails admission.
+The focused arithmetic-domain/bitwise/no-trap census moved from 27/30 to 29/30
+in both backends.
 
 Explicit scalar `uninit` locals are now represented as storage without an
 initializer expression. A following assignment creates the executable value;

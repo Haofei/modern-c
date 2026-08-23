@@ -420,6 +420,9 @@ const Renderer = struct {
                 else => error.InvalidBody,
             };
         }
+        if (binary.arithmetic == .saturating) return self.emitSaturatingBinary(expression, result_ty, binary.op, left, right);
+        if (binary.arithmetic == .wrapping and (binary.op == .shl or binary.op == .shr))
+            return self.emitWrappingShift(expression, result_ty, binary.op, left, right);
         const value = try self.temp();
         const operation: []const u8 = switch (binary.op) {
             .add => "add",
@@ -440,6 +443,62 @@ const Renderer = struct {
             try self.output.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ value, operation, left.ty, left.spelling, right.spelling });
         }
         return .{ .ty = result_ty, .spelling = value };
+    }
+
+    fn emitSaturatingBinary(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        result_ty: []const u8,
+        op_kind: mir.ExecutableBinaryOp,
+        left: Value,
+        right: Value,
+    ) RenderError!Value {
+        const domain = domainInteger(expression.result_ty, .sat) orelse return error.InvalidBody;
+        const info = integerInfo(domain.child) orelse return error.InvalidBody;
+        if (info.signed or !std.mem.eql(u8, result_ty, left.ty) or !std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
+        const op: []const u8 = switch (op_kind) {
+            .add => "add",
+            .sub => "sub",
+            .mul => "mul",
+            else => return error.InvalidBody,
+        };
+        const pair = try self.temp();
+        const value = try self.temp();
+        const overflow = try self.temp();
+        const result = try self.temp();
+        const saturation: u128 = if (op_kind == .sub) 0 else info.max;
+        try self.output.print(
+            self.allocator,
+            "  {s} = call {{ {s}, i1 }} @llvm.u{s}.with.overflow.{s}({s} {s}, {s} {s})\n" ++
+                "  {s} = extractvalue {{ {s}, i1 }} {s}, 0\n" ++
+                "  {s} = extractvalue {{ {s}, i1 }} {s}, 1\n" ++
+                "  {s} = select i1 {s}, {s} {d}, {s} {s}\n",
+            .{ pair, result_ty, op, result_ty, left.ty, left.spelling, right.ty, right.spelling, value, result_ty, pair, overflow, result_ty, pair, result, overflow, result_ty, saturation, result_ty, value },
+        );
+        return .{ .ty = result_ty, .spelling = result };
+    }
+
+    fn emitWrappingShift(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        result_ty: []const u8,
+        op_kind: mir.ExecutableBinaryOp,
+        left: Value,
+        right: Value,
+    ) RenderError!Value {
+        const domain = domainInteger(expression.result_ty, .wrap) orelse return error.InvalidBody;
+        const info = integerInfo(domain.child) orelse return error.InvalidBody;
+        if (info.bits == 0 or !std.mem.eql(u8, result_ty, left.ty) or !std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
+        const masked = try self.temp();
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = and {s} {s}, {d}\n", .{ masked, right.ty, right.spelling, info.bits - 1 });
+        const operation: []const u8 = switch (op_kind) {
+            .shl => "shl",
+            .shr => if (info.signed) "ashr" else "lshr",
+            else => return error.InvalidBody,
+        };
+        try self.output.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ result, operation, result_ty, left.spelling, masked });
+        return .{ .ty = result_ty, .spelling = result };
     }
 
     fn emitCheckedOverflowBinary(
@@ -805,6 +864,7 @@ fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
         .void => "void",
         .bool => "i1",
         .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) "i8" else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) "i16" else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) "i32" else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) "i64" else null,
+        .domain_integer => |shape| scalarLlvmType(.{ .integer = shape.child }),
         .float => |name| if (std.mem.eql(u8, name, "f32")) "float" else if (std.mem.eql(u8, name, "f64")) "double" else null,
         .pointer, .nullable_pointer, .cstr => "ptr",
         .slice => "{ ptr, i64 }",
@@ -962,6 +1022,24 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     const left_ty = body.expressions[binary.left.index()].result_ty;
     const right_ty = body.expressions[binary.right.index()].result_ty;
     if (!sameValueType(left_ty, right_ty)) return false;
+    if (left_ty == .domain_integer) {
+        const shape = left_ty.domain_integer;
+        if (binary.op == .eq or binary.op == .ne or binary.op == .lt or binary.op == .le or binary.op == .gt or binary.op == .ge) {
+            return binary.arithmetic == .ordinary and expression.result_ty == .bool and ownedExpressionTrapCount(body, expression.id) == 0;
+        }
+        if (!sameValueType(expression.result_ty, left_ty) or ownedExpressionTrapCount(body, expression.id) != 0) return false;
+        return switch (shape.kind) {
+            .wrap => binary.arithmetic == .wrapping and switch (binary.op) {
+                .add, .sub, .mul, .bit_or, .bit_xor, .bit_and, .shl, .shr => integerInfo(shape.child) != null,
+                else => false,
+            },
+            .sat => binary.arithmetic == .saturating and switch (binary.op) {
+                .add, .sub, .mul => integerInfo(shape.child) != null,
+                else => false,
+            },
+            .serial, .counter => false,
+        };
+    }
     return switch (binary.op) {
         .add, .sub, .mul => sameValueType(expression.result_ty, left_ty) and arithmeticIntegerType(left_ty) and
             (binary.arithmetic == .ordinary or checkedIntegerBinaryHasExactTrapEdges(body, expression)),
@@ -1032,6 +1110,7 @@ fn terminatorForBlock(body: *const mir.ExecutableBody, id: mir.BlockId) ?mir.Exe
 fn integerTypeSigned(ty: mir.ValueType) bool {
     return switch (ty) {
         .integer => |name| name.len != 0 and (name[0] == 'i' or std.mem.eql(u8, name, "isize")),
+        .domain_integer => |shape| shape.child.len != 0 and (shape.child[0] == 'i' or std.mem.eql(u8, shape.child, "isize")),
         else => false,
     };
 }
@@ -1055,27 +1134,47 @@ fn arithmeticIntegerType(ty: mir.ValueType) bool {
 
 fn integerLike(ty: mir.ValueType) bool {
     return switch (ty) {
-        .bool, .integer, .address => true,
+        .bool, .integer, .domain_integer, .address => true,
         else => false,
     };
 }
 
 fn orderedIntegerType(ty: mir.ValueType) bool {
     return switch (ty) {
-        .integer, .address => true,
+        .integer, .domain_integer, .address => true,
         else => false,
     };
 }
 
 fn comparableEqualityType(ty: mir.ValueType) bool {
     return switch (ty) {
-        .bool, .integer, .address, .pointer, .nullable_pointer, .cstr => true,
+        .bool, .integer, .domain_integer, .address, .pointer, .nullable_pointer, .cstr => true,
         else => false,
     };
 }
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
-    return std.meta.activeTag(left) == std.meta.activeTag(right) and std.mem.eql(u8, left.name(), right.name());
+    return mir.TypeKey.eql(mir.TypeKey.fromValueType(left), mir.TypeKey.fromValueType(right));
+}
+
+fn domainInteger(ty: mir.ValueType, expected: mir.IntegerDomainKind) ?mir.DomainIntegerShape {
+    const shape = switch (ty) {
+        .domain_integer => |value| value,
+        else => return null,
+    };
+    return if (shape.kind == expected) shape else null;
+}
+
+fn integerInfo(name: []const u8) ?struct { signed: bool, bits: u7, max: u128 } {
+    if (std.mem.eql(u8, name, "u8")) return .{ .signed = false, .bits = 8, .max = std.math.maxInt(u8) };
+    if (std.mem.eql(u8, name, "u16")) return .{ .signed = false, .bits = 16, .max = std.math.maxInt(u16) };
+    if (std.mem.eql(u8, name, "u32")) return .{ .signed = false, .bits = 32, .max = std.math.maxInt(u32) };
+    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "usize")) return .{ .signed = false, .bits = 64, .max = std.math.maxInt(u64) };
+    if (std.mem.eql(u8, name, "i8")) return .{ .signed = true, .bits = 8, .max = 0 };
+    if (std.mem.eql(u8, name, "i16")) return .{ .signed = true, .bits = 16, .max = 0 };
+    if (std.mem.eql(u8, name, "i32")) return .{ .signed = true, .bits = 32, .max = 0 };
+    if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return .{ .signed = true, .bits = 64, .max = 0 };
+    return null;
 }
 
 fn expressionListValid(body: *const mir.ExecutableBody, expressions: []const mir.ExprId) bool {
