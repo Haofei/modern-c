@@ -203,3 +203,31 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     module_mir.checked_callables[0].is_variadic = true;
     try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
 }
+
+test "VerifiedProgram rejects checked callable parameter type drift" {
+    const test_support = @import("test_support.zig");
+    const source =
+        \\extern fn sink(value: u32) -> void;
+        \\fn forward(value: u32) -> u32 { return value; }
+    ;
+    var parsed = try test_support.parseModule("verified_callable_param_drift.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "verified_callable_param_drift.mc", source);
+    defer reporter.deinit();
+
+    _ = try VerifiedProgram.init(&module_mir, &reporter);
+    const forward_index = for (module_mir.functions, 0..) |function, index| {
+        if (std.mem.eql(u8, function.name, "forward")) break index;
+    } else return error.TestUnexpectedResult;
+    const saved = module_mir.checked_callables[forward_index].param_types;
+    const wrong = [_]mir.ValueType{.{ .integer = "u64" }};
+    module_mir.checked_callables[forward_index].param_types = &wrong;
+    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+
+    module_mir.checked_callables[forward_index].param_types = &.{};
+    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+    module_mir.checked_callables[forward_index].param_types = saved;
+    _ = try VerifiedProgram.init(&module_mir, &reporter);
+}

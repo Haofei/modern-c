@@ -1751,6 +1751,9 @@ pub const CheckedCallableFact = struct {
     kind: CallableKind,
     return_ty: ValueType,
     param_count: usize,
+    /// Borrowed from the matching MIR function signature. `Module.functions`
+    /// owns the backing allocation; the checked table must never free it.
+    param_types: []const ValueType = &.{},
     c_abi: bool,
     is_variadic: bool = false,
     no_lang_trap: bool,

@@ -62,6 +62,14 @@
         {
           "file": "src/verified_program.zig",
           "needle": "checked.matchesMir(typed_mir.*)"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "param_types: []const ValueType = &.{}"
+        },
+        {
+          "file": "src/checked_program.zig",
+          "needle": "mir.TypeKey.fromValueType(checked_type)"
         }
       ],
       "retired_evidence": [

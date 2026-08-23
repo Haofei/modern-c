@@ -6140,7 +6140,8 @@ test "lower-c executable MIR forget evaluates its operand once without a release
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "next_value()"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "forget_unchecked(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR: forget_token */") != null);
+    const forget_body = try cFunctionBody(output.items, "MC_UNUSED static void forget_token(");
+    try std.testing.expect(std.mem.indexOf(u8, forget_body, "/* canonical executable MIR */") != null);
 }
 
 test "lower-c wrapping arithmetic requires MIR identity and operand/result type facts" {

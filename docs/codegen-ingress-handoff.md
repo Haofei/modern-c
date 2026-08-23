@@ -353,6 +353,10 @@ backend; the following fixed-arity C-ABI call slice removed the remaining 11
 LLVM ingress mismatches. MIR now owns canonical parameter types and the
 variadic bit, while a syntax-free per-call ABI plan owns target
 `zeroext`/`signext`; variadic calls remain fail-closed on the legacy path.
+CheckedProgram now borrows and admits the same canonical parameter-type vector,
+so equal-arity signature drift is rejected before codegen. Domain integer C-ABI
+arguments share their child integer extension class, and aggregate/unknown ABI
+classes fail closed instead of being mistaken for a valid no-extension class.
 `forget_unchecked` now crosses the same boundary as a typed unsafe builtin: its
 operand is evaluated once, no release operation is emitted, and signature
 aggregate metadata lets LLVM type linear resource parameters without AST body

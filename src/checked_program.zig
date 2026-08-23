@@ -15,6 +15,7 @@ pub const CheckedProgram = struct {
     pub fn init(callables: []const mir.CheckedCallableFact) !CheckedProgram {
         for (callables, 0..) |callable, index| {
             if (!callable.symbol_id.isValid()) return error.InvalidCheckedProgram;
+            if (callable.param_types.len != callable.param_count) return error.InvalidCheckedProgram;
             if (callable.kind == .extern_function) {
                 if (callable.body_id.isValid()) return error.InvalidCheckedProgram;
             } else if (!callable.body_id.isValid() or callable.body_id.index() != index) {
@@ -43,7 +44,11 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
     for (callables, module.functions, 0..) |checked, function, index| {
         if (!checked.symbol_id.eql(function.typed_symbol_id) or !checked.source_id.eql(function.typed_source_id)) return false;
         if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
-        if (checked.param_count != function.param_count or checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
+        if (checked.param_count != function.param_count or checked.param_types.len != function.param_types.len or
+            checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
+        for (checked.param_types, function.param_types) |checked_type, mir_type| {
+            if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(checked_type), mir.TypeKey.fromValueType(mir_type))) return false;
+        }
         if (checked.no_lang_trap != function.no_lang_trap or checked.irq_context != function.irq_context) return false;
 
         if (function.is_extern) {

@@ -437,12 +437,34 @@ test "CheckedProgram is a syntax-free callable and body table" {
     };
     try std.testing.expect(saw_initializer and saw_extern and saw_function);
 
+    const read_index = for (module_mir.functions, 0..) |function, index| {
+        if (std.mem.eql(u8, function.name, "read")) break index;
+    } else return error.TestUnexpectedResult;
+    const read_callable = checked.callables[read_index];
+    try std.testing.expectEqual(@as(usize, 1), read_callable.param_types.len);
+    try std.testing.expect(mir.TypeKey.eql(
+        mir.TypeKey.fromValueType(.{ .integer = "u32" }),
+        mir.TypeKey.fromValueType(read_callable.param_types[0]),
+    ));
+    try std.testing.expect(mir.TypeKey.eql(
+        mir.TypeKey.fromValueType(read_callable.param_types[0]),
+        mir.TypeKey.fromValueType(module_mir.functions[read_index].param_types[0]),
+    ));
+
+    const wrong_param_types = [_]mir.ValueType{.{ .integer = "u64" }};
+    const saved_param_types = module_mir.checked_callables[read_index].param_types;
+    module_mir.checked_callables[read_index].param_types = &wrong_param_types;
+    try std.testing.expect(!checked.matchesMir(module_mir));
+    module_mir.checked_callables[read_index].param_types = saved_param_types;
+    try std.testing.expect(checked.matchesMir(module_mir));
+
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
     try std.testing.expectEqual(module_mir.functions.len, std.mem.count(u8, dump.items, "checked callable "));
 
     module_mir.checked_callables[0].param_count += 1;
+    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(module_mir.checked_callables));
     try std.testing.expect(!checked.matchesMir(module_mir));
 }
 

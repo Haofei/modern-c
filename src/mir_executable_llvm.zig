@@ -52,10 +52,30 @@ pub const CallAbiPlan = struct {
     direct_calls: []const DirectCallAbi,
 };
 
+/// The executable-MIR direct-call path implements only the C ABI classes whose
+/// LLVM representation is already a scalar value. Aggregate/slice/result and
+/// otherwise unknown values require a target layout/ABI plan and must remain on
+/// the qualified legacy path until that plan is canonical MIR data.
+pub fn cAbiDirectCallTypeSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .void, .bool, .cstr, .pointer, .nullable_pointer, .address => true,
+        .integer, .domain_integer, .float => scalarLlvmType(ty) != null,
+        else => false,
+    };
+}
+
+fn cAbiDirectCallParameterTypeSupported(ty: mir.ValueType) bool {
+    return ty != .void and cAbiDirectCallTypeSupported(ty);
+}
+
 pub fn abiExtension(target: TargetAbi, ty: mir.ValueType) AbiExtension {
     if (target == .aarch64) return .none;
     if (ty == .bool) return .zeroext;
-    const integer = mir.ExecutableCastKind.integerInfo(ty) orelse return .none;
+    const scalar_ty: mir.ValueType = switch (ty) {
+        .domain_integer => |shape| .{ .integer = shape.child },
+        else => ty,
+    };
+    const integer = mir.ExecutableCastKind.integerInfo(scalar_ty) orelse return .none;
     if (integer.bits > 32) return .none;
     if (integer.bits == 32) return if (target == .riscv64) .signext else .none;
     return if (integer.signed) .signext else .zeroext;
@@ -90,11 +110,14 @@ fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
             const entry = directCallAbiFor(plan, expression.id) orelse return false;
             if (!entry.callee.eql(call.callee) or entry.fixed_arity != call.argument_count or
                 entry.fixed_arity > mir.max_executable_operands) return false;
+            if (entry.c_abi and !cAbiDirectCallTypeSupported(expression.result_ty)) return false;
             const expected_result = if (entry.c_abi) abiExtension(plan.target, expression.result_ty) else .none;
             if (entry.result_extension != expected_result) return false;
             for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
                 if (!expressionValid(body, argument_id)) return false;
-                const expected = if (entry.c_abi) abiExtension(plan.target, body.expressions[argument_id.index()].result_ty) else .none;
+                const argument_ty = body.expressions[argument_id.index()].result_ty;
+                if (entry.c_abi and !cAbiDirectCallParameterTypeSupported(argument_ty)) return false;
+                const expected = if (entry.c_abi) abiExtension(plan.target, argument_ty) else .none;
                 if (entry.parameter_extensions[index] != expected) return false;
             }
             for (entry.parameter_extensions[call.argument_count..]) |extension| if (extension != .none) return false;
@@ -1925,6 +1948,38 @@ test "mechanical renderer applies normalized C ABI direct-call extensions" {
     calls[0].result_extension = .zeroext;
     calls[0].fixed_arity = 1;
     try std.testing.expect(!supportsWithCallAbi(&body, .bool, plan));
+
+    // A missing target ABI classification is not equivalent to an ABI with no
+    // extension attributes. Keep aggregate-like values on the legacy path.
+    calls[0].fixed_arity = 2;
+    calls[0].parameter_extensions[0] = .none;
+    var unsupported_parameters = parameters;
+    unsupported_parameters[0].ty = .{ .slice = "u8" };
+    var unsupported_expressions = expressions;
+    unsupported_expressions[0].result_ty = .{ .slice = "u8" };
+    const unsupported_body: mir.ExecutableBody = .{
+        .parameters = &unsupported_parameters,
+        .symbols = @constCast(&symbols),
+        .expressions = &unsupported_expressions,
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+    try std.testing.expect(!supportsWithCallAbi(&unsupported_body, .bool, plan));
+    try std.testing.expectError(error.Unsupported, renderWithCallAbi(std.testing.allocator, &unsupported_body, .bool, plan));
+}
+
+test "mechanical renderer classifies only supported C ABI direct-call types" {
+    try std.testing.expect(cAbiDirectCallTypeSupported(.{ .domain_integer = .{ .kind = .wrap, .child = "u8" } }));
+    try std.testing.expect(cAbiDirectCallTypeSupported(.{ .domain_integer = .{ .kind = .sat, .child = "i8" } }));
+    try std.testing.expect(cAbiDirectCallTypeSupported(.{ .domain_integer = .{ .kind = .counter, .child = "u32" } }));
+    try std.testing.expect(!cAbiDirectCallTypeSupported(.{ .struct_ = "Packet" }));
+    try std.testing.expect(!cAbiDirectCallTypeSupported(.{ .slice = "u8" }));
+    try std.testing.expect(!cAbiDirectCallTypeSupported(.unknown));
+
+    try std.testing.expectEqual(AbiExtension.zeroext, abiExtension(.riscv64, .{ .domain_integer = .{ .kind = .wrap, .child = "u8" } }));
+    try std.testing.expectEqual(AbiExtension.signext, abiExtension(.riscv64, .{ .domain_integer = .{ .kind = .sat, .child = "i8" } }));
+    try std.testing.expectEqual(AbiExtension.signext, abiExtension(.riscv64, .{ .domain_integer = .{ .kind = .counter, .child = "u32" } }));
+    try std.testing.expectEqual(AbiExtension.none, abiExtension(.aarch64, .{ .domain_integer = .{ .kind = .wrap, .child = "u8" } }));
 }
 
 test "mechanical renderer rejects assertions until their trap edge is explicit" {

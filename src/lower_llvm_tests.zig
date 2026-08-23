@@ -4456,8 +4456,14 @@ test "LLVM explicit C ABI scalar extensions match each target" {
         \\extern "C" fn c_irq(value: IrqOff) -> IrqOff;
         \\extern "C" fn c_overflow(value: Overflow) -> Overflow;
         \\extern "C" fn c_conversion(value: ConversionError) -> ConversionError;
+        \\extern "C" fn c_wrap(value: wrap<u8>) -> wrap<u8>;
+        \\extern "C" fn c_sat(value: sat<i8>) -> sat<i8>;
+        \\extern "C" fn c_counter(value: counter<u32>) -> counter<u32>;
         \\extern fn mc_i8(value: i8) -> i8;
         \\export fn c_export(value: i8) -> i8 { return c_i8(value); }
+        \\export fn c_wrap_export(value: wrap<u8>) -> wrap<u8> { return c_wrap(value); }
+        \\export fn c_sat_export(value: sat<i8>) -> sat<i8> { return c_sat(value); }
+        \\export fn c_counter_export(value: counter<u32>) -> counter<u32> { return c_counter(value); }
         \\#[mc_abi]
         \\export fn mc_export(value: i8) -> i8 { return mc_i8(value); }
     ;
@@ -4473,11 +4479,22 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try expectContains(riscv.items, "declare zeroext i8 @c_irq(i8 zeroext)");
     try expectContains(riscv.items, "declare zeroext i8 @c_overflow(i8 zeroext)");
     try expectContains(riscv.items, "declare zeroext i8 @c_conversion(i8 zeroext)");
-    if (std.mem.indexOf(u8, riscv.items, "define signext i8 @c_export(i8 signext %mc_arg_0)") == null) std.debug.print("C ABI debug:\n{s}\n", .{riscv.items});
+    try expectContains(riscv.items, "declare zeroext i8 @c_wrap(i8 zeroext)");
+    try expectContains(riscv.items, "declare signext i8 @c_sat(i8 signext)");
+    try expectContains(riscv.items, "declare signext i32 @c_counter(i32 signext)");
     try expectContains(riscv.items, "define signext i8 @c_export(i8 signext %mc_arg_0)");
     const c_export_body = try llvmFunctionBody(riscv.items, "define signext i8 @c_export");
     try expectContains(c_export_body, "; canonical executable MIR");
     try expectContains(c_export_body, "call signext i8 @c_i8(i8 signext %mc_arg_0)");
+    const c_wrap_body = try llvmFunctionBody(riscv.items, "define zeroext i8 @c_wrap_export");
+    try expectContains(c_wrap_body, "; canonical executable MIR");
+    try expectContains(c_wrap_body, "call zeroext i8 @c_wrap(i8 zeroext %mc_arg_0)");
+    const c_sat_body = try llvmFunctionBody(riscv.items, "define signext i8 @c_sat_export");
+    try expectContains(c_sat_body, "; canonical executable MIR");
+    try expectContains(c_sat_body, "call signext i8 @c_sat(i8 signext %mc_arg_0)");
+    const c_counter_body = try llvmFunctionBody(riscv.items, "define signext i32 @c_counter_export");
+    try expectContains(c_counter_body, "; canonical executable MIR");
+    try expectContains(c_counter_body, "call signext i32 @c_counter(i32 signext %mc_arg_0)");
     try expectContains(riscv.items, "declare i8 @mc_i8(i8)");
     try expectContains(riscv.items, "define i8 @mc_export(i8 %mc_arg_0)");
 
@@ -4489,6 +4506,12 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try expectContains(x86.items, "declare signext i8 @c_order(i8 signext)");
     try expectContains(x86.items, "declare zeroext i8 @c_overflow(i8 zeroext)");
     try expectContains(x86.items, "declare i32 @c_u32(i32)");
+    const x86_wrap_body = try llvmFunctionBody(x86.items, "define zeroext i8 @c_wrap_export");
+    try expectContains(x86_wrap_body, "call zeroext i8 @c_wrap(i8 zeroext %mc_arg_0)");
+    const x86_sat_body = try llvmFunctionBody(x86.items, "define signext i8 @c_sat_export");
+    try expectContains(x86_sat_body, "call signext i8 @c_sat(i8 signext %mc_arg_0)");
+    const x86_counter_body = try llvmFunctionBody(x86.items, "define i32 @c_counter_export");
+    try expectContains(x86_counter_body, "call i32 @c_counter(i32 %mc_arg_0)");
 
     var arm: std.ArrayList(u8) = .empty;
     defer arm.deinit(std.testing.allocator);
@@ -4498,6 +4521,12 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try expectContains(arm.items, "declare i1 @c_bool(i1)");
     try expectContains(arm.items, "declare i8 @c_order(i8)");
     try expectContains(arm.items, "declare i8 @c_overflow(i8)");
+    const arm_wrap_body = try llvmFunctionBody(arm.items, "define i8 @c_wrap_export");
+    try expectContains(arm_wrap_body, "call i8 @c_wrap(i8 %mc_arg_0)");
+    const arm_sat_body = try llvmFunctionBody(arm.items, "define i8 @c_sat_export");
+    try expectContains(arm_sat_body, "call i8 @c_sat(i8 %mc_arg_0)");
+    const arm_counter_body = try llvmFunctionBody(arm.items, "define i32 @c_counter_export");
+    try expectContains(arm_counter_body, "call i32 @c_counter(i32 %mc_arg_0)");
 }
 
 test "LLVM C variadic declarations and calls promote tail arguments" {
@@ -4551,7 +4580,7 @@ test "LLVM nominal declarations shadow same-named library scalars" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_shadowed_library_scalar.mc", source, &output);
-    try expectContains(output.items, "define internal { i32 } @identity({ i32 } %value)");
+    try expectContains(output.items, "define internal { i32 } @identity({ i32 } %mc_arg_0)");
     try expectNotContains(output.items, "define internal i8 @identity(i8 %value)");
 }
 
@@ -10069,7 +10098,7 @@ test "LLVM ordinary direct calls require MIR result and argument types" {
     try std.testing.expect(changed);
     var stale_signature_output: std.ArrayList(u8) = .empty;
     defer stale_signature_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &stale_signature, &stale_signature_output, "llvm_direct_call_signature_mutation.mc", .{}, false, .riscv64, false, null));
+    try std.testing.expectError(error.InvalidMirExecutableBody, appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &stale_signature, &stale_signature_output, "llvm_direct_call_signature_mutation.mc", .{}, false, .riscv64, false, null));
 }
 
 test "LLVM indirect calls require MIR callee signature facts" {

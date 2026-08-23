@@ -1019,7 +1019,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
-                        const checked: CheckedCallableFact = .{
+                        var checked: CheckedCallableFact = .{
                             .symbol_id = try internSymbolId(&symbol_ids, global.name.text),
                             .source_id = typed_source_id,
                             .body_id = BodyId.fromIndex(checked_callables.items.len),
@@ -1038,6 +1038,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         {
                             var function = try builder.finish();
                             errdefer freeFunction(allocator, function);
+                            checked.param_types = function.param_types;
                             applyCheckedCallableFact(&function, checked);
                             try checked_callables.append(allocator, checked);
                             try functions.append(allocator, function);
@@ -1047,7 +1048,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    const checked: CheckedCallableFact = .{
+                    var checked: CheckedCallableFact = .{
                         .symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text),
                         .source_id = typed_source_id,
                         .body_id = BodyId.fromIndex(checked_callables.items.len),
@@ -1066,13 +1067,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     {
                         var function = try builder.finish();
                         errdefer freeFunction(allocator, function);
+                        checked.param_types = function.param_types;
                         applyCheckedCallableFact(&function, checked);
                         try checked_callables.append(allocator, checked);
                         try functions.append(allocator, function);
                     }
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
                     const typed_symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text);
-                    const checked: CheckedCallableFact = .{
+                    var checked: CheckedCallableFact = .{
                         .symbol_id = typed_symbol_id,
                         .source_id = typed_source_id,
                         .body_id = .invalid,
@@ -1084,13 +1086,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
-                    try checked_callables.append(allocator, checked);
                     const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &packed_bits, &aliases);
                     var param_types_unowned = true;
                     errdefer if (param_types_unowned and param_types.len != 0) allocator.free(param_types);
                     const ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params);
                     var ffi_contracts_unowned = true;
                     errdefer if (ffi_contracts_unowned and ffi_param_contracts.len != 0) allocator.free(ffi_param_contracts);
+                    checked.param_types = param_types;
+                    try checked_callables.append(allocator, checked);
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
                         .typed_symbol_id = checked.symbol_id,
@@ -14888,6 +14891,8 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     function.ownership_cleanup_plan.deinit(allocator);
     var cleanup_cfg = function.cleanup_cfg;
     cleanup_cfg.deinit(allocator);
+    var executable_body = function.executable_body;
+    executable_body.deinit(allocator);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     if (function.param_types.len != 0) allocator.free(function.param_types);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
