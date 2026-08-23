@@ -4,12 +4,9 @@ const ast = @import("ast.zig");
 const codegen_signature = @import("codegen_signature.zig");
 const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
-const declaration_artifact_fallbacks = @import("declaration_artifact_fallbacks.zig");
-const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
-const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
+const ComptimeFunctionDeclarations = declaration_artifacts.ComptimeFunctionDeclarations;
 const DeclArtifact = declaration_artifacts.DeclArtifact;
-const FunctionArtifact = declaration_artifacts.FunctionArtifact;
 const GlobalArtifact = declaration_artifacts.GlobalArtifact;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
@@ -618,16 +615,6 @@ pub const ComptimeFunction = struct {
         };
     }
 
-    pub fn fromDeclarationArtifact(function: FunctionArtifact, body: ?ast.Block) ComptimeFunction {
-        return .{
-            .name = function.signature.name,
-            .params = function.signature.params,
-            .return_type = function.signature.transitionalReturnType(),
-            .body = body,
-            .owns_params = false,
-        };
-    }
-
     pub fn deinit(self: ComptimeFunction, allocator: std.mem.Allocator) void {
         if (self.owns_params) allocator.free(self.params);
     }
@@ -639,7 +626,7 @@ pub const ComptimeDeclarations = struct {
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
     decl_artifacts: ?[]const DeclArtifact = null,
-    function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
+    comptime_functions: ComptimeFunctionDeclarations = .empty,
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
         // Compatibility adapter for older frontend call sites. It keeps the
@@ -648,13 +635,10 @@ pub const ComptimeDeclarations = struct {
         return .{ .legacy_decls = decls };
     }
 
-    pub fn fromDeclarationArtifacts(
-        artifacts: CgDeclArtifacts,
-        function_bodies: CodegenFunctionBodyArtifacts,
-    ) ComptimeDeclarations {
+    pub fn fromCodegenArtifacts(artifacts: CgDeclArtifacts) ComptimeDeclarations {
         return .{
             .decl_artifacts = artifacts.decl_artifacts,
-            .function_body_fallbacks = function_bodies.function_body_fallbacks,
+            .comptime_functions = artifacts.comptime_functions,
         };
     }
 };
@@ -675,15 +659,9 @@ pub fn collectConstFunctionsFromDeclarations(
         };
         return;
     }
-    if (declarations.decl_artifacts) |decl_artifacts| {
-        for (decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                if (!function.signature.is_const or out.contains(function.signature.name.text)) continue;
-                const body = declaration_artifact_fallbacks.findLegacyFunctionBody(declarations.function_body_fallbacks, function.signature.name.text);
-                try out.put(function.signature.name.text, ComptimeFunction.fromDeclarationArtifact(function, body));
-            },
-            else => {},
-        };
+    for (declarations.comptime_functions.functions) |function| {
+        if (!function.is_const or out.contains(function.name.text)) continue;
+        try out.put(function.name.text, try ComptimeFunction.fromFnDecl(out.allocator, function));
     }
 }
 

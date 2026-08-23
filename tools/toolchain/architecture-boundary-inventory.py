@@ -25,6 +25,23 @@ BACKEND_EXTRA_FILES = {
     "lower_cov.zig",
 }
 
+# Shared MIR plans are backend admission inputs, not another syntax bridge. The
+# one legacy plan below predates this boundary and is an explicitly ratcheted
+# debt: delete it from this tuple when it becomes syntax-free, never add one.
+LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS = (
+    "mir_statement_plan.zig",
+)
+LEGACY_MIR_PLAN_IMPORT_EXCEPTION_CEILING = frozenset({"mir_statement_plan.zig"})
+MIR_PLAN_ALLOWED_IMPORTS = frozenset({"std", "mir_model.zig"})
+MIR_PLAN_FORBIDDEN_IMPORTS = frozenset({
+    "ast.zig",
+    "parser.zig",
+    "sema.zig",
+    "mir.zig",
+    "type_syntax.zig",
+})
+ZIG_IMPORT_RE = re.compile(r'@import\(\s*"([^"]+)"\s*\)')
+
 EXACT_BACKEND_COUNTS = {
     '@import("ast.zig")': 0,
     # Transitional syntax/semantic compatibility edges.  These are not
@@ -665,6 +682,37 @@ def require_absent_glob(pattern: str, description: str) -> None:
             fail(f"{rel_path} contains {description}: {match.group(0)!r}")
 
 
+def mir_plan_sources(source_root: Path = ROOT / "src") -> list[Path]:
+    return sorted(source_root.glob("mir_*_plan.zig"))
+
+
+def validate_syntax_free_mir_plan_imports(paths: list[Path]) -> list[str]:
+    names = {path.name for path in paths}
+    exceptions = set(LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS)
+    failures: list[str] = []
+    if len(exceptions) != len(LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS):
+        failures.append("legacy MIR plan import exceptions must not contain duplicates")
+    if not exceptions.issubset(LEGACY_MIR_PLAN_IMPORT_EXCEPTION_CEILING):
+        failures.append("legacy MIR plan import exceptions may only decrease")
+    for missing in sorted(exceptions - names):
+        failures.append(f"legacy MIR plan import exception {missing!r} is stale")
+
+    for path in paths:
+        if path.name in exceptions:
+            continue
+        for imported in ZIG_IMPORT_RE.findall(path.read_text(encoding="utf-8")):
+            if imported in MIR_PLAN_ALLOWED_IMPORTS:
+                continue
+            if imported in names and imported != path.name and imported not in exceptions:
+                continue
+            rel_path = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+            if imported in MIR_PLAN_FORBIDDEN_IMPORTS:
+                failures.append(f"{rel_path} imports forbidden syntax ingress {imported!r}")
+            else:
+                failures.append(f"{rel_path} imports non-syntax-free dependency {imported!r}")
+    return failures
+
+
 def main() -> int:
     sources = backend_sources()
     if len(sources) != 51:
@@ -686,7 +734,11 @@ def main() -> int:
     for pattern, description in FORBIDDEN_GLOBAL_PATTERNS.items():
         require_absent_glob(pattern, description)
 
-    print("PASS: architecture-boundary-inventory - backend cleanup state stays removed and syntax escapes are ratcheted")
+    mir_plan_failures = validate_syntax_free_mir_plan_imports(mir_plan_sources())
+    if mir_plan_failures:
+        fail("\n  - " + "\n  - ".join(mir_plan_failures))
+
+    print("PASS: architecture-boundary-inventory - backend cleanup state stays removed, syntax escapes are ratcheted, and shared MIR plans stay syntax-free")
     return 0
 
 

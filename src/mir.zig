@@ -90,6 +90,7 @@ pub const ContractRegion = mir_model.ContractRegion;
 pub const RangeFact = mir_model.RangeFact;
 pub const BoundsFact = mir_model.BoundsFact;
 pub const BoundsFactKind = mir_model.BoundsFactKind;
+pub const AccessFact = mir_model.AccessFact;
 pub const IntegerFact = mir_model.IntegerFact;
 pub const BoolFact = mir_model.BoolFact;
 pub const FloatFact = mir_model.FloatFact;
@@ -1074,6 +1075,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .contract_regions = try allocator.alloc(ContractRegion, 0),
                         .range_facts = try allocator.alloc(RangeFact, 0),
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
+                        .access_facts = try allocator.alloc(AccessFact, 0),
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .bool_facts = try allocator.alloc(BoolFact, 0),
                         .float_facts = try allocator.alloc(FloatFact, 0),
@@ -1961,6 +1963,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
     for (mir.functions) |function| {
         verifyFunctionCfg(function, reporter);
         verifyFunctionInstructionIdentities(function, reporter);
+        verifyFunctionAccessFacts(function, reporter);
         verifyFunctionOwnershipEvents(mir, function, reporter);
 
         if (!isVoidLike(function.return_ty)) {
@@ -2211,6 +2214,150 @@ fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostic
             }
         }
     }
+}
+
+fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter) void {
+    for (function.access_facts, 0..) |fact, fact_index| {
+        if (!accessFactValid(function, fact)) {
+            reporter.err(
+                sourcePointSpan(accessFactSource(fact)),
+                "E_MIR_ACCESS_FACT: MIR verifier found malformed resolved access fact",
+                .{},
+            );
+            return;
+        }
+        for (function.access_facts[0..fact_index]) |prior| {
+            if (accessFactTag(prior) == accessFactTag(fact) and accessFactSpanId(prior).eql(accessFactSpanId(fact))) {
+                reporter.err(
+                    sourcePointSpan(accessFactSource(fact)),
+                    "E_MIR_ACCESS_FACT: MIR verifier found duplicate resolved access fact",
+                    .{},
+                );
+                return;
+            }
+        }
+    }
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .index) continue;
+        // `const_get` has its own closed fact family and is not source-level
+        // indexing syntax, so it deliberately does not carry AccessFact.
+        if (std.mem.eql(u8, instruction.detail, "const_get")) continue;
+        const present = if (std.mem.startsWith(u8, instruction.detail, "range_slice"))
+            rangeSliceFactForInstruction(function, instruction)
+        else
+            indexFactForInstruction(function, instruction);
+        if (!present) {
+            reporter.err(
+                sourcePointSpan(.{ .line = instruction.line, .column = instruction.column, .offset = instruction.source_offset, .len = instruction.source_len }),
+                "E_MIR_ACCESS_FACT: MIR verifier found index instruction without resolved access fact",
+                .{},
+            );
+            return;
+        }
+    };
+}
+
+fn accessFactValid(function: Function, fact: AccessFact) bool {
+    const primary_span = accessFactSpanId(fact);
+    const primary_source = sourcePointForSpanId(function, primary_span) orelse return false;
+    if (!sourcePointEquivalent(primary_source, accessFactSource(fact))) return false;
+    switch (fact) {
+        .index => |access| {
+            if (!accessSpanIdsValid(function, &.{ access.base_span_id, access.index_span_id })) return false;
+            if (access.index_ty != .integer) return false;
+            return matchingIndexInstruction(function, access.typed_span_id, access.result_ty, access.base_span_id, access.index_span_id);
+        },
+        .range_slice => |access| {
+            if (!accessSpanIdsValid(function, &.{ access.base_span_id, access.start_span_id, access.end_span_id })) return false;
+            if (!accessResultIsSlice(access.result_ty) or access.start_ty != .integer or access.end_ty != .integer) return false;
+            return matchingRangeSliceInstruction(function, access.typed_span_id, access.result_ty, access.base_span_id, access.start_span_id);
+        },
+        .address_of => |access| {
+            if (!accessSpanIdsValid(function, &.{access.operand_span_id})) return false;
+            return switch (access.result_ty) {
+                // Function addresses are represented as `.value` in the
+                // bounded ValueType domain; data addresses retain pointer or
+                // address-class shape.
+                .pointer, .nullable_pointer, .address, .value => true,
+                else => false,
+            };
+        },
+        .deref => |access| {
+            if (!accessSpanIdsValid(function, &.{access.operand_span_id})) return false;
+            return switch (access.operand_ty) {
+                .pointer, .nullable_pointer, .address => true,
+                else => false,
+            };
+        },
+    }
+}
+
+fn accessSpanIdsValid(function: Function, span_ids: []const SpanId) bool {
+    for (span_ids) |span_id| if (sourcePointForSpanId(function, span_id) == null) return false;
+    return true;
+}
+
+fn accessResultIsSlice(ty: ValueType) bool {
+    return switch (ty) {
+        .slice => true,
+        .pointer => |shape| shape.kind == .slice,
+        else => false,
+    };
+}
+
+fn matchingIndexInstruction(function: Function, span_id: SpanId, result_ty: ValueType, base_span_id: SpanId, index_span_id: SpanId) bool {
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .index or !instructionMatchesSpanId(function, instruction, span_id)) continue;
+        if (std.meta.eql(instruction.result_ty, result_ty) and instruction.typed_base_operand_span_id.eql(base_span_id) and instruction.typed_index_operand_span_id.eql(index_span_id)) return true;
+    };
+    return false;
+}
+
+fn matchingRangeSliceInstruction(function: Function, span_id: SpanId, result_ty: ValueType, base_span_id: SpanId, start_span_id: SpanId) bool {
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .index or !instructionMatchesSpanId(function, instruction, span_id)) continue;
+        if (!std.mem.startsWith(u8, instruction.detail, "range_slice")) continue;
+        if (std.meta.eql(instruction.result_ty, result_ty) and instruction.typed_base_operand_span_id.eql(base_span_id) and instruction.typed_index_operand_span_id.eql(start_span_id)) return true;
+    };
+    return false;
+}
+
+fn indexFactForInstruction(function: Function, instruction: Instruction) bool {
+    for (function.access_facts) |fact| switch (fact) {
+        .index => |access| if (access.typed_span_id.eql(instruction.typed_span_id) and
+            std.meta.eql(access.result_ty, instruction.result_ty) and
+            access.base_span_id.eql(instruction.typed_base_operand_span_id) and
+            access.index_span_id.eql(instruction.typed_index_operand_span_id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn rangeSliceFactForInstruction(function: Function, instruction: Instruction) bool {
+    for (function.access_facts) |fact| switch (fact) {
+        .range_slice => |access| if (access.typed_span_id.eql(instruction.typed_span_id) and
+            std.meta.eql(access.result_ty, instruction.result_ty) and
+            access.base_span_id.eql(instruction.typed_base_operand_span_id) and
+            access.start_span_id.eql(instruction.typed_index_operand_span_id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn accessFactTag(fact: AccessFact) std.meta.Tag(AccessFact) {
+    return std.meta.activeTag(fact);
+}
+
+fn accessFactSpanId(fact: AccessFact) SpanId {
+    return switch (fact) {
+        inline else => |access| access.typed_span_id,
+    };
+}
+
+fn accessFactSource(fact: AccessFact) SourcePoint {
+    return switch (fact) {
+        inline else => |access| access.source,
+    };
 }
 
 fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction) bool {
@@ -2500,6 +2647,112 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
             if (instruction_count == 0 or instruction_count != countMatchingCallTargetFactsForFact(function, fact)) return error.InvalidMirCallTargetFacts;
         }
     }
+}
+
+/// Bind facts are the identity bridge between a captured local and a later
+/// closure value.  They deliberately validate only facts available in MIR;
+/// consumers never need to rediscover the capture or target from an AST body.
+pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThunkFacts}!void {
+    for (module.functions) |function| for (function.bind_thunk_facts) |fact| {
+        if (!bindThunkFactIdentitiesValid(function, fact)) return error.InvalidMirBindThunkFacts;
+        const target = functionByNameForBind(module, fact.target_fn) orelse return error.InvalidMirBindThunkFacts;
+        if (target.param_count != fact.target_param_count or !typeIdMatchesValueType(function, fact.target_return_ty, target.return_ty)) return error.InvalidMirBindThunkFacts;
+        if (fact.target_param_count != fact.closure_param_count + 1 or !fact.target_return_ty.eql(fact.closure_return_ty)) return error.InvalidMirBindThunkFacts;
+        if (!bindFactHasTargetType(function, fact) or !bindFactHasCallTarget(function, fact) or !bindFactHasCaptureAccess(function, fact) or !bindFactHasClosureLocal(function, fact)) return error.InvalidMirBindThunkFacts;
+    };
+}
+
+fn bindThunkFactIdentitiesValid(function: Function, fact: BindThunkFact) bool {
+    if (fact.target_fn.len == 0 or !fact.typed_target_fn_symbol_id.isValid() or !fact.target_span_id.isValid() or !fact.target_return_ty.isValid() or !fact.capture_value_id.isValid() or !fact.capture_span_id.isValid() or !fact.capture_operand_span_id.isValid() or !fact.capture_ty.isValid() or !fact.target_capture_ty.isValid() or !fact.closure_value_id.isValid() or !fact.closure_span_id.isValid() or !fact.closure_ty.isValid() or !fact.closure_return_ty.isValid()) return false;
+    if (fact.typed_target_fn_symbol_id.index() >= function.target_owner_identities.len or !std.mem.eql(u8, function.target_owner_identities[fact.typed_target_fn_symbol_id.index()].spelling, fact.target_fn)) return false;
+    if (!spanIdMatchesSource(function, fact.closure_span_id, fact.source) or !spanIdValid(function, fact.target_span_id) or !spanIdValid(function, fact.capture_span_id) or !spanIdValid(function, fact.capture_operand_span_id)) return false;
+    if (!valueIdValid(function, fact.capture_value_id) or !valueIdValid(function, fact.closure_value_id)) return false;
+    if (!typeIdValid(function, fact.target_return_ty) or !typeIdValid(function, fact.capture_ty) or !typeIdValid(function, fact.target_capture_ty) or !typeIdValid(function, fact.closure_ty) or !typeIdValid(function, fact.closure_return_ty)) return false;
+    return fact.capture_ty.eql(fact.target_capture_ty);
+}
+
+fn bindFactHasTargetType(function: Function, fact: BindThunkFact) bool {
+    var count: usize = 0;
+    for (function.target_type_facts) |target| {
+        if (target.kind != .bind or !target.typed_span_id.eql(fact.closure_span_id)) continue;
+        if (!target.typed_result_ty.eql(fact.closure_ty)) return false;
+        count += 1;
+    }
+    return count == 1;
+}
+
+fn bindFactHasCallTarget(function: Function, fact: BindThunkFact) bool {
+    var count: usize = 0;
+    for (function.call_target_facts) |target| {
+        if (target.kind != .bind or !target.typed_span_id.eql(fact.closure_span_id)) continue;
+        if (!sameValueType(target.result_ty, typeForId(function, fact.closure_ty) orelse return false)) return false;
+        count += 1;
+    }
+    return count == 1;
+}
+
+fn bindFactHasCaptureAccess(function: Function, fact: BindThunkFact) bool {
+    var access_count: usize = 0;
+    for (function.access_facts) |access| switch (access) {
+        .address_of => |address| {
+            if (!address.typed_span_id.eql(fact.capture_span_id)) continue;
+            if (!address.operand_span_id.eql(fact.capture_operand_span_id) or !sameValueType(address.result_ty, typeForId(function, fact.capture_ty) orelse return false)) return false;
+            access_count += 1;
+        },
+        else => {},
+    };
+    if (access_count != 1) return false;
+    const operand = instructionAtSpan(function, fact.capture_operand_span_id) orelse return false;
+    return operand.kind == .expr and operand.typed_value_id != null and operand.typed_value_id.?.eql(fact.capture_value_id);
+}
+
+fn bindFactHasClosureLocal(function: Function, fact: BindThunkFact) bool {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .local or instruction.typed_value_id == null or !instruction.typed_value_id.?.eql(fact.closure_value_id)) continue;
+        if (!instruction.typed_value_operand_span_id.eql(fact.closure_span_id) or !instruction.typed_result_ty.eql(fact.closure_ty)) return false;
+        count += 1;
+    };
+    return count == 1;
+}
+
+fn functionByNameForBind(module: Module, name: []const u8) ?Function {
+    var found: ?Function = null;
+    for (module.functions) |function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (found != null) return null;
+        found = function;
+    }
+    return found;
+}
+
+fn spanIdValid(function: Function, id: SpanId) bool {
+    return id.index() < function.span_identities.len and function.span_identities[id.index()].id.eql(id);
+}
+fn spanIdMatchesSource(function: Function, id: SpanId, source: SourcePoint) bool {
+    if (!spanIdValid(function, id)) return false;
+    const actual = function.span_identities[id.index()].source;
+    return actual.line == source.line and actual.column == source.column and actual.offset == source.offset and actual.len == source.len and actual.file_id == source.file_id;
+}
+fn valueIdValid(function: Function, id: ValueId) bool {
+    return id.index() < function.value_identities.len and function.value_identities[id.index()].id.eql(id);
+}
+fn typeIdValid(function: Function, id: TypeId) bool {
+    return id.index() < function.type_identities.len and function.type_identities[id.index()].id.eql(id);
+}
+fn typeForId(function: Function, id: TypeId) ?ValueType {
+    if (!typeIdValid(function, id)) return null;
+    const name = function.type_identities[id.index()].spelling;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.typed_result_ty.eql(id) and std.mem.eql(u8, instruction.result_ty.name(), name)) return instruction.result_ty;
+    };
+    return null;
+}
+fn typeIdMatchesValueType(function: Function, id: TypeId, ty: ValueType) bool {
+    return typeIdValid(function, id) and std.mem.eql(u8, function.type_identities[id.index()].spelling, ty.name());
+}
+fn sameValueType(left: ValueType, right: ValueType) bool {
+    return std.meta.activeTag(left) == std.meta.activeTag(right) and std.mem.eql(u8, left.name(), right.name());
 }
 
 pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlueFacts}!void {
@@ -3133,6 +3386,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirIntegerFacts,
     InvalidMirConstGetFacts,
     InvalidMirCallTargetFacts,
+    InvalidMirBindThunkFacts,
     InvalidMirDropGlueFacts,
     InvalidMirTypeOwnershipFacts,
     InvalidMirOwnershipEvents,
@@ -3153,6 +3407,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateFloatFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateCallTargetFactsForLowering(module);
+    try validateBindThunkFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
     try validateTypeOwnershipFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
@@ -5721,6 +5976,7 @@ const FunctionBuilder = struct {
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
     bounds_facts: std.ArrayList(BoundsFact),
+    access_facts: std.ArrayList(AccessFact),
     integer_facts: std.ArrayList(IntegerFact),
     bool_facts: std.ArrayList(BoolFact),
     float_facts: std.ArrayList(FloatFact),
@@ -5835,6 +6091,7 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .bounds_facts = .empty,
+            .access_facts = .empty,
             .integer_facts = .empty,
             .bool_facts = .empty,
             .float_facts = .empty,
@@ -5920,6 +6177,7 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .bounds_facts = .empty,
+            .access_facts = .empty,
             .integer_facts = .empty,
             .bool_facts = .empty,
             .float_facts = .empty,
@@ -5978,6 +6236,7 @@ const FunctionBuilder = struct {
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
         self.bounds_facts.deinit(self.allocator);
+        self.access_facts.deinit(self.allocator);
         self.integer_facts.deinit(self.allocator);
         self.bool_facts.deinit(self.allocator);
         self.float_facts.deinit(self.allocator);
@@ -6059,6 +6318,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(range_facts);
         const bounds_facts = try self.bounds_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(bounds_facts);
+        const access_facts = try self.access_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(access_facts);
         const integer_facts = try self.integer_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(integer_facts);
         const bool_facts = try self.bool_facts.toOwnedSlice(self.allocator);
@@ -6167,6 +6428,7 @@ const FunctionBuilder = struct {
             .contract_regions = contract_regions,
             .range_facts = range_facts,
             .bounds_facts = bounds_facts,
+            .access_facts = access_facts,
             .integer_facts = integer_facts,
             .bool_facts = bool_facts,
             .float_facts = float_facts,
@@ -7745,6 +8007,13 @@ const FunctionBuilder = struct {
             },
             .grouped, .move_expr => unreachable,
             .address_of => |inner| {
+                try self.access_facts.append(self.allocator, .{ .address_of = .{
+                    .result_ty = try self.resolvedAccessValueType(expr),
+                    .operand_ty = try self.resolvedAccessValueType(inner.*),
+                    .source = self.sourcePoint(expr.span),
+                    .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
+                    .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
+                } });
                 // OPT (annex E) — taking an address exposes the target to a later aliased write we
                 // cannot see; conservatively drop all facts so none is used past this point.
                 if (!self.isDirectLocalAggregateAliasInitializer(inner.*) and !self.isDirectLocalPointerArrayAliasInitializer(inner.*)) {
@@ -7784,6 +8053,13 @@ const FunctionBuilder = struct {
             },
             .deref => |inner| {
                 const inner_ty = self.exprType(inner.*);
+                try self.access_facts.append(self.allocator, .{ .deref = .{
+                    .result_ty = try self.resolvedAccessValueType(expr),
+                    .operand_ty = try self.resolvedAccessValueType(inner.*),
+                    .source = self.sourcePoint(expr.span),
+                    .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
+                    .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
+                } });
                 if (!self.active_unsafe and isRawManyPointerValue(inner_ty)) {
                     try self.addInstr(.unsafe_check, "raw_many.deref", .unknown, expr.span);
                 }
@@ -8395,6 +8671,15 @@ const FunctionBuilder = struct {
                 }
             },
             .index => |node| {
+                try self.access_facts.append(self.allocator, .{ .index = .{
+                    .result_ty = try self.resolvedAccessValueType(expr),
+                    .base_ty = try self.resolvedAccessValueType(node.base.*),
+                    .index_ty = try self.resolvedAccessValueType(node.index.*),
+                    .source = self.sourcePoint(expr.span),
+                    .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
+                    .base_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span)),
+                    .index_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
+                } });
                 try self.addIndexBaseCheck(node.base.*, node.base.span);
                 try self.addIndexOperandCheck(node.index.*, node.index.span);
                 // OPT (annex E) — const-index bounds-check elision. When optimization is on
@@ -8445,6 +8730,17 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.index.*);
             },
             .slice => |node| {
+                try self.access_facts.append(self.allocator, .{ .range_slice = .{
+                    .result_ty = try self.resolvedAccessValueType(expr),
+                    .base_ty = try self.resolvedAccessValueType(node.base.*),
+                    .start_ty = try self.resolvedAccessValueType(node.start.*),
+                    .end_ty = try self.resolvedAccessValueType(node.end.*),
+                    .source = self.sourcePoint(expr.span),
+                    .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
+                    .base_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span)),
+                    .start_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.start.*).span)),
+                    .end_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.end.*).span)),
+                } });
                 try self.addIndexBaseCheck(node.base.*, node.base.span);
                 try self.addIndexOperandCheck(node.start.*, node.start.span);
                 try self.addIndexOperandCheck(node.end.*, node.end.span);
@@ -8468,6 +8764,9 @@ const FunctionBuilder = struct {
                     });
                 }
                 try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
+                const slice_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                slice_instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
+                slice_instruction.typed_index_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.start.*).span));
                 try self.buildExpr(node.base.*);
                 try self.buildExpr(node.start.*);
                 try self.buildExpr(node.end.*);
@@ -9057,17 +9356,57 @@ const FunctionBuilder = struct {
         });
     }
 
-    fn addBindThunkFactForExpr(self: *FunctionBuilder, expr: ast.Expr) !void {
+    fn addBindThunkFactForExpr(self: *FunctionBuilder, expr: ast.Expr, closure_type_expr: ast.TypeExpr, closure_ty: ValueType) !void {
         const call = switch (expr.kind) {
             .call => |call| call,
             else => return,
         };
         if (call.type_args.len != 0 or call.args.len != 2) return;
         const target_fn = calleeIdentName(call.args[1]) orelse return;
+        const target = self.summaries.get(target_fn) orelse return;
+        const closure_signature = switch (aggregateTargetTypeAlias(closure_type_expr, self.aliases).kind) {
+            .closure_type => |signature| signature,
+            else => return,
+        };
+        const capture = bindCaptureIdentity(call.args[0]) orelse return;
+        if (target.params.len == 0) return;
+        const capture_ty = try self.resolvedAccessValueType(call.args[0]);
+        const target_capture_ty = valueTypeFromTypeAlias(target.params[0].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (std.meta.activeTag(capture_ty) != std.meta.activeTag(target_capture_ty)) return;
+        const closure_name = self.assignment_target orelse return;
+        const local_closure_type = self.local_type_exprs.get(closure_name) orelse return;
+        switch (aggregateTargetTypeAlias(local_closure_type, self.aliases).kind) {
+            .closure_type => {},
+            else => return,
+        }
         try self.bind_thunk_facts.append(self.allocator, .{
             .target_fn = target_fn,
+            .typed_target_fn_symbol_id = try self.internTargetOwnerId(target_fn),
+            .target_span_id = try self.internSpanId(self.sourcePoint(call.args[1].span)),
+            .target_param_count = target.params.len,
+            .target_return_ty = try self.internTypeId(target.return_ty),
+            .capture_value_id = try self.internValueId(capture.name),
+            .capture_span_id = try self.internSpanId(self.sourcePoint(call.args[0].span)),
+            .capture_operand_span_id = try self.internSpanId(self.sourcePoint(capture.operand_span)),
+            .capture_ty = try self.internTypeId(capture_ty),
+            .target_capture_ty = try self.internTypeId(target_capture_ty),
+            .closure_value_id = try self.internValueId(closure_name),
+            .closure_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
+            .closure_ty = try self.internTypeId(closure_ty),
+            .closure_param_count = closure_signature.params.len,
+            .closure_return_ty = try self.internTypeId(valueTypeFromTypeAlias(closure_signature.ret.*, self.enums, self.structs, self.packed_bits, self.aliases)),
             .source = self.sourcePoint(expr.span),
         });
+    }
+
+    const BindCaptureIdentity = struct { name: []const u8, operand_span: ast.Span };
+
+    fn bindCaptureIdentity(expr: ast.Expr) ?BindCaptureIdentity {
+        return switch (expr.kind) {
+            .grouped => |inner| bindCaptureIdentity(inner.*),
+            .address_of => |inner| if (directIdentName(inner.*)) |name| .{ .name = name, .operand_span = canonicalOperatorOperand(inner.*).span } else null,
+            else => null,
+        };
     }
 
     const DiscardDropGlueIdentity = struct {
@@ -9426,6 +9765,19 @@ const FunctionBuilder = struct {
         };
     }
 
+    /// Access facts are consumed without syntax, so prefer a resolved type
+    /// expression where one is available instead of the lightweight runtime
+    /// classifier used by generic expression construction.
+    fn resolvedAccessValueType(self: *FunctionBuilder, expr: ast.Expr) !ValueType {
+        if (self.typeExprForExpr(expr)) |ty| {
+            return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        }
+        if (try self.expressionResultTypeExpr(expr)) |ty| {
+            return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        }
+        return self.exprType(expr);
+    }
+
     fn knownExpressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
@@ -9516,7 +9868,7 @@ const FunctionBuilder = struct {
         if (call_kind) |owned_kind| {
             try self.addInstr(.call_target, @tagName(owned_kind), result_ty, expr.span);
             try self.addCallTargetFact(owned_kind, result_ty, expr.span);
-            if (owned_kind == .bind) try self.addBindThunkFactForExpr(expr);
+            if (owned_kind == .bind) try self.addBindThunkFactForExpr(expr, target_ty, result_ty);
         }
     }
 
@@ -12790,6 +13142,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.contract_regions);
     allocator.free(function.range_facts);
     if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
+    if (function.access_facts.len != 0) allocator.free(function.access_facts);
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
     if (function.bool_facts.len != 0) allocator.free(function.bool_facts);
     if (function.float_facts.len != 0) allocator.free(function.float_facts);

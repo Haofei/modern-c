@@ -1,14 +1,14 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-22 after the per-file module cutover and slice-length MIR plan.
+2026-08-22 after the per-file module cutover and structural body-plan batch.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active and incremental.
-  The current strict ratchet corpus admits **127/160 C** and **128/160 LLVM**
-  functions. The last completed broad snapshot before this slice was C
-  439/1611; broad report mode is intentionally best-effort and is not a gate.
+  The current strict ratchet corpus admits **145/160 C** and **140/160 LLVM**
+  functions. The remaining 15 C / 20 LLVM bodies are explicitly listed by the
+  census; broad report mode remains best-effort and is not a gate.
 - **P1 `minimal-checked-program`** — complete. Callable identity, signature
   representation, ABI and closed effect flags are created from checked
   declarations before body MIR lowering. MIR adopts that table, and
@@ -22,6 +22,15 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+The current batch replaces another set of backend-local syntax recognizers with
+bounded, backend-neutral MIR plans for assertions, nullable control, scalar
+expressions/control, nested conditional returns, aggregate sequences, workflow
+calls, stack allocation and access operations. Admission is structural and
+typed-fact driven: shared plans do not recognize fixture, function, local or
+callee spellings. Renamed-equivalent tests enforce that property. The work also
+caught an initializer-graph parent-slot overflow and prevented a C slice path
+from silently dropping race-safe load/store operations.
 
 ## The three goals, precisely
 

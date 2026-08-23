@@ -10,9 +10,22 @@ const std = @import("std");
 
 pub const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
 
+/// Frontend-owned declarations that are callable while evaluating comptime
+/// expressions.  This is deliberately separate from `FunctionBodyFallbackArtifact`:
+/// its AST bodies are authority for const evaluation, not an ordinary-codegen
+/// compatibility escape hatch.
+pub const ComptimeFunctionDeclarations = struct {
+    functions: []const ast.FnDecl,
+
+    pub const empty = ComptimeFunctionDeclarations{
+        .functions = &.{},
+    };
+};
+
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
     decl_artifacts: []const DeclArtifact,
+    comptime_functions: ComptimeFunctionDeclarations,
     function_body_fallbacks: []const FunctionBodyFallbackArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
@@ -20,6 +33,8 @@ pub const EarlyDeclarationArtifacts = struct {
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
         errdefer deinitDeclArtifacts(allocator, decl_artifacts.items);
         errdefer decl_artifacts.deinit(allocator);
+        var comptime_functions: std.ArrayList(ast.FnDecl) = .empty;
+        errdefer comptime_functions.deinit(allocator);
         var function_body_fallbacks: std.ArrayList(FunctionBodyFallbackArtifact) = .empty;
         errdefer function_body_fallbacks.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
@@ -34,6 +49,7 @@ pub const EarlyDeclarationArtifacts = struct {
                         function.deinit(allocator);
                         return err;
                     };
+                    if (fn_decl.is_const) try comptime_functions.append(allocator, fn_decl);
                     if (fn_decl.body) |body| try function_body_fallbacks.append(allocator, .{ .name = fn_decl.name.text, .syntax = body });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
@@ -43,6 +59,7 @@ pub const EarlyDeclarationArtifacts = struct {
                         function.deinit(allocator);
                         return err;
                     };
+                    if (fn_decl.is_const) try comptime_functions.append(allocator, fn_decl);
                     if (fn_decl.body) |body| try function_body_fallbacks.append(allocator, .{ .name = fn_decl.name.text, .syntax = body });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
@@ -90,6 +107,8 @@ pub const EarlyDeclarationArtifacts = struct {
 
         const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_decl_artifacts);
+        const owned_comptime_functions = try comptime_functions.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_comptime_functions);
         const owned_function_body_fallbacks = try function_body_fallbacks.toOwnedSlice(allocator);
         errdefer allocator.free(owned_function_body_fallbacks);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
@@ -97,6 +116,7 @@ pub const EarlyDeclarationArtifacts = struct {
 
         return .{
             .decl_artifacts = owned_decl_artifacts,
+            .comptime_functions = .{ .functions = owned_comptime_functions },
             .function_body_fallbacks = owned_function_body_fallbacks,
             .source_map_artifacts = owned_source_map_artifacts,
         };
@@ -113,6 +133,7 @@ pub const EarlyDeclarationArtifacts = struct {
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         deinitDeclArtifacts(allocator, self.decl_artifacts);
         allocator.free(self.decl_artifacts);
+        allocator.free(self.comptime_functions.functions);
         allocator.free(self.function_body_fallbacks);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
@@ -120,6 +141,7 @@ pub const EarlyDeclarationArtifacts = struct {
 
     pub const empty = EarlyDeclarationArtifacts{
         .decl_artifacts = &.{},
+        .comptime_functions = .empty,
         .function_body_fallbacks = &.{},
         .source_map_artifacts = &.{},
     };
@@ -127,6 +149,7 @@ pub const EarlyDeclarationArtifacts = struct {
     pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
         return .{
             .decl_artifacts = self.decl_artifacts,
+            .comptime_functions = self.comptime_functions,
         };
     }
 
@@ -152,9 +175,14 @@ fn deinitDeclArtifacts(allocator: std.mem.Allocator, artifacts: []const DeclArti
 /// remaining declaration-shaped payload is migrated into verified MIR facts.
 pub const CodegenDeclarationArtifacts = struct {
     decl_artifacts: []const DeclArtifact,
+    // Borrowed frontend comptime provider.  It crosses the compatibility
+    // request only so existing backend setup can initialize eval without
+    // reaching into `CodegenFunctionBodyArtifacts`.
+    comptime_functions: ComptimeFunctionDeclarations = .empty,
 
     pub const empty = CodegenDeclarationArtifacts{
         .decl_artifacts = &.{},
+        .comptime_functions = .empty,
     };
 };
 

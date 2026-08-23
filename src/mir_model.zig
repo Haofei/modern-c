@@ -347,6 +347,48 @@ pub const BoundsFact = struct {
     typed_span_id: SpanId = .invalid,
 };
 
+/// Resolved access semantics for expressions whose runtime representation is
+/// not enough to recover their operand shapes. This intentionally stores only
+/// structural types and stable source identities: backends do not need an AST
+/// to distinguish an element index, a range slice, address construction, or a
+/// dereference.
+pub const AccessFact = union(enum) {
+    index: struct {
+        result_ty: ValueType,
+        base_ty: ValueType,
+        index_ty: ValueType,
+        source: SourcePoint,
+        typed_span_id: SpanId,
+        base_span_id: SpanId,
+        index_span_id: SpanId,
+    },
+    range_slice: struct {
+        result_ty: ValueType,
+        base_ty: ValueType,
+        start_ty: ValueType,
+        end_ty: ValueType,
+        source: SourcePoint,
+        typed_span_id: SpanId,
+        base_span_id: SpanId,
+        start_span_id: SpanId,
+        end_span_id: SpanId,
+    },
+    address_of: struct {
+        result_ty: ValueType,
+        operand_ty: ValueType,
+        source: SourcePoint,
+        typed_span_id: SpanId,
+        operand_span_id: SpanId,
+    },
+    deref: struct {
+        result_ty: ValueType,
+        operand_ty: ValueType,
+        source: SourcePoint,
+        typed_span_id: SpanId,
+        operand_span_id: SpanId,
+    },
+};
+
 pub const IntegerFact = struct {
     literal: []const u8,
     target_ty: ValueType,
@@ -453,6 +495,20 @@ pub const CallTargetFact = struct {
 
 pub const BindThunkFact = struct {
     target_fn: []const u8,
+    typed_target_fn_symbol_id: SymbolId = .invalid,
+    target_span_id: SpanId = .invalid,
+    target_param_count: usize = 0,
+    target_return_ty: TypeId = .invalid,
+    capture_value_id: ValueId = .invalid,
+    capture_span_id: SpanId = .invalid,
+    capture_operand_span_id: SpanId = .invalid,
+    capture_ty: TypeId = .invalid,
+    target_capture_ty: TypeId = .invalid,
+    closure_value_id: ValueId = .invalid,
+    closure_span_id: SpanId = .invalid,
+    closure_ty: TypeId = .invalid,
+    closure_param_count: usize = 0,
+    closure_return_ty: TypeId = .invalid,
     source: SourcePoint,
 };
 
@@ -943,6 +999,7 @@ pub const Function = struct {
     contract_regions: []ContractRegion,
     range_facts: []RangeFact,
     bounds_facts: []BoundsFact = &.{},
+    access_facts: []AccessFact = &.{},
     integer_facts: []IntegerFact = &.{},
     bool_facts: []BoolFact = &.{},
     float_facts: []FloatFact = &.{},
@@ -1010,6 +1067,7 @@ pub const Module = struct {
             self.allocator.free(function.contract_regions);
             self.allocator.free(function.range_facts);
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
+            if (function.access_facts.len != 0) self.allocator.free(function.access_facts);
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
             if (function.bool_facts.len != 0) self.allocator.free(function.bool_facts);
             if (function.float_facts.len != 0) self.allocator.free(function.float_facts);

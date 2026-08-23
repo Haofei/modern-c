@@ -244,6 +244,7 @@ RULES: tuple[Rule, ...] = (
             "src/hir_inspection.zig",
             "src/loader.zig",
             "src/mir_facts_view.zig",
+            "src/mir_*_plan.zig",
             "src/type_syntax.zig",
         ),
         ("architecture-boundary-inventory-test",),

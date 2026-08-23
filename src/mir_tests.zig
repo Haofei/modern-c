@@ -7,6 +7,7 @@ const parser = @import("parser.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const mir_body_plan = @import("mir_body_plan.zig");
 const mir_statement_plan = @import("mir_statement_plan.zig");
 const module_parser = @import("module_parser.zig");
 const test_support = @import("test_support.zig");
@@ -5252,6 +5253,110 @@ test "MIR owns direct address dereference result types" {
     const fact = targetTypeFactByKind(function, .expression_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns structural access facts and projects them through the body plan" {
+    const source =
+        \\fn access_shapes(values: [4]u32, index: usize) -> u32 {
+        \\    var local: u32 = 1;
+        \\    let pointer: *mut u32 = &local;
+        \\    let window: []u32 = values[1..3];
+        \\    return window[index] + pointer.*;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_access_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "access_shapes") orelse return error.TestUnexpectedResult;
+    var saw_index = false;
+    var saw_range_slice = false;
+    var saw_address_of = false;
+    var saw_deref = false;
+    for (function.access_facts) |fact| switch (fact) {
+        .index => |access| {
+            try std.testing.expectEqual(.integer, std.meta.activeTag(access.index_ty));
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.typed_span_id) != null);
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.base_span_id) != null);
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.index_span_id) != null);
+            saw_index = true;
+        },
+        .range_slice => |access| {
+            switch (access.result_ty) {
+                .slice => {},
+                .pointer => |shape| try std.testing.expectEqual(.slice, shape.kind),
+                else => return error.TestUnexpectedResult,
+            }
+            try std.testing.expectEqual(.integer, std.meta.activeTag(access.start_ty));
+            try std.testing.expectEqual(.integer, std.meta.activeTag(access.end_ty));
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.typed_span_id) != null);
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.base_span_id) != null);
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.start_span_id) != null);
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.end_span_id) != null);
+            saw_range_slice = true;
+        },
+        .address_of => |access| {
+            try std.testing.expectEqual(.pointer, std.meta.activeTag(access.result_ty));
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.operand_span_id) != null);
+            saw_address_of = true;
+        },
+        .deref => |access| {
+            try std.testing.expectEqual(.pointer, std.meta.activeTag(access.operand_ty));
+            try std.testing.expect(mir.sourcePointForSpanId(function, access.operand_span_id) != null);
+            saw_deref = true;
+        },
+    };
+    try std.testing.expect(saw_index and saw_range_slice and saw_address_of and saw_deref);
+
+    var plan = try mir_body_plan.build(std.testing.allocator, functionByNamePtr(&typed_mir, "access_shapes").?);
+    defer plan.deinit(std.testing.allocator);
+    try std.testing.expectEqual(function.access_facts.len, plan.access_facts.len);
+    for (function.access_facts, plan.access_facts) |access_fact, planned_access_fact| {
+        try std.testing.expect(std.meta.eql(access_fact, planned_access_fact));
+    }
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR verifier rejects malformed structural access facts" {
+    // DIAGNOSTIC_UNIT: E_MIR_ACCESS_FACT
+    const source =
+        \\fn access_shapes(values: [4]u32) -> []u32 {
+        \\    return values[1..3];
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_access_fact_mutation.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "access_shapes") orelse return error.TestUnexpectedResult;
+    var mutated = false;
+    for (function.access_facts) |*fact| switch (fact.*) {
+        .range_slice => |*access| {
+            access.end_span_id = .invalid;
+            mutated = true;
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(mutated);
+    try std.testing.expectError(error.InvalidAccessFact, mir_body_plan.verify(function));
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(reporter.has_errors);
 }
 
 test "MIR owns MMIO read write identities and complete types" {

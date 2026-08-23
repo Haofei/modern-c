@@ -10,6 +10,13 @@ const lower_c_runtime = @import("lower_c_runtime.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
+const mir_assert_plan = @import("mir_assert_plan.zig");
+const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
+const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
+const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
+const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
+const mir_workflow_plan = @import("mir_workflow_plan.zig");
+const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const parser = @import("parser.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
@@ -104,6 +111,435 @@ test "lower-c emits slice length returns from MIR without body fallback" {
     try expectContains(const_body, "return values.len;");
     const mutable_body = try cFunctionBody(output.items, "static uintptr_t mutable_slice_len(mc_slice_mut_u32 values)");
     try expectContains(mutable_body, "return values.len;");
+}
+
+test "lower-c emits assertion expression trees from MIR without body fallback" {
+    const source =
+        \\extern fn next_value() -> u32;
+        \\fn require_complex(a: u32, b: u32, flag: bool) -> void {
+        \\    assert(flag && (a == b || a != 0));
+        \\}
+        \\fn assert_ordered_comparison() -> void {
+        \\    assert(next_value() == next_value());
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_assert_expression_tree.mc", source, &output);
+
+    const complex = try cFunctionBody(output.items, "static void require_complex(uint32_t a, uint32_t b, bool flag)");
+    try expectContains(complex, "if (!((flag && ((a == b) || (a != 0))))) mc_trap_Assert();");
+    const ordered = try cFunctionBody(output.items, "static void assert_ordered_comparison(void)");
+    const first = std.mem.indexOf(u8, ordered, "mc_tmp0 = next_value();") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, ordered, first + "mc_tmp0 = next_value();".len, "mc_tmp1 = next_value();") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first < second);
+    try expectContains(ordered, "if (!((mc_tmp0 == mc_tmp1))) mc_trap_Assert();");
+}
+
+test "MIR assertion plan admits require_complex" {
+    const source =
+        \\fn require_complex(a: u32, b: u32, flag: bool) -> void {
+        \\    assert(flag && (a == b || a != 0));
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_assert_plan_require_complex.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(mir_assert_plan.build(module_mir.functions[0]) != null);
+}
+
+test "lower-c emits strict nullable control plans from MIR without body fallback" {
+    const source =
+        \\extern fn maybe_ptr() -> ?*mut u8;
+        \\extern fn maybe_ptr_from(seed: u32) -> ?*mut u8;
+        \\extern fn next_seed() -> u32;
+        \\extern fn ptr_value(p: *mut u8) -> u32;
+        \\global saved_nullable: ?*mut u8 = null;
+        \\struct NullableBox { maybe: ?*mut u8, }
+        \\
+        \\fn unwrap_call_or_zero() -> u32 {
+        \\    if let p = maybe_ptr() { return ptr_value(p); }
+        \\    return 0;
+        \\}
+        \\fn unwrap_global_or_zero() -> u32 {
+        \\    if let p = saved_nullable { return ptr_value(p); }
+        \\    return 0;
+        \\}
+        \\fn unwrap_field_or_zero(box: NullableBox) -> u32 {
+        \\    if let p = box.maybe { return ptr_value(p); }
+        \\    return 0;
+        \\}
+        \\fn nullable_switch(maybe: ?*mut u8) -> u32 {
+        \\    switch maybe { p => { return ptr_value(p); }, _ => { return 0; }, }
+        \\}
+        \\fn nullable_switch_call_seed() -> u32 {
+        \\    switch maybe_ptr_from(next_seed()) { p => { return ptr_value(p); }, _ => { return 0; }, }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_control.mc", source, &output);
+
+    const call = try cFunctionBody(output.items, "static uint32_t unwrap_call_or_zero(void)");
+    try expectContains(call, "mc_tmp0 = maybe_ptr();");
+    try expectContains(call, "if (mc_tmp0 != NULL)");
+    try expectContains(call, "return ptr_value(p);");
+    try expectContains(call, "return 0;");
+
+    const global = try cFunctionBody(output.items, "static uint32_t unwrap_global_or_zero(void)");
+    try expectContains(global, "__atomic_load_n(&saved_nullable, __ATOMIC_RELAXED)");
+    try expectContains(global, "return ptr_value(p);");
+
+    const field = try cFunctionBody(output.items, "unwrap_field_or_zero(");
+    try expectContains(field, "= box.maybe;");
+    try expectContains(field, "return ptr_value(p);");
+
+    const switched = try cFunctionBody(output.items, "static uint32_t nullable_switch(uint8_t * maybe)");
+    try expectContains(switched, "= maybe;");
+    try expectContains(switched, "if (mc_tmp");
+    try expectContains(switched, "return 0;");
+
+    const seeded = try cFunctionBody(output.items, "static uint32_t nullable_switch_call_seed(void)");
+    const seed = std.mem.indexOf(u8, seeded, "= next_seed();") orelse return error.TestUnexpectedResult;
+    const nullable = std.mem.indexOfPos(u8, seeded, seed, "= maybe_ptr_from(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(seed < nullable);
+    try expectContains(seeded, "return ptr_value(p);");
+}
+
+test "lower-c emits scalar CFG plans from MIR without body fallback" {
+    const source =
+        \\fn adjust(n: u32, flag: bool) -> u32 {
+        \\    var x: u32 = n;
+        \\    if flag { x = x + 1; } else { x = x - 1; }
+        \\    return x;
+        \\}
+        \\fn maybe_inc(n: u32, flag: bool) -> u32 {
+        \\    var x: u32 = n;
+        \\    if flag { x = x + 1; }
+        \\    return x;
+        \\}
+        \\fn count_down(n: u32) -> u32 {
+        \\    var x: u32 = n;
+        \\    while x != 0 { x = x - 1; }
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_cfg.mc", source, &output);
+
+    const adjust = try cFunctionBody(output.items, "static uint32_t adjust(uint32_t n, bool flag)");
+    try expectContains(adjust, "uint32_t x = n;");
+    try expectContains(adjust, "if (flag) {");
+    try expectContains(adjust, "x = mc_checked_add_u32(x, 1);");
+    try expectContains(adjust, "x = mc_checked_sub_u32(x, 1);");
+    try expectContains(adjust, "return x;");
+
+    const maybe_inc = try cFunctionBody(output.items, "static uint32_t maybe_inc(uint32_t n, bool flag)");
+    try expectContains(maybe_inc, "if (flag) {");
+    try expectContains(maybe_inc, "x = mc_checked_add_u32(x, 1);");
+    try expectNotContains(maybe_inc, "} else {");
+    try expectContains(maybe_inc, "return x;");
+
+    const count_down = try cFunctionBody(output.items, "static uint32_t count_down(uint32_t n)");
+    try expectContains(count_down, "while (x != 0) {");
+    try expectContains(count_down, "x = mc_checked_sub_u32(x, 1);");
+    try expectContains(count_down, "return x;");
+}
+
+test "lower-c emits nullable binding and checked fallback return from MIR without body fallback" {
+    const source =
+        \\fn unwrap_or(maybe: ?*mut u8, fallback: *mut u8) -> *mut u8 {
+        \\    if let p = maybe {
+        \\        return p;
+        \\    }
+        \\    return fallback;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    var parsed = try test_support.parseCheckedModule("c_mir_nullable_binding_fallback.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expect(mir_nullable_control_plan.build(&module_mir.functions[0]) != null);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_binding_fallback.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint8_t * unwrap_or(uint8_t * maybe, uint8_t * fallback)");
+    try expectContains(body, "= maybe;");
+    try expectContains(body, "if (mc_tmp");
+    try expectContains(body, "uint8_t * p = mc_tmp");
+    try expectContains(body, "return p;");
+    try expectContains(body, "if (fallback == NULL) mc_trap_InvalidRepresentation();");
+    try expectContains(body, "return fallback;");
+}
+
+test "lower-c scalar expression plans preserve high-word typing and flag-set order without body fallback" {
+    const source =
+        \\extern fn read_word(addr: usize) -> u64;
+        \\fn high_word(v: u64) -> u32 {
+        \\    let hi: u32 = (v >> 32) as u32;
+        \\    return hi + 1;
+        \\}
+        \\fn flag_set(addr: usize, mask: u64) -> bool {
+        \\    return (read_word(addr) & mask) != 0;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_mir_scalar_expression_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expect(mir_scalar_expression_plan.build(module_mir.functions[1]) != null);
+    try std.testing.expect(mir_scalar_expression_plan.build(module_mir.functions[2]) != null);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_scalar_expression_plan.mc", .{}, false, null);
+
+    const high = try cFunctionBody(output.items, "static uint32_t high_word(uint64_t v)");
+    try expectContains(high, "uint32_t hi = (uint32_t)mc_checked_shr_u64(v, 32);");
+    try expectContains(high, "return mc_checked_add_u32(hi, 1);");
+    const shift = std.mem.indexOf(u8, high, "mc_checked_shr_u64") orelse return error.TestUnexpectedResult;
+    const add = std.mem.indexOf(u8, high, "mc_checked_add_u32") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(shift < add);
+
+    const flag = try cFunctionBody(output.items, "static bool flag_set(uintptr_t addr, uint64_t mask)");
+    const call = std.mem.indexOf(u8, flag, "= read_word(addr);") orelse return error.TestUnexpectedResult;
+    const and_ = std.mem.indexOf(u8, flag, "= mc_tmp0 & mask;") orelse return error.TestUnexpectedResult;
+    const compare = std.mem.indexOf(u8, flag, "return mc_tmp1 != 0;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call < and_ and and_ < compare);
+}
+
+test "lower-c emits nested classify conditional return from MIR without body fallback" {
+    const source =
+        \\fn classify(x: u32, flag: bool) -> u32 {
+        \\    if !flag {
+        \\        return 5;
+        \\    } else if x > 10 {
+        \\        return 6;
+        \\    } else {
+        \\        return 7;
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("bool_switch.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expect(mir_nested_conditional_return_plan.build(module_mir.functions[0]) != null);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "bool_switch.mc", .{}, false, null);
+
+    const body = try cFunctionBody(output.items, "static uint32_t classify(uint32_t x, bool flag)");
+    try expectContains(body, "if (!flag) {");
+    try expectContains(body, "return 5;");
+    try expectContains(body, "} else if (x > 10) {");
+    try expectContains(body, "return 6;");
+    try expectContains(body, "} else {");
+    try expectContains(body, "return 7;");
+}
+
+test "lower-c emits aggregate sequence plans without body fallback" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\struct Bag { values: [4]u32, tail: []const u32 }
+        \\global matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
+        \\extern fn consume_row(row: [2]u32) -> u32;
+        \\extern fn make_values(seed: u32) -> [4]u32;
+        \\extern fn make_tail(seed: u32) -> []const u32;
+        \\fn consume_pair(pair: Pair) -> u32 { return pair.left + pair.right; }
+        \\fn aggregate_call_after_assignment() -> u32 {
+        \\    var row: [2]u32 = uninit;
+        \\    row = matrix[0];
+        \\    var pair: Pair = uninit;
+        \\    pair = .{ .left = 71, .right = 72 };
+        \\    return consume_row(row) + consume_pair(pair);
+        \\}
+        \\fn make_bag(seed: u32) -> Bag {
+        \\    return .{ .values = make_values(seed), .tail = make_tail(seed) };
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_mir_aggregate_sequence.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expect(mir_aggregate_sequence_plan.build(&module_mir.functions[5]) != null);
+    try std.testing.expect(mir_aggregate_sequence_plan.build(&module_mir.functions[6]) != null);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_aggregate_sequence.mc", .{}, false, null);
+    const sequence = try cFunctionBody(output.items, "static uint32_t aggregate_call_after_assignment(void)");
+    try expectContains(sequence, "row;");
+    try expectContains(sequence, "matrix.elems[mc_check_index_usize(0, 2)]");
+    try expectContains(sequence, "pair = (Pair){ .left = 71, .right = 72 };");
+    const row_call = std.mem.indexOf(u8, sequence, "= consume_row(row);") orelse return error.TestUnexpectedResult;
+    const pair_call = std.mem.indexOf(u8, sequence, "= consume_pair(pair);") orelse return error.TestUnexpectedResult;
+    const add = std.mem.indexOf(u8, sequence, "mc_checked_add_u32") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(row_call < pair_call and pair_call < add);
+    const bag = try cFunctionBody(output.items, "static Bag make_bag(uint32_t seed)");
+    const values = std.mem.indexOf(u8, bag, "= make_values(seed);") orelse return error.TestUnexpectedResult;
+    const tail = std.mem.indexOf(u8, bag, "= make_tail(seed);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(values < tail);
+    try expectContains(bag, "mc_trap_InvalidRepresentation();");
+    try expectContains(bag, "return (Bag){ .values = mc_tmp");
+}
+
+test "lower-c emits local workflow plans without body fallback" {
+    const source =
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\struct Env { value: u32 }
+        \\fn mul(a: u32, b: u32) -> u32 { return a * b; }
+        \\fn dispatch(o: *BinOp, x: u32, y: u32) -> u32 { return o.combine(x, y); }
+        \\extern fn consume_u32(value: u32) -> void;
+        \\extern fn combine(left: u32, right: u32) -> u32;
+        \\fn store_value(env: *mut Env, value: u32) -> void { env.value = value; }
+        \\fn local_vtable_call(x: u32, y: u32) -> u32 {
+        \\    var op: BinOp = .{ .combine = mul };
+        \\    return dispatch(&op, x, y);
+        \\}
+        \\fn scoped_block(value: u32) -> u32 {
+        \\    var out: u32 = value;
+        \\    { let inner: u32 = combine(value, 1); consume_u32(inner); }
+        \\    return out;
+        \\}
+        \\fn call_closure(value: u32) -> void {
+        \\    var env: Env = .{ .value = 0 };
+        \\    let set: closure(u32) -> void = bind(&env, store_value);
+        \\    set(value);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_mir_workflow.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expect(mir_workflow_plan.build(&module_mir.functions[5]) != null);
+    try std.testing.expect(mir_workflow_plan.build(&module_mir.functions[6]) != null);
+    try std.testing.expect(mir_workflow_plan.build(&module_mir.functions[7]) != null);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_workflow.mc", .{}, false, null);
+    const vtable = try cFunctionBody(output.items, "static uint32_t local_vtable_call(uint32_t x, uint32_t y)");
+    try expectContains(vtable, "BinOp op = (BinOp){ .combine = mul };");
+    try expectContains(vtable, "return dispatch(&op, x, y);");
+    const scoped = try cFunctionBody(output.items, "static uint32_t scoped_block(uint32_t value)");
+    try expectContains(scoped, "uint32_t out = value;");
+    try expectContains(scoped, "{\n");
+    try expectContains(scoped, "uint32_t inner = combine(value, 1);");
+    try expectContains(scoped, "consume_u32(inner);");
+    try expectContains(scoped, "return out;");
+    const closure = try cFunctionBody(output.items, "static void call_closure(uint32_t value)");
+    try expectContains(closure, "Env env = (Env){ .value = 0 };");
+    try expectContains(closure, ".code = (void (*)(void *, uint32_t))store_value");
+    try expectContains(closure, ".env = (void *)(&env)");
+    try expectContains(closure, ".code(mc_tmp");
+
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "workflow.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "workflow.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "clang", "-fsyntax-only", generated_c },
+    });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+}
+
+test "lower-c emits alloca hoist plan without body fallback" {
+    const source =
+        \\const ITERS: u32 = 16;
+        \\const BUF: usize = 256;
+        \\export fn alloca_hoist_run() -> u32 {
+        \\    var sum: u32 = 0;
+        \\    var i: u32 = 0;
+        \\    while i < ITERS {
+        \\        var scratch: [BUF]u8 = uninit;
+        \\        let slot: usize = (i as usize) % BUF;
+        \\        scratch[slot] = (i & 0xFF) as u8;
+        \\        sum = sum + (scratch[slot] as u32);
+        \\        i = i + 1;
+        \\    }
+        \\    return sum;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_mir_alloca_hoist.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var alloca_function: ?*mir.Function = null;
+    for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "alloca_hoist_run")) alloca_function = candidate;
+    }
+    try std.testing.expect(mir_alloca_hoist_plan.build(alloca_function orelse return error.TestUnexpectedResult) != null);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_alloca_hoist.mc", .{}, false, null);
+    const body = try cFunctionBody(output.items, "uint32_t alloca_hoist_run(void)");
+    try expectContains(body, "while (i < ITERS) {");
+    try expectContains(body, "uint8_t scratch[256];");
+    try expectContains(body, "uintptr_t slot = mc_checked_mod_usize((uintptr_t)i, BUF);");
+    try expectContains(body, "scratch[mc_check_index_usize(slot, 256)] = (uint8_t)(i & 255);");
+    try expectContains(body, "sum = mc_checked_add_u32(sum, (uint32_t)scratch[mc_check_index_usize(slot, 256)]);");
+    try expectContains(body, "i = mc_checked_add_u32(i, 1);");
+
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    var probe_source: std.ArrayList(u8) = .empty;
+    defer probe_source.deinit(std.testing.allocator);
+    try probe_source.appendSlice(std.testing.allocator, output.items);
+    try probe_source.appendSlice(std.testing.allocator, "\nint main(void) { return alloca_hoist_run() == 120 ? 0 : 1; }\n");
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "alloca_hoist.c", .data = probe_source.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "alloca_hoist.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{ "clang", "-fsyntax-only", generated_c } });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+    const compile_probe = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{ "clang", "alloca_hoist.c", "-o", "alloca_probe" }, .cwd = .{ .dir = temp.dir } });
+    defer std.testing.allocator.free(compile_probe.stdout);
+    defer std.testing.allocator.free(compile_probe.stderr);
+    try std.testing.expect(compile_probe.term == .exited and compile_probe.term.exited == 0);
+    const probe = try temp.dir.realPathFileAlloc(std.testing.io, "alloca_probe", std.testing.allocator);
+    defer std.testing.allocator.free(probe);
+    const run_probe = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{probe} });
+    defer std.testing.allocator.free(run_probe.stdout);
+    defer std.testing.allocator.free(run_probe.stderr);
+    try std.testing.expect(run_probe.term == .exited and run_probe.term.exited == 0);
+}
+
+test "lower-c emits access slice plans without body fallback" {
+    const source =
+        \\extern fn make_slice() -> []const u32;
+        \\fn read_slice(xs: []const u32, i: usize) -> u32 { return xs[i]; }
+        \\fn read_literal(xs: []const u32) -> u32 { return xs[0]; }
+        \\fn write_slice(xs: []mut u32, i: usize, value: u32) -> void { xs[i] = value; return; }
+        \\fn direct_call_slice(i: usize) -> u32 { return make_slice()[i]; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_mir_access_slice.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_access_slice.mc", .{}, false, null);
+    try expectContains(try cFunctionBody(output.items, "static uint32_t read_slice("), "mc_check_index_usize(i, xs.len)");
+    try expectContains(try cFunctionBody(output.items, "static uint32_t read_literal("), "mc_check_index_usize(0, xs.len)");
+    try expectContains(try cFunctionBody(output.items, "static void write_slice("), "mc_race_store_u32");
+    try expectContains(try cFunctionBody(output.items, "static void write_slice("), "(uint32_t)value");
+    try expectContains(try cFunctionBody(output.items, "static uint32_t direct_call_slice("), "= make_slice();");
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "access_slice.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "access_slice.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{ .argv = &.{ "clang", "-fsyntax-only", generated_c } });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
 }
 
 test "lower-c nullable narrowing with long identifiers never falls back to constants" {
@@ -18204,13 +18640,18 @@ test "lower-c emits nullable switch binding" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_nullable_switch.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t nullable_switch(uint8_t * maybe)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (maybe != NULL) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = p;\n        return ptr_value(mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "else {\n        return 0;\n    }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp1 = maybe_ptr();\n    if (mc_tmp1 != NULL) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp1;") != null);
+    const parameter_body = try cFunctionBody(output.items, "static uint32_t nullable_switch(uint8_t * maybe)");
+    try expectContains(parameter_body, "= maybe;");
+    try expectContains(parameter_body, "if (mc_tmp");
+    try expectContains(parameter_body, "uint8_t * p = mc_tmp");
+    try expectContains(parameter_body, "return ptr_value(p);");
+    try expectContains(parameter_body, "else {\n        return 0;");
+
+    const call_body = try cFunctionBody(output.items, "static uint32_t nullable_call_switch(void)");
+    try expectContains(call_body, "= maybe_ptr();");
+    try expectContains(call_body, "if (mc_tmp");
+    try expectContains(call_body, "uint8_t * p = mc_tmp");
+    try expectContains(call_body, "return ptr_value(p);");
 }
 
 test "lower-c emits Result if-let narrowing" {

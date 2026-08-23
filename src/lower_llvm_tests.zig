@@ -43,6 +43,32 @@ test "LLVM nullable initialization and race lowering follow representation" {
     try expectContains(point_store, "store atomic i8");
 }
 
+test "LLVM emits assertion expression trees from MIR without body fallback" {
+    const source =
+        \\extern fn next_value() -> u32;
+        \\fn require_complex(a: u32, b: u32, flag: bool) -> void {
+        \\    assert(flag && (a == b || a != 0));
+        \\}
+        \\fn assert_ordered_comparison() -> void {
+        \\    assert(next_value() == next_value());
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_assert_expression_tree.mc", source, &output);
+
+    const complex = try llvmFunctionBody(output.items, "define internal void @require_complex");
+    try expectContains(complex, "and i1 %flag");
+    try expectContains(complex, "or i1");
+    try expectContains(complex, "call void @mc_trap_Assert()");
+    const ordered = try llvmFunctionBody(output.items, "define internal void @assert_ordered_comparison");
+    const first = std.mem.indexOf(u8, ordered, "call i32 @next_value()") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, ordered, first + "call i32 @next_value()".len, "call i32 @next_value()") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first < second);
+    try expectContains(ordered, "icmp eq i32");
+    try expectContains(ordered, "call void @mc_trap_Assert()");
+}
+
 test "LLVM aggregate literal storage materializes every allocation byte" {
     const source =
         \\struct Padded { small: u8, wide: u64 }
@@ -3552,6 +3578,73 @@ test "LLVM emits nullable pointer try from MIR without body fallback" {
     try expectContains(expr_body, "call ptr @maybe_ptr()");
     try expectContains(expr_body, "call void @consume_ptr(ptr %");
     try expectContains(expr_body, "ret void");
+}
+
+test "LLVM emits strict nullable control plans from MIR without body fallback" {
+    const source =
+        \\extern fn maybe_ptr() -> ?*mut u8;
+        \\extern fn maybe_ptr_from(seed: u32) -> ?*mut u8;
+        \\extern fn next_seed() -> u32;
+        \\extern fn ptr_value(p: *mut u8) -> u32;
+        \\global saved_nullable: ?*mut u8 = null;
+        \\struct NullableBox { maybe: ?*mut u8, }
+        \\
+        \\fn unwrap_call_or_zero() -> u32 {
+        \\    if let p = maybe_ptr() { return ptr_value(p); }
+        \\    return 0;
+        \\}
+        \\fn unwrap_global_or_zero() -> u32 {
+        \\    if let p = saved_nullable { return ptr_value(p); }
+        \\    return 0;
+        \\}
+        \\fn unwrap_field_or_zero(box: NullableBox) -> u32 {
+        \\    if let p = box.maybe { return ptr_value(p); }
+        \\    return 0;
+        \\}
+        \\fn nullable_switch(maybe: ?*mut u8) -> u32 {
+        \\    switch maybe { p => { return ptr_value(p); }, _ => { return 0; }, }
+        \\}
+        \\fn nullable_switch_call_seed() -> u32 {
+        \\    switch maybe_ptr_from(next_seed()) { p => { return ptr_value(p); }, _ => { return 0; }, }
+        \\}
+        \\fn unwrap_or(maybe: ?*mut u8, fallback: *mut u8) -> *mut u8 {
+        \\    if let p = maybe { return p; }
+        \\    return fallback;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_control_plan.mc", source, &output);
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_call_or_zero");
+    try expectContains(call_body, "call ptr @maybe_ptr()");
+    try expectContains(call_body, "icmp ne ptr");
+    try expectContains(call_body, "call i32 @ptr_value(ptr");
+    try expectContains(call_body, "ret i32 0");
+
+    const global_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_global_or_zero");
+    try expectContains(global_body, "@saved_nullable");
+    try expectContains(global_body, "call i32 @ptr_value(ptr");
+
+    const field_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_field_or_zero");
+    try expectContains(field_body, "extractvalue");
+    try expectContains(field_body, "%box, 0");
+    try expectContains(field_body, "call i32 @ptr_value(ptr");
+
+    const switch_body = try llvmFunctionBody(output.items, "define internal i32 @nullable_switch");
+    try expectContains(switch_body, "icmp ne ptr %maybe, null");
+    try expectContains(switch_body, "call i32 @ptr_value(ptr %maybe)");
+
+    const seeded_body = try llvmFunctionBody(output.items, "define internal i32 @nullable_switch_call_seed");
+    const seed_offset = std.mem.indexOf(u8, seeded_body, "call i32 @next_seed()") orelse return error.TestUnexpectedResult;
+    const subject_offset = std.mem.indexOf(u8, seeded_body, "call ptr @maybe_ptr_from(i32") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(seed_offset < subject_offset);
+    try expectContains(seeded_body, "call i32 @ptr_value(ptr");
+
+    const unwrap_or_body = try llvmFunctionBody(output.items, "define internal ptr @unwrap_or");
+    try expectContains(unwrap_or_body, "icmp ne ptr %maybe, null");
+    try expectContains(unwrap_or_body, "ret ptr %maybe");
+    try expectContains(unwrap_or_body, "ret ptr %fallback");
 }
 
 test "LLVM emits nullable none returns from MIR without body fallback" {
@@ -13661,6 +13754,85 @@ test "LLVM checked scalar local return does not use function body fallback" {
     try expectContains(body, "ret i32 %");
 }
 
+test "LLVM scalar expression plans preserve typed high-word local and flag-set order without body fallback" {
+    const source =
+        \\extern fn read_word(addr: usize) -> u64;
+        \\fn high_word(v: u64) -> u32 {
+        \\    let hi: u32 = (v >> 32) as u32;
+        \\    return hi + 1;
+        \\}
+        \\fn flag_set(addr: usize, mask: u64) -> bool {
+        \\    return (read_word(addr) & mask) != 0;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_expression_plan.mc", source, &output);
+
+    const high = try llvmFunctionBody(output.items, "define internal i32 @high_word");
+    try expectContains(high, "lshr i64 %v, 32");
+    try expectContains(high, "trunc i64 %");
+    try expectContains(high, "alloca i32");
+    try expectContains(high, "call void @mc_trap_InvalidShift()");
+    try expectContains(high, "@llvm.uadd.with.overflow.i32");
+    try expectContains(high, "call void @mc_trap_IntegerOverflow()");
+    const store = std.mem.indexOf(u8, high, "store i32") orelse return error.TestUnexpectedResult;
+    const checked_add = std.mem.indexOf(u8, high, "@llvm.uadd.with.overflow.i32") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(store < checked_add);
+
+    const flag = try llvmFunctionBody(output.items, "define internal i1 @flag_set");
+    const call = std.mem.indexOf(u8, flag, "call i64 @read_word(i64 %addr)") orelse return error.TestUnexpectedResult;
+    const and_ = std.mem.indexOf(u8, flag, "and i64") orelse return error.TestUnexpectedResult;
+    const compare = std.mem.indexOf(u8, flag, "icmp ne i64") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call < and_ and and_ < compare);
+    try expectContains(flag, "ret i1 %");
+}
+
+test "LLVM scalar control plans preserve checked local CFGs without body fallback" {
+    const source =
+        \\fn adjust(n: u32, flag: bool) -> u32 {
+        \\    var x: u32 = n;
+        \\    if flag { x = x + 1; } else { x = x - 1; }
+        \\    return x;
+        \\}
+        \\fn maybe_inc(n: u32, flag: bool) -> u32 {
+        \\    var x: u32 = n;
+        \\    if flag { x = x + 1; }
+        \\    return x;
+        \\}
+        \\fn count_down(n: u32) -> u32 {
+        \\    var x: u32 = n;
+        \\    while x != 0 { x = x - 1; }
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_control_plan.mc", source, &output);
+
+    const adjust = try llvmFunctionBody(output.items, "define internal i32 @adjust");
+    try expectContains(adjust, "alloca i32");
+    try expectContains(adjust, "br i1 %flag");
+    try expectContains(adjust, "@llvm.uadd.with.overflow.i32");
+    try expectContains(adjust, "@llvm.usub.with.overflow.i32");
+    try std.testing.expect(std.mem.count(u8, adjust, "call void @mc_trap_IntegerOverflow()") == 2);
+    try expectContains(adjust, "ret i32 %");
+
+    const maybe = try llvmFunctionBody(output.items, "define internal i32 @maybe_inc");
+    try expectContains(maybe, "br i1 %flag");
+    try expectContains(maybe, "@llvm.uadd.with.overflow.i32");
+    try expectNotContains(maybe, "@llvm.usub.with.overflow.i32");
+    try std.testing.expect(std.mem.count(u8, maybe, "call void @mc_trap_IntegerOverflow()") == 1);
+
+    const down = try llvmFunctionBody(output.items, "define internal i32 @count_down");
+    try expectContains(down, "scalar_control_condition");
+    try expectContains(down, "icmp ne i32");
+    try expectContains(down, "@llvm.usub.with.overflow.i32");
+    try expectContains(down, "br label %bb_scalar_control_condition");
+    try expectContains(down, "call void @mc_trap_IntegerOverflow()");
+    try expectContains(down, "ret i32 %");
+}
+
 test "LLVM pointer-member aggregate value copies lower recursively" {
     const source =
         \\struct Inner {
@@ -13829,6 +14001,50 @@ test "LLVM slice scalar index access lowers race-tolerantly" {
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_array_index_stays_plain");
     try expectContains(local_body, "load i32, ptr %");
     try expectNotContains(local_body, " atomic ");
+}
+
+test "LLVM access-plan slice bucket lowers without function body fallback" {
+    const source =
+        \\fn read_slice(xs: []const u8, i: usize) -> u8 { return xs[i]; }
+        \\fn read_literal(xs: []const u8) -> u8 { return xs[0]; }
+        \\fn write_slice(xs: []mut u32, i: usize, value: u32) -> void { xs[i] = value; return; }
+        \\extern fn make_slice() -> []const u8;
+        \\fn direct_call_slice() -> u8 { return make_slice()[0]; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_access_plan_slice_bucket.mc", source, &output);
+
+    const read_body = try llvmFunctionBody(output.items, "define internal i8 @read_slice");
+    try expectContains(read_body, "access_repr_trap");
+    try expectContains(read_body, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(read_body, "call void @mc_trap_Bounds()");
+    try expectContains(read_body, "load atomic i8, ptr %");
+
+    const literal_body = try llvmFunctionBody(output.items, "define internal i8 @read_literal");
+    try expectContains(literal_body, "icmp ult i64 0, %");
+    try expectContains(literal_body, "load atomic i8, ptr %");
+
+    const write_body = try llvmFunctionBody(output.items, "define internal void @write_slice");
+    try expectContains(write_body, "icmp ult i64 %i, %");
+    try expectContains(write_body, "store atomic i32 %value, ptr %");
+
+    const direct_body = try llvmFunctionBody(output.items, "define internal i8 @direct_call_slice");
+    try expectContains(direct_body, "call { ptr, i64 } @make_slice()");
+    try expectContains(direct_body, "load atomic i8, ptr %");
+}
+
+test "LLVM local-address access tag lowers checked update without function body fallback" {
+    const source =
+        \\fn local_address(value: u32) -> u32 { var x: u32 = value; let p: *mut u32 = &x; *p = x + 1; return x; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_local_address_tag.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @local_address");
+    try expectContains(body, "@llvm.uadd.with.overflow.i32");
+    try expectContains(body, "call void @mc_trap_IntegerOverflow()");
+    try expectContains(body, "store i32 %value, ptr %");
 }
 
 test "LLVM pointer-to-array scalar index access lowers race-tolerantly" {

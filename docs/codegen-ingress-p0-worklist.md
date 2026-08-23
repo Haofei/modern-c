@@ -11,8 +11,8 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits **78.8% of C functions (126/160)** and **79.4% of LLVM functions
-(127/160)**; the rest still ingest the AST body.
+admits **90.6% of C functions (145/160)** and **87.5% of LLVM functions
+(140/160)**; the rest still ingest the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
 
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 126 | 34 | 0 | 7875 |
-| LLVM | 160 | 127 | 33 | 0 | 7937 |
+| C | 160 | 145 | 15 | 0 | 9062 |
+| LLVM | 160 | 140 | 20 | 0 | 8750 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -122,7 +122,23 @@ typed-unary operand-descendant bugs before commit.
 | Checked pointer-to-integer cast | `return p as usize`; MIR owns source/target type facts, pointer `ValueId`, exact representation edge, and the return edge while C/LLVM only spell the target cast | (current batch) |
 | Checked scalar local generation | `let x: u32 = n + 1; return x`; a shared plan owns the local generation, typed operands, overflow edge, source locations and return identity while both backends preserve a materialized local instead of folding it | (current batch) |
 
-### Remaining families, by tractability
+### Remaining strict-corpus families
+
+The remaining C fallbacks are the access/address families, single-trap global
+accesses, nullable branch/switch variants and `unwrap_or`. LLVM has the same
+semantic tail plus parity gaps for the already shared aggregate-sequence,
+workflow, stack-allocation and nested-conditional plans. The immediate order is:
+
+1. wire existing shared plans into LLVM (no new semantic representation);
+2. generalize nullable-control plans over the remaining CFG shapes;
+3. finish typed local/global address and slice access rendering;
+4. rerun the strict census at zero fallback, then delete
+   `FunctionBodyFallbackArtifact` and all request/backend fallback plumbing.
+
+Zero census fallback is necessary but not sufficient: P0 completes only after
+the AST artifact type and legacy branches are physically deleted.
+
+### Broader remaining families, by tractability
 
 | Family | Example | Blocker | Effort |
 |---|---|---|---|

@@ -7,11 +7,13 @@ import importlib.util
 import pathlib
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEV_GATES = ROOT / "tools" / "dev-gates.py"
+ARCHITECTURE_INVENTORY = ROOT / "tools" / "toolchain" / "architecture-boundary-inventory.py"
 
 
 def fail(message: str) -> None:
@@ -27,6 +29,38 @@ def load_dev_gates():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_architecture_inventory():
+    spec = importlib.util.spec_from_file_location("architecture_inventory", ARCHITECTURE_INVENTORY)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load {ARCHITECTURE_INVENTORY.relative_to(ROOT)}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def assert_syntax_free_mir_plan_import_policy(module) -> None:
+    if not set(module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS).issubset({"mir_statement_plan.zig"}):
+        fail(f"legacy MIR plan exceptions changed: {module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS!r}")
+    with tempfile.TemporaryDirectory() as temp:
+        root = pathlib.Path(temp)
+        (root / "mir_leaf_plan.zig").write_text('const std = @import("std");\nconst mir = @import("mir_model.zig");\n', encoding="utf-8")
+        (root / "mir_parent_plan.zig").write_text('const leaf = @import("mir_leaf_plan.zig");\n', encoding="utf-8")
+        (root / "mir_statement_plan.zig").write_text('const ast = @import("ast.zig");\n', encoding="utf-8")
+        if module.validate_syntax_free_mir_plan_imports(module.mir_plan_sources(root)):
+            fail("syntax-free MIR plan policy rejected allowed imports or the one legacy exception")
+
+        for index, imported in enumerate(sorted(module.MIR_PLAN_FORBIDDEN_IMPORTS)):
+            (root / f"mir_bad_{index}_plan.zig").write_text(f'const forbidden = @import("{imported}");\n', encoding="utf-8")
+        (root / "mir_bad_legacy_plan.zig").write_text('const legacy = @import("mir_statement_plan.zig");\n', encoding="utf-8")
+        failures = module.validate_syntax_free_mir_plan_imports(module.mir_plan_sources(root))
+        for imported in module.MIR_PLAN_FORBIDDEN_IMPORTS:
+            if not any(f"forbidden syntax ingress {imported!r}" in failure for failure in failures):
+                fail(f"syntax-free MIR plan policy accepted {imported!r}: {failures!r}")
+        if not any("non-syntax-free dependency 'mir_statement_plan.zig'" in failure for failure in failures):
+            fail(f"syntax-free MIR plan policy allowed another plan to import the legacy exception: {failures!r}")
 
 
 def assert_gates(module, paths: Sequence[str], expected: Sequence[str]) -> None:
@@ -64,6 +98,7 @@ def assert_route(module, paths: Sequence[str], expected_gates: Sequence[str], ex
 
 def main() -> None:
     module = load_dev_gates()
+    assert_syntax_free_mir_plan_import_policy(load_architecture_inventory())
 
     assert_gates(
         module,
@@ -224,6 +259,7 @@ def main() -> None:
     assert_gates_include(module, ["src/backend.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/lower_c_emitter.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/lower_llvm.zig"], ["architecture-boundary-inventory-test"])
+    assert_gates_include(module, ["src/mir_alloca_hoist_plan.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/type_syntax.zig"], ["architecture-boundary-inventory-test"])
     assert_route(module, ["docs/typed-semantic-facts.md"], ["semantic-facts-inventory-test", "mir-identity-inventory-test"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/compilation-session-inventory.py"], ["compilation-session-inventory-test"])
