@@ -707,7 +707,6 @@ pub const SymbolIdentity = mir_model.SymbolIdentity;
 pub const SourceIdentity = mir_model.SourceIdentity;
 pub const SpanIdentity = mir_model.SpanIdentity;
 pub const TypeIdentity = mir_model.TypeIdentity;
-pub const TypeKey = mir_model.TypeKey;
 pub const ExecutableBinaryOp = mir_model.ExecutableBinaryOp;
 pub const ExecutableArithmeticSemantics = mir_model.ExecutableArithmeticSemantics;
 pub const ValueIdentity = mir_model.ValueIdentity;
@@ -2828,7 +2827,7 @@ fn typeIdValid(function: Function, id: TypeId) bool {
 fn typeForId(function: Function, id: TypeId) ?ValueType {
     if (!typeIdValid(function, id)) return null;
     const identity = function.type_identities[id.index()];
-    if (identity.key.toValueType()) |ty| return ty;
+    if (identity.ty) |ty| return ty;
     const name = identity.spelling;
     for (function.blocks) |block| for (block.instructions) |instruction| {
         if (instruction.typed_result_ty.eql(id) and std.mem.eql(u8, instruction.result_ty.name(), name)) return instruction.result_ty;
@@ -2839,7 +2838,7 @@ fn typeIdMatchesValueType(function: Function, id: TypeId, ty: ValueType) bool {
     return typeIdValid(function, id) and function.type_identities[id.index()].matches(ty);
 }
 fn sameValueType(left: ValueType, right: ValueType) bool {
-    return TypeKey.eql(TypeKey.fromValueType(left), TypeKey.fromValueType(right));
+    return ValueType.eql(left, right);
 }
 
 pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlueFacts}!void {
@@ -6040,43 +6039,48 @@ const AggregatePointerAliasFieldPath = struct {
     field_path: []const u8,
 };
 
-const TypeKeyContext = struct {
-    pub fn hash(_: @This(), key: TypeKey) u64 {
+const ValueTypeContext = struct {
+    pub fn hash(_: @This(), ty: ValueType) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        const tag: u8 = @intCast(@intFromEnum(std.meta.activeTag(key)));
+        const tag: u8 = @intCast(@intFromEnum(std.meta.activeTag(ty)));
         hasher.update(&.{tag});
-        switch (key) {
-            .integer, .float, .nullable_value, .slice, .array, .closed_enum, .open_enum, .struct_ => |name| hashTypeKeyString(&hasher, name),
+        switch (ty) {
+            .integer, .float, .nullable_value, .slice, .array, .closed_enum, .open_enum, .struct_ => |name| hashTypeString(&hasher, name),
+            .domain_integer => |shape| {
+                const kind: u8 = @intCast(@intFromEnum(shape.kind));
+                hasher.update(&.{kind});
+                hashTypeString(&hasher, shape.child);
+            },
             .pointer, .nullable_pointer => |shape| {
                 const kind: u8 = @intCast(@intFromEnum(shape.kind));
                 const mutability: u8 = @intCast(@intFromEnum(shape.mutability));
                 hasher.update(&.{ kind, mutability });
-                hashTypeKeyString(&hasher, shape.child);
+                hashTypeString(&hasher, shape.child);
             },
             .address => |address_class| {
                 const encoded: u8 = @intCast(@intFromEnum(address_class));
                 hasher.update(&.{encoded});
             },
             .result => |shape| {
-                hashTypeKeyString(&hasher, shape.ok);
-                hashTypeKeyString(&hasher, shape.err);
+                hashTypeString(&hasher, shape.ok);
+                hashTypeString(&hasher, shape.err);
             },
             else => {},
         }
         return hasher.final();
     }
 
-    pub fn eql(_: @This(), left: TypeKey, right: TypeKey) bool {
-        return TypeKey.eql(left, right);
+    pub fn eql(_: @This(), left: ValueType, right: ValueType) bool {
+        return ValueType.eql(left, right);
     }
 
-    fn hashTypeKeyString(hasher: *std.hash.Wyhash, value: []const u8) void {
+    fn hashTypeString(hasher: *std.hash.Wyhash, value: []const u8) void {
         hasher.update(std.mem.asBytes(&value.len));
         hasher.update(value);
     }
 };
 
-const TypeIdMap = std.HashMap(TypeKey, TypeId, TypeKeyContext, std.hash_map.default_max_load_percentage);
+const TypeIdMap = std.HashMap(ValueType, TypeId, ValueTypeContext, std.hash_map.default_max_load_percentage);
 
 const FunctionBuilder = struct {
     allocator: std.mem.Allocator,
@@ -6677,12 +6681,12 @@ const FunctionBuilder = struct {
         if (!self.executableTrapProjectionComplete(trap_edges)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
-            parameter.type_id = self.type_ids.get(TypeKey.fromValueType(parameter.ty)) orelse .invalid;
+            parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
             if (!parameter.span_id.isValid() or !parameter.type_id.isValid()) complete = false;
         }
         for (self.executable_expressions.items) |*expression| {
             expression.span_id = self.span_ids.get(expression.source) orelse .invalid;
-            expression.type_id = self.type_ids.get(TypeKey.fromValueType(expression.result_ty)) orelse .invalid;
+            expression.type_id = self.type_ids.get(expression.result_ty) orelse .invalid;
             switch (expression.operation) {
                 .load => |*load| if (load.representation_source) |source| {
                     load.representation_span_id = self.span_ids.get(source) orelse .invalid;
@@ -6715,8 +6719,8 @@ const FunctionBuilder = struct {
         }
         for (self.executable_places.items) |*place| {
             place.span_id = self.span_ids.get(place.source) orelse .invalid;
-            place.root_type_id = self.type_ids.get(TypeKey.fromValueType(place.root_ty)) orelse .invalid;
-            place.type_id = self.type_ids.get(TypeKey.fromValueType(place.ty)) orelse .invalid;
+            place.root_type_id = self.type_ids.get(place.root_ty) orelse .invalid;
+            place.type_id = self.type_ids.get(place.ty) orelse .invalid;
             if (!place.span_id.isValid() or !place.root_type_id.isValid() or !place.type_id.isValid() or
                 place.projection_count >= mir_model.max_executable_projections or !self.executablePlaceComplete(place.*)) complete = false;
         }
@@ -6725,7 +6729,7 @@ const FunctionBuilder = struct {
             if (!statement.span_id.isValid()) complete = false;
             switch (statement.operation) {
                 .local_init => |*local| {
-                    local.type_id = self.type_ids.get(TypeKey.fromValueType(local.ty)) orelse .invalid;
+                    local.type_id = self.type_ids.get(local.ty) orelse .invalid;
                     if (!local.type_id.isValid()) complete = false;
                     if (local.value) |value_id| {
                         const value = self.executable_expressions.items[value_id.index()];
@@ -6733,7 +6737,7 @@ const FunctionBuilder = struct {
                     }
                 },
                 .store => |*store| {
-                    store.type_id = self.type_ids.get(TypeKey.fromValueType(store.ty)) orelse .invalid;
+                    store.type_id = self.type_ids.get(store.ty) orelse .invalid;
                     if (store.representation_source) |source| {
                         store.representation_span_id = self.span_ids.get(source) orelse .invalid;
                     }
@@ -6832,7 +6836,7 @@ const FunctionBuilder = struct {
         return .{
             .complete = complete,
             .incomplete_reason = self.executable_incomplete_reason,
-            .return_type_id = self.type_ids.get(TypeKey.fromValueType(self.return_ty)) orelse .invalid,
+            .return_type_id = self.type_ids.get(self.return_ty) orelse .invalid,
             .parameters = parameters,
             .locals = locals,
             .symbols = symbols,
@@ -6998,7 +7002,7 @@ const FunctionBuilder = struct {
             .deref, .index => return false,
         };
         const aggregate_ty: ValueType = .{ .struct_ = shape.child };
-        const aggregate_type_id = self.type_ids.get(TypeKey.fromValueType(aggregate_ty)) orelse return false;
+        const aggregate_type_id = self.type_ids.get(aggregate_ty) orelse return false;
         var aggregate: ?mir_model.ExecutableAggregateType = null;
         for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(aggregate_type_id)) {
             aggregate = candidate;
@@ -12170,7 +12174,7 @@ const FunctionBuilder = struct {
     }
 
     fn internTypeId(self: *FunctionBuilder, ty: ValueType) !TypeId {
-        const entry = try self.type_ids.getOrPut(TypeKey.fromValueType(ty));
+        const entry = try self.type_ids.getOrPut(ty);
         if (!entry.found_existing) {
             entry.value_ptr.* = TypeId.fromIndex(self.type_ids.count() - 1);
         }
@@ -12217,8 +12221,8 @@ const FunctionBuilder = struct {
             std.debug.assert(id.index() < identities.len);
             identities[id.index()] = .{
                 .id = id,
-                .spelling = entry.key_ptr.toValueType().?.name(),
-                .key = entry.key_ptr.*,
+                .spelling = entry.key_ptr.name(),
+                .ty = entry.key_ptr.*,
             };
         }
         return identities;

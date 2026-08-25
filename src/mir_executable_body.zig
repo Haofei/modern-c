@@ -969,5 +969,5 @@ fn sameSource(left: mir.SourcePoint, right: mir.SourcePoint) bool {
 }
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
-    return mir.TypeKey.eql(mir.TypeKey.fromValueType(left), mir.TypeKey.fromValueType(right));
+    return mir.ValueType.eql(left, right);
 }

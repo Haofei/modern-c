@@ -47,7 +47,7 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
         if (checked.param_count != function.param_count or checked.param_types.len != function.param_types.len or
             checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
         for (checked.param_types, function.param_types) |checked_type, mir_type| {
-            if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(checked_type), mir.TypeKey.fromValueType(mir_type))) return false;
+            if (!mir.ValueType.eql(checked_type, mir_type)) return false;
         }
         if (checked.no_lang_trap != function.no_lang_trap or checked.irq_context != function.irq_context) return false;
 

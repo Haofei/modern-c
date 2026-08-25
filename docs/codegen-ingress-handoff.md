@@ -80,7 +80,7 @@ closed. In the targeted `std/addr.mc` census this removed 14
 `unsupported_expression` classifications and left only 6 C / 8 LLVM
 fallbacks, all in larger control/value-graph families.
 
-Arithmetic-domain identity is now retained in `ValueType`/`TypeKey` rather than
+Arithmetic-domain identity is now retained structurally in `ValueType` rather than
 collapsed to the underlying integer before executable lowering. MIR marks
 wrapping and saturating binary semantics explicitly and the verifier rejects a
 domain/operation mismatch or a stray trap edge. C uses the existing saturating

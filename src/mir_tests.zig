@@ -295,7 +295,7 @@ test "executable MIR target-types null in pointer comparisons" {
     };
     const left = function.executable_body.expressions[binary.left.index()];
     const right = function.executable_body.expressions[binary.right.index()];
-    try std.testing.expect(mir.TypeKey.eql(mir.TypeKey.fromValueType(left.result_ty), mir.TypeKey.fromValueType(right.result_ty)));
+    try std.testing.expect(mir.ValueType.eql(left.result_ty, right.result_ty));
     try std.testing.expect(right.operation == .literal and right.operation.literal == .null);
     try mir.validateLoweringAdmission(module_mir);
 
@@ -647,14 +647,8 @@ test "CheckedProgram is a syntax-free callable and body table" {
     } else return error.TestUnexpectedResult;
     const read_callable = checked.callables[read_index];
     try std.testing.expectEqual(@as(usize, 1), read_callable.param_types.len);
-    try std.testing.expect(mir.TypeKey.eql(
-        mir.TypeKey.fromValueType(.{ .integer = "u32" }),
-        mir.TypeKey.fromValueType(read_callable.param_types[0]),
-    ));
-    try std.testing.expect(mir.TypeKey.eql(
-        mir.TypeKey.fromValueType(read_callable.param_types[0]),
-        mir.TypeKey.fromValueType(module_mir.functions[read_index].param_types[0]),
-    ));
+    try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, read_callable.param_types[0]));
+    try std.testing.expect(mir.ValueType.eql(read_callable.param_types[0], module_mir.functions[read_index].param_types[0]));
     try std.testing.expect(read_callable.param_types.ptr != module_mir.functions[read_index].param_types.ptr);
 
     const wrong_param_types = [_]mir.ValueType{.{ .integer = "u64" }};

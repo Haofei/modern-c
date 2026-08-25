@@ -234,14 +234,14 @@ test "single parameter pointer deref owns typed place and race access" {
     return error.TestUnexpectedResult;
 }
 
-test "type keys distinguish every legacy spelling collision family" {
+test "value types distinguish every legacy spelling collision family" {
     const pointer_u8: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     const pointer_u32: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const nullable_pointer_u8: mir.ValueType = .{ .nullable_pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     try std.testing.expectEqualStrings(pointer_u8.name(), pointer_u32.name());
     try std.testing.expectEqualStrings(pointer_u8.name(), nullable_pointer_u8.name());
-    try std.testing.expect(!mir.TypeKey.eql(mir.TypeKey.fromValueType(pointer_u8), mir.TypeKey.fromValueType(pointer_u32)));
-    try std.testing.expect(!mir.TypeKey.eql(mir.TypeKey.fromValueType(pointer_u8), mir.TypeKey.fromValueType(nullable_pointer_u8)));
+    try std.testing.expect(!mir.ValueType.eql(pointer_u8, pointer_u32));
+    try std.testing.expect(!mir.ValueType.eql(pointer_u8, nullable_pointer_u8));
 
     const named_collisions = [_]mir.ValueType{
         .{ .nullable_value = "Payload" },
@@ -251,17 +251,22 @@ test "type keys distinguish every legacy spelling collision family" {
     };
     for (named_collisions, 0..) |left, left_index| for (named_collisions[left_index + 1 ..]) |right| {
         try std.testing.expectEqualStrings(left.name(), right.name());
-        try std.testing.expect(!mir.TypeKey.eql(mir.TypeKey.fromValueType(left), mir.TypeKey.fromValueType(right)));
+        try std.testing.expect(!mir.ValueType.eql(left, right));
     };
 
     const first_result: mir.ValueType = .{ .result = .{ .ok = "u32", .err = "IoError" } };
     const second_result: mir.ValueType = .{ .result = .{ .ok = "u64", .err = "IoError" } };
     try std.testing.expectEqualStrings(first_result.name(), second_result.name());
-    try std.testing.expect(!mir.TypeKey.eql(mir.TypeKey.fromValueType(first_result), mir.TypeKey.fromValueType(second_result)));
+    try std.testing.expect(!mir.ValueType.eql(first_result, second_result));
 
     const physical: mir.ValueType = .{ .address = .paddr };
     const virtual: mir.ValueType = .{ .address = .vaddr };
-    try std.testing.expect(!mir.TypeKey.eql(mir.TypeKey.fromValueType(physical), mir.TypeKey.fromValueType(virtual)));
+    try std.testing.expect(!mir.ValueType.eql(physical, virtual));
+
+    const wrapping: mir.ValueType = .{ .domain_integer = .{ .kind = .wrap, .child = "u32" } };
+    const saturating: mir.ValueType = .{ .domain_integer = .{ .kind = .sat, .child = "u32" } };
+    try std.testing.expectEqualStrings(wrapping.name(), saturating.name());
+    try std.testing.expect(!mir.ValueType.eql(wrapping, saturating));
 }
 
 test "shadowed local generations keep executable admission closed" {

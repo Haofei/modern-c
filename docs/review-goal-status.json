@@ -69,7 +69,7 @@
         },
         {
           "file": "src/checked_program.zig",
-          "needle": "mir.TypeKey.fromValueType(checked_type)"
+          "needle": "mir.ValueType.eql(checked_type, mir_type)"
         }
       ],
       "retired_evidence": [

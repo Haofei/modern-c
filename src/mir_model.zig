@@ -169,109 +169,25 @@ pub const ValueType = union(enum) {
             .unknown => "unknown",
         };
     }
-};
 
-/// Structural identity for a MIR value type. `ValueType.name()` remains a
-/// presentation/legacy spelling and is intentionally not an identity: for
-/// example `*T`, `?*T`, `[]T`, and a nominal `T` can share that spelling.
-pub const TypeKey = union(enum) {
-    legacy,
-    void,
-    never,
-    bool,
-    value,
-    integer: []const u8,
-    domain_integer: DomainIntegerShape,
-    float: []const u8,
-    cstr,
-    pointer: PointerShape,
-    nullable_pointer: PointerShape,
-    nullable_dyn_trait,
-    nullable_value: []const u8,
-    slice: []const u8,
-    array: []const u8,
-    address: AddressClass,
-    closed_enum: []const u8,
-    open_enum: []const u8,
-    struct_: []const u8,
-    result: ResultShape,
-    contract,
-    branch,
-    trap,
-    unknown,
-
-    pub fn fromValueType(ty: ValueType) TypeKey {
-        return switch (ty) {
-            .void => .void,
-            .never => .never,
-            .bool => .bool,
-            .value => .value,
-            .integer => |name| .{ .integer = name },
-            .domain_integer => |shape| .{ .domain_integer = shape },
-            .float => |name| .{ .float = name },
-            .cstr => .cstr,
-            .pointer => |shape| .{ .pointer = shape },
-            .nullable_pointer => |shape| .{ .nullable_pointer = shape },
-            .nullable_dyn_trait => .nullable_dyn_trait,
-            .nullable_value => |name| .{ .nullable_value = name },
-            .slice => |name| .{ .slice = name },
-            .array => |name| .{ .array = name },
-            .address => |address_class| .{ .address = address_class },
-            .closed_enum => |name| .{ .closed_enum = name },
-            .open_enum => |name| .{ .open_enum = name },
-            .struct_ => |name| .{ .struct_ = name },
-            .result => |shape| .{ .result = shape },
-            .contract => .contract,
-            .branch => .branch,
-            .trap => .trap,
-            .unknown => .unknown,
-        };
-    }
-
-    pub fn toValueType(self: TypeKey) ?ValueType {
-        return switch (self) {
-            .legacy => null,
-            .void => .void,
-            .never => .never,
-            .bool => .bool,
-            .value => .value,
-            .integer => |name| .{ .integer = name },
-            .domain_integer => |shape| .{ .domain_integer = shape },
-            .float => |name| .{ .float = name },
-            .cstr => .cstr,
-            .pointer => |shape| .{ .pointer = shape },
-            .nullable_pointer => |shape| .{ .nullable_pointer = shape },
-            .nullable_dyn_trait => .nullable_dyn_trait,
-            .nullable_value => |name| .{ .nullable_value = name },
-            .slice => |name| .{ .slice = name },
-            .array => |name| .{ .array = name },
-            .address => |address_class| .{ .address = address_class },
-            .closed_enum => |name| .{ .closed_enum = name },
-            .open_enum => |name| .{ .open_enum = name },
-            .struct_ => |name| .{ .struct_ = name },
-            .result => |shape| .{ .result = shape },
-            .contract => .contract,
-            .branch => .branch,
-            .trap => .trap,
-            .unknown => .unknown,
-        };
-    }
-
-    pub fn eql(left: TypeKey, right: TypeKey) bool {
+    /// Structural equality for MIR types. `name()` remains a presentation
+    /// spelling and is intentionally not an identity: for example `*T`,
+    /// `?*T`, `[]T`, and a nominal `T` can share that spelling.
+    pub fn eql(left: ValueType, right: ValueType) bool {
         if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
         return switch (left) {
-            .integer => |name| std.mem.eql(u8, name, right.integer),
+            .integer => |spelling| std.mem.eql(u8, spelling, right.integer),
             .domain_integer => |shape| shape.kind == right.domain_integer.kind and std.mem.eql(u8, shape.child, right.domain_integer.child),
-            .float => |name| std.mem.eql(u8, name, right.float),
+            .float => |spelling| std.mem.eql(u8, spelling, right.float),
             .pointer => |shape| pointerShapeEql(shape, right.pointer),
             .nullable_pointer => |shape| pointerShapeEql(shape, right.nullable_pointer),
-            .nullable_value => |name| std.mem.eql(u8, name, right.nullable_value),
-            .slice => |name| std.mem.eql(u8, name, right.slice),
-            .array => |name| std.mem.eql(u8, name, right.array),
+            .nullable_value => |spelling| std.mem.eql(u8, spelling, right.nullable_value),
+            .slice => |spelling| std.mem.eql(u8, spelling, right.slice),
+            .array => |spelling| std.mem.eql(u8, spelling, right.array),
             .address => |address_class| address_class == right.address,
-            .closed_enum => |name| std.mem.eql(u8, name, right.closed_enum),
-            .open_enum => |name| std.mem.eql(u8, name, right.open_enum),
-            .struct_ => |name| std.mem.eql(u8, name, right.struct_),
+            .closed_enum => |spelling| std.mem.eql(u8, spelling, right.closed_enum),
+            .open_enum => |spelling| std.mem.eql(u8, spelling, right.open_enum),
+            .struct_ => |spelling| std.mem.eql(u8, spelling, right.struct_),
             .result => |shape| std.mem.eql(u8, shape.ok, right.result.ok) and std.mem.eql(u8, shape.err, right.result.err),
             else => true,
         };
@@ -503,7 +419,7 @@ pub const ExecutableCastKind = enum {
     pointer_const_narrow,
 
     pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
-        if (TypeKey.eql(TypeKey.fromValueType(source), TypeKey.fromValueType(target))) return .identity;
+        if (ValueType.eql(source, target)) return .identity;
         if (source == .address) {
             const target_integer = integerInfo(target) orelse return null;
             return if (!target_integer.signed and target_integer.bits == 64) .address_to_integer else null;
@@ -559,8 +475,8 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             if (operands.len != 2) break :wrapping false;
             const info = ExecutableCastKind.integerInfo(result) orelse break :wrapping false;
             break :wrapping !info.signed and
-                TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[0])) and
-                TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[1]));
+                ValueType.eql(result, operands[0]) and
+                ValueType.eql(result, operands[1]);
         },
         .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
         // `bitcast` preserves the complete scalar bit pattern; it is neither a
@@ -571,16 +487,13 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         .bitcast => operands.len == 1 and executableScalarBitWidth(operands[0]) != null and
             executableScalarBitWidth(operands[0]) == executableScalarBitWidth(result),
         .raw_many_offset => raw_many: {
-            if (operands.len != 2 or !TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operands[0])))
+            if (operands.len != 2 or !ValueType.eql(result, operands[0]))
                 break :raw_many false;
             const pointer = switch (result) {
                 .pointer => |shape| shape,
                 else => break :raw_many false,
             };
-            break :raw_many pointer.kind == .raw_many and TypeKey.eql(
-                TypeKey.fromValueType(operands[1]),
-                TypeKey.fromValueType(.{ .integer = "usize" }),
-            );
+            break :raw_many pointer.kind == .raw_many and ValueType.eql(operands[1], .{ .integer = "usize" });
         },
         .raw_load => operands.len == 1 and isExecutableRawScalar(result) and switch (operands[0]) {
             .address => |class| class == .paddr,
@@ -640,7 +553,7 @@ fn unsignedIntegerAtLeast(ty: ValueType, minimum_bits: u16) bool {
 }
 
 fn valuePreservingIntegerConversion(source: ValueType, target: ValueType) bool {
-    if (TypeKey.eql(TypeKey.fromValueType(source), TypeKey.fromValueType(target))) return true;
+    if (ValueType.eql(source, target)) return true;
     const source_info = ExecutableCastKind.integerInfo(source) orelse return false;
     const target_info = ExecutableCastKind.integerInfo(target) orelse return false;
     return source_info.signed == target_info.signed and target_info.bits >= source_info.bits;
@@ -682,7 +595,7 @@ pub const ExecutableRepresentationCheckKind = enum {
     valid_slice,
 
     pub fn typesValid(kind: ExecutableRepresentationCheckKind, result: ValueType, operand: ValueType) bool {
-        if (!TypeKey.eql(TypeKey.fromValueType(result), TypeKey.fromValueType(operand))) return false;
+        if (!ValueType.eql(result, operand)) return false;
         return switch (kind) {
             .nonnull_pointer => switch (result) {
                 .pointer => |shape| shape.kind == .single,
@@ -1669,13 +1582,13 @@ pub const RepresentationFact = struct {
 pub const TypeIdentity = struct {
     id: TypeId,
     spelling: []const u8,
-    /// `.legacy` is retained for narrow synthetic fixtures. Producer-created
-    /// identities always carry a structural key.
-    key: TypeKey = .legacy,
+    /// `null` is retained for narrow synthetic fixtures. Producer-created
+    /// identities always carry their structural MIR type.
+    ty: ?ValueType = null,
 
     pub fn matches(self: TypeIdentity, ty: ValueType) bool {
         if (!std.mem.eql(u8, self.spelling, ty.name())) return false;
-        return self.key == .legacy or TypeKey.eql(self.key, TypeKey.fromValueType(ty));
+        return self.ty == null or ValueType.eql(self.ty.?, ty);
     }
 };
 

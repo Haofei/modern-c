@@ -5387,12 +5387,12 @@ const LlvmEmitter = struct {
                 const signature = self.mirFunctionByName(symbol.spelling) orelse return false;
                 if (signature.is_variadic or signature.param_count != call.argument_count or signature.param_types.len != call.argument_count) return false;
                 if (signature.c_abi) {
-                    if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(signature.return_ty), mir.TypeKey.fromValueType(expression.result_ty))) return false;
+                    if (!mir.ValueType.eql(signature.return_ty, expression.result_ty)) return false;
                 } else if (!std.mem.eql(u8, self.mirStructuralType(signature.return_ty) orelse return false, self.mirStructuralType(expression.result_ty) orelse return false)) return false;
                 for (call.arguments[0..call.argument_count], signature.param_types) |argument_id, parameter_ty| {
                     const argument = mir_executable_body.expression(&fn_mir.executable_body, argument_id) orelse return false;
                     if (signature.c_abi) {
-                        if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(argument.result_ty), mir.TypeKey.fromValueType(parameter_ty))) return false;
+                        if (!mir.ValueType.eql(argument.result_ty, parameter_ty)) return false;
                     } else if (!std.mem.eql(u8, self.mirStructuralType(argument.result_ty) orelse return false, self.mirStructuralType(parameter_ty) orelse return false)) return false;
                 }
             },
@@ -5462,7 +5462,7 @@ const LlvmEmitter = struct {
                 // admission until those promotions are canonical MIR facts.
                 if (signature.is_variadic or signature.param_count != call.argument_count or signature.param_types.len != call.argument_count) return null;
                 if (signature.c_abi) {
-                    if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(signature.return_ty), mir.TypeKey.fromValueType(expression.result_ty))) return null;
+                    if (!mir.ValueType.eql(signature.return_ty, expression.result_ty)) return null;
                 } else if (!std.mem.eql(u8, self.mirStructuralType(signature.return_ty) orelse return null, self.mirStructuralType(expression.result_ty) orelse return null)) return null;
                 var entry: mir_executable_llvm.DirectCallAbi = .{
                     .expression = expression.id,
@@ -5474,7 +5474,7 @@ const LlvmEmitter = struct {
                 for (call.arguments[0..call.argument_count], signature.param_types, 0..) |argument_id, parameter_ty, index| {
                     const argument = mir_executable_body.expression(&fn_mir.executable_body, argument_id) orelse return null;
                     if (signature.c_abi) {
-                        if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(argument.result_ty), mir.TypeKey.fromValueType(parameter_ty))) return null;
+                        if (!mir.ValueType.eql(argument.result_ty, parameter_ty)) return null;
                     } else if (!std.mem.eql(u8, self.mirStructuralType(argument.result_ty) orelse return null, self.mirStructuralType(parameter_ty) orelse return null)) return null;
                     entry.parameter_extensions[index] = if (signature.c_abi) mir_executable_llvm.abiExtension(target, parameter_ty) else .none;
                 }

@@ -117,7 +117,7 @@ def main() -> int:
         "fn internSpanId(self: *FunctionBuilder, source: SourcePoint) !SpanId {",
         "fn buildSpanIdentities(self: *FunctionBuilder) ![]SpanIdentity {",
         "for (function.span_identities) |identity| {",
-        "const TypeIdMap = std.HashMap(TypeKey, TypeId, TypeKeyContext, std.hash_map.default_max_load_percentage);",
+        "const TypeIdMap = std.HashMap(ValueType, TypeId, ValueTypeContext, std.hash_map.default_max_load_percentage);",
         "type_ids: TypeIdMap,",
         "value_ids: std.StringHashMap(ValueId),",
         "target_owner_ids: std.StringHashMap(SymbolId),",
@@ -178,6 +178,9 @@ def main() -> int:
         "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {",
     ):
         require_contains("src/mir.zig", needle)
+
+    require_not_contains("src/mir_model.zig", "pub const TypeKey = union(enum)")
+    require_not_contains("src/mir.zig", "TypeKey.fromValueType")
 
     for needle in (
         "const BlockId = mir.BlockId;",

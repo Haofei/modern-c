@@ -789,7 +789,7 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
         break;
     };
     const root_ty = parameter_ty orelse return false;
-    if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(root_ty), mir.TypeKey.fromValueType(place.root_ty))) return false;
+    if (!mir.ValueType.eql(root_ty, place.root_ty)) return false;
     const shape = switch (root_ty) {
         .pointer => |value| value,
         else => return false,
@@ -816,18 +816,14 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
         break;
     };
     const root = parameter orelse return false;
-    if (!root.type_id.eql(place.root_type_id) or
-        !mir.TypeKey.eql(mir.TypeKey.fromValueType(root.ty), mir.TypeKey.fromValueType(place.root_ty))) return false;
+    if (!root.type_id.eql(place.root_type_id) or !mir.ValueType.eql(root.ty, place.root_ty)) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
         else => return false,
     };
     if (pointer.kind != .single) return false;
     var aggregate: ?*const mir.ExecutableAggregateType = null;
-    for (body.aggregate_types) |*candidate| if (mir.TypeKey.eql(
-        mir.TypeKey.fromValueType(candidate.ty),
-        mir.TypeKey.fromValueType(.{ .struct_ = pointer.child }),
-    )) {
+    for (body.aggregate_types) |*candidate| if (mir.ValueType.eql(candidate.ty, .{ .struct_ = pointer.child })) {
         aggregate = candidate;
         break;
     };
@@ -835,7 +831,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
     return shape.construction == .declared_struct and field_index < shape.field_count and
         isSafeIdentifier(shape.field_spellings[field_index]) and
         shape.field_type_ids[field_index].eql(place.type_id) and
-        mir.TypeKey.eql(mir.TypeKey.fromValueType(shape.field_types[field_index]), mir.TypeKey.fromValueType(place.ty));
+        mir.ValueType.eql(shape.field_types[field_index], place.ty);
 }
 
 fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, require_mutable: bool) bool {
@@ -874,7 +870,7 @@ fn memoryStoreSupported(
     const scalar = scalarMemoryInfo(store.ty) orelse return false;
     if (store.access.alignment != scalar.alignment) return false;
     const value = expressionById(body, store.value) orelse return false;
-    if (!mir.TypeKey.eql(mir.TypeKey.fromValueType(store.ty), mir.TypeKey.fromValueType(value.result_ty))) return false;
+    if (!mir.ValueType.eql(store.ty, value.result_ty)) return false;
     const place = placeById(body, store.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
@@ -943,9 +939,9 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
     if (integerSuffix(expression.result_ty) == null) return false;
     const left = expressionById(body, binary.left) orelse return false;
     const right = expressionById(body, binary.right) orelse return false;
-    const result_key = mir.TypeKey.fromValueType(expression.result_ty);
-    if (!mir.TypeKey.eql(result_key, mir.TypeKey.fromValueType(left.result_ty)) or
-        !mir.TypeKey.eql(result_key, mir.TypeKey.fromValueType(right.result_ty))) return false;
+    const result_ty = expression.result_ty;
+    if (!mir.ValueType.eql(result_ty, left.result_ty) or
+        !mir.ValueType.eql(result_ty, right.result_ty)) return false;
     const requirements = mir.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty) orelse return false;
     var total: usize = 0;
     for (body.trap_edges) |edge| {
@@ -1109,7 +1105,7 @@ fn allExpressionsExist(body: *const mir.ExecutableBody, expressions: []const mir
 }
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
-    return mir.TypeKey.eql(mir.TypeKey.fromValueType(left), mir.TypeKey.fromValueType(right));
+    return mir.ValueType.eql(left, right);
 }
 
 fn supportsType(ty: mir.ValueType) bool {
@@ -1304,10 +1300,7 @@ fn emitPlaceAddress(
             else => return error.UnsupportedOperation,
         };
         var aggregate: ?*const mir.ExecutableAggregateType = null;
-        for (body.aggregate_types) |*candidate| if (mir.TypeKey.eql(
-            mir.TypeKey.fromValueType(candidate.ty),
-            mir.TypeKey.fromValueType(.{ .struct_ = pointer.child }),
-        )) {
+        for (body.aggregate_types) |*candidate| if (mir.ValueType.eql(candidate.ty, .{ .struct_ = pointer.child })) {
             aggregate = candidate;
             break;
         };
