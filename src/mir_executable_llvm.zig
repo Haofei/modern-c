@@ -138,12 +138,14 @@ fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
 }
 
 pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
-    if (!body.isComplete() or body.terminators.len == 0 or !llvmTypeSupported(body, return_ty)) return false;
+    if (!body.isComplete() or body.terminators.len == 0 or
+        (!llvmTypeSupported(body, return_ty) and !functionSymbolReturnSupported(body, return_ty))) return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !llvmTypeSupported(body, parameter.ty)) return false;
     }
     for (body.expressions) |expression| {
-        if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or !llvmTypeSupported(body, expression.result_ty)) return false;
+        if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
+            (!llvmTypeSupported(body, expression.result_ty) and !functionSymbolExpressionSupported(body, expression))) return false;
         if (!operationSupported(body, expression)) return false;
     }
     for (body.trap_edges) |edge| {
@@ -271,6 +273,9 @@ const Renderer = struct {
 
     fn typeTextDepth(self: *Renderer, ty: mir.ValueType, depth: usize) RenderError![]const u8 {
         if (scalarLlvmType(ty)) |scalar| return scalar;
+        // `.value` is admitted only for a canonical function SymbolId. LLVM
+        // represents that function identity as an opaque pointer.
+        if (ty == .value) return "ptr";
         if (depth >= mir.max_executable_operands) return error.Unsupported;
         if (enumTypeForValueType(self.body, ty)) |enum_ty| return self.typeTextDepth(enum_ty.repr_ty, depth + 1);
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
@@ -411,13 +416,17 @@ const Renderer = struct {
                 break :blk .{ .ty = ty, .spelling = value };
             },
             .symbol => |symbol_id| blk: {
-                const symbol = symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody;
+                const identity = symbolIdentity(self.body, symbol_id) orelse return error.InvalidBody;
+                if (identity.kind == .function) {
+                    if (expression.result_ty != .value) return error.InvalidBody;
+                    break :blk .{ .ty = "ptr", .spelling = try std.fmt.allocPrint(self.allocator, "@{s}", .{identity.spelling}) };
+                }
                 const value = try self.temp();
                 // Memory access mode is semantic data.  In the absence of an
                 // explicit atomic/volatile/MMIO access operation, a symbol
                 // read is an ordinary load; the backend must not infer an
                 // atomic access from the LLVM scalar type.
-                try self.output.print(self.allocator, "  {s} = load {s}, ptr @{s}\n", .{ value, ty, symbol });
+                try self.output.print(self.allocator, "  {s} = load {s}, ptr @{s}\n", .{ value, ty, identity.spelling });
                 break :blk .{ .ty = ty, .spelling = value };
             },
             .load => |load| try self.emitMemoryLoad(expression, load),
@@ -1278,7 +1287,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .local => |id| localExists(body, id),
         // A bare symbol has no memory access mode. Direct calls carry their
         // SymbolId separately; global value reads remain fail-closed.
-        .symbol => false,
+        .symbol => functionSymbolExpressionSupported(body, expression),
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
@@ -1309,6 +1318,31 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (expression.result_ty != .value) return false;
+    const id = switch (expression.operation) {
+        .symbol => |id| id,
+        else => return false,
+    };
+    const identity = symbolIdentity(body, id) orelse return false;
+    return identity.kind == .function;
+}
+
+fn functionSymbolReturnSupported(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
+    if (return_ty != .value) return false;
+    var saw_return = false;
+    for (body.statements) |statement| switch (statement.operation) {
+        .return_ => |value| {
+            const id = value orelse return false;
+            if (!expressionValid(body, id) or
+                !functionSymbolExpressionSupported(body, body.expressions[id.index()])) return false;
+            saw_return = true;
+        },
+        else => {},
+    };
+    return saw_return;
 }
 
 fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, check: anytype) bool {

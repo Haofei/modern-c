@@ -6,6 +6,8 @@ const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
+const mir_executable_c = @import("mir_executable_c.zig");
+const mir_executable_llvm = @import("mir_executable_llvm.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
 const mir_body_plan = @import("mir_body_plan.zig");
@@ -1745,7 +1747,7 @@ test "MIR while control plan owns break and continue CFG edges" {
     try std.testing.expect(mir_statement_plan.buildWhileControl(corrupted_stop.*) == null);
 }
 
-test "MIR identity return plan owns resolved function symbol return" {
+test "MIR executable body owns resolved function symbol return" {
     const source =
         \\fn tick() -> void {}
         \\fn entry_of() -> fn() -> void { return tick; }
@@ -1755,17 +1757,12 @@ test "MIR identity return plan owns resolved function symbol return" {
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    const plan = mir_statement_plan.buildIdentityReturn(functionByName(module_mir, "entry_of").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("tick", plan.name);
-    try std.testing.expect(plan.value_id.isValid());
-    try std.testing.expect(plan.value_location.span_id.isValid());
-    try std.testing.expect(plan.return_location.span_id.isValid());
-
-    var corrupted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer corrupted.deinit();
-    const function = functionByNameMut(&corrupted, "entry_of") orelse return error.TestUnexpectedResult;
-    function.blocks[0].instructions[0].detail = "not_tick";
-    try std.testing.expect(mir_statement_plan.buildIdentityReturn(function.*) == null);
+    const function = functionByName(module_mir, "entry_of").?;
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.symbols.len);
+    try std.testing.expectEqualStrings("tick", function.executable_body.symbols[0].spelling);
+    try std.testing.expectEqual(.function, function.executable_body.symbols[0].kind);
 }
 
 test "MIR sequence foreach update plan owns local generation update traps and control" {

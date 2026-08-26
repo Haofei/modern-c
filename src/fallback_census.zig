@@ -71,7 +71,6 @@ pub const SelectedPath = enum {
     access_local_address_update,
     access_structural,
     scalar_expression,
-    identity_return,
     while_control,
     sequence_foreach_update,
     sequence_foreach_return,

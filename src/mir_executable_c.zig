@@ -437,6 +437,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
 }
 
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (functionSymbolExpressionSupported(body, expression)) return true;
     if (!supportsType(expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
@@ -467,6 +468,16 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .deref, .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (expression.result_ty != .value) return false;
+    const id = switch (expression.operation) {
+        .symbol => |id| id,
+        else => return false,
+    };
+    const identity = symbolById(body, id) orelse return false;
+    return identity.kind == .function;
 }
 
 fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, check: anytype) bool {
@@ -1141,6 +1152,10 @@ fn prepareStatementExpressions(
     // call or store cannot change what an earlier operand observes.
     for (body.expressions) |expression| {
         if (!expression.owner_statement.eql(statement.id)) continue;
+        // A function identity is a pure leaf and is emitted directly at its
+        // use site. Emitting it here as a discarded expression would add no
+        // ordering guarantee and would produce an avoidable C warning.
+        if (functionSymbolExpressionSupported(body, expression)) continue;
         if (representationGuard(expression)) |guard| {
             try writeSourceLineDirective(allocator, out, source_path, guard.source);
             try emitRepresentationGuard(allocator, out, body, guard, indent);
@@ -1248,6 +1263,10 @@ fn emitPreparedArguments(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
 
 fn expressionNeedsTemporary(expression: mir.ExecutableExpression) bool {
     if (expression.result_ty == .void or expression.result_ty == .never) return false;
+    // Function identities are already C expressions. Canonical admission is
+    // deliberately limited to SymbolIdentity.kind=function, so this cannot
+    // turn an untyped global read into a direct expression.
+    if (expression.operation == .symbol) return false;
     return true;
 }
 

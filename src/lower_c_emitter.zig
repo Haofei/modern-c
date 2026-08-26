@@ -1705,14 +1705,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const identity_return_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildIdentityReturn(fn_mir)) |plan|
-                if (self.mirIdentityReturnPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const while_control_plan = if (identity_return_plan == null and simple_trap == null)
+        const while_control_plan = if (simple_trap == null)
             if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
                 if (self.mirWhileControlPlanSupported(function, plan)) plan else null
             else
@@ -1836,7 +1829,6 @@ pub const CEmitter = struct {
             access_local_address_update != null,
             access_structural_operation != null,
             scalar_expression_plan != null,
-            identity_return_plan != null,
             while_control_plan != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
@@ -1904,11 +1896,6 @@ pub const CEmitter = struct {
         } else if (scalar_expression_plan) |plan| {
             selected_path.* = .scalar_expression;
             try self.emitMirScalarExpressionPlan(plan);
-        } else if (identity_return_plan) |plan| {
-            selected_path.* = .identity_return;
-            try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
-            try self.writeIndent();
-            try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.name)});
         } else if (while_control_plan) |plan| {
             selected_path.* = .while_control;
             try self.emitMirWhileControlPlan(plan);
@@ -5978,12 +5965,6 @@ pub const CEmitter = struct {
             return type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.condition_fact.target_ty));
         }
         return false;
-    }
-
-    fn mirIdentityReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.IdentityReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        if (std.meta.activeTag(self.resolveAliasType(return_ty).kind) != .fn_pointer) return false;
-        return self.functions.contains(plan.name);
     }
 
     fn mirNullablePointerLocalReturnPlanSupported(self: *CEmitter, plan: mir_statement_plan.NullablePointerLocalReturnPlan) bool {

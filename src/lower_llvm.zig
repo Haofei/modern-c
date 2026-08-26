@@ -1794,14 +1794,7 @@ const LlvmEmitter = struct {
             mir_access_plan.buildLocalAddressUpdate(access_body_plan.?)
         else
             null;
-        const identity_return_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildIdentityReturn(fn_mir)) |plan|
-                if (self.mirIdentityReturnPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const while_control_plan = if (identity_return_plan == null and simple_trap == null)
+        const while_control_plan = if (simple_trap == null)
             if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
                 if (self.mirWhileControlPlanSupported(function, plan)) plan else null
             else
@@ -1912,7 +1905,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1928,7 +1921,6 @@ const LlvmEmitter = struct {
             llvm_access_operation != null,
             llvm_local_address_update != null,
             llvm_structural_access_operation != null,
-            identity_return_plan != null,
             while_control_plan != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
@@ -2035,9 +2027,6 @@ const LlvmEmitter = struct {
         } else if (llvm_structural_access_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirStructuralAccessPlan(access_body_plan.?, operation, ret_llvm);
-        } else if (identity_return_plan) |plan| {
-            selected_path.* = .identity_return;
-            try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{plan.name}), spanFromMirSourcePoint(plan.return_location.source));
         } else if (while_control_plan) |plan| {
             selected_path.* = .while_control;
             try self.emitMirWhileControlPlan(plan);
@@ -4190,12 +4179,6 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn mirIdentityReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.IdentityReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        if (std.meta.activeTag(self.resolveAliasType(return_ty).kind) != .fn_pointer) return false;
-        return self.fn_sigs.contains(plan.name);
-    }
-
     fn mirNullablePointerLocalReturnPlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.NullablePointerLocalReturnPlan) bool {
         const nullable_llvm = self.llvmType(plan.nullable_type_fact.target_ty) catch return false;
         const source_llvm = self.llvmType(plan.source_type_fact.target_ty) catch return false;
@@ -5048,7 +5031,14 @@ const LlvmEmitter = struct {
             // Generic executable MIR does not yet carry the ordinary/atomic/
             // volatile/MMIO access mode.  Keep every memory read on the
             // specialized path until that semantic fact is explicit.
-            .symbol, .deref => return false,
+            .symbol => |symbol_id| {
+                // A canonical function identity is an SSA pointer value, not
+                // a read from global storage. Ordinary global reads still
+                // require an explicit MIR load/access mode.
+                const symbol = mir_executable_body.symbol(&fn_mir.executable_body, symbol_id) orelse return false;
+                if (symbol.kind != .function or expression.result_ty != .value) return false;
+            },
+            .deref => return false,
             .direct_call => |call| {
                 const symbol = mir_executable_body.symbol(&fn_mir.executable_body, call.callee) orelse return false;
                 const signature = self.mirFunctionByName(symbol.spelling) orelse return false;

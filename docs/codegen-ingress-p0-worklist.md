@@ -219,8 +219,8 @@ parallel execution does not change the raw census or ranked report.
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 | 56 | 104 | 32 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 54 | 106 | 32 |
+| C | 160 | 160 | 0 | 0 | 10000 | 57 | 103 | 31 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 55 | 105 | 31 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized
@@ -237,7 +237,10 @@ owns every `scalar_control` case, so its standalone 468-line plan, 32-line plan
 test and both backend implementations were deleted, reducing the registry to
 32 plans. `simple_conditional_statement_return` has been retired after dead
 conditional continuations and branch-local global accesses moved into canonical
-executable MIR. `simple_loop_return` remains.
+executable MIR. `identity_return` is also gone: executable MIR now carries a
+resolved function `SymbolId`, while both mechanical renderers distinguish that
+pointer value from an ordinary global load. The registry is down to 31 plans.
+`simple_loop_return` remains.
 A deletion is accepted only when the exact-path census and both complete
 backend shards agree that coverage is unchanged.
 
@@ -280,7 +283,7 @@ typed-unary operand-descendant bugs before commit.
 | Sequence foreach return | parameter arrays/slices, direct calls returning either representation, field-projected arrays, and a staged zero-argument nested call; `.for_element` carries the binding `ValueId`, slice representation checking stays explicit, and one shared CFG plan owns iterable evaluation, first-element, and empty-sequence exits | (current batch) |
 | Parameter while with immediate break/continue | MIR emits a source-bearing `control_transfer` instruction and one shared three-block CFG plan validates condition identity plus exact loop/exit edge before either backend renders it | (current batch) |
 | Slice foreach scalar update + break/continue | one bounded shared CFG plan owns slice representation, local generation, element binding, replacement or checked-add operand edges, overflow trap, source-bearing control transfer, and final return; `tests/llvm/for_loops.mc` is now 100% MIR-admitted in both backends | (current batch) |
-| Function-symbol identity return | `fn entry_of() -> fn() -> void { return tick; }`; one shared MIR plan joins the resolved `ValueId`, operand `SpanId`, representation type, and known function registry before either backend emits the symbol address | (current batch) |
+| Function-symbol identity return | `fn entry_of() -> fn() -> void { return tick; }`; canonical executable MIR owns the resolved function `SymbolId` and both mechanical renderers emit its pointer identity directly; the specialized plan has been deleted | `identity_return` retired |
 | Local function-pointer call | `let op: fn(A,B)->R = target; return op(a,b)`; the indirect-call plan now proves the local generation, initializer function identity, callee root, signature, and indexed arguments, while both backends preserve a materialized local and indirect call | (current batch) |
 | Nullable pointer promotion | `let maybe: ?*T = p; return maybe`, null-init + reassignment, and `consume_nullable(p)`; one shared MIR plan joins `ValueId`, call `SpanId`, exact nullable/non-null type facts and the statically satisfied representation edge, while both backends preserve local storage/order and omit the impossible trap | (current batch) |
 | Nullable pointer try | `return maybe?`, `return make_nullable()?`, direct/void one-argument consumers, and a zero-argument source call; one shared MIR plan joins the `try_operand`, unwrapped value, call argument, representation-use facts, and exact InvalidRepresentation/Unwrap edge pair while both backends evaluate the source exactly once | (current batch) |

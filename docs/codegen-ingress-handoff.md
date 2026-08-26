@@ -429,7 +429,7 @@ the AST fallback. The first four retired paths (`simple_assert`,
 were deleted after proving zero use. `scalar_control` was then
 retired after its three inline-only control-flow tests moved to canonical CFG
 emission; its standalone plan, tests and both backend renderers were deleted.
-Both specialized-plan chains are now ratcheted from 38 definitions to 32.
+Both specialized-plan chains are now ratcheted from 38 definitions to 31.
 Complete backend shards remain mandatory retirement evidence because the broad
 fixture census still misses inline-only paths.
 
@@ -451,7 +451,7 @@ the direct enum-literal branch was deleted from both copies of the transitional
 `simple_return` recognizer. Local enum fold cases remain on the bounded legacy
 branch until their representation-check cleanup is explicit in executable MIR.
 
-The 32-plan existence checks are flat boolean registries, replacing the
+The 31-plan existence checks are flat boolean registries, replacing the
 duplicated negated conjunctions. This does not
 pretend the plans are gone, but it makes every later retirement a one-entry
 deletion and removes operator-precedence risk from the cutover mechanism.
@@ -463,6 +463,14 @@ admission restriction. C and LLVM therefore consume the same explicit CFG and
 memory-access facts for conditional calls, stores, aggregate/enum/float returns,
 and mixed early exits. The strict census moved two functions per backend from
 specialized to canonical emission (C 56/104, LLVM 54/106).
+
+`identity_return` is also fully retired. Function values now remain a resolved
+`SymbolId` with `SymbolIdentity.kind=function` in executable MIR. The C
+renderer emits that identity directly; LLVM maps the same value to an opaque
+function pointer without inventing a global load. Ordinary global symbols still
+require an explicit MIR memory-access operation. The strict census moved one
+function per backend to canonical emission (C 57/103, LLVM 55/105), and the
+standalone plan, backend recognizers and renderer branches were deleted.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their
