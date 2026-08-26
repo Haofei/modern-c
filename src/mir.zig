@@ -8140,7 +8140,10 @@ const FunctionBuilder = struct {
     fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) anyerror!PlaceId {
         const place_ty = self.exprType(expr);
         var place: ExecutablePlace = .{
-            .id = PlaceId.fromIndex(self.executable_places.items.len),
+            // Filling an indexed place may recursively materialize an index
+            // expression, which can append another place. Assign this place's
+            // identity only after all recursive construction is complete.
+            .id = .invalid,
             .source = self.sourcePoint(expr.span),
             .span_id = try self.internSpanId(self.sourcePoint(expr.span)),
             .root = undefined,
@@ -8161,6 +8164,7 @@ const FunctionBuilder = struct {
             place.root = .{ .symbol = try self.internExecutableSymbol("<unsupported-place>") };
             place.projection_count = mir_model.max_executable_projections;
         }
+        place.id = PlaceId.fromIndex(self.executable_places.items.len);
         try self.executable_places.append(self.allocator, place);
         return place.id;
     }

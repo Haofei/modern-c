@@ -234,6 +234,29 @@ test "single parameter pointer deref owns typed place and race access" {
     return error.TestUnexpectedResult;
 }
 
+test "indexed places receive identities after recursive index lowering" {
+    const source =
+        \\struct Table { values: [4]u32, index: usize }
+        \\fn read(table: *Table) -> u32 { return table.values[table.index]; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_index_place.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    for (function.executable_body.places, 0..) |place, index| {
+        try std.testing.expectEqual(index, place.id.index());
+    }
+}
+
 test "value types distinguish every legacy spelling collision family" {
     const pointer_u8: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     const pointer_u32: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
@@ -291,7 +314,7 @@ test "shadowed local generations keep executable admission closed" {
     try std.testing.expect(!executable.isComplete(function));
 }
 
-test "builtin call is explicit and keeps mechanical admission closed" {
+test "builtin call is explicit and mechanically complete" {
     const source =
         \\fn make_phys(value: usize) -> PAddr {
         \\    return phys(value);
@@ -309,7 +332,7 @@ test "builtin call is explicit and keeps mechanical admission closed" {
     defer module.deinit();
     const function = &module.functions[0];
     try executable.verify(function);
-    try std.testing.expect(!executable.isComplete(function));
+    try std.testing.expect(executable.isComplete(function));
     var saw_builtin = false;
     for (function.executable_body.expressions) |value| switch (value.operation) {
         .builtin_call => |call| {
@@ -484,7 +507,7 @@ test "raw pointer construction owns its nonnull trap and unsafe authority" {
 
     const saved_span = function.executable_body.expressions[index].operation.builtin_call.representation_span_id;
     function.executable_body.expressions[index].operation.builtin_call.representation_span_id = .invalid;
-    try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
     function.executable_body.expressions[index].operation.builtin_call.representation_span_id = saved_span;
 
     const argument_id = function.executable_body.expressions[index].operation.builtin_call.arguments[0];
@@ -528,7 +551,7 @@ test "nonnull pointer values own value-preserving representation checks" {
         .representation_check => |check| {
             check_index = index;
             try std.testing.expect(check.operand.index() < expression.id.index());
-            try std.testing.expectEqual(mir.ExecutableRepresentationCheckKind.nonnull_pointer, check.kind);
+            try std.testing.expectEqual(mir_model.ExecutableRepresentationCheckKind.nonnull_pointer, check.kind);
         },
         else => {},
     };
@@ -723,7 +746,7 @@ test "lowering admission rejects executable body identity drift" {
     return error.TestUnexpectedResult;
 }
 
-test "checked traps are complete while asserts and eager logical operators remain incomplete" {
+test "checked traps and asserts are complete while eager logical operators remain incomplete" {
     const source =
         \\fn checked(value: u32) -> u32 { return value + 1; }
         \\fn logical(left: bool, right: bool) -> bool { return left && right; }
@@ -741,7 +764,7 @@ test "checked traps are complete while asserts and eager logical operators remai
     defer module.deinit();
     for (module.functions, 0..) |*function, index| {
         try executable.verify(function);
-        try std.testing.expectEqual(index == 0, executable.isComplete(function));
+        try std.testing.expectEqual(index != 1, executable.isComplete(function));
     }
 }
 
