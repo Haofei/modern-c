@@ -1,8 +1,8 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-26 after the typed-signature admission and specialized-plan registry
-cutovers.
+2026-08-26 after canonical function-attribute admission and union aggregate
+identity correction.
 
 ## TL;DR
 
@@ -10,8 +10,8 @@ cutovers.
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **758/1696 C** and **825/1762 LLVM** distinct functions using the AST
-  body (C admits 55.3%, LLVM 53.2%). Report mode intentionally preserves
+  finds **757/1696 C** and **823/1762 LLVM** distinct functions using the AST
+  body (C admits 55.4%, LLVM 53.3%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -63,12 +63,13 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-708 to an incomplete MIR producer, 49 to renderer support and 2 nominally
-ready; LLVM attributes 748/75/3 respectively. The producer bucket is now
+707 to an incomplete MIR producer and 50 to renderer support; LLVM attributes
+747/76 respectively. There are no bodies marked canonical-ready that still
+fall through to AST codegen. The producer bucket is now
 classified by its first stable canonical-model gap. The largest C reasons are
-producer invariants (141), trap projection (112), non-canonical literals (107),
+producer invariants (141), trap projection (116), non-canonical literals (102),
 unsupported members (50), and unresolved indexing (46); LLVM records
-141/125/110/50/60 respectively. Direct pointer-member scalar access is
+141/129/105/50/60 respectively. Direct pointer-member scalar access is
 canonical in the targeted census; the remaining `unlowered_member` reason count
 is 15 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and
@@ -380,8 +381,20 @@ relaxed to `monotonic` and loads bool storage as `i8` before truncating to `i1`.
 Nested pointers, local `atomic.init`, atomic aggregate fields and non-scalar
 payloads remain fail-closed. The pointer-depth rule was also corrected in sema
 and the legacy C shape helper, preventing `**atomic<T>` from being read as the
-payload at the wrong address. The 522-root census is now C **938/1696 (55.3%)**
-and LLVM **937/1762 (53.2%)**, with 758/825 fallbacks.
+payload at the wrong address.
+
+Non-naked function mechanics no longer block canonical bodies. `weak`,
+`section`, `align`, and `noinline` are emitted by one shared wrapper per
+backend, while transitional specialized plans remain restricted to plain
+functions so they cannot silently discard attributes. This moved the two
+ordinary attributed functions in `section_attr.mc` off AST fallback in both
+backends. The same census exposed an inaccurate aggregate fact: an overlay/C
+union was labelled `declared_struct`. Executable MIR now preserves `c_union`
+identity; the verifier admits that metadata but continues to reject union
+construction as struct construction. Until canonical union layout exists, the
+affected body stays producer-incomplete instead of being falsely reported
+ready. The 522-root census is now C **939/1696 (55.4%)** and LLVM
+**939/1762 (53.3%)**, with 757/823 fallbacks and zero ready-but-fallback bodies.
 
 Runtime `assert` now owns one typed statement-level `Assert/assert_stmt` edge
 whose source block, trap block and bool condition are verified before codegen.

@@ -1678,7 +1678,8 @@ const LlvmEmitter = struct {
         right: SimpleMirCallArg,
     };
 
-    fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) !bool {
+    fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
+        if (render_attrs.naked) return false;
         const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
             fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
             for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
@@ -1715,17 +1716,9 @@ const LlvmEmitter = struct {
             self.current_params = old_params;
         }
 
-        const attr_str: []const u8 = if (self.linux_kernel and self.target_arch == .x86_64)
-            " nounwind fn_ret_thunk_extern"
-        else if (self.linux_kernel and self.target_arch == .aarch64)
-            " nounwind \"branch-target-enforcement\""
-        else if (self.linux_kernel)
-            " nounwind"
-        else
-            "";
-        const weak_str: []const u8 = if (!sig_facts.exported) "internal " else "";
+        const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
 
-        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, sig_facts.name.text });
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
@@ -1733,9 +1726,9 @@ const LlvmEmitter = struct {
         }
         const entry_label = try self.functionEntryLabel();
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, "){s} !dbg !{d} {{\n{s}:\n", .{ attr_str, scope, entry_label });
+            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, scope, entry_label });
         } else {
-            try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
+            try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
         }
         try self.out.appendSlice(self.allocator, rendered);
         try self.out.appendSlice(self.allocator, "}\n\n");
@@ -1743,15 +1736,19 @@ const LlvmEmitter = struct {
     }
 
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
-        if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        if (function.signature.is_variadic) return false;
         // Prefer the canonical executable body before constructing any of the
         // legacy, source-shaped recognition plans below.  Unsupported bodies
         // still fall through to those plans, but an admitted body has exactly
         // one semantic input: verified executable MIR.
-        if (try self.emitExecutableMirFunction(function, fn_mir)) {
+        if (try self.emitExecutableMirFunction(function, fn_mir, render_attrs)) {
             selected_path.* = .canonical;
             return true;
         }
+        // As in the C backend, attributed definitions may use the canonical
+        // wrapper or the full legacy emitter, but not a specialized plan that
+        // cannot preserve declaration mechanics.
+        if (!plainFunctionRenderAttrs(render_attrs)) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const assert_expression_plan = if (simple_trap == null)
             if (mir_assert_plan.build(fn_mir)) |plan|
@@ -9746,6 +9743,44 @@ const LlvmEmitter = struct {
         return !render.naked and !render.weak and !render.noinline_attr and render.section == null and render.effective_align == null;
     }
 
+    const LlvmFunctionRenderMechanics = struct {
+        attributes: []const u8,
+        section: []const u8,
+        alignment: []const u8,
+        linkage: []const u8,
+    };
+
+    fn llvmFunctionRenderMechanics(self: *LlvmEmitter, attrs: codegen_attrs.FunctionRenderAttrs, exported: bool) !LlvmFunctionRenderMechanics {
+        const base_attributes: []const u8 = if (attrs.naked and attrs.noinline_attr)
+            " naked noinline"
+        else if (attrs.naked)
+            " naked"
+        else if (attrs.noinline_attr)
+            " noinline"
+        else
+            "";
+        const attributes: []const u8 = if (self.linux_kernel and self.target_arch == .x86_64)
+            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind fn_ret_thunk_extern", .{base_attributes})
+        else if (self.linux_kernel and self.target_arch == .aarch64)
+            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind \"branch-target-enforcement\"", .{base_attributes})
+        else if (self.linux_kernel)
+            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind", .{base_attributes})
+        else
+            base_attributes;
+        return .{
+            .attributes = attributes,
+            .section = if (attrs.section) |section|
+                try std.fmt.allocPrint(self.scratch.allocator(), " section \"{s}\"", .{section})
+            else
+                "",
+            .alignment = if (attrs.effective_align) |alignment|
+                try std.fmt.allocPrint(self.scratch.allocator(), " align {d}", .{alignment})
+            else
+                "",
+            .linkage = if (attrs.weak) "weak " else if (!exported) "internal " else "",
+        };
+    }
+
     fn simpleMirReturnSpan(self: *LlvmEmitter, fn_mir: mir.Function) ?diagnostics.Span {
         _ = self;
         if (fn_mir.blocks.len != 1) return null;
@@ -9804,57 +9839,8 @@ const LlvmEmitter = struct {
         // ABI-correct jump/return itself; we terminate the entry block with
         // `unreachable` because the asm — not a synthesized `ret` — transfers control.
         const naked = attrs.naked;
-        // `#[noinline]`: the LLVM `noinline` function attribute keeps a distinct physical call
-        // frame (e.g. a frame-pointer backtrace must walk nested frames). Composes with naked.
-        const base_attr_str: []const u8 = if (naked and attrs.noinline_attr)
-            " naked noinline"
-        else if (naked)
-            " naked"
-        else if (attrs.noinline_attr)
-            " noinline"
-        else
-            "";
-        const attr_str: []const u8 = if (self.linux_kernel and self.target_arch == .x86_64)
-            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind fn_ret_thunk_extern", .{base_attr_str})
-        else if (self.linux_kernel and self.target_arch == .aarch64)
-            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind \"branch-target-enforcement\"", .{base_attr_str})
-        else if (self.linux_kernel)
-            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind", .{base_attr_str})
-        else
-            base_attr_str;
-        // `#[section("...")]`: emit an LLVM `section "..."` clause so the symbol lands in the
-        // named linker section (bare-metal entry points pinned by the linker script, e.g.
-        // OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
-        var section_buf: std.ArrayList(u8) = .empty;
-        defer section_buf.deinit(self.allocator);
-        if (attrs.section) |sec| {
-            try section_buf.print(self.allocator, " section \"{s}\"", .{sec});
-        }
-        const section_str: []const u8 = section_buf.items;
-        // `#[align(N)]`: emit an LLVM `align N` function attribute. `#[naked]` functions default
-        // to 4-byte alignment — they are trap/entry code whose address is loaded into an
-        // alignment-sensitive register (a RISC-V `stvec`/`mtvec` base must be 4-byte aligned;
-        // its low two bits are the MODE field, so a 2-byte-aligned vector traps to a bad PC).
-        var align_buf: [32]u8 = undefined;
-        const align_str: []const u8 = if (attrs.effective_align) |al|
-            std.fmt.bufPrint(&align_buf, " align {d}", .{al}) catch unreachable
-        else
-            "";
-        // Linkage specifier (before the return type):
-        // - `#[weak]` -> `weak` (a strong definition in another unit overrides this default);
-        // - a NON-`export` function -> `internal`, the analogue of the C backend's `static`.
-        //   MC inlines an imported module's source into every importer's object, so a non-export
-        //   helper (e.g. std/fmt_sink.mc's `fmt_put_*`) is COPIED into each object; without
-        //   internal linkage the copies collide at link time (`ld.lld: duplicate symbol`).
-        //   Exported functions keep external linkage so the C bring-up glue / cross-object
-        //   references resolve.
-        const weak_str: []const u8 = if (attrs.weak)
-            "weak "
-        else if (!sig_facts.exported)
-            "internal "
-        else
-            "";
-        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, sig_facts.name.text });
+        const mechanics = try self.llvmFunctionRenderMechanics(attrs, sig_facts.exported);
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
@@ -9869,9 +9855,9 @@ const LlvmEmitter = struct {
         // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
         if (naked) {
             if (self.current_debug_scope) |scope| {
-                try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ attr_str, section_str, align_str, scope, entry_label });
+                try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, scope, entry_label });
             } else {
-                try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ attr_str, section_str, align_str, entry_label });
+                try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
             }
             self.temp_index = 0;
             try self.emitAsmStmt(syntax_bridge.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
@@ -9947,9 +9933,9 @@ const LlvmEmitter = struct {
         self.out = real_out;
         self.entry_allocas = null;
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ attr_str, section_str, align_str, scope, entry_label });
+            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, scope, entry_label });
         } else {
-            try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ attr_str, section_str, align_str, entry_label });
+            try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
         }
         try self.out.appendSlice(self.allocator, alloca_buf.items);
         try self.out.appendSlice(self.allocator, body_buf.items);

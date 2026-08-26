@@ -703,7 +703,7 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
 fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableAggregateType, index: usize) !void {
     const body = &function.executable_body;
     if (!aggregate.type_id.isValid() or aggregate.field_count == 0 or aggregate.field_count > mir.max_executable_operands or
-        aggregate.construction != .declared_struct) return error.InvalidAggregateType;
+        (aggregate.construction != .declared_struct and aggregate.construction != .c_union)) return error.InvalidAggregateType;
     try verifyType(function, aggregate.type_id, aggregate.ty, body.complete);
     if (aggregate.ty != .struct_) return error.InvalidAggregateType;
     for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
@@ -752,7 +752,8 @@ fn verifyStructConstruction(
 ) !void {
     const body = &function.executable_body;
     const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
-    if (!sameValueType(aggregate.ty, value.result_ty) or operation.construction != aggregate.construction or
+    if (aggregate.construction != .declared_struct or operation.construction != .declared_struct or
+        !sameValueType(aggregate.ty, value.result_ty) or
         operation.operand_count != aggregate.field_count) return error.InvalidAggregateConstruction;
     var seen = [_]bool{false} ** mir.max_executable_operands;
     for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
@@ -936,7 +937,7 @@ fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.Exe
         break;
     };
     const aggregate = pointee orelse return false;
-    return aggregate.construction == .declared_struct and field_index < aggregate.field_count and
+    return (aggregate.construction == .declared_struct or aggregate.construction == .c_union) and field_index < aggregate.field_count and
         aggregate.field_type_ids[field_index].eql(target.type_id) and
         sameValueType(aggregate.field_types[field_index], target.ty);
 }

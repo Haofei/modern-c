@@ -766,6 +766,10 @@ const UnionSummary = mir_summary.UnionSummary;
 const PackedBitsSummary = mir_summary.PackedBitsSummary;
 const MirReflectEnv = mir_summary.ReflectEnv;
 
+fn executableAggregateConstruction(summary: StructSummary) AggregateConstructionKind {
+    return if (summary.is_c_union) .c_union else .declared_struct;
+}
+
 const directCalleeName = mir_syntax.directCalleeName;
 const directIdentName = mir_syntax.directIdentName;
 const exprTerminates = mir_syntax.exprTerminates;
@@ -6311,7 +6315,7 @@ const FunctionBuilder = struct {
                     // LLVM needs the canonical aggregate shape even when a
                     // resource parameter is only consumed by a no-runtime-op
                     // ownership intrinsic such as `forget_unchecked`.
-                    if (!try builder.internExecutableAggregateType(param_ty, .declared_struct, summary.fields))
+                    if (!try builder.internExecutableAggregateType(param_ty, executableAggregateConstruction(summary), summary.fields))
                         builder.executable_supported = false;
                 },
                 else => {},
@@ -7548,7 +7552,7 @@ const FunctionBuilder = struct {
                 const summary = self.structs.get(struct_name) orelse
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
                 if (field_index >= summary.fields.len or
-                    !try self.internExecutableAggregateType(.{ .struct_ = struct_name }, .declared_struct, summary.fields))
+                    !try self.internExecutableAggregateType(.{ .struct_ = struct_name }, executableAggregateConstruction(summary), summary.fields))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty))
@@ -7812,7 +7816,8 @@ const FunctionBuilder = struct {
         construction: AggregateConstructionKind,
         fields: []const ast.Field,
     ) !bool {
-        if (construction != .declared_struct or fields.len == 0 or fields.len > mir_model.max_executable_operands) return false;
+        if ((construction != .declared_struct and construction != .c_union) or
+            fields.len == 0 or fields.len > mir_model.max_executable_operands) return false;
         const type_id = try self.internTypeId(ty);
         for (self.executable_aggregate_types.items) |aggregate| {
             if (!aggregate.type_id.eql(type_id)) continue;
@@ -8204,7 +8209,7 @@ const FunctionBuilder = struct {
                         else => unreachable,
                     };
                     const summary = self.structs.get(struct_name) orelse break :projection false;
-                    if (!try self.internExecutableAggregateType(.{ .struct_ = struct_name }, .declared_struct, summary.fields)) break :projection false;
+                    if (!try self.internExecutableAggregateType(.{ .struct_ = struct_name }, executableAggregateConstruction(summary), summary.fields)) break :projection false;
                 }
                 if (!try self.fillExecutablePlace(place, node.base.*) or
                     place.projection_count + @intFromBool(implicit_deref) >= mir_model.max_executable_projections) break :projection false;

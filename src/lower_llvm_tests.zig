@@ -10,6 +10,23 @@ const mir = @import("mir.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM canonical executable MIR preserves function render attributes" {
+    const source =
+        \\#[section(".text.hot")]
+        \\export fn hot_path(x: u32) -> u32 { return x + 1; }
+        \\#[noinline]
+        \\export fn never_inlined(x: u32) -> u32 { return x + 1; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_function_attrs.mc", source, &output);
+
+    const hot = try llvmFunctionBody(output.items, "define signext i32 @hot_path(i32 signext %mc_arg_0) section \".text.hot\"");
+    try expectContains(hot, "; canonical executable MIR");
+    const noinline_body = try llvmFunctionBody(output.items, "define signext i32 @never_inlined(i32 signext %mc_arg_0) noinline");
+    try expectContains(noinline_body, "; canonical executable MIR");
+}
+
 test "LLVM valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {

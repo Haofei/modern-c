@@ -29,6 +29,33 @@ const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
 const SymbolId = mir.SymbolId;
 
+test "executable MIR preserves union construction identity" {
+    const source =
+        \\overlay union Word {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\fn touch(p: *mut Word) -> void {
+        \\    let bits: u32 = p.bits;
+        \\    p.bits = bits;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_union_construction_identity.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "touch") orelse return error.TestUnexpectedResult;
+    var found = false;
+    for (function.executable_body.aggregate_types) |aggregate| {
+        if (!mir.ValueType.eql(aggregate.ty, .{ .struct_ = "Word" })) continue;
+        try std.testing.expectEqual(mir.AggregateConstructionKind.c_union, aggregate.construction);
+        found = true;
+    }
+    try std.testing.expect(found);
+    try mir_executable_body.verify(function);
+}
+
 test "executable MIR owns valid slice representation checks and rejects mutations" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {

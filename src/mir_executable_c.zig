@@ -828,7 +828,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
         break;
     };
     const shape = aggregate orelse return false;
-    return shape.construction == .declared_struct and field_index < shape.field_count and
+    return (shape.construction == .declared_struct or shape.construction == .c_union) and field_index < shape.field_count and
         isSafeIdentifier(shape.field_spellings[field_index]) and
         shape.field_type_ids[field_index].eql(place.type_id) and
         mir.ValueType.eql(shape.field_types[field_index], place.ty);

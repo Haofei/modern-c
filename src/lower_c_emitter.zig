@@ -1180,7 +1180,7 @@ pub const CEmitter = struct {
 
     fn emitFunction(self: *CEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) anyerror!void {
         try self.writeLineDirective(function.signature.name.span);
-        try codegen_attrs.emitCFunctionRenderAttrs(self.allocator, self.out, attrs);
+        try self.emitFunctionRenderAttrs(attrs);
         if (attrs.naked) {
             try self.emitNakedFunction(function, body);
             return;
@@ -1629,7 +1629,7 @@ pub const CEmitter = struct {
     };
 
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
-        if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        if (function.signature.is_variadic) return false;
         // Prefer the canonical, syntax-free executable body whenever it is
         // complete and within this backend's capability set.  In particular,
         // do this before constructing any of the transitional specialized
@@ -1639,11 +1639,17 @@ pub const CEmitter = struct {
             mir_executable_body.verify(&fn_mir) catch break :body null;
             break :body &fn_mir.executable_body;
         } else null;
-        if (executable_body) |body| {
-            try self.emitExecutableMirFunction(function, body);
+        if (!render_attrs.naked) if (executable_body) |body| {
+            try self.emitExecutableMirFunction(function, body, render_attrs);
             selected_path.* = .canonical;
             return true;
-        }
+        };
+
+        // Transitional specialized plans do not own function declaration
+        // mechanics.  Keep them restricted to plain definitions; attributed
+        // functions either use the canonical wrapper above or fall through to
+        // the legacy definition emitter, which still renders every attribute.
+        if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const assert_expression_plan = if (simple_trap == null)
@@ -2321,8 +2327,9 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitExecutableMirFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody) !void {
+    fn emitExecutableMirFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
         try self.writeLineDirective(function.signature.name.span);
+        try self.emitFunctionRenderAttrs(render_attrs);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
@@ -9733,6 +9740,10 @@ pub const CEmitter = struct {
 
     fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, is_static: bool, with_asm_label: bool) !void {
         try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, is_static, with_asm_label);
+    }
+
+    fn emitFunctionRenderAttrs(self: *CEmitter, attrs: codegen_attrs.FunctionRenderAttrs) !void {
+        try codegen_attrs.emitCFunctionRenderAttrs(self.allocator, self.out, attrs);
     }
 
     fn emitParamDecl(self: *CEmitter, ty: ast_bridge.TypeExpr, name: []const u8) !void {

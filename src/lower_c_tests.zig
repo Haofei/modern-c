@@ -69,6 +69,23 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     });
 }
 
+test "lower-c canonical executable MIR preserves function render attributes" {
+    const source =
+        \\#[section(".text.hot")]
+        \\export fn hot_path(x: u32) -> u32 { return x + 1; }
+        \\#[noinline]
+        \\export fn never_inlined(x: u32) -> u32 { return x + 1; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_function_attrs.mc", source, &output);
+
+    const hot = try cFunctionBody(output.items, "__attribute__((section(\".text.hot\"))) uint32_t hot_path");
+    try expectContains(hot, "/* canonical executable MIR */");
+    const noinline_body = try cFunctionBody(output.items, "__attribute__((noinline)) uint32_t never_inlined");
+    try expectContains(noinline_body, "/* canonical executable MIR */");
+}
+
 test "lower-c valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {

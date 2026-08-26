@@ -63,12 +63,12 @@
       "function.has_explicit_abi": 0,
       "function.render_attrs": 1,
       "attr_syntax.emitCFunctionRenderAttrs": 0,
-      "attrs.naked": 1,
+      "attrs.naked": 2,
       "@import(\"attr_syntax.zig\")": 0,
       "@import(\"codegen_attrs.zig\")": 1,
       "codegen_attrs.emitCFunctionRenderAttrs": 1,
       "attr_syntax.FunctionRenderAttrs": 0,
-      "codegen_attrs.FunctionRenderAttrs": 1,
+      "codegen_attrs.FunctionRenderAttrs": 3,
       "const sig = function.signature": 2,
       "function.signature.is_const": 0,
       "eval.collectConstFunctionsFromDeclarations": 1,
@@ -88,7 +88,7 @@
       "function.has_explicit_abi": 0,
       "function.has_mc_abi": 0,
       "function.render_attrs": 1,
-      "attrs.naked": 1,
+      "attrs.naked": 4,
       "attrs.section": 1,
       "attrs.effective_align": 1,
       "attrs.weak": 1,
@@ -96,7 +96,7 @@
       "@import(\"attr_syntax.zig\")": 0,
       "@import(\"codegen_attrs.zig\")": 1,
       "attr_syntax.FunctionRenderAttrs": 0,
-      "codegen_attrs.FunctionRenderAttrs": 1,
+      "codegen_attrs.FunctionRenderAttrs": 3,
       "const sig = function.signature": 1,
       "function.signature.is_const": 0,
       "eval.collectConstFunctionsFromDeclarations": 1,
@@ -135,11 +135,11 @@
   },
   "mir_body_fast_path_ratchet": {
     "src/lower_c_tests.zig": {
-      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 138,
+      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 139,
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
     },
     "src/lower_llvm_tests.zig": {
-      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 138,
+      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 139,
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
     }
   },
