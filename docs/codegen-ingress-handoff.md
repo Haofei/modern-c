@@ -424,12 +424,14 @@ change the broad admitted/fallback totals above.
 
 The census now records the exact selected codegen path, separating the general
 canonical executable-MIR renderer from transitional specialized MIR plans and
-the AST fallback. Four zero-use paths (`simple_assert`,
+the AST fallback. The first four retired paths (`simple_assert`,
 `scalar_local_checked_binary_return`, `slice_length_return`, and `place_store`)
-and their C/LLVM renderer helpers were deleted; both specialized-plan chains
-are ratcheted from 38 definitions to 34. Complete backend shards remain
-mandatory retirement evidence because the broad fixture census missed inline
-tests that still require three other specialized plans.
+were deleted after proving zero use. `scalar_control` was then
+retired after its three inline-only control-flow tests moved to canonical CFG
+emission; its standalone plan, tests and both backend renderers were deleted.
+Both specialized-plan chains are now ratcheted from 38 definitions to 33.
+Complete backend shards remain mandatory retirement evidence because the broad
+fixture census still misses inline-only paths.
 
 Canonical body admission now compares executable parameters, return values and
 direct callees exclusively against typed MIR `ValueType`/callable facts. The C
@@ -449,8 +451,8 @@ the direct enum-literal branch was deleted from both copies of the transitional
 `simple_return` recognizer. Local enum fold cases remain on the bounded legacy
 branch until their representation-check cleanup is explicit in executable MIR.
 
-The 34-plan existence checks are flat boolean registries, replacing the
-duplicated 34-term negated conjunctions. This does not
+The 33-plan existence checks are flat boolean registries, replacing the
+duplicated negated conjunctions. This does not
 pretend the plans are gone, but it makes every later retirement a one-entry
 deletion and removes operator-precedence risk from the cutover mechanism.
 

@@ -12,7 +12,6 @@ const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_assert_plan = @import("mir_assert_plan.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
-const mir_scalar_control_plan = @import("mir_scalar_control_plan.zig");
 const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
@@ -1721,13 +1720,6 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const scalar_control_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and scalar_expression_plan == null)
-            if (mir_scalar_control_plan.build(&fn_mir)) |plan|
-                if (self.mirScalarControlPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
         const identity_return_plan = if (simple_trap == null)
             if (mir_statement_plan.buildIdentityReturn(fn_mir)) |plan|
                 if (self.mirIdentityReturnPlanSupported(function, plan)) plan else null
@@ -1860,7 +1852,6 @@ pub const CEmitter = struct {
             access_local_address_update != null,
             access_structural_operation != null,
             scalar_expression_plan != null,
-            scalar_control_plan != null,
             identity_return_plan != null,
             while_control_plan != null,
             sequence_foreach_update_plan != null,
@@ -1930,9 +1921,6 @@ pub const CEmitter = struct {
         } else if (scalar_expression_plan) |plan| {
             selected_path.* = .scalar_expression;
             try self.emitMirScalarExpressionPlan(plan);
-        } else if (scalar_control_plan) |plan| {
-            selected_path.* = .scalar_control;
-            try self.emitMirScalarControlPlan(plan);
         } else if (identity_return_plan) |plan| {
             selected_path.* = .identity_return;
             try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
@@ -4184,124 +4172,6 @@ pub const CEmitter = struct {
         try self.writeLineDirective(spanFromMirSourcePoint(flag.compare_location.source));
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s} != {d};\n", .{ and_value, flag.zero.value });
-    }
-
-    fn mirScalarControlPlanSupported(self: *CEmitter, function: anytype, plan: mir_scalar_control_plan.Plan) bool {
-        const local = switch (plan) {
-            .conditional => |conditional| conditional.local,
-            .count_down => |count_down| count_down.local,
-        };
-        const declared_return = function.signature.transitionalReturnType() orelse return false;
-        const initializer_ty = self.mirScalarControlParameterType(function, local.initializer.name) orelse return false;
-        if (!local.value_id.isValid() or !local.initializer.value_id.isValid() or !self.mirScalarControlIntegerTypeMatches(local.value_ty, declared_return) or
-            !self.mirScalarControlIntegerTypeMatches(local.initializer.value_ty, initializer_ty) or
-            !type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(initializer_ty))) return false;
-        return switch (plan) {
-            .conditional => |conditional| blk: {
-                const condition_ty = self.mirScalarControlParameterType(function, conditional.condition.name) orelse break :blk false;
-                if (!conditional.condition.value_id.isValid() or !isBoolType(self.resolveAliasType(condition_ty))) break :blk false;
-                if (!self.mirScalarControlUpdateMatchesLocal(conditional.true_update, local)) break :blk false;
-                if (conditional.false_update) |update| if (!self.mirScalarControlUpdateMatchesLocal(update, local)) break :blk false;
-                break :blk true;
-            },
-            .count_down => |count_down| self.mirScalarControlUpdateMatchesLocal(count_down.update, local) and count_down.update.operation == .sub,
-        };
-    }
-
-    fn mirScalarControlParameterType(self: *CEmitter, function: anytype, name: []const u8) ?TransitionalTypeExpr {
-        _ = self;
-        for (function.signature.params) |param| if (std.mem.eql(u8, param.name.text, name)) return param.ty;
-        return null;
-    }
-
-    fn mirScalarControlIntegerTypeMatches(self: *CEmitter, value_ty: mir.ValueType, source_ty: TransitionalTypeExpr) bool {
-        const name = switch (value_ty) {
-            .integer => |integer| integer,
-            else => return false,
-        };
-        const resolved_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
-        return std.mem.eql(u8, name, resolved_name);
-    }
-
-    fn mirScalarControlUpdateMatchesLocal(self: *CEmitter, update: mir_scalar_control_plan.CheckedUpdate, local: mir_scalar_control_plan.Local) bool {
-        _ = self;
-        return update.block_id.isValid() and update.trap_block.isValid() and update.generation == local.generation;
-    }
-
-    fn emitMirScalarControlPlan(self: *CEmitter, plan: mir_scalar_control_plan.Plan) !void {
-        switch (plan) {
-            .conditional => |conditional| {
-                try self.emitMirScalarControlLocal(conditional.local);
-                try self.writeLineDirective(spanFromMirSourcePoint(conditional.condition.location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "if ({s}) {{\n", .{try self.cIdent(conditional.condition.name)});
-                self.indent += 1;
-                try self.emitMirScalarControlUpdate(conditional.local, conditional.true_update);
-                self.indent -= 1;
-                if (conditional.false_update) |update| {
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "} else {\n");
-                    self.indent += 1;
-                    try self.emitMirScalarControlUpdate(conditional.local, update);
-                    self.indent -= 1;
-                }
-                try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "}\n");
-                try self.emitMirScalarControlReturn(conditional.local, conditional.return_location);
-            },
-            .count_down => |count_down| {
-                try self.emitMirScalarControlLocal(count_down.local);
-                try self.writeLineDirective(spanFromMirSourcePoint(count_down.condition_location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "while ({s} != 0) {{\n", .{try self.cIdent(count_down.local.name)});
-                self.indent += 1;
-                try self.emitMirScalarControlUpdate(count_down.local, count_down.update);
-                self.indent -= 1;
-                try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "}\n");
-                try self.emitMirScalarControlReturn(count_down.local, count_down.return_location);
-            },
-        }
-    }
-
-    fn emitMirScalarControlLocal(self: *CEmitter, local: mir_scalar_control_plan.Local) !void {
-        const initializer_ty = self.currentFunctionParameterType(local.initializer.name) orelse return error.UnsupportedCEmission;
-        try self.writeLineDirective(spanFromMirSourcePoint(local.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{
-            try self.cTypeFor(initializer_ty, .typedef_name),
-            try self.cIdent(local.name),
-            try self.cIdent(local.initializer.name),
-        });
-    }
-
-    fn currentFunctionParameterType(self: *CEmitter, name: []const u8) ?TransitionalTypeExpr {
-        const current = self.current_function orelse return null;
-        const signature = self.functions.get(current) orelse return null;
-        for (signature.params) |param| if (std.mem.eql(u8, param.name.text, name)) return param.ty;
-        return null;
-    }
-
-    fn emitMirScalarControlUpdate(self: *CEmitter, local: mir_scalar_control_plan.Local, update: mir_scalar_control_plan.CheckedUpdate) !void {
-        const type_name = local.value_ty.name();
-        const operation = switch (update.operation) {
-            .add => "add",
-            .sub => "sub",
-        };
-        try self.writeLineDirective(spanFromMirSourcePoint(update.assignment.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = mc_checked_{s}_{s}({s}, 1);\n", .{
-            try self.cIdent(local.name),
-            operation,
-            type_name,
-            try self.cIdent(local.name),
-        });
-    }
-
-    fn emitMirScalarControlReturn(self: *CEmitter, local: mir_scalar_control_plan.Local, return_location: mir_scalar_control_plan.Location) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(local.name)});
     }
 
     fn simpleMirReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {

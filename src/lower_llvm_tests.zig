@@ -14150,7 +14150,7 @@ test "LLVM scalar control plans preserve checked local CFGs without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_control_plan.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_canonical_scalar_control.mc", source, &output);
 
     const adjust = try llvmFunctionBody(output.items, "define internal i32 @adjust");
     try expectContains(adjust, "alloca i32");
