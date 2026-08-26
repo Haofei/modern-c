@@ -113,18 +113,6 @@ pub const NullablePointerVoidCallPlan = struct {
     argument_location: Location,
 };
 
-/// A checked single-pointer parameter explicitly converted to an integer. MIR
-/// owns the source/target type facts, pointer identity, representation check,
-/// and return edge; backends only choose their target spelling for ptr-to-int.
-pub const PointerToIntegerCastPlan = struct {
-    source_name: []const u8,
-    source_id: mir.ValueId,
-    source_fact: mir.TargetTypeFact,
-    target_fact: mir.TargetTypeFact,
-    cast_location: Location,
-    return_location: Location,
-};
-
 pub const NullableTryPlan = struct {
     pub const Source = union(enum) {
         parameter: struct {
@@ -780,69 +768,6 @@ pub fn buildNullablePointerVoidCall(function: mir.Function) ?NullablePointerVoid
         .source_type_fact = source_fact,
         .call_location = locationFromInstruction(call),
         .argument_location = locationFromInstruction(argument_expr),
-    };
-}
-
-pub fn buildPointerToIntegerCast(function: mir.Function) ?PointerToIntegerCastPlan {
-    if (function.blocks.len != 2 or function.trap_edges.len != 1 or
-        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0) return null;
-    switch (function.return_ty) {
-        .integer => {},
-        else => return null,
-    }
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const entry = function.blocks[0];
-    if (entry.terminator != .return_ or entry.successors.len != 1) return null;
-    var cast_expr: ?mir.Instruction = null;
-    var source_expr: ?mir.Instruction = null;
-    var returned: ?mir.Instruction = null;
-    var expression_count: usize = 0;
-    for (entry.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type, .typed_load, .representation_check => {},
-        .expr => {
-            expression_count += 1;
-            if (std.mem.eql(u8, instruction.detail, "cast")) {
-                if (cast_expr != null) return null;
-                cast_expr = instruction;
-            } else if (instruction.typed_value_id != null) {
-                if (source_expr != null) return null;
-                source_expr = instruction;
-            } else return null;
-        },
-        .return_value => {
-            if (returned != null or !instruction.typed_value_operand_span_id.isValid()) return null;
-            returned = instruction;
-        },
-        else => return null,
-    };
-    if (expression_count != 2) return null;
-    const cast = cast_expr orelse return null;
-    const source = source_expr orelse return null;
-    const ret = returned orelse return null;
-    if (!ret.typed_value_operand_span_id.eql(cast.typed_span_id) or
-        !sameRepresentationType(ret.result_ty, function.return_ty)) return null;
-
-    const source_fact = targetFactBySpan(function, .explicit_cast_source, cast.typed_span_id) orelse return null;
-    const target_fact = targetFactBySpan(function, .explicit_cast_target, cast.typed_span_id) orelse return null;
-    if (std.meta.activeTag(source_fact.target_ty.kind) != .pointer or std.meta.activeTag(source_fact.result_ty) != .pointer or
-        target_fact.result_ty != .integer or !sameRepresentationType(target_fact.result_ty, function.return_ty)) return null;
-    const source_id = source.typed_value_id orelse return null;
-    const source_name = valueIdentityName(function, source_id) orelse return null;
-    if (parameterType(function, source_name) == null or !std.mem.eql(u8, source.detail, source_name)) return null;
-    const source_place = buildPlace(function, entry, source.typed_span_id) orelse return null;
-    if (source_place.root_kind != .parameter or !source_place.root_indirect or
-        source_place.projection_count != 0 or !source_place.root_id.eql(source_id) or
-        !placeRootRepresentationMatches(function, source_place)) return null;
-
-    return .{
-        .source_name = source_name,
-        .source_id = source_id,
-        .source_fact = source_fact,
-        .target_fact = target_fact,
-        .cast_location = locationFromInstruction(cast),
-        .return_location = locationFromInstruction(ret),
     };
 }
 

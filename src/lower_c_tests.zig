@@ -13829,7 +13829,12 @@ test "lower-c checked pointer-to-integer cast does not use function body fallbac
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_to_integer.mc", source, &output);
-    try expectContains(output.items, "return ((uintptr_t)p);");
+    const body = try cFunctionBody(output.items, "static uintptr_t pointer_to_usize(uint32_t * p)");
+    try expectContains(body, "/* canonical executable MIR */");
+    const guard = std.mem.indexOf(u8, body, "== NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const cast = std.mem.indexOf(u8, body, "= ((uintptr_t)(mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    const returned = std.mem.indexOfPos(u8, body, cast, "return mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < cast and cast < returned);
 }
 
 test "lower-c address representation cast does not use function body fallback" {

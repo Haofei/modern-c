@@ -14072,7 +14072,11 @@ test "LLVM checked pointer-to-integer cast does not use function body fallback" 
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_to_integer.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @pointer_to_usize");
-    try expectContains(body, "ptrtoint ptr %p to i64");
+    try expectContains(body, "; canonical executable MIR");
+    const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const cast = std.mem.indexOf(u8, body, "ptrtoint ptr %mc_arg_0 to i64") orelse return error.TestUnexpectedResult;
+    const returned = std.mem.indexOfPos(u8, body, cast, "ret i64 %mc_expr_tmp_") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < cast and cast < returned);
 }
 
 test "LLVM address representation cast does not use function body fallback" {

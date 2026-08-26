@@ -4738,7 +4738,7 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
-test "MIR plans a checked pointer-to-integer cast" {
+test "executable MIR owns checked pointer-to-integer casts" {
     const source =
         \\fn pointer_to_usize(p: *mut u32) -> usize {
         \\    return p as usize;
@@ -4749,12 +4749,24 @@ test "MIR plans a checked pointer-to-integer cast" {
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer typed_mir.deinit();
 
-    const function = functionByName(typed_mir, "pointer_to_usize") orelse return error.TestUnexpectedResult;
-    const plan = mir_statement_plan.buildPointerToIntegerCast(function) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("p", plan.source_name);
-    try std.testing.expect(plan.source_id.isValid());
-    try std.testing.expectEqual(.pointer, std.meta.activeTag(plan.source_fact.result_ty));
-    try std.testing.expectEqual(.integer, std.meta.activeTag(plan.target_fact.result_ty));
+    const function = functionByNameMut(&typed_mir, "pointer_to_usize") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    var cast_index: ?usize = null;
+    for (function.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .cast => |cast| {
+            try std.testing.expectEqual(mir.ExecutableCastKind.pointer_to_integer, cast.kind);
+            try std.testing.expectEqual(.pointer, std.meta.activeTag(function.executable_body.expressions[cast.operand.index()].result_ty));
+            try std.testing.expectEqual(.integer, std.meta.activeTag(expression.result_ty));
+            cast_index = index;
+        },
+        else => {},
+    };
+    const index = cast_index orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(function);
+    function.executable_body.expressions[index].operation.cast.kind = .address_to_integer;
+    try std.testing.expectError(error.InvalidCast, mir_executable_body.verify(function));
+    function.executable_body.expressions[index].operation.cast.kind = .pointer_to_integer;
+    try mir_executable_body.verify(function);
 }
 
 test "executable MIR owns pure logical eager-evaluation proof" {

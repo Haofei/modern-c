@@ -1,7 +1,7 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-26 after retiring the logical-return specialized plan.
+2026-08-26 after retiring the pointer-to-integer specialized plan.
 
 ## TL;DR
 
@@ -429,7 +429,7 @@ the AST fallback. The first four retired paths (`simple_assert`,
 were deleted after proving zero use. `scalar_control` was then
 retired after its three inline-only control-flow tests moved to canonical CFG
 emission; its standalone plan, tests and both backend renderers were deleted.
-Both specialized-plan chains are now ratcheted from 38 definitions to 30.
+Both specialized-plan chains are now ratcheted from 38 definitions to 29.
 Complete backend shards remain mandatory retirement evidence because the broad
 fixture census still misses inline-only paths.
 
@@ -451,7 +451,7 @@ the direct enum-literal branch was deleted from both copies of the transitional
 `simple_return` recognizer. Local enum fold cases remain on the bounded legacy
 branch until their representation-check cleanup is explicit in executable MIR.
 
-The 30-plan existence checks are flat boolean registries, replacing the
+The 29-plan existence checks are flat boolean registries, replacing the
 duplicated negated conjunctions. This does not
 pretend the plans are gone, but it makes every later retirement a one-entry
 deletion and removes operator-precedence risk from the cutover mechanism.
@@ -484,6 +484,13 @@ or forged proof, while both renderers consume the same fact. The strict census
 moved four functions per backend to canonical emission (C 61/99, LLVM 59/101),
 and the plan model, builder, census path, and both backend emitters were deleted.
 
+`pointer_to_integer_cast` is fully retired. `ExecutableCastKind` now owns the
+pointer-to-integer conversion, while the existing representation-check
+expression and `InvalidRepresentation` edge remain explicit. C emits the guard
+before its integer cast and LLVM emits the same guard before `ptrtoint`. The
+strict census moved one function per backend to canonical emission (C 62/98,
+LLVM 60/100); the standalone plan and both backend implementations were deleted.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather
@@ -494,8 +501,8 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530. The current
-strict corpus remains fully admitted, split into C 61 canonical/99 specialized
-and LLVM 59 canonical/101 specialized. The exact-root soundness gate
+strict corpus remains fully admitted, split into C 62 canonical/98 specialized
+and LLVM 60 canonical/100 specialized. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

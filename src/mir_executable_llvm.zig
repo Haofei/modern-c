@@ -568,6 +568,7 @@ const Renderer = struct {
         const operation: ?[]const u8 = switch (expected) {
             .identity => null,
             .address_to_integer, .integer_to_address => null,
+            .pointer_to_integer => "ptrtoint",
             .pointer_to_nullable, .pointer_const_narrow => null,
             .unsigned_resize => resize: {
                 const source = source_info orelse return error.InvalidBody;
@@ -1423,6 +1424,7 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
         .identity => true,
         .address_to_integer => operand.result_ty == .address and target != null and !target.?.signed and target.?.bits == 64,
         .integer_to_address => source != null and !source.?.signed and source.?.bits == 64 and expression.result_ty == .address,
+        .pointer_to_integer => operand.result_ty == .pointer and target != null,
         .pointer_to_nullable, .pointer_const_narrow => std.mem.eql(u8, scalarLlvmType(operand.result_ty) orelse return false, "ptr") and
             std.mem.eql(u8, scalarLlvmType(expression.result_ty) orelse return false, "ptr"),
         .unsigned_resize => source != null and target != null and !source.?.signed and !target.?.signed,

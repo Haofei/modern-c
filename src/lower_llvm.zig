@@ -1864,11 +1864,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const pointer_to_integer_cast_plan = if (simple_trap == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null)
-            mir_statement_plan.buildPointerToIntegerCast(fn_mir)
-        else
-            null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1901,7 +1897,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1926,7 +1922,6 @@ const LlvmEmitter = struct {
             nullable_pointer_local_return_plan != null,
             nullable_pointer_void_call_plan != null,
             nullable_try_plan != null,
-            pointer_to_integer_cast_plan != null,
             simple_return != null,
             simple_void_body != null,
             simple_conditional_return != null,
@@ -2052,9 +2047,6 @@ const LlvmEmitter = struct {
         } else if (nullable_try_plan) |plan| {
             selected_path.* = .nullable_try;
             try self.emitMirNullableTryPlan(plan);
-        } else if (pointer_to_integer_cast_plan) |plan| {
-            selected_path.* = .pointer_to_integer_cast;
-            try self.emitMirPointerToIntegerCastPlan(plan);
         } else if (nullable_pointer_void_call_plan) |plan| {
             selected_path.* = .nullable_pointer_void_call;
             try self.emitMirNullablePointerVoidCallPlan(plan);
@@ -4514,19 +4506,6 @@ const LlvmEmitter = struct {
                 }
             },
         }
-    }
-
-    fn emitMirPointerToIntegerCastPlan(self: *LlvmEmitter, plan: mir_statement_plan.PointerToIntegerCastPlan) !void {
-        const span = spanFromMirSourcePoint(plan.cast_location.source);
-        self.current_debug_span = span;
-        const value = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = ptrtoint ptr %{s} to {s}{s}\n", .{
-            value,
-            plan.source_name,
-            try self.llvmType(plan.target_fact.target_ty),
-            try self.debugCallSuffix(),
-        });
-        try self.emitReturnValue(plan.target_fact.target_ty, value, spanFromMirSourcePoint(plan.return_location.source));
     }
 
     fn mirPlanSourceTypeMatches(self: *LlvmEmitter, value_ty: mir.ValueType, source_ty: TransitionalTypeExpr) bool {

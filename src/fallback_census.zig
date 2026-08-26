@@ -81,7 +81,6 @@ pub const SelectedPath = enum {
     scalar_switch_return,
     nullable_pointer_local_return,
     nullable_try,
-    pointer_to_integer_cast,
     nullable_pointer_void_call,
     indirect_call_return,
     statement,

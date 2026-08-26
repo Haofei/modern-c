@@ -415,6 +415,7 @@ pub const ExecutableCastKind = enum {
     signed_widen,
     address_to_integer,
     integer_to_address,
+    pointer_to_integer,
     pointer_to_nullable,
     pointer_const_narrow,
 
@@ -428,6 +429,7 @@ pub const ExecutableCastKind = enum {
             const source_integer = integerInfo(source) orelse return null;
             return if (!source_integer.signed and source_integer.bits == 64) .integer_to_address else null;
         }
+        if (source == .pointer and integerInfo(target) != null) return .pointer_to_integer;
         if (source == .pointer and target == .nullable_pointer) {
             return if (pointerQualificationCompatible(source.pointer, target.nullable_pointer)) .pointer_to_nullable else null;
         }

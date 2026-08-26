@@ -1775,11 +1775,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const pointer_to_integer_cast_plan = if (simple_trap == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null)
-            mir_statement_plan.buildPointerToIntegerCast(fn_mir)
-        else
-            null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and scalar_expression_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and scalar_expression_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1834,7 +1830,6 @@ pub const CEmitter = struct {
             nullable_pointer_local_return_plan != null,
             nullable_pointer_void_call_plan != null,
             nullable_try_plan != null,
-            pointer_to_integer_cast_plan != null,
             simple_return != null,
             simple_void_body != null,
             simple_conditional_return != null,
@@ -1921,9 +1916,6 @@ pub const CEmitter = struct {
         } else if (nullable_try_plan) |plan| {
             selected_path.* = .nullable_try;
             try self.emitMirNullableTryPlan(plan);
-        } else if (pointer_to_integer_cast_plan) |plan| {
-            selected_path.* = .pointer_to_integer_cast;
-            try self.emitMirPointerToIntegerCastPlan(plan);
         } else if (nullable_pointer_void_call_plan) |plan| {
             selected_path.* = .nullable_pointer_void_call;
             try self.emitMirNullablePointerVoidCallPlan(plan);
@@ -6063,15 +6055,6 @@ pub const CEmitter = struct {
                 try self.out.print(self.allocator, "{s}({s});\n", .{ try self.cIdent(call.callee_name), temp });
             },
         }
-    }
-
-    fn emitMirPointerToIntegerCastPlan(self: *CEmitter, plan: mir_statement_plan.PointerToIntegerCastPlan) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return (({s}){s});\n", .{
-            try self.cTypeFor(plan.target_fact.target_ty, .typedef_name),
-            try self.cIdent(plan.source_name),
-        });
     }
 
     fn emitMirScalarLocalCheckedBinaryOperand(
