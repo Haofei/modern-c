@@ -374,7 +374,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
                 } else {
-                    if (!isSingleParameterDerefPlace(body, target.*, false) or !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
+                    if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
+                        !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
                     const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, address.representation_span_id, source);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
@@ -415,7 +416,9 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .binary => |binary| if (binary.arithmetic != .checked) return error.InvalidTrapEdge,
                     .load => |load| {
                         const target = place(body, load.place) orelse return error.InvalidTrapEdge;
-                        if (target.storage != .ordinary or !isParameterScalarAccessPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
+                        if (target.storage != .ordinary or
+                            !(isParameterScalarAccessPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
+                            edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     .atomic_load => |load| {
@@ -426,7 +429,8 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     },
                     .address_of => |address| {
                         const target = place(body, address.place) orelse return error.InvalidTrapEdge;
-                        if (!isSingleParameterDerefPlace(body, target.*, false) or edge.kind != .InvalidRepresentation or
+                        if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
+                            edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     .builtin_call => |call| {
@@ -456,7 +460,8 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                 switch (owner.operation) {
                     .store => |store| {
                         const target = place(body, store.place) orelse return error.InvalidTrapEdge;
-                        if (!isParameterScalarAccessPlace(body, target.*, true) or edge.kind != .InvalidRepresentation or
+                        if (!(isParameterScalarAccessPlace(body, target.*, true) or mir.executableLocalAddressDerefPlace(body, target.*, true)) or
+                            edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                         break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
                     },
@@ -801,7 +806,9 @@ fn verifyMemoryAccess(
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
     if (target.projection_count != 0) {
         if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
-        if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
+        const expected_kind: mir.ExecutableMemoryAccessKind =
+            if (mir.executableLocalAddressDerefPlace(body, target.*, false)) .plain else .race_unordered;
+        if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
         return;
     }
     switch (target.root) {
@@ -877,6 +884,7 @@ fn isComputedRawManyDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
 
 fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
     return isParameterScalarAccessPlace(body, target, require_mutable) or
+        mir.executableLocalAddressDerefPlace(body, target, require_mutable) or
         isComputedRawManyDerefPlace(body, target, require_mutable);
 }
 

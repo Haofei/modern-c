@@ -732,10 +732,13 @@ test "lower-c emits local address update from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_address_update.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t update(uint32_t seed)");
-    try expectContains(body, "uint32_t value = seed;");
-    try expectContains(body, "uint32_t * mc_tmp0 = &value;");
-    try expectContains(body, "*mc_tmp0 = mc_checked_add_u32(value, 1);");
-    try expectContains(body, "return value;");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "uint32_t value = mc_exec_tmp_");
+    try expectContains(body, "uint32_t * pointer = mc_exec_tmp_");
+    try expectContains(body, "mc_checked_add_u32(");
+    try expectContains(body, "if (pointer == NULL) mc_trap_InvalidRepresentation();");
+    try expectContains(body, "(*(pointer)) = mc_exec_tmp_");
+    try expectContains(body, "return mc_exec_tmp_");
 }
 
 test "lower-c emits the structural access tail from MIR without body fallback" {

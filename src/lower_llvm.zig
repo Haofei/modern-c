@@ -1774,10 +1774,6 @@ const LlvmEmitter = struct {
             const body = access_body_plan orelse break :blk null;
             break :blk mir_access_plan.buildSliceOperation(body);
         } else null;
-        const llvm_local_address_update = if (llvm_access_operation == null and access_body_plan != null)
-            mir_access_plan.buildLocalAddressUpdate(access_body_plan.?)
-        else
-            null;
         const while_control_plan = if (simple_trap == null)
             if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
                 if (self.mirWhileControlPlanSupported(function, plan)) plan else null
@@ -1841,7 +1837,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and llvm_local_address_update == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1867,7 +1863,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1879,7 +1875,6 @@ const LlvmEmitter = struct {
             workflow_plan != null,
             alloca_hoist_plan != null,
             llvm_access_operation != null,
-            llvm_local_address_update != null,
             llvm_structural_access_operation != null,
             while_control_plan != null,
             sequence_foreach_update_plan != null,
@@ -1971,9 +1966,6 @@ const LlvmEmitter = struct {
         } else if (llvm_access_operation) |operation| {
             selected_path.* = .access_operation;
             try self.emitMirAccessPlan(operation, ret_llvm);
-        } else if (llvm_local_address_update) |operation| {
-            selected_path.* = .access_local_address_update;
-            try self.emitMirLocalAddressUpdate(operation, ret_llvm);
         } else if (llvm_structural_access_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirStructuralAccessPlan(access_body_plan.?, operation, ret_llvm);
@@ -5516,21 +5508,6 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  store atomic {s} %{s}, ptr {s} unordered, align {d}\n  ret void\n", .{ scalar_ty, value.name orelse return error.UnsupportedLlvmEmission, element_pointer, alignment });
             },
         }
-    }
-
-    fn emitMirLocalAddressUpdate(self: *LlvmEmitter, operation: mir_access_plan.LocalAddressUpdate, ret_llvm: []const u8) !void {
-        if (!std.mem.eql(u8, ret_llvm, "i32")) return error.UnsupportedLlvmEmission;
-        const slot = try self.nextTemp();
-        const loaded = try self.nextTemp();
-        const pair = try self.nextTemp();
-        const next = try self.nextTemp();
-        const overflow = try self.nextTemp();
-        const trap = try self.nextLabel("local_address_overflow");
-        const cont = try self.nextLabel("local_address_store");
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca i32\n  store i32 %{s}, ptr {s}, align 4\n  {s} = load i32, ptr {s}, align 4\n  {s} = call {{ i32, i1 }} @llvm.uadd.with.overflow.i32(i32 {s}, i32 {d})\n  {s} = extractvalue {{ i32, i1 }} {s}, 0\n  {s} = extractvalue {{ i32, i1 }} {s}, 1\n", .{ slot, operation.initial_name, slot, loaded, slot, pair, loaded, operation.increment, next, pair, overflow, pair });
-        try self.emitTrapBranch(overflow, trap, cont, trap, cont, "IntegerOverflow");
-        try self.out.print(self.allocator, "  store i32 {s}, ptr {s}, align 4\n  {s} = load i32, ptr {s}, align 4\n  ret i32 {s}\n", .{ next, slot, result, slot, result });
     }
 
     fn mirScalarLocalCheckedBinaryOperand(

@@ -14686,9 +14686,12 @@ test "LLVM local-address access tag lowers checked update without function body 
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_local_address_tag.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @local_address");
+    try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "@llvm.uadd.with.overflow.i32");
     try expectContains(body, "call void @mc_trap_IntegerOverflow()");
-    try expectContains(body, "store i32 %value, ptr %");
+    try expectContains(body, "load ptr, ptr %mc_local_");
+    try expectContains(body, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(body, "store i32 %mc_expr_tmp_");
 }
 
 test "LLVM pointer-to-array scalar index access lowers race-tolerantly" {

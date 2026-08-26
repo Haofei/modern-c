@@ -458,65 +458,6 @@ pub fn buildSliceOperation(body: AccessBodyPlan) ?SliceOperation {
     return .{ .kind = .load, .scalar = scalar, .base = base, .index = index_value };
 }
 
-pub const LocalAddressUpdate = struct {
-    local_name: []const u8,
-    initial_name: []const u8,
-    increment: usize,
-};
-
-pub fn buildLocalAddressUpdate(body: AccessBodyPlan) ?LocalAddressUpdate {
-    var root: ?LocalInit = null;
-    var address: ?AccessEvent = null;
-    var deref: ?AccessEvent = null;
-    var store: ?Store = null;
-    var returned: ?Return = null;
-    for (body.statements) |statement| switch (statement) {
-        .local_init => |local| switch (local.value) {
-            .named => if (root == null and sliceScalarFor(local.type_ref.value_ty) == .u32) {
-                root = local;
-            } else return null,
-            .access_result => {},
-            else => return null,
-        },
-        .address_of => |event| if (address == null) {
-            address = event;
-        } else return null,
-        .deref_load => |event| if (deref == null) {
-            deref = event;
-        } else return null,
-        .deref_store => |value| if (store == null) {
-            store = value;
-        } else return null,
-        .return_value => |value| if (returned == null) {
-            returned = value;
-        } else return null,
-        else => return null,
-    };
-    const local = root orelse return null;
-    const initial = switch (local.value) {
-        .named => |value| value,
-        else => unreachable,
-    };
-    const address_event = address orelse return null;
-    if (address_event.access_index >= body.accesses.len) return null;
-    const address_access = switch (body.accesses[address_event.access_index]) {
-        .address_of => |value| value,
-        else => return null,
-    };
-    if (address_access.place.root_kind != .local or address_access.place.projection_count != 0 or !std.mem.eql(u8, address_access.place.root.name orelse return null, local.name)) return null;
-    const deref_event = deref orelse return null;
-    const stored = store orelse return null;
-    if (stored.target_access_index != deref_event.access_index) return null;
-    const binary = switch (stored.value) {
-        .checked_binary => |value| value,
-        else => return null,
-    };
-    if (!std.mem.eql(u8, binary.op, "add") or !std.mem.eql(u8, binary.left.name orelse return null, local.name) or binary.right.integer_value == null or sliceScalarFor(binary.type_ref.value_ty) != .u32) return null;
-    const returned_value = (returned orelse return null).value orelse return null;
-    if (!std.mem.eql(u8, returned_value.name orelse return null, local.name)) return null;
-    return .{ .local_name = local.name, .initial_name = initial.name orelse return null, .increment = binary.right.integer_value.? };
-}
-
 /// Build a finite statement/value plan for the strict address and slice
 /// bucket. `build` first verifies every AccessFact/instruction/bounds edge;
 /// this layer then admits only locals, direct calls, access stores, and a

@@ -67,7 +67,6 @@ pub const SelectedPath = enum {
     alloca_hoist,
     access_slice,
     access_operation,
-    access_local_address_update,
     access_structural,
     while_control,
     sequence_foreach_update,

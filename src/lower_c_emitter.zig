@@ -1676,11 +1676,7 @@ pub const CEmitter = struct {
             const plan = access_body_plan orelse break :blk null;
             break :blk if (self.mirAccessSlicePlanSupported(function, plan)) plan else null;
         } else null;
-        const access_local_address_update = if (access_slice_plan == null and access_body_plan != null)
-            mir_access_plan.buildLocalAddressUpdate(access_body_plan.?)
-        else
-            null;
-        const access_structural_operation = if (access_slice_plan == null and access_local_address_update == null and access_body_plan != null)
+        const access_structural_operation = if (access_slice_plan == null and access_body_plan != null)
             if (mir_access_plan.buildStructuralOperation(access_body_plan.?)) |operation|
                 if (self.mirAccessStructuralPlanSupported(function, access_body_plan.?, operation)) operation else null
             else
@@ -1752,7 +1748,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1787,7 +1783,6 @@ pub const CEmitter = struct {
             workflow_plan != null,
             alloca_hoist_plan != null,
             access_slice_plan != null,
-            access_local_address_update != null,
             access_structural_operation != null,
             while_control_plan != null,
             sequence_foreach_update_plan != null,
@@ -1840,9 +1835,6 @@ pub const CEmitter = struct {
         } else if (access_slice_plan) |plan| {
             selected_path.* = .access_slice;
             try self.emitMirAccessSlicePlan(plan);
-        } else if (access_local_address_update) |operation| {
-            selected_path.* = .access_local_address_update;
-            try self.emitMirLocalAddressUpdate(operation);
         } else if (access_structural_priority) {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, access_structural_operation.?);
@@ -3019,25 +3011,6 @@ pub const CEmitter = struct {
         } else {
             try self.out.print(self.allocator, "return (({s})mc_race_load_{s}(&({s}.ptr[mc_check_index_usize({s}, {s}.len)])));\n", .{ scalar.c_type, scalar.race_type_name, base, index_text, base });
         }
-    }
-
-    fn emitMirLocalAddressUpdate(self: *CEmitter, operation: mir_access_plan.LocalAddressUpdate) !void {
-        const pointer = try self.nextTempName();
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint32_t {s} = {s};\n", .{
-            try self.cIdent(operation.local_name),
-            try self.cIdent(operation.initial_name),
-        });
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint32_t * {s} = &{s};\n", .{ pointer, try self.cIdent(operation.local_name) });
-        try self.writeIndent();
-        try self.out.print(self.allocator, "*{s} = mc_checked_add_u32({s}, {d});\n", .{
-            pointer,
-            try self.cIdent(operation.local_name),
-            operation.increment,
-        });
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(operation.local_name)});
     }
 
     fn mirAccessStructuralPlanSupported(self: *CEmitter, function: anytype, body: mir_access_plan.AccessBodyPlan, operation: mir_access_plan.StructuralOperation) bool {

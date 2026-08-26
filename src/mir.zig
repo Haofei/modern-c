@@ -7020,7 +7020,18 @@ const FunctionBuilder = struct {
             parameter_ty = parameter.ty;
             break;
         };
-        const root_ty = parameter_ty orelse return false;
+        const root_ty = parameter_ty orelse local_alias: {
+            if (place.projection_count != 1) return false;
+            if (!mir_model.executableLocalAddressAlias(
+                self.executable_statements.items,
+                self.executable_expressions.items,
+                self.executable_places.items,
+                local_id,
+                place.root_ty,
+                place.root_type_id,
+            )) return false;
+            break :local_alias place.root_ty;
+        };
         if (!sameValueType(root_ty, place.root_ty) or mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
         const shape = switch (root_ty) {
             .pointer => |value| value,
@@ -7146,7 +7157,20 @@ const FunctionBuilder = struct {
     ) bool {
         if (!sameValueType(place.ty, ty) or access.alignment != mir_model.ExecutableMemoryAccess.scalarAlignment(ty)) return false;
         if (place.projection_count != 0) {
-            if (!self.executablePlaceComplete(place) or access.kind != .race_unordered) return false;
+            if (!self.executablePlaceComplete(place)) return false;
+            const local_alias = switch (place.root) {
+                .local => |id| mir_model.executableLocalAddressAlias(
+                    self.executable_statements.items,
+                    self.executable_expressions.items,
+                    self.executable_places.items,
+                    id,
+                    place.root_ty,
+                    place.root_type_id,
+                ),
+                .symbol, .value => false,
+            };
+            const expected_kind: mir_model.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
+            if (access.kind != expected_kind) return false;
             if (is_store) {
                 const shape = switch (place.root_ty) {
                     .pointer => |value| value,
@@ -7979,7 +8003,19 @@ const FunctionBuilder = struct {
         if (alignment == 0) self.executable_supported = false;
         const root = executablePlaceRootIdent(place_expr);
         const kind: mir_model.ExecutableMemoryAccessKind = if (self.executablePlaceHasDeref(place_expr))
-            .race_unordered
+            if (root) |name| local_alias: {
+                const local = self.executable_local_ids.get(name) orelse break :local_alias .race_unordered;
+                const root_ty = self.local_types.get(name) orelse break :local_alias .race_unordered;
+                const root_type_id = self.type_ids.get(root_ty) orelse break :local_alias .race_unordered;
+                break :local_alias if (mir_model.executableLocalAddressAlias(
+                    self.executable_statements.items,
+                    self.executable_expressions.items,
+                    self.executable_places.items,
+                    local,
+                    root_ty,
+                    root_type_id,
+                )) .plain else .race_unordered;
+            } else .race_unordered
         else if (root) |name|
             if (self.globals.contains(name) and self.mutable_globals.contains(name)) .race_unordered else .plain
         else
@@ -8579,6 +8615,7 @@ const FunctionBuilder = struct {
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
                         .ty = ty,
+                        .type_id = try self.internTypeId(ty),
                         .value = executable_initializer,
                         .mutable = mutable,
                     } });

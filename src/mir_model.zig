@@ -928,6 +928,62 @@ pub const ExecutableStatement = struct {
     };
 };
 
+/// Prove that `local` is initialized exactly once from the direct address of
+/// another local and is never reassigned. This is the bounded provenance fact
+/// needed to lower `*p` as local storage without reconstructing an AST alias.
+pub fn executableLocalAddressAlias(
+    statements: []const ExecutableStatement,
+    expressions: []const ExecutableExpression,
+    places: []const ExecutablePlace,
+    local: LocalId,
+    pointer_ty: ValueType,
+    pointer_type_id: TypeId,
+) bool {
+    // Any ordinary value use can copy or escape the pointer. Dereference
+    // places refer to the LocalId directly and therefore do not need a
+    // `.local` expression; keeping the accepted proof this narrow preserves
+    // the existing conservative access mode after calls, returns, or copies.
+    for (expressions) |expression| switch (expression.operation) {
+        .local => |used| if (used.eql(local)) return false,
+        .direct_call, .indirect_call, .builtin_call => return false,
+        else => {},
+    };
+    var found = false;
+    for (statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local)) {
+            if (found or init.value == null or !ValueType.eql(init.ty, pointer_ty) or
+                !init.type_id.eql(pointer_type_id)) return false;
+            const value_id = init.value.?;
+            if (!value_id.isValid() or value_id.index() >= expressions.len) return false;
+            const value = expressions[value_id.index()];
+            if (!value.id.eql(value_id) or !value.owner_statement.eql(statement.id) or
+                !ValueType.eql(value.result_ty, pointer_ty) or !value.type_id.eql(pointer_type_id)) return false;
+            const address = switch (value.operation) {
+                .address_of => |address| address,
+                else => return false,
+            };
+            if (!address.place.isValid() or address.place.index() >= places.len) return false;
+            const target = places[address.place.index()];
+            if (!target.id.eql(address.place) or target.projection_count != 0 or
+                !ValueType.eql(target.root_ty, target.ty)) return false;
+            switch (target.root) {
+                .local => {},
+                .symbol, .value => return false,
+            }
+            found = true;
+        },
+        .store => |store| if (store.place.isValid() and store.place.index() < places.len) {
+            const target = places[store.place.index()];
+            if (target.projection_count == 0) switch (target.root) {
+                .local => |stored| if (stored.eql(local)) return false,
+                .symbol, .value => {},
+            };
+        },
+        else => {},
+    };
+    return found;
+}
+
 pub const ExecutableParameter = struct {
     local: LocalId,
     ty: ValueType,
@@ -1033,6 +1089,37 @@ pub const ExecutableBody = struct {
         self.* = .{};
     }
 };
+
+/// Check the complete typed shape of a scalar dereference through an
+/// unescaped local-address alias. Producer, verifier, and renderers use this
+/// single predicate so provenance admission cannot drift across backends.
+pub fn executableLocalAddressDerefPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    if (!executableLocalAddressAlias(
+        body.statements,
+        body.expressions,
+        body.places,
+        local,
+        place.root_ty,
+        place.root_type_id,
+    )) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut) and
+        std.mem.eql(u8, pointer.child, place.ty.name());
+}
 
 pub const Terminator = union(enum) {
     fallthrough,

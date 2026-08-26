@@ -346,6 +346,8 @@ const Renderer = struct {
                 const place = self.body.places[store.place.index()];
                 const pointer = if (computedRawManyDerefPlaceSupported(self.body, place, true))
                     try self.emitComputedRawManyDerefPointer(place)
+                else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
+                    try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
                 else if (place.projection_count != 0)
                     try self.emitGuardedParameterStorePointer(statement, store.place)
                 else
@@ -992,6 +994,8 @@ const Renderer = struct {
         const place = self.body.places[load.place.index()];
         const pointer = if (computedRawManyDerefPlaceSupported(self.body, place, false))
             try self.emitComputedRawManyDerefPointer(place)
+        else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
+            try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
         else if (place.projection_count != 0)
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
@@ -1072,6 +1076,9 @@ const Renderer = struct {
         if (computedRawManyDerefPlaceSupported(self.body, place, false)) {
             return .{ .ty = "ptr", .spelling = try self.emitComputedRawManyDerefPointer(place) };
         }
+        if (mir.executableLocalAddressDerefPlace(self.body, place, false)) {
+            return .{ .ty = "ptr", .spelling = try self.emitGuardedLocalAddressAliasPointer(expression, address.place) };
+        }
         if (!addressOfParameterDerefSupported(self.body, expression, address)) return error.InvalidBody;
         return .{ .ty = "ptr", .spelling = try self.emitGuardedParameterDerefPointer(expression, address.place) };
     }
@@ -1150,6 +1157,42 @@ const Renderer = struct {
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_store_ready_{d}", .{statement.id.raw});
         try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
         return self.emitParameterAccessPointer(place, local.storage);
+    }
+
+    fn emitGuardedLocalAddressAliasPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableLocalAddressDerefPlace(self.body, place, false)) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (!local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ pointer, local.storage });
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_local_alias_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
+    }
+
+    fn emitGuardedLocalAddressAliasStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableLocalAddressDerefPlace(self.body, place, true)) return error.InvalidBody;
+        const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (!local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ pointer, local.storage });
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_local_alias_store_ready_{d}", .{statement.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
     }
 
     fn emitParameterAccessPointer(self: *Renderer, place: mir.ExecutablePlace, root_pointer: []const u8) RenderError![]const u8 {
@@ -1306,6 +1349,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .indirect_call => |call| call.argument_count <= mir.max_executable_operands and expressionValid(body, call.callee) and expressionListValid(body, call.arguments[0..call.argument_count]),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfParameterDerefSupported(body, expression, address) or
+            addressOfLocalAddressAliasDerefSupported(body, expression, address) or
             addressOfComputedRawManyDerefSupported(body, expression, address),
         .deref => |id| expressionValid(body, id) and switch (body.expressions[id.index()].result_ty) {
             .pointer => true,
@@ -1761,6 +1805,7 @@ fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
 
 fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     return parameterScalarAccessPlaceSupported(body, place) or
+        mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
 
@@ -1840,6 +1885,16 @@ fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression:
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn addressOfLocalAddressAliasDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    return mir.executableLocalAddressDerefPlace(body, place, false) and
+        sameValueType(expression.result_ty, place.root_ty) and
+        expression.type_id.isValid() and expression.type_id.eql(place.root_type_id) and
+        address.representation_source != null and address.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+}
+
 fn addressOfComputedRawManyDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
@@ -1885,7 +1940,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         return store.representation_source == null and !store.representation_span_id.isValid() and
             statementRepresentationTrapEdge(body, statement) == null;
     }
-    return parameterScalarAccessStorePlaceSupported(body, place) and
+    return (parameterScalarAccessStorePlaceSupported(body, place) or
+        mir.executableLocalAddressDerefPlace(body, place, true)) and
         store.representation_source != null and store.representation_span_id.isValid() and
         statementRepresentationTrapEdgeIsExact(body, statement);
 }
@@ -1895,9 +1951,13 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     const place = body.places[place_id.index()];
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
-        return sameValueType(place.ty, ty) and access.kind == .race_unordered and
+        const local_alias = mir.executableLocalAddressDerefPlace(body, place, false);
+        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
+        return sameValueType(place.ty, ty) and access.kind == expected_kind and
             if (is_store)
-                parameterScalarAccessStorePlaceSupported(body, place) or computedRawManyDerefPlaceSupported(body, place, true)
+                parameterScalarAccessStorePlaceSupported(body, place) or
+                    mir.executableLocalAddressDerefPlace(body, place, true) or
+                    computedRawManyDerefPlaceSupported(body, place, true)
             else
                 scalarAccessPlaceSupported(body, place);
     }

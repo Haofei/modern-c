@@ -526,6 +526,13 @@ leaving a complete expression graph marked incomplete. Both `high_word` and
 tests, and both backend implementations are deleted. The strict split is C
 67/93 and LLVM 64/96, and the shared registry falls to 25.
 
+`access_local_address_update` is fully retired. Executable MIR now proves that
+a pointer local has one direct-local address initializer and is never
+reassigned; the producer, verifier, and both renderers use that bounded
+provenance fact for the guarded dereference store. The source-shaped plan and
+both dedicated emitters are deleted. The strict split is now C 68/92 and LLVM
+65/95, and the shared registry falls to 24.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather

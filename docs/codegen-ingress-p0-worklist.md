@@ -324,6 +324,7 @@ typed-unary operand-descendant bugs before commit.
 | Target-typed binary/character literals | unsuffixed integer and character operands adopt the binary operand type; character spelling is parsed once and removed from executable MIR | (current batch) |
 | Explicit scalar `uninit` storage | `var x: T = uninit` becomes `local_init(value=null)` for scalar storage; later assignment/store owns the first value generation | (current batch) |
 | Declared-struct construction | MIR owns a `TypeId`-keyed aggregate table, exact field types and resolved field indices; operands evaluate in source order while C/LLVM assemble declaration-order layout; duplicate/incomplete/mistyped fields fail verification | (current batch) |
+| Local-address scalar update | `let p: *mut T = &x; *p = x + 1`; executable MIR proves the immutable local-address alias, owns the checked store and representation edge, and both renderers consume the same proof | `access_local_address_update` retired |
 
 ### Remaining strict-corpus families
 

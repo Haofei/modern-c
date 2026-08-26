@@ -661,7 +661,10 @@ fn memoryLoadSupported(
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
-        if (!scalarAccessPlaceSupported(body, place.*) or load.access.kind != .race_unordered) return false;
+        if (!scalarAccessPlaceSupported(body, place.*)) return false;
+        const local_alias = mir.executableLocalAddressDerefPlace(body, place.*, false);
+        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
+        if (load.access.kind != expected_kind) return false;
         if (computedRawManyDerefPlaceSupported(body, place.*, false)) {
             return load.representation_source == null and !load.representation_span_id.isValid() and
                 ownedTrapEdgeCount(body, expression.id) == 0;
@@ -759,7 +762,8 @@ fn addressOfSupported(
         return address.representation_source == null and !address.representation_span_id.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0;
     }
-    return singleParameterScalarDerefPlaceSupported(body, place.*) and
+    return (singleParameterScalarDerefPlaceSupported(body, place.*) or
+        mir.executableLocalAddressDerefPlace(body, place.*, false)) and
         sameValueType(expression.result_ty, place.root_ty) and
         representationOperationHasExactTrapEdge(body, expression);
 }
@@ -870,6 +874,7 @@ fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
 
 fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     return parameterScalarAccessPlaceSupported(body, place) or
+        mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
 
@@ -890,12 +895,14 @@ fn memoryStoreSupported(
             .pointer => |pointer| pointer,
             else => return false,
         };
-        if (shape.mutability != .mut or store.access.kind != .race_unordered) return false;
+        const local_alias = mir.executableLocalAddressDerefPlace(body, place.*, false);
+        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
+        if (shape.mutability != .mut or store.access.kind != expected_kind) return false;
         if (computedRawManyDerefPlaceSupported(body, place.*, true)) {
             return store.representation_source == null and !store.representation_span_id.isValid() and
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
-        return parameterScalarAccessPlaceSupported(body, place.*) and
+        return (parameterScalarAccessPlaceSupported(body, place.*) or local_alias) and
             statementRepresentationOperationHasExactTrapEdge(body, statement, store);
     }
     return switch (place.root) {
@@ -1001,7 +1008,8 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
     const metadata: RepresentationMetadata = switch (expression.operation) {
         .load => |load| blk: {
             const place = placeById(body, load.place) orelse return false;
-            if (!parameterScalarAccessPlaceSupported(body, place.*)) return false;
+            if (!(parameterScalarAccessPlaceSupported(body, place.*) or
+                mir.executableLocalAddressDerefPlace(body, place.*, false))) return false;
             break :blk .{ .source = load.representation_source, .span_id = load.representation_span_id };
         },
         .atomic_load => |load| blk: {
@@ -1011,7 +1019,8 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
         },
         .address_of => |address| blk: {
             const place = placeById(body, address.place) orelse return false;
-            if (!singleParameterScalarDerefPlaceSupported(body, place.*)) return false;
+            if (!(singleParameterScalarDerefPlaceSupported(body, place.*) or
+                mir.executableLocalAddressDerefPlace(body, place.*, false))) return false;
             break :blk .{ .source = address.representation_source, .span_id = address.representation_span_id };
         },
         .builtin_call => |call| blk: {
@@ -1040,7 +1049,8 @@ fn statementRepresentationOperationHasExactTrapEdge(
     store: @FieldType(mir.ExecutableStatement.Operation, "store"),
 ) bool {
     const place = placeById(body, store.place) orelse return false;
-    if (!parameterScalarAccessPlaceSupported(body, place.*) or
+    if (!(parameterScalarAccessPlaceSupported(body, place.*) or
+        mir.executableLocalAddressDerefPlace(body, place.*, false)) or
         store.representation_source == null or !store.representation_span_id.isValid() or
         ownedStatementTrapEdgeCount(body, statement.id) != 1) return false;
     for (body.trap_edges) |edge| {
@@ -1297,7 +1307,14 @@ fn emitPlace(
     id: mir.PlaceId,
 ) (RenderError || std.mem.Allocator.Error)!void {
     const place = placeById(body, id) orelse return error.InvalidPlace;
-    if (place.storage != .ordinary or place.projection_count != 0) return error.UnsupportedOperation;
+    if (place.storage != .ordinary) return error.UnsupportedOperation;
+    if (place.projection_count == 1 and mir.executableLocalAddressDerefPlace(body, place.*, false)) {
+        try out.appendSlice(allocator, "(*(");
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, "))");
+        return;
+    }
+    if (place.projection_count != 0) return error.UnsupportedOperation;
     try emitPlaceRootValue(allocator, out, body, place.*);
 }
 
