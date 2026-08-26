@@ -641,7 +641,7 @@ pub const CEmitter = struct {
             const previous_source_path = self.source_path;
             self.source_path = self.sourcePathForSpan(function.signature.name.span);
             defer self.source_path = previous_source_path;
-            const canonical_status = self.canonicalCensusStatus(function, &fn_mir);
+            const canonical_status = self.canonicalCensusStatus(&fn_mir);
             const canonical_detail = if (canonical_status == .producer_incomplete) mir_executable_body.incompleteReason(&fn_mir) else "";
             var selected_path: fallback_census.SelectedPath = .unsupported;
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs, &selected_path)) {
@@ -657,11 +657,11 @@ pub const CEmitter = struct {
         }
     }
 
-    fn canonicalCensusStatus(self: *CEmitter, function: anytype, fn_mir: *const mir.Function) fallback_census.CanonicalStatus {
+    fn canonicalCensusStatus(self: *CEmitter, fn_mir: *const mir.Function) fallback_census.CanonicalStatus {
         if (!fallback_census.isEnabled()) return .producer_incomplete;
         if (!mir_executable_body.isComplete(fn_mir)) return .producer_incomplete;
         if (!mir_executable_c.canEmitBody(&fn_mir.executable_body)) return .renderer_unsupported;
-        if (!self.mirExecutableBodySupported(function, fn_mir)) return .ingress_mismatch;
+        if (!self.mirExecutableBodySupported(fn_mir)) return .ingress_mismatch;
         return .ready;
     }
 
@@ -1635,7 +1635,7 @@ pub const CEmitter = struct {
         // do this before constructing any of the transitional specialized
         // plans below: once the canonical body is admitted, AST-shaped plans
         // must not get another opportunity to decide the function semantics.
-        const executable_body = if (self.mirExecutableBodySupported(function, &fn_mir)) body: {
+        const executable_body = if (self.mirExecutableBodySupported(&fn_mir)) body: {
             mir_executable_body.verify(&fn_mir) catch break :body null;
             break :body &fn_mir.executable_body;
         } else null;
@@ -1842,8 +1842,43 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const no_specialized_body = simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and access_structural_operation == null and scalar_expression_plan == null and scalar_control_plan == null and identity_return_plan == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null;
-        if (no_specialized_body) return false;
+        const specialized_plans = [_]bool{
+            simple_trap != null,
+            assert_expression_plan != null,
+            nullable_control_plan != null,
+            nested_conditional_return_plan != null,
+            aggregate_sequence_plan != null,
+            workflow_plan != null,
+            alloca_hoist_plan != null,
+            access_slice_plan != null,
+            access_local_address_update != null,
+            access_structural_operation != null,
+            scalar_expression_plan != null,
+            scalar_control_plan != null,
+            identity_return_plan != null,
+            while_control_plan != null,
+            sequence_foreach_update_plan != null,
+            sequence_foreach_return_plan != null,
+            direct_call_projected_return_plan != null,
+            local_aggregate_place_update_return_plan != null,
+            local_aggregate_assignment_return_plan != null,
+            nullable_pointer_local_return_plan != null,
+            nullable_pointer_void_call_plan != null,
+            nullable_try_plan != null,
+            pointer_to_integer_cast_plan != null,
+            simple_return != null,
+            simple_void_body != null,
+            simple_conditional_statement_return != null,
+            simple_conditional_return != null,
+            simple_enum_switch_return != null,
+            simple_loop_return != null,
+            place_return_plan != null,
+            scalar_switch_return_plan != null,
+            indirect_call_return_plan != null,
+            logical_return_plan != null,
+            statement_plan != null,
+        };
+        if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -2303,7 +2338,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn mirExecutableBodySupported(self: *CEmitter, function_artifact: anytype, function: *const mir.Function) bool {
+    fn mirExecutableBodySupported(self: *CEmitter, function: *const mir.Function) bool {
         // The generic renderer does not schedule cleanup edges.  Admission is
         // fail-closed until ownership cleanup is itself represented by
         // executable-body statements/blocks.
@@ -2311,30 +2346,22 @@ pub const CEmitter = struct {
         for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
         const body = &function.executable_body;
         if (!mir_executable_c.canEmitBody(body)) return false;
-        if (body.parameters.len != function_artifact.signature.params.len) return false;
-        if (!self.mirExecutableTypeMatchesSource(function.return_ty, function_artifact.signature.transitionalReturnType())) return false;
-        for (body.parameters, function_artifact.signature.params) |parameter, source_parameter| {
-            if (!self.mirExecutableTypeMatchesSource(parameter.ty, source_parameter.ty) and
-                !self.mirExecutableAtomicParameterMatchesSource(parameter, source_parameter.ty)) return false;
+        if (mir_executable_body.hasOnlyWriteOnlyLocals(body)) return false;
+        if (body.parameters.len != function.param_types.len or body.parameters.len != function.param_count) return false;
+        for (body.parameters, function.param_types) |parameter, parameter_ty| {
+            if (!mir.ValueType.eql(parameter.ty, parameter_ty)) return false;
         }
         for (body.expressions) |expression| switch (expression.operation) {
-            .symbol => |symbol_id| {
-                if (!symbol_id.isValid() or symbol_id.index() >= body.symbols.len) return false;
-                const symbol = body.symbols[symbol_id.index()];
-                if (!symbol.id.eql(symbol_id)) return false;
-                const global = self.globals.get(symbol.spelling) orelse return false;
-                if (!self.mirExecutableTypeMatchesSource(expression.result_ty, global.source_ty)) return false;
-            },
             .direct_call => |call| {
                 if (!call.callee.isValid() or call.callee.index() >= body.symbols.len) return false;
                 const symbol = body.symbols[call.callee.index()];
                 if (!symbol.id.eql(call.callee)) return false;
-                const signature = self.functions.get(symbol.spelling) orelse return false;
-                if (signature.is_variadic or signature.params.len != call.argument_count or
-                    !self.mirExecutableTypeMatchesSource(expression.result_ty, signature.return_type)) return false;
-                for (call.arguments[0..call.argument_count], signature.params) |argument_id, source_parameter| {
+                const signature = self.mirFunctionByName(symbol.spelling) orelse return false;
+                if (signature.is_variadic or signature.param_types.len != call.argument_count or
+                    !mir.ValueType.eql(expression.result_ty, signature.return_ty)) return false;
+                for (call.arguments[0..call.argument_count], signature.param_types) |argument_id, parameter_ty| {
                     if (!argument_id.isValid() or argument_id.index() >= body.expressions.len) return false;
-                    if (!self.mirExecutableTypeMatchesSource(body.expressions[argument_id.index()].result_ty, source_parameter.ty)) return false;
+                    if (!mir.ValueType.eql(body.expressions[argument_id.index()].result_ty, parameter_ty)) return false;
                 }
             },
             else => {},
@@ -2342,27 +2369,9 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn mirExecutableAtomicParameterMatchesSource(self: *CEmitter, parameter: mir.ExecutableParameter, source_ty: TransitionalTypeExpr) bool {
-        if (!parameter.atomic_payload_type_id.isValid()) return false;
-        const pointer = switch (parameter.ty) {
-            .pointer => |shape| shape,
-            else => return false,
-        };
-        if (pointer.kind != .single) return false;
-        const resolved = self.resolveAliasType(source_ty);
-        const source_pointer = switch (resolved.kind) {
-            .pointer => |shape| shape,
-            else => return false,
-        };
-        if (pointer.mutability != source_pointer.mutability) return false;
-        const child = self.resolveAliasType(source_pointer.child.*);
-        if (child.kind == .pointer) return false;
-        return lower_c_shape.atomicPayloadOfType(child) != null;
-    }
-
-    fn mirExecutableTypeMatchesSource(self: *CEmitter, value_ty: mir.ValueType, maybe_source_ty: ?TransitionalTypeExpr) bool {
-        if (maybe_source_ty == null) return value_ty == .void;
-        return self.mirWorkflowValueTypeMatchesSource(value_ty, maybe_source_ty.?);
+    fn mirFunctionByName(self: *const CEmitter, name: []const u8) ?mir.Function {
+        for (self.mir_module.functions) |function| if (std.mem.eql(u8, function.name, name)) return function;
+        return null;
     }
 
     fn simpleMirTrapBody(self: *CEmitter, fn_mir: mir.Function) ?SimpleMirTrapBody {

@@ -34,8 +34,8 @@ REQUIRED_COLUMNS = (
 )
 
 PLAN_DEFINITION_ANCHORS = {
-    "c": (ROOT / "src/lower_c_emitter.zig", "const no_specialized_body ="),
-    "llvm": (ROOT / "src/lower_llvm.zig", "const legacy_plan_missing ="),
+    "c": (ROOT / "src/lower_c_emitter.zig", "const specialized_plans = [_]bool{"),
+    "llvm": (ROOT / "src/lower_llvm.zig", "const specialized_plans = [_]bool{"),
 }
 
 
@@ -131,10 +131,15 @@ def check_backend(backend: str, expected: dict[str, int], actual: dict[str, Any]
 
 def specialized_plan_definition_count(backend: str) -> int:
     path, anchor = PLAN_DEFINITION_ANCHORS[backend]
-    line = next((line for line in path.read_text(encoding="utf-8").splitlines() if anchor in line), None)
-    if line is None:
+    text = path.read_text(encoding="utf-8")
+    start = text.find(anchor)
+    if start < 0:
         raise AssertionError(f"{path.relative_to(ROOT)} is missing specialized-plan anchor {anchor!r}")
-    return len(re.findall(r"\b[a-z][a-z0-9_]* == null", line))
+    end = text.find("};", start)
+    if end < 0:
+        raise AssertionError(f"{path.relative_to(ROOT)} has an unterminated specialized-plan registry")
+    registry = text[start:end]
+    return len(re.findall(r"\b[a-z][a-z0-9_]* != null", registry))
 
 
 def main() -> int:

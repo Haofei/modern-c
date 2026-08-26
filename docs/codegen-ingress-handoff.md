@@ -1,7 +1,8 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-23 after the per-file module cutover and strict-corpus body-plan cutover.
+2026-08-26 after the typed-signature admission and specialized-plan registry
+cutovers.
 
 ## TL;DR
 
@@ -400,6 +401,20 @@ and their C/LLVM renderer helpers were deleted; both specialized-plan chains
 are ratcheted from 38 definitions to 34. Complete backend shards remain
 mandatory retirement evidence because the broad fixture census missed inline
 tests that still require three other specialized plans.
+
+Canonical body admission now compares executable parameters, return values and
+direct callees exclusively against typed MIR `ValueType`/callable facts. The C
+and LLVM admission paths no longer compare those facts with `ast.Param` or
+`ast.TypeExpr`, and the C path no longer recovers direct-call signatures from
+the declaration artifact registry. This moved four broad-corpus C functions
+from specialized plans to canonical emission without changing the strict
+corpus. Canonical LLVM output uses stable `LocalId` parameter names; affected
+tests now assert those identities instead of legacy source-local spellings.
+
+The 34-plan existence checks are flat boolean registries, replacing the
+duplicated 34-term negated conjunctions. This does not
+pretend the plans are gone, but it makes every later retirement a one-entry
+deletion and removes operator-precedence risk from the cutover mechanism.
 
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their

@@ -79,6 +79,41 @@ pub fn symbol(body: *const mir.ExecutableBody, id: mir.SymbolId) ?mir.SymbolIden
     return if (value.id.eql(id)) value else null;
 }
 
+/// Transitional admission guard for backends whose canonical renderer still
+/// materializes every declared local. The specialized path already removes
+/// locals that are only initialized or assigned and never read; keep those
+/// bodies there until executable-MIR owns a shared dead-local elimination pass.
+pub fn hasOnlyWriteOnlyLocals(body: *const mir.ExecutableBody) bool {
+    var saw_local = false;
+    for (body.statements) |statement_value| switch (statement_value.operation) {
+        .local_init => |init| {
+            saw_local = true;
+            if (localIsRead(body, init.local)) return false;
+        },
+        else => {},
+    };
+    return saw_local;
+}
+
+fn localIsRead(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
+    for (body.expressions) |expression_value| switch (expression_value.operation) {
+        .local => |local_id| if (local_id.eql(id)) return true,
+        .load => |load| if (placeRootIsLocal(body, load.place, id)) return true,
+        .atomic_load => |load| if (placeRootIsLocal(body, load.place, id)) return true,
+        .address_of => |address| if (placeRootIsLocal(body, address.place, id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn placeRootIsLocal(body: *const mir.ExecutableBody, id: mir.PlaceId, local_id: mir.LocalId) bool {
+    const value = place(body, id) orelse return false;
+    return switch (value.root) {
+        .local => |root| root.eql(local_id),
+        .symbol, .value => false,
+    };
+}
+
 pub fn verify(function: *const mir.Function) !void {
     const body = &function.executable_body;
     if (function.param_types.len != function.param_count) return error.InvalidFunctionSignature;

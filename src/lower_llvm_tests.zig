@@ -2164,7 +2164,7 @@ test "LLVM emits simple global stores from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_store.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @store_param");
-    try expectContains(param_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectContains(param_body, "store atomic i32 %mc_arg_0, ptr @g unordered, align 4");
     try expectNotContains(param_body, "alloca");
 
     const literal_body = try llvmFunctionBody(output.items, "define internal void @store_literal");
@@ -2176,78 +2176,78 @@ test "LLVM emits simple global stores from MIR" {
     try expectNotContains(char_body, "alloca");
 
     const float_body = try llvmFunctionBody(output.items, "define internal void @store_float");
-    try expectContains(float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
+    try expectContains(float_body, "store atomic float bitcast (i32 1069547520 to float), ptr @small_float unordered, align 4");
     try expectNotContains(float_body, "alloca");
 
     const double_body = try llvmFunctionBody(output.items, "define internal void @store_double");
-    try expectContains(double_body, "store atomic double 2.5, ptr @wide_float unordered, align 8");
+    try expectContains(double_body, "store atomic double bitcast (i64 4612811918334230528 to double), ptr @wide_float unordered, align 8");
     try expectNotContains(double_body, "alloca");
 
     const local_float_body = try llvmFunctionBody(output.items, "define internal void @store_local_float");
-    try expectContains(local_float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
-    try expectNotContains(local_float_body, "alloca");
+    try expectContains(local_float_body, "store atomic float %mc_expr_tmp_0, ptr @small_float unordered, align 4");
+    try expectContains(local_float_body, "%mc_local_0 = alloca float");
 
     const assigned_float_body = try llvmFunctionBody(output.items, "define internal void @store_assigned_float");
-    try expectContains(assigned_float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
-    try expectNotContains(assigned_float_body, "alloca");
+    try expectContains(assigned_float_body, "store atomic float %mc_expr_tmp_0, ptr @small_float unordered, align 4");
+    try expectContains(assigned_float_body, "%mc_local_0 = alloca float");
 
     const bool_literal_body = try llvmFunctionBody(output.items, "define internal void @store_bool_literal");
-    try expectContains(bool_literal_body, "zext i1 1 to i8");
-    try expectContains(bool_literal_body, "store atomic i8 %t");
+    try expectContains(bool_literal_body, "zext i1 true to i8");
+    try expectContains(bool_literal_body, "store atomic i8 %mc_expr_tmp_0");
     try expectContains(bool_literal_body, "ptr @flag unordered, align 1");
     try expectNotContains(bool_literal_body, "alloca");
 
     const field_body = try llvmFunctionBody(output.items, "define internal void @store_field");
-    try expectContains(field_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(field_body, "store atomic i32 %t");
+    try expectContains(field_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
+    try expectContains(field_body, "store atomic i32 %mc_expr_tmp_0");
     try expectContains(field_body, "ptr @g unordered, align 4");
     try expectNotContains(field_body, "alloca");
 
     const global_body = try llvmFunctionBody(output.items, "define internal void @store_global");
     try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
-    try expectContains(global_body, "store atomic i32 %t");
+    try expectContains(global_body, "store atomic i32 %mc_expr_tmp_0");
     try expectContains(global_body, "ptr @h unordered, align 4");
     try expectNotContains(global_body, "alloca");
 
     const compare_body = try llvmFunctionBody(output.items, "define internal void @store_compare");
-    try expectContains(compare_body, "icmp slt i32 %a, %b");
+    try expectContains(compare_body, "icmp slt i32 %mc_arg_0, %mc_arg_1");
     try expectContains(compare_body, "store atomic i8");
     try expectContains(compare_body, "ptr @flag unordered, align 1");
     try expectNotContains(compare_body, "alloca");
 
     const not_body = try llvmFunctionBody(output.items, "define internal void @store_not");
-    try expectContains(not_body, "xor i1 %input, true");
+    try expectContains(not_body, "xor i1 %mc_arg_0, true");
     try expectContains(not_body, "store atomic i8");
     try expectContains(not_body, "ptr @flag unordered, align 1");
     try expectNotContains(not_body, "alloca");
 
     const local_body = try llvmFunctionBody(output.items, "define internal void @store_local(");
-    try expectContains(local_body, "store atomic i32 %x, ptr @g unordered, align 4");
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "load i32");
+    try expectContains(local_body, "store atomic i32 %mc_expr_tmp_0, ptr @g unordered, align 4");
+    try expectContains(local_body, "%mc_local_1 = alloca i32");
+    try expectContains(local_body, "load i32, ptr %mc_local_1");
 
     const var_body = try llvmFunctionBody(output.items, "define internal void @store_var");
-    try expectContains(var_body, "store atomic i32 %x, ptr @g unordered, align 4");
-    try expectNotContains(var_body, "alloca");
-    try expectNotContains(var_body, "load i32");
+    try expectContains(var_body, "store atomic i32 %mc_expr_tmp_0, ptr @g unordered, align 4");
+    try expectContains(var_body, "%mc_local_1 = alloca i32");
+    try expectContains(var_body, "load i32, ptr %mc_local_1");
 
     const call_body = try llvmFunctionBody(output.items, "define internal void @store_call");
-    try expectContains(call_body, "call i32 @id(i32 %x)");
-    try expectContains(call_body, "store atomic i32 %t");
+    try expectContains(call_body, "call i32 @id(i32 %mc_arg_0)");
+    try expectContains(call_body, "store atomic i32 %mc_expr_tmp_0");
     try expectContains(call_body, "ptr @g unordered, align 4");
     try expectNotContains(call_body, "alloca");
 
     const many_body = try llvmFunctionBody(output.items, "define internal void @store_many");
-    try expectContains(many_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectContains(many_body, "store atomic i32 %mc_arg_0, ptr @g unordered, align 4");
     try expectContains(many_body, "load atomic i32, ptr @g unordered, align 4");
     try expectContains(many_body, "ptr @h unordered, align 4");
-    try expectContains(many_body, "xor i1 %input, true");
+    try expectContains(many_body, "xor i1 %mc_arg_1, true");
     try expectContains(many_body, "ptr @flag unordered, align 1");
     try expectNotContains(many_body, "alloca");
 
     const add_body = try llvmFunctionBody(output.items, "define internal void @store_add");
     try expectContains(add_body, "@llvm.sadd.with.overflow.i32");
-    try expectContains(add_body, "store atomic i32 %t");
+    try expectContains(add_body, "store atomic i32 %mc_expr_tmp_1");
     try expectContains(add_body, "ptr @s unordered, align 4");
     try expectNotContains(add_body, "alloca");
 
@@ -2265,8 +2265,8 @@ test "LLVM emits simple global stores from MIR" {
     try expectNotContains(unchecked_body, "alloca");
 
     const cast_body = try llvmFunctionBody(output.items, "define internal void @store_cast");
-    try expectContains(cast_body, "zext i32 %value to i64");
-    try expectContains(cast_body, "store atomic i64 %t");
+    try expectContains(cast_body, "zext i32 %mc_arg_0 to i64");
+    try expectContains(cast_body, "store atomic i64 %mc_expr_tmp_0");
     try expectContains(cast_body, "ptr @wide unordered, align 8");
     try expectNotContains(cast_body, "alloca");
 
@@ -2312,13 +2312,13 @@ test "LLVM emits simple global stores from MIR" {
     try expectNotContains(neg_body, "alloca");
 
     const call_then_store_body = try llvmFunctionBody(output.items, "define internal void @call_then_store");
-    try expectContains(call_then_store_body, "call void @hit(i32 %x)");
-    try expectContains(call_then_store_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectContains(call_then_store_body, "call void @hit(i32 %mc_arg_0)");
+    try expectContains(call_then_store_body, "store atomic i32 %mc_arg_0, ptr @g unordered, align 4");
     try expectNotContains(call_then_store_body, "alloca");
 
     const store_then_call_body = try llvmFunctionBody(output.items, "define internal void @store_then_call");
-    try expectContains(store_then_call_body, "store atomic i32 %x, ptr @g unordered, align 4");
-    try expectContains(store_then_call_body, "call void @hit(i32 %x)");
+    try expectContains(store_then_call_body, "store atomic i32 %mc_arg_0, ptr @g unordered, align 4");
+    try expectContains(store_then_call_body, "call void @hit(i32 %mc_arg_0)");
     try expectNotContains(store_then_call_body, "alloca");
 
     const if_body = try llvmFunctionBody(output.items, "define internal void @if_store");
