@@ -1809,11 +1809,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const logical_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
-            mir_statement_plan.buildSingleBlockLogicalReturn(fn_mir)
-        else
-            null;
-        const statement_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null)
+        const statement_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
@@ -1847,7 +1843,6 @@ pub const CEmitter = struct {
             place_return_plan != null,
             scalar_switch_return_plan != null,
             indirect_call_return_plan != null,
-            logical_return_plan != null,
             statement_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
@@ -1935,9 +1930,6 @@ pub const CEmitter = struct {
         } else if (indirect_call_return_plan) |plan| {
             selected_path.* = .indirect_call_return;
             try self.emitMirIndirectCallReturnPlan(plan);
-        } else if (logical_return_plan) |plan| {
-            selected_path.* = .logical_return;
-            try self.emitMirLogicalReturnPlan(plan);
         } else if (statement_plan) |plan| {
             selected_path.* = .statement;
             try self.emitMirStatementPlan(function, fn_mir, plan);
@@ -6808,40 +6800,6 @@ pub const CEmitter = struct {
         if (plan.local_init) |local| _ = self.mirPlaceType(local.value, span) catch return false;
         if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
         return true;
-    }
-
-    fn emitMirLogicalReturnPlan(self: *CEmitter, plan: mir_statement_plan.LogicalReturnPlan) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.location.source));
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "return ");
-        try self.emitMirLogicalNode(plan, plan.root);
-        try self.out.appendSlice(self.allocator, ";\n");
-    }
-
-    fn emitMirLogicalNode(self: *CEmitter, plan: mir_statement_plan.LogicalReturnPlan, index: usize) !void {
-        if (index >= plan.count) return error.UnsupportedCEmission;
-        switch (plan.nodes[index].operation) {
-            .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
-            .logical_not => |operand| {
-                try self.out.appendSlice(self.allocator, "(!");
-                try self.emitMirLogicalNode(plan, operand);
-                try self.out.append(self.allocator, ')');
-            },
-            .logical_and => |binary| {
-                try self.out.append(self.allocator, '(');
-                try self.emitMirLogicalNode(plan, binary.left);
-                try self.out.appendSlice(self.allocator, " && ");
-                try self.emitMirLogicalNode(plan, binary.right);
-                try self.out.append(self.allocator, ')');
-            },
-            .logical_or => |binary| {
-                try self.out.append(self.allocator, '(');
-                try self.emitMirLogicalNode(plan, binary.left);
-                try self.out.appendSlice(self.allocator, " || ");
-                try self.emitMirLogicalNode(plan, binary.right);
-                try self.out.append(self.allocator, ')');
-            },
-        }
     }
 
     fn emitMirIndirectCallee(self: *CEmitter, callee: mir_statement_plan.IndirectCallee) !void {

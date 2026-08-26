@@ -6899,7 +6899,10 @@ const FunctionBuilder = struct {
                 .string, .uninit, .enum_value => false,
                 else => true,
             },
-            .binary => |binary| binary.op != .logical_and and binary.op != .logical_or,
+            .binary => |binary| if (binary.op == .logical_and or binary.op == .logical_or)
+                binary.eager_safe and self.executablePureBoolOperand(binary.left) and self.executablePureBoolOperand(binary.right)
+            else
+                !binary.eager_safe,
             .direct_call => |call| direct: {
                 if (!call.callee.isValid() or call.callee.index() >= self.executable_symbols.items.len) break :direct false;
                 const spelling = self.executable_symbols.items[call.callee.index()].spelling;
@@ -6909,6 +6912,20 @@ const FunctionBuilder = struct {
             .builtin_call => |call| self.executableBuiltinComplete(expression, call),
             .representation_check => |check| self.executableRepresentationCheckComplete(expression, check),
             else => true,
+        };
+    }
+
+    fn executablePureBoolOperand(self: *const FunctionBuilder, id: ExprId) bool {
+        if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return false;
+        const operand = self.executable_expressions.items[id.index()];
+        if (operand.result_ty != .bool) return false;
+        return switch (operand.operation) {
+            .local => true,
+            .literal => |literal| literal == .boolean,
+            .unary => |unary| unary.op == .logical_not and self.executablePureBoolOperand(unary.operand),
+            .binary => |binary| (binary.op == .logical_and or binary.op == .logical_or) and binary.eager_safe and
+                self.executablePureBoolOperand(binary.left) and self.executablePureBoolOperand(binary.right),
+            else => false,
         };
     }
 
@@ -7499,11 +7516,14 @@ const FunctionBuilder = struct {
                 // renderer compares operand types.
                 self.contextualizeExecutableLiteral(left, operand_ty);
                 self.contextualizeExecutableLiteral(right, operand_ty);
+                const executable_op = executableBinaryOp(node.op);
                 break :binary .{ .binary = .{
-                    .op = executableBinaryOp(node.op),
+                    .op = executable_op,
                     .left = left,
                     .right = right,
                     .arithmetic = arithmetic,
+                    .eager_safe = (executable_op == .logical_and or executable_op == .logical_or) and
+                        self.executablePureBoolOperand(left) and self.executablePureBoolOperand(right),
                 } };
             },
             .cast => |node| cast: {
@@ -8510,10 +8530,8 @@ const FunctionBuilder = struct {
             },
             else => {},
         };
-        // Keep a lexical unsafe block on the transitional path unless every
-        // unsafe-sensitive operation it enables carries typed authority. The
-        // raw-many offset slice above is the first such operation; plain code
-        // wrapped in `unsafe {}` must still preserve the source-level scope.
+        // Preserve an ordinary lexical unsafe block until ExecutableBody owns
+        // the scope marker as well as the operations authorized by it.
         if (!owns_typed_authority) self.executable_supported = false;
         return terminated;
     }
@@ -8822,9 +8840,9 @@ const FunctionBuilder = struct {
     }
 
     fn buildContractBlock(self: *FunctionBuilder, contract: ast.ContractBlock, stmt_span: ast.Span) !bool {
-        // Contract regions are verified MIR facts, but their begin/end
-        // operations are not yet part of ExecutableBody.  Do not let the
-        // mechanical renderer silently discard those audit markers.
+        // Contract begin/end are observable audit markers in generated C.
+        // Keep this body on the legacy renderer until ExecutableBody carries
+        // those markers explicitly rather than silently dropping them.
         self.executable_supported = false;
         const id = self.next_contract_region_id;
         self.next_contract_region_id += 1;

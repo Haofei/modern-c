@@ -699,6 +699,9 @@ pub const ExecutableExpression = struct {
             left: ExprId,
             right: ExprId,
             arithmetic: ExecutableArithmeticSemantics = .ordinary,
+            /// Eager operand evaluation is equivalent to source short-circuit
+            /// semantics for this logical operation.
+            eager_safe: bool = false,
         },
         cast: struct { operand: ExprId, kind: ExecutableCastKind },
         representation_check: struct {

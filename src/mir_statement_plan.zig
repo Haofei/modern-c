@@ -9,7 +9,6 @@ const type_syntax = @import("type_syntax.zig");
 /// MIR, while each backend only encodes the admitted operations.
 pub const max_statements = 8;
 pub const max_arguments = 8;
-pub const max_logical_nodes = 16;
 pub const max_place_projections = 4;
 pub const max_switch_arms = 8;
 pub const max_aggregate_value_nodes = 32;
@@ -160,28 +159,6 @@ pub const NullableTryPlan = struct {
     try_value_id: mir.ValueId,
     try_location: Location,
     return_location: ?Location,
-};
-
-pub const LogicalNode = struct {
-    location: Location,
-    operation: Operation,
-
-    pub const Operation = union(enum) {
-        parameter: struct {
-            value_id: mir.ValueId,
-            name: []const u8,
-        },
-        logical_not: usize,
-        logical_and: struct { left: usize, right: usize },
-        logical_or: struct { left: usize, right: usize },
-    };
-};
-
-pub const LogicalReturnPlan = struct {
-    nodes: [max_logical_nodes]LogicalNode = undefined,
-    count: usize = 0,
-    root: usize = 0,
-    location: Location,
 };
 
 pub const ScalarSwitchArm = struct {
@@ -2564,76 +2541,6 @@ fn appendCheckedIndexLocations(place: Place, indexes: []CheckedIndexIdentity, co
     return {};
 }
 
-/// Admit a pure boolean expression tree returned directly from one block.
-/// Operator edges and leaves are identified exclusively by typed MIR IDs. The
-/// initial slice admits parameter leaves only, so eager LLVM `and`/`or` is
-/// observably equivalent to source short-circuit evaluation.
-pub fn buildSingleBlockLogicalReturn(function: mir.Function) ?LogicalReturnPlan {
-    if (function.return_ty != .bool or function.blocks.len != 1) return null;
-    if (function.trap_edges.len != 0 or function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const block = function.blocks[0];
-    if (block.terminator != .return_ or block.successors.len != 0) return null;
-
-    var return_instruction: ?mir.Instruction = null;
-    var logical_count: usize = 0;
-    var saw_binary = false;
-    for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type, .expr => {},
-        .unary => {
-            if (!std.mem.eql(u8, instruction.detail, "logical_not") or
-                !instruction.typed_left_operand_span_id.isValid() or
-                instruction.typed_right_operand_span_id.isValid()) return null;
-            logical_count += 1;
-        },
-        .binary => {
-            if (!std.mem.eql(u8, instruction.detail, "logical_and") and
-                !std.mem.eql(u8, instruction.detail, "logical_or")) return null;
-            if (!instruction.typed_left_operand_span_id.isValid() or !instruction.typed_right_operand_span_id.isValid()) return null;
-            logical_count += 1;
-            saw_binary = true;
-        },
-        .return_value => {
-            if (return_instruction != null or instruction.result_ty != .bool) return null;
-            return_instruction = instruction;
-        },
-        else => return null,
-    };
-    if (!saw_binary or logical_count == 0 or logical_count >= max_logical_nodes) return null;
-
-    const returned = return_instruction orelse return null;
-    const returned_id = returned.typed_value_id orelse return null;
-    const returned_name = valueIdentityName(function, returned_id) orelse return null;
-    if (!std.mem.eql(u8, returned_name, "binary")) return null;
-
-    var root_span: ?mir.SpanId = null;
-    for (block.instructions) |candidate| {
-        if (!isLogicalOperator(candidate)) continue;
-        var referenced = false;
-        for (block.instructions) |parent| {
-            if (!isLogicalOperator(parent)) continue;
-            if (parent.typed_left_operand_span_id.eql(candidate.typed_span_id) or
-                parent.typed_right_operand_span_id.eql(candidate.typed_span_id))
-            {
-                referenced = true;
-                break;
-            }
-        }
-        if (referenced) continue;
-        if (root_span != null) return null;
-        root_span = candidate.typed_span_id;
-    }
-
-    const root_id = root_span orelse return null;
-    var plan: LogicalReturnPlan = .{ .location = locationForSpan(function, root_id) orelse return null };
-    plan.root = appendLogicalNode(function, block, root_id, &plan, 0) orelse return null;
-    if (plan.count == 0 or countLogicalNodes(plan) != logical_count) return null;
-    if (!allExpressionLeavesUsed(block, plan)) return null;
-    return plan;
-}
-
 /// Admit a single value-producing function-pointer call whose result is
 /// returned immediately. Arguments are typed/indexed MIR facts and, in this
 /// first slice, must be direct parameter values. The callee may be a parameter,
@@ -2796,55 +2703,6 @@ pub fn buildSingleBlockVoid(function: mir.Function) ?Plan {
     return plan;
 }
 
-fn appendLogicalNode(function: mir.Function, block: mir.Block, span_id: mir.SpanId, plan: *LogicalReturnPlan, depth: usize) ?usize {
-    if (!span_id.isValid() or plan.count >= max_logical_nodes or depth >= max_logical_nodes) return null;
-    const fact = targetFactBySpan(function, .expression_result, span_id) orelse return null;
-    if (fact.result_ty != .bool) return null;
-
-    var matched: ?mir.Instruction = null;
-    for (block.instructions) |instruction| {
-        if (!instruction.typed_span_id.eql(span_id)) continue;
-        if (instruction.kind != .expr and !isLogicalOperator(instruction)) continue;
-        if (matched != null) return null;
-        matched = instruction;
-    }
-    const instruction = matched orelse return null;
-    const location = locationFromInstruction(instruction);
-
-    const operation: LogicalNode.Operation = switch (instruction.kind) {
-        .expr => blk: {
-            if (instruction.result_ty != .bool) return null;
-            const value_id = instruction.typed_value_id orelse return null;
-            const name = valueIdentityName(function, value_id) orelse return null;
-            const parameter_ty = parameterType(function, name) orelse return null;
-            if (parameter_ty != .bool) return null;
-            break :blk .{ .parameter = .{ .value_id = value_id, .name = name } };
-        },
-        .unary => blk: {
-            if (!std.mem.eql(u8, instruction.detail, "logical_not")) return null;
-            const operand = appendLogicalNode(function, block, instruction.typed_left_operand_span_id, plan, depth + 1) orelse return null;
-            break :blk .{ .logical_not = operand };
-        },
-        .binary => blk: {
-            const left = appendLogicalNode(function, block, instruction.typed_left_operand_span_id, plan, depth + 1) orelse return null;
-            const right = appendLogicalNode(function, block, instruction.typed_right_operand_span_id, plan, depth + 1) orelse return null;
-            if (std.mem.eql(u8, instruction.detail, "logical_and")) {
-                break :blk .{ .logical_and = .{ .left = left, .right = right } };
-            }
-            if (std.mem.eql(u8, instruction.detail, "logical_or")) {
-                break :blk .{ .logical_or = .{ .left = left, .right = right } };
-            }
-            return null;
-        },
-        else => return null,
-    };
-
-    const index = plan.count;
-    plan.nodes[index] = .{ .location = location, .operation = operation };
-    plan.count += 1;
-    return index;
-}
-
 fn buildPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?Place {
     var place: Place = .{};
     var root_set = false;
@@ -2960,46 +2818,9 @@ fn localType(function: mir.Function, name: []const u8) ?mir.ValueType {
     return null;
 }
 
-fn isLogicalOperator(instruction: mir.Instruction) bool {
-    if (!instruction.typed_span_id.isValid()) return false;
-    return switch (instruction.kind) {
-        .unary => std.mem.eql(u8, instruction.detail, "logical_not"),
-        .binary => std.mem.eql(u8, instruction.detail, "logical_and") or std.mem.eql(u8, instruction.detail, "logical_or"),
-        else => false,
-    };
-}
-
 fn locationForSpan(function: mir.Function, span_id: mir.SpanId) ?Location {
     if (!span_id.isValid() or span_id.index() >= function.span_identities.len) return null;
     return .{ .span_id = span_id, .source = function.span_identities[span_id.index()].source };
-}
-
-fn countLogicalNodes(plan: LogicalReturnPlan) usize {
-    var count: usize = 0;
-    for (plan.nodes[0..plan.count]) |node| switch (node.operation) {
-        .parameter => {},
-        else => count += 1,
-    };
-    return count;
-}
-
-fn allExpressionLeavesUsed(block: mir.Block, plan: LogicalReturnPlan) bool {
-    for (block.instructions) |instruction| {
-        if (instruction.kind != .expr) continue;
-        const value_id = instruction.typed_value_id orelse return false;
-        var found = false;
-        for (plan.nodes[0..plan.count]) |node| switch (node.operation) {
-            .parameter => |parameter| {
-                if (node.location.span_id.eql(instruction.typed_span_id) and parameter.value_id.eql(value_id)) {
-                    if (found) return false;
-                    found = true;
-                }
-            },
-            else => {},
-        };
-        if (!found) return false;
-    }
-    return true;
 }
 
 fn locationFromInstruction(instruction: mir.Instruction) Location {

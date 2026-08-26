@@ -7470,9 +7470,15 @@ test "lower-c logical return tree lowers without function body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_logical_return_tree.mc", source, &output);
-    try expectContains(try cFunctionBody(output.items, "static bool bool_and(bool a, bool b)"), "return (a && b);");
-    try expectContains(try cFunctionBody(output.items, "static bool bool_or(bool a, bool b)"), "return (a || b);");
-    try expectContains(try cFunctionBody(output.items, "static bool nested_bool(bool a, bool b, bool c)"), "return ((!a) || (b && c));");
+    const and_body = try cFunctionBody(output.items, "static bool bool_and(bool a, bool b)");
+    const or_body = try cFunctionBody(output.items, "static bool bool_or(bool a, bool b)");
+    const nested_body = try cFunctionBody(output.items, "static bool nested_bool(bool a, bool b, bool c)");
+    for ([_][]const u8{ and_body, or_body, nested_body }) |body| try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(and_body, " && ");
+    try expectContains(or_body, " || ");
+    try expectContains(nested_body, "(!");
+    try expectContains(nested_body, " && ");
+    try expectContains(nested_body, " || ");
 }
 
 test "lower-c compare inferred local lowers without function body fallback" {

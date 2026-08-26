@@ -55,7 +55,7 @@ EXACT_BACKEND_COUNTS = {
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
-    "ast_bridge.": 2824,
+    "ast_bridge.": 2823,
     "declaration_artifacts.": 44,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,

@@ -1897,15 +1897,11 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const logical_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
-            mir_statement_plan.buildSingleBlockLogicalReturn(fn_mir)
-        else
-            null;
-        const statement_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null)
+        const statement_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_pointer_local_return_plan == null and nullable_pointer_void_call_plan == null and nullable_try_plan == null and pointer_to_integer_cast_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1939,7 +1935,6 @@ const LlvmEmitter = struct {
             place_return_plan != null,
             scalar_switch_return_plan != null,
             indirect_call_return_plan != null,
-            logical_return_plan != null,
             statement_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
@@ -2066,9 +2061,6 @@ const LlvmEmitter = struct {
         } else if (indirect_call_return_plan) |plan| {
             selected_path.* = .indirect_call_return;
             try self.emitMirIndirectCallReturnPlan(plan);
-        } else if (logical_return_plan) |plan| {
-            selected_path.* = .logical_return;
-            try self.emitMirLogicalReturnPlan(plan, ret_ty);
         } else if (statement_plan) |plan| {
             selected_path.* = .statement;
             try self.emitMirStatementPlan(function, fn_mir, plan);
@@ -6693,45 +6685,6 @@ const LlvmEmitter = struct {
         };
         _ = span;
         return ty;
-    }
-
-    fn emitMirLogicalReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.LogicalReturnPlan, ret_ty: ast_bridge.TypeExpr) !void {
-        const span = spanFromMirSourcePoint(plan.location.source);
-        const value = try self.emitMirLogicalNode(plan, plan.root);
-        try self.emitReturnValue(ret_ty, value, span);
-    }
-
-    fn emitMirLogicalNode(self: *LlvmEmitter, plan: mir_statement_plan.LogicalReturnPlan, index: usize) anyerror![]const u8 {
-        if (index >= plan.count) return error.UnsupportedLlvmEmission;
-        const node = plan.nodes[index];
-        return switch (node.operation) {
-            .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
-            .logical_not => |operand| blk: {
-                const input = try self.emitMirLogicalNode(plan, operand);
-                const value = try self.nextTemp();
-                const dbg_suffix = try self.mirLogicalDebugSuffix(node.location);
-                try self.out.print(self.allocator, "  {s} = xor i1 {s}, true{s}\n", .{ value, input, dbg_suffix });
-                break :blk value;
-            },
-            .logical_and => |binary| try self.emitMirLogicalBinary(plan, binary.left, binary.right, "and", node.location),
-            .logical_or => |binary| try self.emitMirLogicalBinary(plan, binary.left, binary.right, "or", node.location),
-        };
-    }
-
-    fn emitMirLogicalBinary(self: *LlvmEmitter, plan: mir_statement_plan.LogicalReturnPlan, left_index: usize, right_index: usize, operation: []const u8, location: mir_statement_plan.Location) anyerror![]const u8 {
-        const left = try self.emitMirLogicalNode(plan, left_index);
-        const right = try self.emitMirLogicalNode(plan, right_index);
-        const value = try self.nextTemp();
-        const dbg_suffix = try self.mirLogicalDebugSuffix(location);
-        try self.out.print(self.allocator, "  {s} = {s} i1 {s}, {s}{s}\n", .{ value, operation, left, right, dbg_suffix });
-        return value;
-    }
-
-    fn mirLogicalDebugSuffix(self: *LlvmEmitter, location: mir_statement_plan.Location) ![]const u8 {
-        return if (try self.debugLocation(spanFromMirSourcePoint(location.source))) |dbg|
-            try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{dbg})
-        else
-            "";
     }
 
     fn emitMirIndirectCallee(self: *LlvmEmitter, callee: mir_statement_plan.IndirectCallee, callee_ty: ast_bridge.TypeExpr) ![]const u8 {

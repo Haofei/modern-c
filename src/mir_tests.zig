@@ -4757,7 +4757,7 @@ test "MIR plans a checked pointer-to-integer cast" {
     try std.testing.expectEqual(.integer, std.meta.activeTag(plan.target_fact.result_ty));
 }
 
-test "MIR plans pure logical returns from typed operand identities" {
+test "executable MIR owns pure logical eager-evaluation proof" {
     // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
     const source =
         \\fn bool_and(a: bool, b: bool) -> bool { return a && b; }
@@ -4775,29 +4775,45 @@ test "MIR plans pure logical returns from typed operand identities" {
 
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
-    for ([_][]const u8{ "bool_and", "bool_or" }) |name| {
+    for ([_][]const u8{ "bool_and", "bool_or", "nested_bool" }, 0..) |name, function_index| {
         const function = functionByName(typed_mir, name).?;
-        const plan = mir_statement_plan.buildSingleBlockLogicalReturn(function) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(@as(usize, 3), plan.count);
-        switch (plan.nodes[plan.root].operation) {
-            .logical_and, .logical_or => {},
-            else => return error.TestUnexpectedResult,
-        }
+        try std.testing.expect(function.executable_body.complete);
+        try mir_executable_body.verify(&function);
+        var logical_count: usize = 0;
+        for (function.executable_body.expressions) |expression| switch (expression.operation) {
+            .binary => |binary| switch (binary.op) {
+                .logical_and, .logical_or => {
+                    try std.testing.expect(binary.eager_safe);
+                    logical_count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        };
+        try std.testing.expectEqual(if (function_index < 2) @as(usize, 1) else 2, logical_count);
     }
-    const nested = mir_statement_plan.buildSingleBlockLogicalReturn(functionByName(typed_mir, "nested_bool").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 6), nested.count);
-    switch (nested.nodes[nested.root].operation) {
-        .logical_or => {},
-        else => return error.TestUnexpectedResult,
-    }
+
+    const mutable_bool_and = functionByNameMut(&typed_mir, "bool_and").?;
+    for (mutable_bool_and.executable_body.expressions) |*expression| switch (expression.operation) {
+        .binary => |*binary| switch (binary.op) {
+            .logical_and => {
+                binary.eager_safe = false;
+                try std.testing.expectError(error.InvalidLogicalOperation, mir_executable_body.verify(mutable_bool_and));
+                binary.eager_safe = true;
+                try mir_executable_body.verify(mutable_bool_and);
+                break;
+            },
+            else => {},
+        },
+        else => {},
+    } else return error.TestUnexpectedResult;
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir operand_identity fn=nested_bool") != null);
 
-    const bool_and = functionByNameMut(&typed_mir, "bool_and").?;
-    for (bool_and.blocks[0].instructions) |*instruction| {
+    for (mutable_bool_and.blocks[0].instructions) |*instruction| {
         if (instruction.kind != .binary or !std.mem.eql(u8, instruction.detail, "logical_and")) continue;
         instruction.typed_left_operand_span_id = .invalid;
         break;

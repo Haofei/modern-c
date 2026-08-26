@@ -8321,12 +8321,15 @@ test "LLVM logical return tree lowers without function body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_logical_return_tree.mc", source, &output);
-    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @bool_and"), "and i1 %a, %b");
-    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @bool_or"), "or i1 %a, %b");
+    const and_body = try llvmFunctionBody(output.items, "define internal i1 @bool_and");
+    const or_body = try llvmFunctionBody(output.items, "define internal i1 @bool_or");
     const nested = try llvmFunctionBody(output.items, "define internal i1 @nested_bool");
-    try expectContains(nested, "xor i1 %a, true");
-    try expectContains(nested, "and i1 %b, %c");
-    try expectContains(nested, "or i1 %t");
+    for ([_][]const u8{ and_body, or_body, nested }) |body| try expectContains(body, "; canonical executable MIR");
+    try expectContains(and_body, "and i1 %mc_arg_0, %mc_arg_1");
+    try expectContains(or_body, "or i1 %mc_arg_0, %mc_arg_1");
+    try expectContains(nested, "xor i1 %mc_arg_0, true");
+    try expectContains(nested, "and i1 %mc_arg_1, %mc_arg_2");
+    try expectContains(nested, "or i1 %mc_expr_tmp_");
 }
 
 test "LLVM compare inferred local lowers without function body fallback" {
@@ -9418,9 +9421,11 @@ test "LLVM inferred local binary expressions require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_binary_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%sum") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%is_less") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%both") != null);
+    const binary_body = try llvmFunctionBody(complete_output.items, "define internal i64 @binary");
+    try expectContains(binary_body, "; canonical executable MIR");
+    try expectContains(binary_body, "@llvm.uadd.with.overflow.i64");
+    try expectContains(binary_body, "icmp ult i64");
+    try expectContains(binary_body, "and i1");
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%combined") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%shifted") != null);
 

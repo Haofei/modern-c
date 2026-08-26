@@ -219,8 +219,8 @@ parallel execution does not change the raw census or ranked report.
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 | 57 | 103 | 31 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 55 | 105 | 31 |
+| C | 160 | 160 | 0 | 0 | 10000 | 61 | 99 | 30 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 59 | 101 | 30 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized
@@ -239,8 +239,16 @@ test and both backend implementations were deleted, reducing the registry to
 conditional continuations and branch-local global accesses moved into canonical
 executable MIR. `identity_return` is also gone: executable MIR now carries a
 resolved function `SymbolId`, while both mechanical renderers distinguish that
-pointer value from an ordinary global load. The registry is down to 31 plans.
-`simple_loop_return` remains.
+pointer value from an ordinary global load. `logical_return` is gone as well:
+executable MIR owns the recursively verified proof that eager evaluation of a
+pure boolean tree is equivalent to source short-circuit evaluation. The
+registry is down to 30 plans. `simple_loop_return` remains.
+
+A complete-shard retirement probe for `simple_void_body` found 17 real users,
+covering aggregate, Result, enum, and statement-oriented void bodies that are
+not yet represented completely by executable MIR. It therefore remains a
+live transitional plan; zero hits in the strict census would not be sufficient
+deletion evidence.
 A deletion is accepted only when the exact-path census and both complete
 backend shards agree that coverage is unchanged.
 
