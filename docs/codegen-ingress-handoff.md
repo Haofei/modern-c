@@ -1,8 +1,7 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-26 after canonical function-attribute admission and union aggregate
-identity correction.
+2026-08-26 after canonical LLVM floating-operation admission.
 
 ## TL;DR
 
@@ -10,8 +9,8 @@ identity correction.
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **757/1696 C** and **823/1762 LLVM** distinct functions using the AST
-  body (C admits 55.4%, LLVM 53.3%). Report mode intentionally preserves
+  finds **757/1696 C** and **820/1762 LLVM** distinct functions using the AST
+  body (C admits 55.4%, LLVM 53.5%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -393,8 +392,25 @@ union was labelled `declared_struct`. Executable MIR now preserves `c_union`
 identity; the verifier admits that metadata but continues to reject union
 construction as struct construction. Until canonical union layout exists, the
 affected body stays producer-incomplete instead of being falsely reported
-ready. The 522-root census is now C **939/1696 (55.4%)** and LLVM
-**939/1762 (53.3%)**, with 757/823 fallbacks and zero ready-but-fallback bodies.
+ready. The 522-root census after that slice was C **939/1696 (55.4%)** and
+LLVM **939/1762 (53.3%)**, with 757/823 fallbacks and zero
+ready-but-fallback bodies.
+
+Canonical LLVM now emits ordinary `fadd`, `fsub`, `fmul`, `fdiv`, `fneg` and
+all six floating comparisons directly from typed executable MIR. Comparison
+predicates preserve the legacy/C NaN contract (`oeq`, `une`, and ordered
+relations), and float literals remain bit-exact. In the strict corpus this
+moved ten functions from `simple_return` to canonical emission (42→52
+canonical, 118→108 specialized). The broad census moved seventeen functions
+to canonical emission, including two functions previously on AST fallback.
+After that measurement, executable MIR aggregate metadata became transitive:
+an outer aggregate now brings along every by-value nested aggregate and enum
+layout identity required to render its LLVM GEP type. Registration is bounded
+and rolls back the whole recursive addition on an incomplete nested type. This
+moved eight more LLVM functions from `simple_return` to canonical emission and
+one from AST fallback. LLVM is now **942/1762 (53.5%)**, with 820 fallbacks and
+296 specialized bodies. C is unchanged at **939/1696 (55.4%)**, with 757
+fallbacks and 268 specialized bodies.
 
 Runtime `assert` now owns one typed statement-level `Assert/assert_stmt` edge
 whose source block, trap block and bool condition are verified before codegen.

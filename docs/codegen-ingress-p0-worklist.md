@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-26
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 757 C and 823 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 757 C and 820 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -28,13 +28,21 @@ strict-corpus recognizers are no longer an honest completion strategy.
 ### Last completed broad census snapshot (2026-08-26)
 
 The 522-root sweep found C **939/1696 admitted (55.4%)**, 757 fallback, and
-LLVM **939/1762 admitted (53.3%)**, 823 fallback. There were no unsupported
+LLVM **942/1762 admitted (53.5%)**, 820 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body still fell through to that ingress. The latest slice
-admits ordinary `section`/`noinline` function definitions through the canonical
-body while preserving normalized render mechanics. It also corrects overlay/C
-union aggregate identity so LLVM does not mistake union fields for struct
-layout. The preceding slice makes enum literals canonical numeric tags backed
+adds transitive by-value aggregate/enum metadata with bounded failure rollback,
+so LLVM can mechanically render nested aggregate GEP types. It moves eight
+broad functions from `simple_return` to canonical MIR and one function off AST
+fallback. The preceding float slice adds ordinary arithmetic, negation and
+comparisons to the syntax-free LLVM renderer. It preserves bit-exact literals
+and the established NaN predicate contract, moves ten strict-corpus functions
+and seventeen broad functions from specialized lowering to canonical MIR, and
+moves two broad functions off AST fallback. The earlier attribute slice admits
+ordinary `section`/`noinline` function definitions through the canonical body while
+preserving normalized render mechanics. It also corrects overlay/C union
+aggregate identity so LLVM does not mistake union fields for struct layout.
+The earlier enum slice makes enum literals canonical numeric tags backed
 by a verified nominal/repr table. It moved seven functions per backend to
 canonical emission and deleted the direct enum-literal branch from both
 transitional `simple_return` recognizers. The machine-effect slice makes scalar `raw.load<T>` /
@@ -212,7 +220,7 @@ parallel execution does not change the raw census or ranked report.
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | C | 160 | 160 | 0 | 0 | 10000 | 54 | 106 | 34 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 42 | 118 | 34 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 52 | 108 | 34 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized

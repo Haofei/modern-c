@@ -538,7 +538,10 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ value, operand.spelling })
             else
                 return error.InvalidBody,
-            .neg => return error.Unsupported,
+            .neg => if (isFloatType(self.body.expressions[unary.operand.index()].result_ty))
+                try self.output.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ value, ty, operand.spelling })
+            else
+                return error.Unsupported,
         }
         return .{ .ty = ty, .spelling = value };
     }
@@ -582,6 +585,33 @@ const Renderer = struct {
         const left = try self.emitExpression(binary.left);
         const right = try self.emitExpression(binary.right);
         if (!std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
+        const operand_ty = self.body.expressions[binary.left.index()].result_ty;
+        if (isFloatType(operand_ty)) {
+            if (binary.arithmetic != .ordinary) return error.InvalidBody;
+            const value = try self.temp();
+            const operation: []const u8 = switch (binary.op) {
+                .add => "fadd",
+                .sub => "fsub",
+                .mul => "fmul",
+                .div => "fdiv",
+                .eq, .ne, .lt, .le, .gt, .ge => "fcmp",
+                else => return error.Unsupported,
+            };
+            if (std.mem.eql(u8, operation, "fcmp")) {
+                if (!std.mem.eql(u8, result_ty, "i1")) return error.InvalidBody;
+                try self.output.print(self.allocator, "  {s} = fcmp {s} {s} {s}, {s}\n", .{
+                    value,
+                    floatComparisonPredicate(binary.op),
+                    left.ty,
+                    left.spelling,
+                    right.spelling,
+                });
+            } else {
+                if (!std.mem.eql(u8, result_ty, left.ty)) return error.InvalidBody;
+                try self.output.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ value, operation, left.ty, left.spelling, right.spelling });
+            }
+            return .{ .ty = result_ty, .spelling = value };
+        }
         if (binary.arithmetic == .checked) {
             if (!std.mem.eql(u8, result_ty, left.ty)) return error.InvalidBody;
             return switch (binary.op) {
@@ -1371,7 +1401,7 @@ fn unarySupported(body: *const mir.ExecutableBody, result_ty: mir.ValueType, una
     return switch (unary.op) {
         .bit_not => integerLike(result_ty),
         .logical_not => result_ty == .bool,
-        .neg => false,
+        .neg => isFloatType(result_ty),
     };
 }
 
@@ -1380,6 +1410,14 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     const left_ty = body.expressions[binary.left.index()].result_ty;
     const right_ty = body.expressions[binary.right.index()].result_ty;
     if (!sameValueType(left_ty, right_ty)) return false;
+    if (isFloatType(left_ty)) {
+        if (binary.arithmetic != .ordinary or ownedExpressionTrapCount(body, expression.id) != 0) return false;
+        return switch (binary.op) {
+            .add, .sub, .mul, .div => sameValueType(expression.result_ty, left_ty),
+            .eq, .ne, .lt, .le, .gt, .ge => expression.result_ty == .bool,
+            else => false,
+        };
+    }
     if (left_ty == .domain_integer) {
         const shape = left_ty.domain_integer;
         if (binary.op == .eq or binary.op == .ne or binary.op == .lt or binary.op == .le or binary.op == .gt or binary.op == .ge) {
@@ -1407,6 +1445,25 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         .eq, .ne => binary.arithmetic == .ordinary and expression.result_ty == .bool and comparableEqualityType(left_ty),
         .lt, .le, .gt, .ge => binary.arithmetic == .ordinary and expression.result_ty == .bool and orderedIntegerType(left_ty),
         else => false,
+    };
+}
+
+fn isFloatType(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .float => true,
+        else => false,
+    };
+}
+
+fn floatComparisonPredicate(op: mir.ExecutableBinaryOp) []const u8 {
+    return switch (op) {
+        .eq => "oeq",
+        .ne => "une",
+        .lt => "olt",
+        .le => "ole",
+        .gt => "ogt",
+        .ge => "oge",
+        else => unreachable,
     };
 }
 
@@ -2233,7 +2290,7 @@ test "mechanical renderer hoists loop local alloca to the entry prologue" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "%mc_local_0 = alloca i32"));
 }
 
-test "mechanical renderer rejects floating comparison without fcmp semantics" {
+test "mechanical renderer emits canonical floating comparison semantics" {
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .{ .float = "f32" }, .source = source },
@@ -2249,7 +2306,10 @@ test "mechanical renderer rejects floating comparison without fcmp semantics" {
     };
     const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
     const body: mir.ExecutableBody = .{ .parameters = @constCast(&parameters), .expressions = @constCast(&expressions), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
-    try std.testing.expect(!supports(&body, .bool));
+    try std.testing.expect(supports(&body, .bool));
+    const rendered = try render(std.testing.allocator, &body, .bool);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "fcmp oeq float") != null);
 }
 
 test "mechanical renderer emits bit-exact canonical float literals" {

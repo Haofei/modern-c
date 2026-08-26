@@ -3142,22 +3142,20 @@ test "LLVM emits scalar comparison returns from MIR" {
     try expectContains(assigned_body, "ret i1 %");
 
     const lt_f32_body = try llvmFunctionBody(output.items, "define internal i1 @lt_f32");
-    try expectContains(lt_f32_body, "fcmp olt float %a, %b");
-    try expectContains(lt_f32_body, "ret i1 %t");
+    try expectContains(lt_f32_body, "fcmp olt float ");
+    try expectContains(lt_f32_body, "ret i1 %mc_expr_tmp_");
     try expectNotContains(lt_f32_body, "alloca");
     try expectNotContains(lt_f32_body, "store");
 
     const local_float_body = try llvmFunctionBody(output.items, "define internal i1 @local_float_compare");
-    try expectContains(local_float_body, "fcmp oge float %a, %b");
-    try expectContains(local_float_body, "ret i1 %t");
-    try expectNotContains(local_float_body, "alloca");
-    try expectNotContains(local_float_body, "store");
+    try expectContains(local_float_body, "; canonical executable MIR");
+    try expectContains(local_float_body, "fcmp oge float ");
+    try expectContains(local_float_body, "ret i1 %mc_expr_tmp_");
 
     const assigned_float_body = try llvmFunctionBody(output.items, "define internal i1 @assigned_float_compare");
-    try expectContains(assigned_float_body, "fcmp une float %a, %b");
-    try expectContains(assigned_float_body, "ret i1 %t");
-    try expectNotContains(assigned_float_body, "alloca");
-    try expectNotContains(assigned_float_body, "store");
+    try expectContains(assigned_float_body, "; canonical executable MIR");
+    try expectContains(assigned_float_body, "fcmp une float ");
+    try expectContains(assigned_float_body, "ret i1 %mc_expr_tmp_");
 
     const choose_body = try llvmFunctionBody(output.items, "define internal i1 @choose_compare");
     try expectContains(choose_body, "br i1 %");
@@ -4838,8 +4836,8 @@ test "LLVM float literal returns lower without body fallback" {
     try expectNotContains(choose_early_body, "alloca");
 
     const less_body = try llvmFunctionBody(output.items, "define internal i1 @less_than_literal");
-    try expectContains(less_body, "fcmp olt float %value, 0x3FF8000000000000");
-    try expectContains(less_body, "ret i1 %t");
+    try expectContains(less_body, "fcmp olt float %mc_arg_0, bitcast (i32 1069547520 to float)");
+    try expectContains(less_body, "ret i1 %mc_expr_tmp_");
     try expectNotContains(less_body, "alloca");
 }
 

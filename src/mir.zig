@@ -7816,12 +7816,28 @@ const FunctionBuilder = struct {
         construction: AggregateConstructionKind,
         fields: []const ast.Field,
     ) !bool {
+        return self.internExecutableAggregateTypeDepth(ty, construction, fields, 0);
+    }
+
+    fn internExecutableAggregateTypeDepth(
+        self: *FunctionBuilder,
+        ty: ValueType,
+        construction: AggregateConstructionKind,
+        fields: []const ast.Field,
+        depth: usize,
+    ) !bool {
         if ((construction != .declared_struct and construction != .c_union) or
-            fields.len == 0 or fields.len > mir_model.max_executable_operands) return false;
+            fields.len == 0 or fields.len > mir_model.max_executable_operands or
+            depth >= mir_model.max_executable_operands) return false;
         const type_id = try self.internTypeId(ty);
         for (self.executable_aggregate_types.items) |aggregate| {
             if (!aggregate.type_id.eql(type_id)) continue;
             return sameValueType(aggregate.ty, ty) and aggregate.construction == construction and aggregate.field_count == fields.len;
+        }
+        const previous_len = self.executable_aggregate_types.items.len;
+        var complete = false;
+        defer {
+            if (!complete) self.executable_aggregate_types.items.len = previous_len;
         }
         var aggregate: mir_model.ExecutableAggregateType = .{
             .type_id = type_id,
@@ -7837,6 +7853,20 @@ const FunctionBuilder = struct {
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
         }
         try self.executable_aggregate_types.append(self.allocator, aggregate);
+        for (aggregate.field_types[0..aggregate.field_count]) |field_ty| switch (field_ty) {
+            .struct_ => |name| {
+                const summary = self.structs.get(name) orelse return false;
+                if (!try self.internExecutableAggregateTypeDepth(
+                    field_ty,
+                    executableAggregateConstruction(summary),
+                    summary.fields,
+                    depth + 1,
+                )) return false;
+            },
+            .closed_enum, .open_enum => if (!try self.internExecutableEnumType(field_ty)) return false,
+            else => {},
+        };
+        complete = true;
         return true;
     }
 

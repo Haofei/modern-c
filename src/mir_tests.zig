@@ -56,6 +56,37 @@ test "executable MIR preserves union construction identity" {
     try mir_executable_body.verify(function);
 }
 
+test "executable MIR interns transitive aggregate layout metadata" {
+    const source =
+        \\struct Inner {
+        \\    value: u32,
+        \\}
+        \\struct Outer {
+        \\    state: u8,
+        \\    inner: Inner,
+        \\    result: i32,
+        \\}
+        \\fn take_result(p: *mut Outer) -> i32 {
+        \\    return p.result;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_transitive_aggregate_metadata.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "take_result") orelse return error.TestUnexpectedResult;
+    var found_outer = false;
+    var found_inner = false;
+    for (function.executable_body.aggregate_types) |aggregate| {
+        if (mir.ValueType.eql(aggregate.ty, .{ .struct_ = "Outer" })) found_outer = true;
+        if (mir.ValueType.eql(aggregate.ty, .{ .struct_ = "Inner" })) found_inner = true;
+    }
+    try std.testing.expect(found_outer);
+    try std.testing.expect(found_inner);
+    try mir_executable_body.verify(function);
+}
+
 test "executable MIR owns valid slice representation checks and rejects mutations" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {
