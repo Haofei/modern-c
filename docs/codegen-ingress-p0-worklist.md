@@ -219,8 +219,8 @@ parallel execution does not change the raw census or ranked report.
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 | 54 | 106 | 33 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 52 | 108 | 33 |
+| C | 160 | 160 | 0 | 0 | 10000 | 56 | 104 | 32 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 54 | 106 | 32 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized
@@ -235,7 +235,9 @@ Broad-corpus zero hits alone are not retirement proof. The first retirement
 probe found three paths used only by inline backend tests. Canonical CFG now
 owns every `scalar_control` case, so its standalone 468-line plan, 32-line plan
 test and both backend implementations were deleted, reducing the registry to
-33 plans. `simple_conditional_statement_return` and `simple_loop_return` remain.
+32 plans. `simple_conditional_statement_return` has been retired after dead
+conditional continuations and branch-local global accesses moved into canonical
+executable MIR. `simple_loop_return` remains.
 A deletion is accepted only when the exact-path census and both complete
 backend shards agree that coverage is unchanged.
 

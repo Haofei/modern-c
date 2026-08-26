@@ -930,6 +930,43 @@ test "ownership cleanup obligations keep executable admission closed" {
     return error.TestUnexpectedResult;
 }
 
+test "conditional arms that both return leave an unreachable continuation" {
+    const source =
+        \\extern fn hit(value: u32) -> void;
+        \\fn choose(flag: bool, value: u32) -> u32 {
+        \\    if flag {
+        \\        hit(value);
+        \\        return value;
+        \\    } else {
+        \\        return value;
+        \\    }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_conditional_returns.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    var function: ?*mir.Function = null;
+    for (module.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "choose")) {
+            function = candidate;
+            break;
+        }
+    }
+    const selected = function orelse return error.TestUnexpectedResult;
+    try executable.verify(selected);
+    try std.testing.expect(executable.isComplete(selected));
+    try std.testing.expect(selected.executable_body.terminators.len > 1);
+    try std.testing.expect(selected.executable_body.terminators[1].operation == .unreachable_);
+}
+
 fn assertOperandsPrecede(value: mir.ExecutableExpression) !void {
     switch (value.operation) {
         .unary => |operation| try std.testing.expect(operation.operand.index() < value.id.index()),

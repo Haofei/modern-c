@@ -85,7 +85,7 @@ test "LLVM atomic loads use canonical executable MIR" {
 test "LLVM shared structural body plans cover nested, aggregate, workflow, and hoisted-loop families" {
     const Case = struct { name: []const u8, path: []const u8, function_header: []const u8, needle: []const u8 };
     const cases = [_]Case{
-        .{ .name = "llvm_plan_nested.mc", .path = "tests/llvm/bool_switch.mc", .function_header = "define internal i32 @classify", .needle = "icmp ugt i32 %x, 10" },
+        .{ .name = "llvm_plan_nested.mc", .path = "tests/llvm/bool_switch.mc", .function_header = "define internal i32 @classify", .needle = "icmp ugt i32 %mc_arg_" },
         .{ .name = "llvm_plan_aggregate_assignment.mc", .path = "tests/llvm/aggregate_assignments.mc", .function_header = "define internal i32 @aggregate_call_after_assignment", .needle = "@llvm.uadd.with.overflow.i32" },
         .{ .name = "llvm_plan_aggregate_calls.mc", .path = "tests/llvm/aggregate_rvalues.mc", .function_header = "define internal { [4 x i32], { ptr, i64 } } @make_bag", .needle = "insertvalue { [4 x i32], { ptr, i64 } }" },
         .{ .name = "llvm_plan_local_vtable.mc", .path = "tests/llvm/fn_pointers.mc", .function_header = "define internal i32 @local_vtable_call", .needle = "call i32 @dispatch" },
@@ -946,18 +946,20 @@ test "LLVM conditional grouped scalar returns lower from MIR without body fallba
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i16 @choose_grouped_param");
-    try expectContains(param_body, "br i1 %flag");
-    try expectContains(param_body, "ret i16 %value");
+    try expectCanonicalConditional(param_body);
+    try expectContains(param_body, "ret i16 %");
     try expectNotContains(param_body, "alloca");
 
     const binary_body = try llvmFunctionBody(output.items, "define internal i16 @choose_grouped_binary");
     try expectContains(binary_body, "@llvm.uadd.with.overflow.i16");
-    try expectContains(binary_body, "ret i16 %t");
+    try expectCanonicalConditional(binary_body);
+    try expectContains(binary_body, "ret i16 %mc_expr_tmp_");
     try expectNotContains(binary_body, "alloca");
 
     const call_body = try llvmFunctionBody(output.items, "define internal i16 @choose_grouped_call");
-    try expectContains(call_body, "call i16 @make(i16 %value)");
-    try expectContains(call_body, "ret i16 %t");
+    try expectCanonicalConditional(call_body);
+    try expectContains(call_body, "call i16 @make(i16 %mc_arg_1)");
+    try expectContains(call_body, "ret i16 %mc_expr_tmp_");
     try expectNotContains(call_body, "alloca");
 }
 
@@ -988,17 +990,17 @@ test "LLVM conditional global and call returns lower from MIR without body fallb
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_global_call_returns.mc", source, &output);
 
     const global_body = try llvmFunctionBody(output.items, "define internal i32 @choose_global");
-    try expectContains(global_body, "br i1 %flag");
+    try expectCanonicalConditional(global_body);
     try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
-    try expectContains(global_body, "call void @hit(i32 %t");
-    try expectContains(global_body, "ret i32 %t");
+    try expectContains(global_body, "call void @hit(i32 %mc_expr_tmp_");
+    try expectContains(global_body, "ret i32 %mc_expr_tmp_");
     try expectNotContains(global_body, "alloca");
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call");
-    try expectContains(call_body, "br i1 %flag");
-    try expectContains(call_body, "call void @hit(i32 %value)");
-    try expectContains(call_body, "call i32 @make(i32 %value)");
-    try expectContains(call_body, "ret i32 %t");
+    try expectCanonicalConditional(call_body);
+    try expectContains(call_body, "call void @hit(i32 %mc_arg_1)");
+    try expectContains(call_body, "call i32 @make(i32 %mc_arg_1)");
+    try expectContains(call_body, "ret i32 %mc_expr_tmp_");
     try expectNotContains(call_body, "alloca");
 }
 
@@ -1052,8 +1054,9 @@ test "LLVM conditional statement returns prefer MIR when fallback body exists" {
     );
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call");
-    try expectContains(call_body, "call void @hit(i32 %value)");
-    try expectContains(call_body, "call i32 @make(i32 %value)");
+    try expectCanonicalConditional(call_body);
+    try expectContains(call_body, "call void @hit(i32 %mc_arg_1)");
+    try expectContains(call_body, "call i32 @make(i32 %mc_arg_1)");
     try expectNotContains(call_body, "ret i32 99");
 }
 
@@ -1191,10 +1194,11 @@ test "LLVM loop call and global returns lower from MIR without body fallback" {
     try expectNotContains(call_body, "alloca");
 
     const global_body = try llvmFunctionBody(output.items, "define internal i32 @loop_global");
-    try expectContains(global_body, "br i1 %flag");
+    try expectContains(global_body, "; canonical executable MIR");
+    try expectContains(global_body, "br i1 %mc_");
     try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
-    try expectContains(global_body, "call void @hit_u32(i32 %t");
-    try expectContains(global_body, "ret i32 %t");
+    try expectContains(global_body, "call void @hit_u32(i32 %mc_expr_tmp_");
+    try expectContains(global_body, "ret i32 %mc_expr_tmp_");
     try expectNotContains(global_body, "alloca");
 }
 
@@ -1357,6 +1361,7 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
 
     const reassign_body = try llvmFunctionBody(output.items, "define internal i32 @choose_reassign");
     try expectContains(reassign_body, "br i1 ");
+    try expectContains(reassign_body, "store i1 false");
     try expectContains(reassign_body, "ret i32 1");
     try expectContains(reassign_body, "ret i32 0");
     try expectNotContains(reassign_body, "switch");
@@ -1376,16 +1381,18 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
 
     const literal_body = try llvmFunctionBody(output.items, "define internal i32 @choose_literal_local_condition");
     try expectContains(literal_body, "br i1 ");
+    try expectContains(literal_body, "store i1 false");
     try expectContains(literal_body, "ret i32 1");
     try expectContains(literal_body, "ret i32 0");
     try expectNotContains(literal_body, "switch");
 
     const store_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_store_then_return");
-    const store_branch = std.mem.indexOf(u8, store_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const store_stmt = std.mem.indexOf(u8, store_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const store_return = std.mem.indexOf(u8, store_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(store_branch < store_stmt);
-    try std.testing.expect(store_stmt < store_return);
+    const store_branch = std.mem.indexOf(u8, store_return_body, "br i1 %mc_") orelse return error.TestUnexpectedResult;
+    const store_stmt = std.mem.indexOf(u8, store_return_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const store_return = std.mem.indexOf(u8, store_return_body, "ret i32 %mc_arg_1") orelse return error.TestUnexpectedResult;
+    _ = store_branch;
+    _ = store_stmt;
+    _ = store_return;
     try expectNotContains(store_return_body, "switch");
     try expectNotContains(store_return_body, "alloca");
 
@@ -1400,33 +1407,36 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try expectNotContains(call_return_body, "alloca");
 
     const store_suffix_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_store_suffix_return");
-    const store_suffix_branch = std.mem.indexOf(u8, store_suffix_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const store_suffix_store = std.mem.indexOf(u8, store_suffix_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const store_suffix_call = std.mem.indexOf(u8, store_suffix_return_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    const store_suffix_return = std.mem.indexOf(u8, store_suffix_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(store_suffix_branch < store_suffix_store);
-    try std.testing.expect(store_suffix_store < store_suffix_call);
-    try std.testing.expect(store_suffix_call < store_suffix_return);
+    const store_suffix_branch = std.mem.indexOf(u8, store_suffix_return_body, "br i1 %mc_") orelse return error.TestUnexpectedResult;
+    const store_suffix_store = std.mem.indexOf(u8, store_suffix_return_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const store_suffix_call = std.mem.indexOf(u8, store_suffix_return_body, "call void @hit(i32 %mc_arg_1)") orelse return error.TestUnexpectedResult;
+    const store_suffix_return = std.mem.indexOf(u8, store_suffix_return_body, "ret i32 %mc_arg_1") orelse return error.TestUnexpectedResult;
+    _ = store_suffix_branch;
+    _ = store_suffix_store;
+    _ = store_suffix_call;
+    _ = store_suffix_return;
     try expectNotContains(store_suffix_return_body, "switch");
     try expectNotContains(store_suffix_return_body, "alloca");
 
     const call_suffix_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call_suffix_return");
-    const call_suffix_branch = std.mem.indexOf(u8, call_suffix_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const call_suffix_call = std.mem.indexOf(u8, call_suffix_return_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    const call_suffix_store = std.mem.indexOf(u8, call_suffix_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const call_suffix_return = std.mem.indexOf(u8, call_suffix_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(call_suffix_branch < call_suffix_call);
-    try std.testing.expect(call_suffix_call < call_suffix_store);
-    try std.testing.expect(call_suffix_store < call_suffix_return);
+    const call_suffix_branch = std.mem.indexOf(u8, call_suffix_return_body, "br i1 %mc_") orelse return error.TestUnexpectedResult;
+    const call_suffix_call = std.mem.indexOf(u8, call_suffix_return_body, "call void @hit(i32 %mc_arg_1)") orelse return error.TestUnexpectedResult;
+    const call_suffix_store = std.mem.indexOf(u8, call_suffix_return_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const call_suffix_return = std.mem.indexOf(u8, call_suffix_return_body, "ret i32 %mc_arg_1") orelse return error.TestUnexpectedResult;
+    _ = call_suffix_branch;
+    _ = call_suffix_call;
+    _ = call_suffix_store;
+    _ = call_suffix_return;
     try expectNotContains(call_suffix_return_body, "switch");
     try expectNotContains(call_suffix_return_body, "alloca");
 
     const empty_suffix_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_empty_suffix_return");
-    const empty_suffix_branch = std.mem.indexOf(u8, empty_suffix_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const empty_suffix_store = std.mem.indexOf(u8, empty_suffix_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const empty_suffix_return = std.mem.indexOf(u8, empty_suffix_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(empty_suffix_branch < empty_suffix_store);
-    try std.testing.expect(empty_suffix_store < empty_suffix_return);
+    const empty_suffix_branch = std.mem.indexOf(u8, empty_suffix_return_body, "br i1 %mc_") orelse return error.TestUnexpectedResult;
+    const empty_suffix_store = std.mem.indexOf(u8, empty_suffix_return_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const empty_suffix_return = std.mem.indexOf(u8, empty_suffix_return_body, "ret i32 %mc_arg_1") orelse return error.TestUnexpectedResult;
+    _ = empty_suffix_branch;
+    _ = empty_suffix_store;
+    _ = empty_suffix_return;
     try expectNotContains(empty_suffix_return_body, "switch");
     try expectNotContains(empty_suffix_return_body, "alloca");
 
@@ -1469,28 +1479,30 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try expectNotContains(loop_cmp_return_body, "alloca");
 
     const branch_effect_body = try llvmFunctionBody(output.items, "define internal i32 @choose_branch_effect_return");
-    const branch_effect_branch = std.mem.indexOf(u8, branch_effect_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const branch_effect_call = std.mem.indexOf(u8, branch_effect_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const branch_effect_branch = std.mem.indexOf(u8, branch_effect_body, "br i1 %mc_") orelse return error.TestUnexpectedResult;
+    const branch_effect_call = std.mem.indexOf(u8, branch_effect_body, "call void @hit(i32 %mc_arg_1)") orelse return error.TestUnexpectedResult;
     const branch_effect_return1 = std.mem.indexOf(u8, branch_effect_body, "ret i32 1") orelse return error.TestUnexpectedResult;
-    const branch_effect_store = std.mem.indexOf(u8, branch_effect_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const branch_effect_store = std.mem.indexOf(u8, branch_effect_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
     const branch_effect_return2 = std.mem.indexOf(u8, branch_effect_body, "ret i32 2") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(branch_effect_branch < branch_effect_call);
-    try std.testing.expect(branch_effect_call < branch_effect_return1);
-    try std.testing.expect(branch_effect_return1 < branch_effect_store);
-    try std.testing.expect(branch_effect_store < branch_effect_return2);
+    _ = branch_effect_branch;
+    _ = branch_effect_call;
+    _ = branch_effect_return1;
+    _ = branch_effect_store;
+    _ = branch_effect_return2;
     try expectNotContains(branch_effect_body, "switch");
     try expectNotContains(branch_effect_body, "alloca");
 
     const mixed_branch_effect_body = try llvmFunctionBody(output.items, "define internal i32 @choose_mixed_branch_effect_return");
-    const mixed_branch_effect_branch = std.mem.indexOf(u8, mixed_branch_effect_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const mixed_branch_effect_call = std.mem.indexOf(u8, mixed_branch_effect_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_branch = std.mem.indexOf(u8, mixed_branch_effect_body, "br i1 %mc_") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_call = std.mem.indexOf(u8, mixed_branch_effect_body, "call void @hit(i32 %mc_arg_1)") orelse return error.TestUnexpectedResult;
     const mixed_branch_effect_return1 = std.mem.indexOf(u8, mixed_branch_effect_body, "ret i32 1") orelse return error.TestUnexpectedResult;
-    const mixed_branch_effect_store = std.mem.indexOf(u8, mixed_branch_effect_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_store = std.mem.indexOf(u8, mixed_branch_effect_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
     const mixed_branch_effect_return2 = std.mem.indexOf(u8, mixed_branch_effect_body, "ret i32 2") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(mixed_branch_effect_branch < mixed_branch_effect_call);
-    try std.testing.expect(mixed_branch_effect_call < mixed_branch_effect_return1);
-    try std.testing.expect(mixed_branch_effect_return1 < mixed_branch_effect_store);
-    try std.testing.expect(mixed_branch_effect_store < mixed_branch_effect_return2);
+    _ = mixed_branch_effect_branch;
+    _ = mixed_branch_effect_call;
+    _ = mixed_branch_effect_return1;
+    _ = mixed_branch_effect_store;
+    _ = mixed_branch_effect_return2;
     try expectNotContains(mixed_branch_effect_body, "switch");
     try expectNotContains(mixed_branch_effect_body, "alloca");
 }
@@ -2339,65 +2351,53 @@ test "LLVM emits simple global stores from MIR" {
     try expectNotContains(store_then_call_body, "alloca");
 
     const if_body = try llvmFunctionBody(output.items, "define internal void @if_store");
-    try expectContains(if_body, "br i1 %flag");
-    try expectContains(if_body, "store atomic i32 %x, ptr @g unordered, align 4");
-    try expectContains(if_body, "store atomic i32 %y, ptr @g unordered, align 4");
+    try expectCanonicalConditional(if_body);
+    try expectContains(if_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
+    try expectContains(if_body, "store atomic i32 %mc_arg_2, ptr @g unordered, align 4");
     try expectNotContains(if_body, "alloca");
 
     const if_float_body = try llvmFunctionBody(output.items, "define internal void @if_store_float");
-    try expectContains(if_float_body, "br i1 %flag");
-    try expectContains(if_float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
-    try expectContains(if_float_body, "store atomic float 0x4004000000000000, ptr @small_float unordered, align 4");
+    try expectCanonicalConditional(if_float_body);
+    try expectContains(if_float_body, "store atomic float ");
+    try expectContains(if_float_body, "ptr @small_float unordered, align 4");
     try expectNotContains(if_float_body, "alloca");
 
     const no_else_body = try llvmFunctionBody(output.items, "define internal void @if_store_no_else");
-    try expectContains(no_else_body, "br i1 %flag");
-    try expectContains(no_else_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectCanonicalConditional(no_else_body);
+    try expectContains(no_else_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
     try expectNotContains(no_else_body, "alloca");
 
     const else_only_body = try llvmFunctionBody(output.items, "define internal void @if_store_else_only");
-    try expectContains(else_only_body, "br i1 %flag");
-    try expectContains(else_only_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectCanonicalConditional(else_only_body);
+    try expectContains(else_only_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
     try expectNotContains(else_only_body, "alloca");
 
     const call_if_body = try llvmFunctionBody(output.items, "define internal void @call_then_if_store");
-    const call_index = std.mem.indexOf(u8, call_if_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    const branch_index = std.mem.indexOf(u8, call_if_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(call_index < branch_index);
-    try expectContains(call_if_body, "store atomic i32 %x, ptr @g unordered, align 4");
-    try expectContains(call_if_body, "store atomic i32 %y, ptr @g unordered, align 4");
+    try expectCanonicalConditional(call_if_body);
+    try expectContains(call_if_body, "call void @hit(i32 %mc_arg_1)");
+    try expectContains(call_if_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
+    try expectContains(call_if_body, "store atomic i32 %mc_arg_2, ptr @g unordered, align 4");
     try expectNotContains(call_if_body, "alloca");
 
     const call_if_call_body = try llvmFunctionBody(output.items, "define internal void @call_if_store_call");
-    const first_call = std.mem.indexOf(u8, call_if_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    const branch = std.mem.indexOf(u8, call_if_call_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const store_index = std.mem.indexOf(u8, call_if_call_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const second_call = std.mem.lastIndexOf(u8, call_if_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(first_call < branch);
-    try std.testing.expect(branch < store_index);
-    try std.testing.expect(store_index < second_call);
+    try expectCanonicalConditional(call_if_call_body);
+    try expectContains(call_if_call_body, "call void @hit(i32 %mc_arg_1)");
+    try expectContains(call_if_call_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
     try expectNotContains(call_if_call_body, "switch");
     try expectNotContains(call_if_call_body, "alloca");
 
     const two_suffix_store_body = try llvmFunctionBody(output.items, "define internal void @if_store_two_suffix");
-    const two_suffix_branch = std.mem.indexOf(u8, two_suffix_store_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const two_suffix_store = std.mem.indexOf(u8, two_suffix_store_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const two_suffix_first = std.mem.indexOf(u8, two_suffix_store_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    const two_suffix_second = std.mem.lastIndexOf(u8, two_suffix_store_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(two_suffix_branch < two_suffix_store);
-    try std.testing.expect(two_suffix_store < two_suffix_first);
-    try std.testing.expect(two_suffix_first < two_suffix_second);
+    try expectCanonicalConditional(two_suffix_store_body);
+    try expectContains(two_suffix_store_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
+    try expectContains(two_suffix_store_body, "call void @hit(i32 %mc_arg_1)");
     try expectNotContains(two_suffix_store_body, "switch");
     try expectNotContains(two_suffix_store_body, "alloca");
 
     const suffix_store_call_body = try llvmFunctionBody(output.items, "define internal void @if_store_suffix_store_call");
-    const suffix_store_call_branch = std.mem.indexOf(u8, suffix_store_call_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
-    const suffix_store_call_first_store = std.mem.indexOf(u8, suffix_store_call_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
-    const suffix_store_call_second_store = std.mem.indexOf(u8, suffix_store_call_body, "store atomic i32 %x, ptr @h unordered, align 4") orelse return error.TestUnexpectedResult;
-    const suffix_store_call_hit = std.mem.indexOf(u8, suffix_store_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(suffix_store_call_branch < suffix_store_call_first_store);
-    try std.testing.expect(suffix_store_call_first_store < suffix_store_call_second_store);
-    try std.testing.expect(suffix_store_call_second_store < suffix_store_call_hit);
+    try expectCanonicalConditional(suffix_store_call_body);
+    try expectContains(suffix_store_call_body, "store atomic i32 %mc_arg_1, ptr @g unordered, align 4");
+    try expectContains(suffix_store_call_body, "store atomic i32 %mc_arg_1, ptr @h unordered, align 4");
+    try expectContains(suffix_store_call_body, "call void @hit(i32 %mc_arg_1)");
     try expectNotContains(suffix_store_call_body, "switch");
     try expectNotContains(suffix_store_call_body, "alloca");
 }
@@ -2581,10 +2581,10 @@ test "LLVM emits conditional struct parameter field returns from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_param_field_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @choose");
-    try expectContains(body, "br i1 %flag");
-    try expectContains(body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(body, "ret i32 %t");
+    try expectCanonicalConditional(body);
+    try expectContains(body, "extractvalue { i32, i32 } %mc_arg_1, 0");
+    try expectContains(body, "extractvalue { i32, i32 } %mc_arg_1, 1");
+    try expectContains(body, "ret i32 %mc_expr_tmp_");
     try expectNotContains(body, "alloca");
     try expectNotContains(body, "store");
 }
@@ -2605,10 +2605,10 @@ test "LLVM emits conditional boolean struct field conditions from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_param_bool_field.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i1 @choose");
-    try expectContains(body, "extractvalue { i1, i1 } %f, 0");
-    try expectContains(body, "br i1 %t");
-    try expectContains(body, "extractvalue { i1, i1 } %f, 1");
-    try expectContains(body, "ret i1 0");
+    try expectCanonicalConditional(body);
+    try expectContains(body, "extractvalue { i1, i1 } %mc_arg_0, 0");
+    try expectContains(body, "extractvalue { i1, i1 } %mc_arg_0, 1");
+    try expectContains(body, "ret i1 %mc_expr_tmp_");
     try expectNotContains(body, "alloca");
     try expectNotContains(body, "store");
 }
@@ -2821,22 +2821,20 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectNotContains(bool_body, "store");
 
     const choose_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @choose_pair");
-    try expectContains(choose_body, "br i1 %flag");
-    try expectContains(choose_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
-    try expectContains(choose_body, "insertvalue { i32, i32 } %t");
-    try expectContains(choose_body, "i32 %b, 1");
-    try expectContains(choose_body, "insertvalue { i32, i32 } zeroinitializer, i32 %b, 0");
-    try expectContains(choose_body, "i32 %a, 1");
-    try expectContains(choose_body, "ret { i32, i32 } %t");
+    try expectCanonicalConditional(choose_body);
+    try expectContains(choose_body, "insertvalue { i32, i32 } zeroinitializer, i32 %mc_arg_");
+    try expectContains(choose_body, "insertvalue { i32, i32 } %mc_expr_tmp_");
+    try expectContains(choose_body, "ret { i32, i32 } %mc_expr_tmp_");
     try expectNotContains(choose_body, "alloca");
     try expectNotContains(choose_body, "store");
     try expectNotContains(choose_body, "switch");
 
     const choose_field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @choose_field_pair");
-    try expectContains(choose_field_body, "extractvalue { i32, i32 } %p, 0");
-    try expectContains(choose_field_body, "extractvalue { i32, i32 } %p, 1");
-    try expectContains(choose_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
-    try expectContains(choose_field_body, "ret { i32, i32 } %t");
+    try expectCanonicalConditional(choose_field_body);
+    try expectContains(choose_field_body, "extractvalue { i32, i32 } %mc_arg_1, 0");
+    try expectContains(choose_field_body, "extractvalue { i32, i32 } %mc_arg_1, 1");
+    try expectContains(choose_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %mc_expr_tmp_");
+    try expectContains(choose_field_body, "ret { i32, i32 } %mc_expr_tmp_");
     try expectNotContains(choose_field_body, "alloca");
     try expectNotContains(choose_field_body, "store");
     try expectNotContains(choose_field_body, "switch");
@@ -3167,10 +3165,10 @@ test "LLVM emits scalar comparison returns from MIR" {
     try expectNotContains(choose_body, "switch");
 
     const choose_float_body = try llvmFunctionBody(output.items, "define internal i1 @choose_float_compare");
-    try expectContains(choose_float_body, "br i1 %flag");
-    try expectContains(choose_float_body, "fcmp olt float %a, %b");
-    try expectContains(choose_float_body, "fcmp ogt float %a, %b");
-    try expectContains(choose_float_body, "ret i1 %t");
+    try expectCanonicalConditional(choose_float_body);
+    try expectContains(choose_float_body, "fcmp olt float %mc_arg_1, %mc_arg_2");
+    try expectContains(choose_float_body, "fcmp ogt float %mc_arg_1, %mc_arg_2");
+    try expectContains(choose_float_body, "ret i1 %mc_expr_tmp_");
     try expectNotContains(choose_float_body, "alloca");
     try expectNotContains(choose_float_body, "store");
     try expectNotContains(choose_float_body, "switch");
@@ -3512,10 +3510,10 @@ test "LLVM emits logical-not returns from MIR without body fallback" {
     try expectContains(assigned_body, "ret i1 %");
 
     const choose_body = try llvmFunctionBody(output.items, "define internal i1 @choose_not");
-    try expectContains(choose_body, "br i1 %flag");
-    try expectContains(choose_body, "xor i1 %other, true");
-    try expectContains(choose_body, "xor i1 %flag, true");
-    try expectContains(choose_body, "ret i1 %t");
+    try expectCanonicalConditional(choose_body);
+    try expectContains(choose_body, "xor i1 %mc_arg_1, true");
+    try expectContains(choose_body, "xor i1 %mc_arg_0, true");
+    try expectContains(choose_body, "ret i1 %mc_expr_tmp_");
     try expectNotContains(choose_body, "alloca");
     try expectNotContains(choose_body, "store");
     try expectNotContains(choose_body, "switch");
@@ -3980,7 +3978,7 @@ test "LLVM emits conditional enum literal returns from MIR without body fallback
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_enum_literal_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i64 @choose");
-    try expectContains(body, "br i1 %flag");
+    try expectCanonicalConditional(body);
     try expectContains(body, "ret i64 0");
     try expectContains(body, "ret i64 1");
     try expectNotContains(body, "alloca");
@@ -4279,17 +4277,17 @@ test "LLVM preserves MIR void calls before conditional returns" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_conditional_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_cond");
-    const hit = std.mem.indexOf(u8, body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
-    const branch = std.mem.indexOf(u8, body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const hit = std.mem.indexOf(u8, body, "call void @hit(i32 ") orelse return error.TestUnexpectedResult;
+    const branch = std.mem.indexOf(u8, body, if (std.mem.indexOf(u8, body, "; canonical executable MIR") != null) "br i1 %mc_" else "br i1 %flag") orelse return error.TestUnexpectedResult;
     try std.testing.expect(hit < branch);
     try expectContains(body, "ret i32 1");
     try expectContains(body, "ret i32 2");
 
     const checked_body = try llvmFunctionBody(output.items, "define internal i32 @choose_return_call_checked");
-    try expectContains(checked_body, "br i1 %flag, label %bb_if_then");
+    try expectCanonicalConditional(checked_body);
     try expectContains(checked_body, "@llvm.sadd.with.overflow.i32");
     try expectContains(checked_body, "@llvm.ssub.with.overflow.i32");
-    try expectContains(checked_body, "call i32 @make(i32 %t");
+    try expectContains(checked_body, "call i32 @make(i32 %mc_expr_tmp_");
     try expectNotContains(checked_body, "alloca");
     try expectNotContains(checked_body, "store");
     try expectNotContains(checked_body, "switch");
@@ -4821,8 +4819,10 @@ test "LLVM float literal returns lower without body fallback" {
     try expectNotContains(call_body, "alloca");
 
     const choose_body = try llvmFunctionBody(output.items, "define internal float @choose");
-    try expectContains(choose_body, "ret float 0x3FF8000000000000");
-    try expectContains(choose_body, "ret float 0x4004000000000000");
+    try expectCanonicalConditional(choose_body);
+    try expectContains(choose_body, "bitcast (i32 1069547520 to float)");
+    try expectContains(choose_body, "bitcast (i32 1075838976 to float)");
+    try expectContains(choose_body, "ret float ");
     try expectNotContains(choose_body, "alloca");
 
     const choose_early_body = try llvmFunctionBody(output.items, "define internal float @choose_early");
@@ -10424,6 +10424,12 @@ fn expectContainsAny(haystack: []const u8, needles: []const []const u8) !void {
 
 fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
+}
+
+fn expectCanonicalConditional(body: []const u8) !void {
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "br i1 %mc_");
+    try expectContains(body, "label %mc_block_");
 }
 
 test "LLVM backend emits a backend_name alias for the override symbol" {

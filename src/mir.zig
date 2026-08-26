@@ -6785,6 +6785,14 @@ const FunctionBuilder = struct {
             const operation: @FieldType(ExecutableTerminator, "operation") = switch (block.terminator) {
                 .fallthrough => fallthrough: {
                     if (block.successors.items.len == 0 and self.return_ty == .void) break :fallthrough .return_;
+                    // Structured conditionals create a synthetic continuation block even
+                    // when every arm terminates.  Once it has no incoming CFG edge it is
+                    // semantically unreachable, not an incomplete non-void fallthrough.
+                    if (block.id != 0 and block.successors.items.len == 0 and
+                        !self.executableBlockHasPredecessor(block.id))
+                    {
+                        break :fallthrough .unreachable_;
+                    }
                     complete = false;
                     break :fallthrough .fallthrough;
                 },
@@ -7259,6 +7267,15 @@ const FunctionBuilder = struct {
             }
         }
         return null;
+    }
+
+    fn executableBlockHasPredecessor(self: *const FunctionBuilder, target: usize) bool {
+        for (self.blocks.items) |candidate| {
+            for (candidate.successors.items) |successor| {
+                if (successor == target) return true;
+            }
+        }
+        return false;
     }
 
     fn executableBooleanBranch(self: *const FunctionBuilder, dispatch: MutableBlock) ?struct { true_block: usize, false_block: usize } {
@@ -7942,13 +7959,6 @@ const FunctionBuilder = struct {
         const alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse 0;
         if (alignment == 0) self.executable_supported = false;
         const root = executablePlaceRootIdent(place_expr);
-        if (root) |name| {
-            // This first memory slice intentionally admits only straight-line
-            // global access.  Branch/loop cleanup and access scheduling stay
-            // on the existing verified path until the executable CFG owns the
-            // complete effect ordering contract for those regions.
-            if (self.globals.contains(name) and self.current != 0) self.executable_supported = false;
-        }
         const kind: mir_model.ExecutableMemoryAccessKind = if (self.executablePlaceHasDeref(place_expr))
             .race_unordered
         else if (root) |name|
