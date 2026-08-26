@@ -12,7 +12,6 @@ const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
-const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
@@ -451,7 +450,7 @@ test "lower-c emits nullable binding and checked fallback return from MIR withou
     try expectContains(body, "return fallback;");
 }
 
-test "lower-c scalar expression plans preserve high-word typing and flag-set order without body fallback" {
+test "lower-c canonical executable MIR preserves high-word typing and flag-set order" {
     const source =
         \\extern fn read_word(addr: usize) -> u64;
         \\fn high_word(v: u64) -> u32 {
@@ -462,20 +461,22 @@ test "lower-c scalar expression plans preserve high-word typing and flag-set ord
         \\    return (read_word(addr) & mask) != 0;
         \\}
     ;
-    var parsed = try test_support.parseCheckedModule("c_mir_scalar_expression_plan.mc", source);
+    var parsed = try test_support.parseCheckedModule("c_canonical_scalar_expressions.mc", source);
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try std.testing.expect(mir_scalar_expression_plan.build(module_mir.functions[1]) != null);
-    try std.testing.expect(mir_scalar_expression_plan.build(module_mir.functions[2]) != null);
+    try std.testing.expect(module_mir.functions[1].executable_body.isComplete());
+    try std.testing.expect(module_mir.functions[2].executable_body.isComplete());
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_scalar_expression_plan.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_canonical_scalar_expressions.mc", .{}, false, null);
 
     const high = try cFunctionBody(output.items, "static uint32_t high_word(uint64_t v)");
-    try expectContains(high, "uint32_t hi = (uint32_t)mc_checked_shr_u64(v, 32);");
-    try expectContains(high, "return mc_checked_add_u32(hi, 1);");
+    try expectContains(high, "/* canonical executable MIR */");
+    try expectContains(high, "mc_checked_shr_u64(");
+    try expectContains(high, "uint32_t hi = ");
+    try expectContains(high, "mc_checked_add_u32(");
     const shift = std.mem.indexOf(u8, high, "mc_checked_shr_u64") orelse return error.TestUnexpectedResult;
     const add = std.mem.indexOf(u8, high, "mc_checked_add_u32") orelse return error.TestUnexpectedResult;
     try std.testing.expect(shift < add);

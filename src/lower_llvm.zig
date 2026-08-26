@@ -12,7 +12,6 @@ const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
-const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
@@ -1768,16 +1767,9 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const scalar_expression_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null)
-            if (mir_scalar_expression_plan.build(fn_mir)) |plan|
-                if (self.mirScalarExpressionPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const llvm_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null) blk: {
+        const llvm_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const body = access_body_plan orelse break :blk null;
             break :blk mir_access_plan.buildSliceOperation(body);
@@ -1849,7 +1841,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and llvm_local_address_update == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1875,7 +1867,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1886,7 +1878,6 @@ const LlvmEmitter = struct {
             aggregate_sequence_plan != null,
             workflow_plan != null,
             alloca_hoist_plan != null,
-            scalar_expression_plan != null,
             llvm_access_operation != null,
             llvm_local_address_update != null,
             llvm_structural_access_operation != null,
@@ -1977,9 +1968,6 @@ const LlvmEmitter = struct {
         } else if (alloca_hoist_plan) |plan| {
             selected_path.* = .alloca_hoist;
             try self.emitMirAllocaHoistPlan(plan, ret_ty);
-        } else if (scalar_expression_plan) |plan| {
-            selected_path.* = .scalar_expression;
-            try self.emitMirScalarExpressionPlan(plan, ret_ty);
         } else if (llvm_access_operation) |operation| {
             selected_path.* = .access_operation;
             try self.emitMirAccessPlan(operation, ret_llvm);
@@ -4717,67 +4705,6 @@ const LlvmEmitter = struct {
         try self.emitReturnValue(ret_ty, final_sum, spanFromMirSourcePoint(plan.return_location.source));
     }
 
-    fn mirScalarExpressionPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_scalar_expression_plan.Plan) bool {
-        return switch (plan) {
-            .high_word => |high| self.mirHighWordPlanSupported(function, high),
-            .flag_set => |flag| self.mirFlagSetPlanSupported(function, flag),
-        };
-    }
-
-    fn mirHighWordPlanSupported(self: *LlvmEmitter, function: anytype, high: mir_scalar_expression_plan.HighWord) bool {
-        if (high.shift_amount.value != 32 or high.increment.value != 1 or !high.parameter.id.isValid() or !high.local.id.isValid()) return false;
-        const parameter_llvm = self.mirScalarExpressionLlvmType(high.parameter.ty) orelse return false;
-        const shift_llvm = self.mirScalarExpressionLlvmType(high.shift_result) orelse return false;
-        const local_llvm = self.mirScalarExpressionLlvmType(high.local.ty) orelse return false;
-        if (!std.mem.eql(u8, parameter_llvm, shift_llvm) or !std.mem.eql(u8, shift_llvm, "i64") or
-            !std.mem.eql(u8, local_llvm, "i32") or
-            !std.mem.eql(u8, local_llvm, self.mirScalarExpressionLlvmType(high.cast_target) orelse return false) or
-            !std.mem.eql(u8, shift_llvm, self.mirScalarExpressionLlvmType(high.cast_source) orelse return false) or
-            !std.mem.eql(u8, local_llvm, self.mirScalarExpressionLlvmType(high.increment.ty) orelse return false)) return false;
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        if (!std.mem.eql(u8, self.llvmType(return_ty) catch return false, local_llvm)) return false;
-        return self.mirScalarExpressionParameterSupported(function, high.parameter);
-    }
-
-    fn mirFlagSetPlanSupported(self: *LlvmEmitter, function: anytype, flag: mir_scalar_expression_plan.FlagSet) bool {
-        if (!flag.address.id.isValid() or !flag.mask.id.isValid() or !flag.callee_id.isValid() or flag.zero.value != 0) return false;
-        const address_llvm = self.mirScalarExpressionLlvmType(flag.address.ty) orelse return false;
-        const mask_llvm = self.mirScalarExpressionLlvmType(flag.mask.ty) orelse return false;
-        const result_llvm = self.mirScalarExpressionLlvmType(flag.call_result) orelse return false;
-        const compare_llvm = self.mirScalarExpressionLlvmType(flag.compare_result) orelse return false;
-        if (!std.mem.eql(u8, address_llvm, self.mirScalarExpressionLlvmType(flag.call_argument) orelse return false) or
-            !std.mem.eql(u8, mask_llvm, result_llvm) or !std.mem.eql(u8, result_llvm, self.mirScalarExpressionLlvmType(flag.and_result) orelse return false) or
-            !std.mem.eql(u8, result_llvm, self.mirScalarExpressionLlvmType(flag.zero.ty) orelse return false) or
-            !std.mem.eql(u8, result_llvm, "i64") or !std.mem.eql(u8, compare_llvm, "i1")) return false;
-        if (!self.mirScalarExpressionParameterSupported(function, flag.address) or !self.mirScalarExpressionParameterSupported(function, flag.mask)) return false;
-        const signature = self.fn_sigs.get(flag.callee_name) orelse return false;
-        if (signature.is_variadic or signature.params.len != 1 or
-            !std.mem.eql(u8, self.llvmType(signature.params[0].ty) catch return false, address_llvm) or
-            !std.mem.eql(u8, self.llvmType(signature.ret) catch return false, result_llvm)) return false;
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        return std.mem.eql(u8, self.llvmType(return_ty) catch return false, compare_llvm);
-    }
-
-    fn mirScalarExpressionParameterSupported(self: *LlvmEmitter, function: anytype, value: mir_scalar_expression_plan.Value) bool {
-        const expected = self.mirScalarExpressionLlvmType(value.ty) orelse return false;
-        var matches: usize = 0;
-        for (function.signature.params) |parameter| {
-            if (!std.mem.eql(u8, parameter.name.text, value.name)) continue;
-            if (!std.mem.eql(u8, self.llvmType(parameter.ty) catch return false, expected)) return false;
-            matches += 1;
-        }
-        return matches == 1;
-    }
-
-    fn mirScalarExpressionLlvmType(self: *LlvmEmitter, ty: mir_scalar_expression_plan.TypeRef) ?[]const u8 {
-        _ = self;
-        return switch (ty.value_ty) {
-            .bool => "i1",
-            .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) "i8" else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) "i16" else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) "i32" else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) "i64" else null,
-            else => null,
-        };
-    }
-
     const MirStructuralLocal = struct {
         llvm_ty: []const u8,
         slot: []const u8,
@@ -5535,13 +5462,6 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitMirScalarExpressionPlan(self: *LlvmEmitter, plan: mir_scalar_expression_plan.Plan, ret_ty: anytype) !void {
-        switch (plan) {
-            .high_word => |high| try self.emitMirHighWordPlan(high, ret_ty),
-            .flag_set => |flag| try self.emitMirFlagSetPlan(flag, ret_ty),
-        }
-    }
-
     fn emitMirAccessPlan(self: *LlvmEmitter, operation: mir_access_plan.SliceOperation, ret_llvm: []const u8) !void {
         const scalar_ty: []const u8 = switch (operation.scalar) {
             .u8 => "i8",
@@ -5611,58 +5531,6 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = alloca i32\n  store i32 %{s}, ptr {s}, align 4\n  {s} = load i32, ptr {s}, align 4\n  {s} = call {{ i32, i1 }} @llvm.uadd.with.overflow.i32(i32 {s}, i32 {d})\n  {s} = extractvalue {{ i32, i1 }} {s}, 0\n  {s} = extractvalue {{ i32, i1 }} {s}, 1\n", .{ slot, operation.initial_name, slot, loaded, slot, pair, loaded, operation.increment, next, pair, overflow, pair });
         try self.emitTrapBranch(overflow, trap, cont, trap, cont, "IntegerOverflow");
         try self.out.print(self.allocator, "  store i32 {s}, ptr {s}, align 4\n  {s} = load i32, ptr {s}, align 4\n  ret i32 {s}\n", .{ next, slot, result, slot, result });
-    }
-
-    fn emitMirHighWordPlan(self: *LlvmEmitter, high: mir_scalar_expression_plan.HighWord, ret_ty: anytype) !void {
-        const shift_ty = self.mirScalarExpressionLlvmType(high.shift_result) orelse return error.UnsupportedLlvmEmission;
-        const local_ty = self.mirScalarExpressionLlvmType(high.local.ty) orelse return error.UnsupportedLlvmEmission;
-        self.current_debug_span = spanFromMirSourcePoint(high.shift_location.source);
-        const invalid_shift = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = icmp uge {s} {d}, 64\n", .{ invalid_shift, shift_ty, high.shift_amount.value });
-        const shift_trap = try self.nextLabel("trap_shift");
-        const shift_cont = try self.nextLabel("shift_ok");
-        try self.emitTrapBranch(invalid_shift, shift_trap, shift_cont, shift_trap, shift_cont, "InvalidShift");
-        const shifted = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = lshr {s} %{s}, {d}{s}\n", .{ shifted, shift_ty, high.parameter.name, high.shift_amount.value, try self.debugCallSuffix() });
-        self.current_debug_span = spanFromMirSourcePoint(high.cast_location.source);
-        const casted = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = trunc {s} {s} to {s}{s}\n", .{ casted, shift_ty, shifted, local_ty, try self.debugCallSuffix() });
-        const storage = try self.nextTemp();
-        try self.emitAlloca(storage, local_ty);
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ local_ty, casted, storage, try self.debugCallSuffix() });
-        const local_value = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ local_value, local_ty, storage, try self.debugCallSuffix() });
-        self.current_debug_span = spanFromMirSourcePoint(high.increment_location.source);
-        const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{local_ty});
-        const pair = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = call {s} @llvm.uadd.with.overflow.i32({s} {s}, {s} {d}){s}\n", .{
-            pair, pair_ty, local_ty, local_value, local_ty, high.increment.value, try self.debugCallSuffix(),
-        });
-        const result = try self.nextTemp();
-        const overflow = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ result, pair_ty, pair });
-        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ overflow, pair_ty, pair });
-        const overflow_trap = try self.nextLabel("trap_overflow");
-        const overflow_cont = try self.nextLabel("overflow_ok");
-        try self.emitTrapBranch(overflow, overflow_trap, overflow_cont, overflow_trap, overflow_cont, "IntegerOverflow");
-        try self.emitReturnValue(ret_ty, result, spanFromMirSourcePoint(high.return_location.source));
-    }
-
-    fn emitMirFlagSetPlan(self: *LlvmEmitter, flag: mir_scalar_expression_plan.FlagSet, ret_ty: anytype) !void {
-        const result_ty = self.mirScalarExpressionLlvmType(flag.call_result) orelse return error.UnsupportedLlvmEmission;
-        const address_ty = self.mirScalarExpressionLlvmType(flag.call_argument) orelse return error.UnsupportedLlvmEmission;
-        self.current_debug_span = spanFromMirSourcePoint(flag.call_location.source);
-        const call_result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} %{s}){s}\n", .{
-            call_result, result_ty, flag.callee_name, address_ty, flag.address.name, try self.debugCallSuffix(),
-        });
-        self.current_debug_span = spanFromMirSourcePoint(flag.and_location.source);
-        const and_result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = and {s} {s}, %{s}{s}\n", .{ and_result, result_ty, call_result, flag.mask.name, try self.debugCallSuffix() });
-        self.current_debug_span = spanFromMirSourcePoint(flag.compare_location.source);
-        const compared = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, {d}{s}\n", .{ compared, result_ty, and_result, flag.zero.value, try self.debugCallSuffix() });
-        try self.emitReturnValue(ret_ty, compared, spanFromMirSourcePoint(flag.return_location.source));
     }
 
     fn mirScalarLocalCheckedBinaryOperand(

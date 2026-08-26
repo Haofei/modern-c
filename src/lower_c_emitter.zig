@@ -11,7 +11,6 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
-const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
@@ -1690,13 +1689,6 @@ pub const CEmitter = struct {
             null;
         const access_structural_priority = access_structural_operation != null and
             mirAccessStructuralRequiresPriority(access_body_plan.?, access_structural_operation.?);
-        const scalar_expression_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null)
-            if (mir_scalar_expression_plan.build(fn_mir)) |plan|
-                if (self.mirScalarExpressionPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
         const while_control_plan = if (simple_trap == null)
             if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
                 if (self.mirWhileControlPlanSupported(function, plan)) plan else null
@@ -1760,7 +1752,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and scalar_expression_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1797,7 +1789,6 @@ pub const CEmitter = struct {
             access_slice_plan != null,
             access_local_address_update != null,
             access_structural_operation != null,
-            scalar_expression_plan != null,
             while_control_plan != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
@@ -1855,9 +1846,6 @@ pub const CEmitter = struct {
         } else if (access_structural_priority) {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, access_structural_operation.?);
-        } else if (scalar_expression_plan) |plan| {
-            selected_path.* = .scalar_expression;
-            try self.emitMirScalarExpressionPlan(plan);
         } else if (while_control_plan) |plan| {
             selected_path.* = .while_control;
             try self.emitMirWhileControlPlan(plan);
@@ -3905,96 +3893,9 @@ pub const CEmitter = struct {
         }
     }
 
-    fn mirScalarExpressionPlanSupported(self: *CEmitter, function: anytype, plan: mir_scalar_expression_plan.Plan) bool {
-        return switch (plan) {
-            .high_word => |high| self.mirHighWordPlanSupported(function, high),
-            .flag_set => |flag| self.mirFlagSetPlanSupported(function, flag),
-        };
-    }
-
-    fn mirHighWordPlanSupported(self: *CEmitter, function: anytype, high: mir_scalar_expression_plan.HighWord) bool {
-        if (high.shift_amount.value != 32 or high.increment.value != 1 or !high.parameter.id.isValid() or !high.local.id.isValid()) return false;
-        if (!mirScalarExpressionTypeIs(high.parameter.ty, "u64") or !mirScalarExpressionTypeIs(high.shift_result, "u64") or
-            !mirScalarExpressionTypeIs(high.cast_source, "u64") or !mirScalarExpressionTypeIs(high.local.ty, "u32") or
-            !mirScalarExpressionTypeIs(high.cast_target, "u32") or !mirScalarExpressionTypeIs(high.increment.ty, "u32")) return false;
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        return self.mirScalarExpressionParameterSupported(function, high.parameter) and self.mirScalarExpressionSourceTypeIs(return_ty, "u32");
-    }
-
-    fn mirFlagSetPlanSupported(self: *CEmitter, function: anytype, flag: mir_scalar_expression_plan.FlagSet) bool {
-        if (!flag.address.id.isValid() or !flag.mask.id.isValid() or !flag.callee_id.isValid() or flag.zero.value != 0) return false;
-        if (!mirScalarExpressionTypeIs(flag.address.ty, "usize") or !mirScalarExpressionTypeIs(flag.mask.ty, "u64") or
-            !mirScalarExpressionTypeIs(flag.call_argument, "usize") or !mirScalarExpressionTypeIs(flag.call_result, "u64") or
-            !mirScalarExpressionTypeIs(flag.and_result, "u64") or !mirScalarExpressionTypeIs(flag.zero.ty, "u64") or
-            !mirScalarExpressionTypeIs(flag.compare_result, "bool")) return false;
-        if (!self.mirScalarExpressionParameterSupported(function, flag.address) or !self.mirScalarExpressionParameterSupported(function, flag.mask)) return false;
-        const callee = self.functions.get(flag.callee_name) orelse return false;
-        const callee_return = callee.return_type orelse return false;
-        if (callee.is_variadic or callee.params.len != 1 or !self.mirScalarExpressionSourceTypeIs(callee.params[0].ty, "usize") or
-            !self.mirScalarExpressionSourceTypeIs(callee_return, "u64")) return false;
-        return self.mirScalarExpressionSourceTypeIs(function.signature.transitionalReturnType() orelse return false, "bool");
-    }
-
-    fn mirScalarExpressionParameterSupported(self: *CEmitter, function: anytype, value: mir_scalar_expression_plan.Value) bool {
-        var matches: usize = 0;
-        for (function.signature.params) |parameter| {
-            if (!std.mem.eql(u8, parameter.name.text, value.name)) continue;
-            if (!self.mirScalarExpressionSourceTypeMatches(value.ty, parameter.ty)) return false;
-            matches += 1;
-        }
-        return matches == 1;
-    }
-
-    fn mirScalarExpressionSourceTypeMatches(self: *CEmitter, plan_ty: mir_scalar_expression_plan.TypeRef, source_ty: TransitionalTypeExpr) bool {
-        return self.mirScalarExpressionSourceTypeIs(source_ty, plan_ty.value_ty.name());
-    }
-
     fn mirScalarExpressionSourceTypeIs(self: *CEmitter, source_ty: TransitionalTypeExpr, expected: []const u8) bool {
         const name = typeName(self.resolveAliasType(source_ty)) orelse return false;
         return std.mem.eql(u8, name, expected);
-    }
-
-    fn mirScalarExpressionTypeIs(plan_ty: mir_scalar_expression_plan.TypeRef, expected: []const u8) bool {
-        return std.mem.eql(u8, plan_ty.value_ty.name(), expected);
-    }
-
-    fn emitMirScalarExpressionPlan(self: *CEmitter, plan: mir_scalar_expression_plan.Plan) !void {
-        switch (plan) {
-            .high_word => |high| try self.emitMirHighWordPlan(high),
-            .flag_set => |flag| try self.emitMirFlagSetPlan(flag),
-        }
-    }
-
-    fn emitMirHighWordPlan(self: *CEmitter, high: mir_scalar_expression_plan.HighWord) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(high.cast_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint32_t {s} = (uint32_t){s}({s}, {d});\n", .{
-            try self.cIdent(high.local.name),
-            try self.checkedHelperName("shr", high.shift_result.value_ty.name()),
-            try self.cIdent(high.parameter.name),
-            high.shift_amount.value,
-        });
-        try self.writeLineDirective(spanFromMirSourcePoint(high.increment_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s}({s}, {d});\n", .{
-            try self.checkedHelperName("add", high.local.ty.value_ty.name()),
-            try self.cIdent(high.local.name),
-            high.increment.value,
-        });
-    }
-
-    fn emitMirFlagSetPlan(self: *CEmitter, flag: mir_scalar_expression_plan.FlagSet) !void {
-        const call_value = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(flag.call_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint64_t {s} = {s}({s});\n", .{ call_value, try self.cIdent(flag.callee_name), try self.cIdent(flag.address.name) });
-        const and_value = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(flag.and_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint64_t {s} = {s} & {s};\n", .{ and_value, call_value, try self.cIdent(flag.mask.name) });
-        try self.writeLineDirective(spanFromMirSourcePoint(flag.compare_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s} != {d};\n", .{ and_value, flag.zero.value });
     }
 
     fn simpleMirReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {

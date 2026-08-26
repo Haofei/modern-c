@@ -7360,6 +7360,11 @@ const FunctionBuilder = struct {
 
     fn ensureExecutableCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
         const operand = try self.ensureExecutableExprAs(input, target_ty);
+        // Targetless integer/character literals acquire their storage type
+        // from this coercion context.  Apply that fact before asking whether a
+        // runtime cast is necessary; `comptime_int -> u64` is not a runtime
+        // conversion and must not make an otherwise complete body fall back.
+        self.contextualizeExecutableLiteral(operand, target_ty);
         const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
         if (sameValueType(operand_ty, target_ty)) return operand;
         const kind = mir_model.ExecutableCastKind.classify(operand_ty, target_ty) orelse {

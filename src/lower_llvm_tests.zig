@@ -9432,8 +9432,11 @@ test "LLVM inferred local binary expressions require MIR types" {
     try expectContains(binary_body, "@llvm.uadd.with.overflow.i64");
     try expectContains(binary_body, "icmp ult i64");
     try expectContains(binary_body, "and i1");
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%combined") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%shifted") != null);
+    const bitwise_body = try llvmFunctionBody(complete_output.items, "define internal i32 @bitwise");
+    try expectContains(bitwise_body, "; canonical executable MIR");
+    try expectContains(bitwise_body, "and i32");
+    try expectContains(bitwise_body, "shl i64");
+    try expectContains(bitwise_body, "or i32");
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -14117,7 +14120,7 @@ test "LLVM checked scalar local return does not use function body fallback" {
     try expectContains(body, "ret i32 %");
 }
 
-test "LLVM scalar expression plans preserve typed high-word local and flag-set order without body fallback" {
+test "LLVM canonical executable MIR preserves typed high-word local and flag-set order" {
     const source =
         \\extern fn read_word(addr: usize) -> u64;
         \\fn high_word(v: u64) -> u32 {
@@ -14130,10 +14133,10 @@ test "LLVM scalar expression plans preserve typed high-word local and flag-set o
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_expression_plan.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_canonical_scalar_expressions.mc", source, &output);
 
     const high = try llvmFunctionBody(output.items, "define internal i32 @high_word");
-    try expectContains(high, "lshr i64 %v, 32");
+    try expectContains(high, "lshr i64 %mc_arg_0, 32");
     try expectContains(high, "trunc i64 %");
     try expectContains(high, "alloca i32");
     try expectContains(high, "call void @mc_trap_InvalidShift()");

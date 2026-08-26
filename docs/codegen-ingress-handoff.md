@@ -517,6 +517,15 @@ and both renderers consume that same proof; `mir_assert_plan.zig` and both
 recursive backend renderers were deleted. The strict split is now C 66/94 and
 LLVM 63/97, and the shared registry falls to 26.
 
+`scalar_expression` is fully retired. The producer now contextualizes a
+targetless integer literal before classifying an executable coercion. A checked
+shift count such as `32` therefore becomes the verified operand type directly,
+instead of first failing an impossible runtime `comptime_int -> u64` cast and
+leaving a complete expression graph marked incomplete. Both `high_word` and
+`flag_set` now use the canonical renderer. The standalone 381-line plan, its
+tests, and both backend implementations are deleted. The strict split is C
+67/93 and LLVM 64/96, and the shared registry falls to 25.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather
@@ -527,8 +536,8 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530. The current
-strict corpus remains fully admitted, split into C 66 canonical/94 specialized
-and LLVM 63 canonical/97 specialized. The exact-root soundness gate
+strict corpus remains fully admitted, split into C 67 canonical/93 specialized
+and LLVM 64 canonical/96 specialized. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 
