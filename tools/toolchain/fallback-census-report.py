@@ -2,7 +2,7 @@
 """Aggregate function-body fallback census JSONL into a ranked worklist.
 
 Reads the records emitted by src/fallback_census.zig (one JSON object per line:
-backend, status, canonical, canonical_detail, module, fn, blocks, term, ret, traps, cleanup, instrs,
+backend, status, selected_path, canonical, canonical_detail, module, fn, blocks, term, ret, traps, cleanup, instrs,
 call_targets) and prints,
 per backend:
 
@@ -87,6 +87,7 @@ def summarize_backend(recs):
     status_of = {}
     canonical_of = {}
     canonical_detail_of = {}
+    selected_paths_of = collections.defaultdict(set)
     for r in recs:
         sig = signature(r)
         if sig not in seen:
@@ -101,22 +102,36 @@ def summarize_backend(recs):
         if previous_canonical is None or CANONICAL_RANK.get(canonical, -1) > CANONICAL_RANK.get(previous_canonical, -1):
             canonical_of[sig] = canonical
             canonical_detail_of[sig] = r.get("canonical_detail", "unknown")
+        selected_paths_of[sig].add(r.get("selected_path", "unknown"))
 
     total = len(seen)
     admitted = sum(1 for s in status_of.values() if s == "admitted")
     fallback = sum(1 for s in status_of.values() if s == "fallback")
     unsupported = sum(1 for s in status_of.values() if s == "unsupported")
     admission_bps = (admitted * 10000 // total) if total else 0
+    canonical_admitted = sum(
+        1
+        for sig, status in status_of.items()
+        if status == "admitted" and selected_paths_of[sig] == {"canonical"}
+    )
+    specialized_admitted = sum(
+        1
+        for sig, status in status_of.items()
+        if status == "admitted" and any(path not in ("canonical", "unknown") for path in selected_paths_of[sig])
+    )
     return {
         "total": total,
         "admitted": admitted,
         "fallback": fallback,
         "unsupported": unsupported,
         "admission_bps": admission_bps,
+        "canonical_admitted": canonical_admitted,
+        "specialized_admitted": specialized_admitted,
         "seen": seen,
         "status_of": status_of,
         "canonical_of": canonical_of,
         "canonical_detail_of": canonical_detail_of,
+        "selected_paths_of": selected_paths_of,
     }
 
 
@@ -138,6 +153,7 @@ def report_backend(backend, recs):
     status_of = summary["status_of"]
     canonical_of = summary["canonical_of"]
     canonical_detail_of = summary["canonical_detail_of"]
+    selected_paths_of = summary["selected_paths_of"]
     total = summary["total"]
     admitted = summary["admitted"]
     fallback = summary["fallback"]
@@ -156,7 +172,22 @@ def report_backend(backend, recs):
     print(f"  fast-path admitted : {admitted:5d}  ({cov*100:5.1f}%)  {bar(cov)}")
     print(f"  AST body fallback  : {fallback:5d}  ({fallback/total*100:5.1f}%)")
     print(f"  unsupported (no fb): {unsupported:5d}  ({unsupported/total*100:5.1f}%)")
+    print(f"  canonical emitter   : {summary['canonical_admitted']:5d}")
+    print(f"  specialized MIR     : {summary['specialized_admitted']:5d}")
     print()
+
+    selected_paths = collections.Counter()
+    for sig, status in status_of.items():
+        if status != "admitted":
+            continue
+        for path in selected_paths_of[sig]:
+            if path not in ("canonical", "unknown"):
+                selected_paths[path] += 1
+    if selected_paths:
+        print("  --- transitional specialized MIR paths ---")
+        for path, count in selected_paths.most_common():
+            print(f"  {count:>5}  {path}")
+        print()
     if not_admitted == 0:
         print("  No remaining fallbacks in this corpus. P0 closed here.")
         print()

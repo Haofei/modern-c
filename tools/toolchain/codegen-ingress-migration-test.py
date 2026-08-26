@@ -101,6 +101,9 @@ def validate_fallback_census_ratchet(spec: Any) -> int:
             "fallback_max",
             "unsupported_max",
             "admission_bps_min",
+            "canonical_min",
+            "specialized_max",
+            "specialized_plan_defs_max",
         ],
         "fallback census baseline header mismatch",
     )

@@ -53,6 +53,51 @@ pub const CanonicalStatus = enum {
     ready,
 };
 
+/// The exact body-lowering path selected by codegen. The specialized entries
+/// are transitional, syntax-free MIR plans: tracking them separately from the
+/// canonical executable body and the AST fallback makes their retirement
+/// measurable instead of inferred from source shape.
+pub const SelectedPath = enum {
+    canonical,
+    simple_trap,
+    assert_expression,
+    nullable_control,
+    nested_conditional_return,
+    aggregate_sequence,
+    workflow,
+    alloca_hoist,
+    access_slice,
+    access_operation,
+    access_local_address_update,
+    access_structural,
+    scalar_expression,
+    scalar_control,
+    identity_return,
+    while_control,
+    sequence_foreach_update,
+    sequence_foreach_return,
+    direct_call_projected_return,
+    local_aggregate_place_update_return,
+    local_aggregate_assignment_return,
+    place_return,
+    scalar_switch_return,
+    nullable_pointer_local_return,
+    nullable_try,
+    pointer_to_integer_cast,
+    nullable_pointer_void_call,
+    indirect_call_return,
+    logical_return,
+    statement,
+    simple_return,
+    simple_void_body,
+    simple_conditional_statement_return,
+    simple_conditional_return,
+    simple_enum_switch_return,
+    simple_loop_return,
+    ast_fallback,
+    unsupported,
+};
+
 var enabled: bool = false;
 var armed: bool = false;
 var out_path_buf: [4096]u8 = undefined;
@@ -85,13 +130,13 @@ pub fn isEnabled() bool {
 /// Record one function's admission outcome. No-op unless armed. Best-effort:
 /// any allocation failure is swallowed so the census never changes `mcc`'s
 /// behavior or exit status.
-pub fn record(backend: Backend, status: Status, canonical: CanonicalStatus, canonical_detail: []const u8, module: ?[]const u8, fn_mir: mir.Function) void {
+pub fn record(backend: Backend, status: Status, selected_path: SelectedPath, canonical: CanonicalStatus, canonical_detail: []const u8, module: ?[]const u8, fn_mir: mir.Function) void {
     if (builtin.is_test and !armed) {
         init(std.testing.io, std.process.Environ.getPosix(std.testing.environ, "MC_FALLBACK_CENSUS"));
     }
     if (!enabled) return;
     const a = std.heap.page_allocator;
-    writeRecordJson(&buf, a, backend, status, canonical, canonical_detail, module, fn_mir) catch return;
+    writeRecordJson(&buf, a, backend, status, selected_path, canonical, canonical_detail, module, fn_mir) catch return;
     buf.append(a, '\n') catch return;
 }
 
@@ -122,6 +167,7 @@ fn writeRecordJson(
     a: std.mem.Allocator,
     backend: Backend,
     status: Status,
+    selected_path: SelectedPath,
     canonical: CanonicalStatus,
     canonical_detail: []const u8,
     module: ?[]const u8,
@@ -132,6 +178,8 @@ fn writeRecordJson(
     try out.appendSlice(a, @tagName(backend));
     try out.appendSlice(a, "\",\"status\":\"");
     try out.appendSlice(a, @tagName(status));
+    try out.appendSlice(a, "\",\"selected_path\":\"");
+    try out.appendSlice(a, @tagName(selected_path));
     try out.appendSlice(a, "\",\"canonical\":\"");
     try out.appendSlice(a, @tagName(canonical));
     try out.appendSlice(a, "\",\"canonical_detail\":");
@@ -333,10 +381,10 @@ test "fallback census JSON includes normalized call targets" {
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(a);
-    try writeRecordJson(&out, a, .c, .fallback, .producer_incomplete, "unlowered_member", "module.mc", function);
+    try writeRecordJson(&out, a, .c, .fallback, .ast_fallback, .producer_incomplete, "unlowered_member", "module.mc", function);
 
     try std.testing.expectEqualStrings(
-        "{\"backend\":\"c\",\"status\":\"fallback\",\"canonical\":\"producer_incomplete\",\"canonical_detail\":\"unlowered_member\",\"module\":\"module.mc\"," ++
+        "{\"backend\":\"c\",\"status\":\"fallback\",\"selected_path\":\"ast_fallback\",\"canonical\":\"producer_incomplete\",\"canonical_detail\":\"unlowered_member\",\"module\":\"module.mc\"," ++
             "\"fn\":\"example\",\"blocks\":1,\"term\":\"return\",\"ret\":\"none\"," ++
             "\"traps\":0,\"cleanup\":false,\"instrs\":\"call_target\"," ++
             "\"call_targets\":\"phys,wrapping_add\"}",

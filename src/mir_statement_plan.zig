@@ -126,45 +126,6 @@ pub const PointerToIntegerCastPlan = struct {
     return_location: Location,
 };
 
-pub const ScalarCheckedBinaryOperand = union(enum) {
-    parameter: struct {
-        name: []const u8,
-        value_id: mir.ValueId,
-        type_fact: mir.TargetTypeFact,
-        location: Location,
-    },
-    integer_literal: IntegerLiteralValue,
-};
-
-/// Preserve a scalar local whose first generation is initialized by one
-/// checked integer operation and then returned unchanged:
-///
-///     let x: T = parameter + literal;
-///     return x;
-///
-/// This is intentionally a shared MIR execution plan rather than the older
-/// backend-local "fold the local into the return" recognizer.  The local
-/// generation, operand identities, overflow edge and both source locations
-/// are admitted once, so C and LLVM retain the same observable storage/debug
-/// shape while no longer reading the AST body.
-pub const ScalarLocalCheckedBinaryReturnPlan = struct {
-    local_name: []const u8,
-    local_id: mir.ValueId,
-    local_fact: mir.TargetTypeFact,
-    declaration_location: Location,
-    operation: []const u8,
-    operation_location: Location,
-    left: ScalarCheckedBinaryOperand,
-    right: ScalarCheckedBinaryOperand,
-    return_location: Location,
-};
-
-/// One nullable-pointer `?` operation and its immediate consumer.  The source
-/// is evaluated exactly once, the nullable representation is checked once,
-/// and the unwrapped non-null pointer is either returned or passed as the sole
-/// argument of one direct call.  This is deliberately an execution plan rather
-/// than a syntax recognizer: call/argument/value identity and both trap edges
-/// are joined through typed MIR IDs.
 pub const NullableTryPlan = struct {
     pub const Source = union(enum) {
         parameter: struct {
@@ -445,15 +406,6 @@ pub const IdentityReturnPlan = struct {
 /// non-null representation check is proven by the plan and is statically
 /// elided by both backends: reading a slice's stored length never dereferences
 /// its data pointer.
-pub const SliceLengthReturnPlan = struct {
-    parameter_name: []const u8,
-    parameter_id: mir.ValueId,
-    parameter_fact: mir.TargetTypeFact,
-    length_fact: mir.TargetTypeFact,
-    length_location: Location,
-    return_location: Location,
-};
-
 pub const SequenceForEachUpdatePlan = struct {
     pub const Update = union(enum) {
         replace_with_element,
@@ -677,94 +629,6 @@ pub fn buildIdentityReturn(function: mir.Function) ?IdentityReturnPlan {
 /// complete MIR identity chain (parameter → member projection → return) and
 /// the elided non-null representation check/trap edge. Backends still verify
 /// their declared parameter and `usize` return spellings before rendering.
-pub fn buildSliceLengthReturn(function: mir.Function) ?SliceLengthReturnPlan {
-    if (function.blocks.len != 2 or function.trap_edges.len != 1 or
-        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
-        function.return_ty != .integer) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const entry = function.blocks[0];
-    const trap = function.blocks[1];
-    if (entry.terminator != .return_ or entry.successors.len != 1 or entry.successors[0] != trap.id or
-        trap.instructions.len != 0 or trap.successors.len != 0) return null;
-    switch (trap.terminator) {
-        .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
-        else => return null,
-    }
-
-    var parameter: ?mir.Instruction = null;
-    var parameter_expr: ?mir.Instruction = null;
-    var length: ?mir.Instruction = null;
-    var returned: ?mir.Instruction = null;
-    var typed_load_count: usize = 0;
-    var representation_check_count: usize = 0;
-    for (entry.instructions) |instruction| switch (instruction.kind) {
-        .param => {
-            if (parameter != null or !instruction.typed_span_id.isValid()) return null;
-            parameter = instruction;
-        },
-        .target_type => {},
-        .expr => {
-            if (std.mem.eql(u8, instruction.detail, "len")) {
-                if (length != null or !instruction.typed_span_id.isValid() or !instruction.typed_base_operand_span_id.isValid() or
-                    instruction.builtin_member != .slice_length) return null;
-                length = instruction;
-            } else {
-                if (parameter_expr != null or !instruction.typed_span_id.isValid()) return null;
-                parameter_expr = instruction;
-            }
-        },
-        .typed_load => typed_load_count += 1,
-        .representation_check => representation_check_count += 1,
-        .return_value => {
-            if (returned != null or !instruction.typed_value_operand_span_id.isValid()) return null;
-            returned = instruction;
-        },
-        else => return null,
-    };
-    if (typed_load_count != 1 or representation_check_count != 1) return null;
-
-    const parameter_instruction = parameter orelse return null;
-    const parameter_expression = parameter_expr orelse return null;
-    const length_instruction = length orelse return null;
-    const return_instruction = returned orelse return null;
-    const parameter_name = parameter_instruction.detail;
-    const parameter_id = valueIdentityId(function, parameter_name) orelse return null;
-    if (!parameter_id.isValid() or !std.mem.eql(u8, valueIdentityName(function, parameter_id) orelse return null, parameter_name) or
-        !std.mem.eql(u8, parameter_expression.detail, parameter_name) or
-        parameter_expression.typed_value_id == null or !parameter_expression.typed_value_id.?.eql(parameter_id) or
-        !length_instruction.typed_base_operand_span_id.eql(parameter_expression.typed_span_id) or
-        !return_instruction.typed_value_operand_span_id.eql(length_instruction.typed_span_id) or
-        !sameRepresentationType(return_instruction.result_ty, function.return_ty)) return null;
-
-    const parameter_fact = targetFactBySpan(function, .expression_result, parameter_expression.typed_span_id) orelse return null;
-    const length_fact = targetFactBySpan(function, .expression_result, length_instruction.typed_span_id) orelse return null;
-    if (std.meta.activeTag(parameter_fact.target_ty.kind) != .slice or length_fact.result_ty != .integer or
-        !sameRepresentationType(parameter_fact.result_ty, parameter_instruction.result_ty) or
-        !sameRepresentationType(length_fact.result_ty, function.return_ty)) return null;
-    if (!validateNonnullRepresentationPromotion(function, entry, parameter_expression.typed_span_id, parameter_id, parameter_fact.result_ty)) return null;
-
-    return .{
-        .parameter_name = parameter_name,
-        .parameter_id = parameter_id,
-        .parameter_fact = parameter_fact,
-        .length_fact = length_fact,
-        .length_location = locationFromInstruction(length_instruction),
-        .return_location = locationFromInstruction(return_instruction),
-    };
-}
-
-/// Admit the two straight-line nullable-pointer local forms whose semantics
-/// are fully present in checked MIR:
-///
-///     let maybe: ?*T = p; return maybe;
-///     var maybe: ?*T = null; maybe = p; return maybe;
-///
-/// This deliberately keeps the local declaration/reassignment instead of
-/// folding the return to `p`, so debug/source-map shape remains backend
-/// independent.  All identity comparisons use ValueId/SpanId; source
-/// line/column arithmetic is not part of admission.
 pub fn buildNullablePointerLocalReturn(function: mir.Function) ?NullablePointerLocalReturnPlan {
     const return_pointer_shape = switch (function.return_ty) {
         .nullable_pointer => |shape| shape,
@@ -1041,146 +905,6 @@ pub fn buildPointerToIntegerCast(function: mir.Function) ?PointerToIntegerCastPl
     };
 }
 
-pub fn buildScalarLocalCheckedBinaryReturn(function: mir.Function) ?ScalarLocalCheckedBinaryReturnPlan {
-    if (function.blocks.len != 2 or function.trap_edges.len != 1 or
-        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
-        function.representation_facts.len != 0) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const entry = function.blocks[0];
-    const trap = function.blocks[1];
-    if (entry.terminator != .return_ or entry.successors.len != 1 or entry.successors[0] != trap.id or
-        trap.instructions.len != 0) return null;
-    switch (trap.terminator) {
-        .trap_ => |kind| if (kind != .IntegerOverflow) return null,
-        else => return null,
-    }
-
-    var local: ?mir.Instruction = null;
-    var binary: ?mir.Instruction = null;
-    var overflow: ?mir.Instruction = null;
-    var returned: ?mir.Instruction = null;
-    var expression_count: usize = 0;
-    var literal_conversion_count: usize = 0;
-    for (entry.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type => {},
-        .integer_literal_conversion => literal_conversion_count += 1,
-        .expr => expression_count += 1,
-        .local => {
-            if (local != null) return null;
-            local = instruction;
-        },
-        .binary => {
-            if (binary != null) return null;
-            binary = instruction;
-        },
-        .add_overflow => {
-            if (overflow != null) return null;
-            overflow = instruction;
-        },
-        .return_value => {
-            if (returned != null) return null;
-            returned = instruction;
-        },
-        else => return null,
-    };
-    if (expression_count != 3 or literal_conversion_count != 1) return null;
-
-    const local_instruction = local orelse return null;
-    const binary_instruction = binary orelse return null;
-    const overflow_instruction = overflow orelse return null;
-    const return_instruction = returned orelse return null;
-    if (!std.mem.eql(u8, binary_instruction.detail, "add") or
-        !overflow_instruction.typed_span_id.eql(binary_instruction.typed_span_id) or
-        !local_instruction.typed_value_operand_span_id.eql(binary_instruction.typed_span_id) or
-        !binary_instruction.typed_left_operand_span_id.isValid() or
-        !binary_instruction.typed_right_operand_span_id.isValid() or
-        !return_instruction.typed_value_operand_span_id.isValid()) return null;
-
-    const local_id = local_instruction.typed_value_id orelse return null;
-    const local_name = valueIdentityName(function, local_id) orelse return null;
-    if (!std.mem.eql(u8, local_instruction.detail, local_name) or
-        !sameRepresentationType(local_instruction.result_ty, function.return_ty) or
-        !sameRepresentationType(return_instruction.result_ty, function.return_ty) or
-        !localInitAt(function, local_id, locationFromInstruction(binary_instruction).source)) return null;
-
-    const returned_expr = expressionAtSpan(entry, return_instruction.typed_value_operand_span_id) orelse return null;
-    const returned_id = returned_expr.typed_value_id orelse return null;
-    if (!returned_id.eql(local_id) or !std.mem.eql(u8, returned_expr.detail, local_name)) return null;
-
-    const operation_fact = targetFactBySpan(function, .expression_result, binary_instruction.typed_span_id) orelse return null;
-    const return_fact = targetFactBySpan(function, .expression_result, returned_expr.typed_span_id) orelse return null;
-    if (!sameRepresentationType(operation_fact.result_ty, function.return_ty) or
-        !sameRepresentationType(return_fact.result_ty, function.return_ty) or
-        !type_syntax.sameTypeSyntax(operation_fact.target_ty, return_fact.target_ty)) return null;
-
-    const left = buildScalarCheckedBinaryOperand(function, entry, binary_instruction.typed_left_operand_span_id, operation_fact) orelse return null;
-    const right = buildScalarCheckedBinaryOperand(function, entry, binary_instruction.typed_right_operand_span_id, operation_fact) orelse return null;
-    if (std.meta.activeTag(left) == std.meta.activeTag(right)) return null;
-
-    const edge = function.trap_edges[0];
-    if (edge.from_block != entry.id or edge.trap_block != trap.id or edge.kind != .IntegerOverflow or
-        edge.source != .checked_arithmetic or
-        (edge.typed_span_id.isValid() and !edge.typed_span_id.eql(binary_instruction.typed_span_id))) return null;
-
-    return .{
-        .local_name = local_name,
-        .local_id = local_id,
-        .local_fact = operation_fact,
-        .declaration_location = locationFromInstruction(local_instruction),
-        .operation = binary_instruction.detail,
-        .operation_location = locationFromInstruction(binary_instruction),
-        .left = left,
-        .right = right,
-        .return_location = locationFromInstruction(return_instruction),
-    };
-}
-
-fn buildScalarCheckedBinaryOperand(
-    function: mir.Function,
-    block: mir.Block,
-    span_id: mir.SpanId,
-    operation_fact: mir.TargetTypeFact,
-) ?ScalarCheckedBinaryOperand {
-    const instruction = expressionAtSpan(block, span_id) orelse return null;
-    const fact = targetFactBySpan(function, .expression_result, span_id) orelse return null;
-    if (!sameRepresentationType(fact.result_ty, operation_fact.result_ty) or
-        !type_syntax.sameTypeSyntax(fact.target_ty, operation_fact.target_ty)) return null;
-    if (instruction.typed_value_id) |value_id| {
-        const name = valueIdentityName(function, value_id) orelse return null;
-        const parameter_ty = parameterType(function, name) orelse return null;
-        if (!std.mem.eql(u8, instruction.detail, name) or
-            !sameRepresentationType(parameter_ty, fact.result_ty)) return null;
-        return .{ .parameter = .{
-            .name = name,
-            .value_id = value_id,
-            .type_fact = fact,
-            .location = locationFromInstruction(instruction),
-        } };
-    }
-    if (!std.mem.eql(u8, instruction.detail, "int")) return null;
-    const value = instruction.constant_usize_value orelse return null;
-    var integer_fact_count: usize = 0;
-    for (function.integer_facts) |integer_fact| {
-        const source = locationFromInstruction(instruction).source;
-        if (integer_fact.source.line != source.line or integer_fact.source.column != source.column) continue;
-        if (!sameRepresentationType(integer_fact.target_ty, fact.result_ty)) return null;
-        integer_fact_count += 1;
-    }
-    if (integer_fact_count != 1) return null;
-    return .{ .integer_literal = .{
-        .value = value,
-        .type_fact = fact,
-        .location = locationFromInstruction(instruction),
-    } };
-}
-
-/// Admit one nullable-pointer unwrap whose value is immediately returned or
-/// supplied to a single-argument direct call.  The two MIR trap edges are
-/// required to be the exact InvalidRepresentation/Unwrap pair for the same
-/// typed expression.  Backends therefore encode an ordinary null test and the
-/// language NullUnwrap trap without inspecting the source expression.
 pub fn buildNullableTry(function: mir.Function) ?NullableTryPlan {
     if (function.blocks.len != 3 or function.trap_edges.len != 2 or
         function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0) return null;
@@ -2264,45 +1988,6 @@ pub fn buildSingleBlockPlaceReturn(function: mir.Function) ?PlaceReturnPlan {
 /// pointer dereference and field index are MIR identities, and the sole
 /// InvalidRepresentation edge belongs to the pointer root.  This is the
 /// statement counterpart of the pointer-root indirect-call plan.
-pub fn buildSingleBlockPlaceStore(function: mir.Function) ?PlaceStore {
-    if (function.return_ty != .void or function.blocks.len != 2 or
-        function.pointer_provenance_facts.len != 0) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const block = function.blocks[0];
-    if (block.terminator != .fallthrough) return null;
-    var assignment: ?mir.Instruction = null;
-    var expression_count: usize = 0;
-    for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type, .typed_load, .representation_check => {},
-        .expr => expression_count += 1,
-        .assign => {
-            if (assignment != null or !instruction.typed_target_operand_span_id.isValid() or
-                !instruction.typed_value_operand_span_id.isValid()) return null;
-            assignment = instruction;
-        },
-        else => return null,
-    };
-    const store_instruction = assignment orelse return null;
-    const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
-    if (!target.root_indirect or target.root_kind != .parameter or target.projection_count == 0 or
-        !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
-    const value = buildPlaceStoreValue(function, block, store_instruction.typed_value_operand_span_id) orelse return null;
-    switch (value) {
-        .parameter => {},
-        else => return null,
-    }
-    if (!sameRepresentationType(value.resultType(), target.resultType()) or
-        expression_count != target.projection_count + 1 + value.expressionCount() or
-        !placeRootRepresentationMatches(function, target)) return null;
-    return .{
-        .target = target,
-        .value = value,
-        .location = locationFromInstruction(store_instruction),
-    };
-}
-
 fn buildPlaceStoreValue(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?PlaceStoreValue {
     const instruction = expressionAtSpan(block, span_id) orelse return null;
     if (instruction.typed_value_id) |value_id| {
@@ -3553,26 +3238,6 @@ fn valueIdentityId(function: mir.Function, name: []const u8) ?mir.ValueId {
         found = identity.id;
     }
     return found;
-}
-
-test "slice length plan admits direct slice parameter projection" {
-    const diagnostics = @import("diagnostics.zig");
-    const parser = @import("parser.zig");
-    const source =
-        \\fn slice_len(values: []const u8) -> usize {
-        \\    return values.len;
-        \\}
-    ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "slice_len.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var source_parser = parser.Parser.init(source, &reporter);
-    const module = try source_parser.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer module_mir.deinit();
-    try std.testing.expect(buildSliceLengthReturn(module_mir.functions[0]) != null);
 }
 
 fn sameRepresentationType(left: mir.ValueType, right: mir.ValueType) bool {

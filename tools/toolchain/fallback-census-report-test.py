@@ -23,10 +23,10 @@ def load_report_module():
     return module
 
 
-def record(name: str, call_targets=None):
+def record(name: str, call_targets=None, status="fallback", selected_path=None):
     value = {
         "backend": "c",
-        "status": "fallback",
+        "status": status,
         "fn": name,
         "blocks": 1,
         "term": "return",
@@ -37,6 +37,8 @@ def record(name: str, call_targets=None):
     }
     if call_targets is not None:
         value["call_targets"] = call_targets
+    if selected_path is not None:
+        value["selected_path"] = selected_path
     return value
 
 
@@ -61,9 +63,22 @@ def main() -> None:
     if ":: phys" not in text or ":: wrapping_add" not in text:
         fail(f"fine ranking omitted call_targets: {text!r}")
 
+    canonical = record("canonical", status="admitted", selected_path="canonical")
+    specialized = record("specialized", status="admitted", selected_path="simple_return")
+    selected_summary = report.summarize_backend([canonical, specialized])
+    if selected_summary["canonical_admitted"] != 1 or selected_summary["specialized_admitted"] != 1:
+        fail(f"selected-path split is incorrect: {selected_summary!r}")
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        report.report_backend("c", [canonical, specialized])
+    text = output.getvalue()
+    if "canonical emitter   :     1" not in text or "specialized MIR     :     1" not in text or "simple_return" not in text:
+        fail(f"selected-path report is incomplete: {text!r}")
+
     print(
         "PASS: fallback-census-report-test - call-target families are stable, "
-        "distinct, visible, and old JSONL remains compatible"
+        "distinct, selected paths are measured, and old JSONL remains compatible"
     )
 
 

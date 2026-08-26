@@ -151,7 +151,7 @@
     "baseline": "tools/toolchain/fallback-census-baseline.tsv",
     "roots": "tools/toolchain/fallback-census-roots.txt",
     "default_check_corpus": "tools/toolchain/fallback-census-roots.txt",
-    "policy": "check mode fails on compile error/timeout/crash; total/admitted/admission_bps may not regress; fallback/unsupported may not increase"
+    "policy": "check mode fails on compile error/timeout/crash; total/admitted/canonical/admission_bps may not regress; fallback/unsupported/specialized admission/plan definitions may not increase"
   },
   "backend_artifact_consumers": {
     "src/lower_c_emitter.zig": {
@@ -189,7 +189,11 @@
       "function.backend_attrs": 0,
       "function.hasLegacySyntaxBody()": 0,
       "@import(\"attr_syntax.zig\")": 0,
-      "attr_syntax.": 0
+      "attr_syntax.": 0,
+      "simpleMirAssertBody(": 0,
+      "mirScalarLocalCheckedBinaryReturnPlanSupported(": 0,
+      "mirSliceLengthReturnPlanSupported(": 0,
+      "mirPlaceStorePlanSupported(": 0
     },
     "src/lower_llvm.zig": {
       "function.attrs": 0,
@@ -204,7 +208,16 @@
       "function.backend_attrs": 0,
       "function.hasLegacySyntaxBody()": 0,
       "@import(\"attr_syntax.zig\")": 0,
-      "attr_syntax.": 0
+      "attr_syntax.": 0,
+      "simpleMirAssertBody(": 0,
+      "mirScalarLocalCheckedBinaryReturnPlanSupported(": 0,
+      "mirSliceLengthReturnPlanSupported(": 0,
+      "mirPlaceStorePlanSupported(": 0
+    },
+    "src/mir_statement_plan.zig": {
+      "buildScalarLocalCheckedBinaryReturn(": 0,
+      "buildSliceLengthReturn(": 0,
+      "buildSingleBlockPlaceStore(": 0
     }
   }
 }

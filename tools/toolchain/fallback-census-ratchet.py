@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,15 @@ REQUIRED_COLUMNS = (
     "fallback_max",
     "unsupported_max",
     "admission_bps_min",
+    "canonical_min",
+    "specialized_max",
+    "specialized_plan_defs_max",
 )
+
+PLAN_DEFINITION_ANCHORS = {
+    "c": (ROOT / "src/lower_c_emitter.zig", "const no_specialized_body ="),
+    "llvm": (ROOT / "src/lower_llvm.zig", "const legacy_plan_missing ="),
+}
 
 
 def fail(message: str) -> int:
@@ -85,6 +94,9 @@ def load_baseline(path: Path) -> dict[str, dict[str, int]]:
                 "fallback_max": parse_int(row["fallback_max"], "fallback_max", line_no),
                 "unsupported_max": parse_int(row["unsupported_max"], "unsupported_max", line_no),
                 "admission_bps_min": parse_int(row["admission_bps_min"], "admission_bps_min", line_no),
+                "canonical_min": parse_int(row["canonical_min"], "canonical_min", line_no),
+                "specialized_max": parse_int(row["specialized_max"], "specialized_max", line_no),
+                "specialized_plan_defs_max": parse_int(row["specialized_plan_defs_max"], "specialized_plan_defs_max", line_no),
             }
 
     if header is None:
@@ -101,6 +113,8 @@ def check_backend(backend: str, expected: dict[str, int], actual: dict[str, Any]
         ("fallback", "<=", "fallback_max"),
         ("unsupported", "<=", "unsupported_max"),
         ("admission_bps", ">=", "admission_bps_min"),
+        ("canonical_admitted", ">=", "canonical_min"),
+        ("specialized_admitted", "<=", "specialized_max"),
     )
     for actual_field, op, expected_field in comparisons:
         actual_value = int(actual[actual_field])
@@ -113,6 +127,14 @@ def check_backend(backend: str, expected: dict[str, int], actual: dict[str, Any]
             failures.append(
                 f"{backend}: {actual_field} regressed to {actual_value}, above baseline {expected_field}={expected_value}"
             )
+
+
+def specialized_plan_definition_count(backend: str) -> int:
+    path, anchor = PLAN_DEFINITION_ANCHORS[backend]
+    line = next((line for line in path.read_text(encoding="utf-8").splitlines() if anchor in line), None)
+    if line is None:
+        raise AssertionError(f"{path.relative_to(ROOT)} is missing specialized-plan anchor {anchor!r}")
+    return len(re.findall(r"\b[a-z][a-z0-9_]* == null", line))
 
 
 def main() -> int:
@@ -135,6 +157,12 @@ def main() -> int:
                 failures.append(f"missing backend {backend!r} in census")
                 continue
             check_backend(backend, expected, actual, failures)
+            plan_defs = specialized_plan_definition_count(backend)
+            if plan_defs > expected["specialized_plan_defs_max"]:
+                failures.append(
+                    f"{backend}: specialized plan definitions grew to {plan_defs}, "
+                    f"above specialized_plan_defs_max={expected['specialized_plan_defs_max']}"
+                )
 
         if failures:
             return fail("\n  - " + "\n  - ".join(failures))
@@ -144,7 +172,10 @@ def main() -> int:
     checked = ", ".join(
         f"{backend}: total={summaries[backend]['total']} admitted={summaries[backend]['admitted']} "
         f"fallback={summaries[backend]['fallback']} unsupported={summaries[backend]['unsupported']} "
-        f"admission_bps={summaries[backend]['admission_bps']}"
+        f"admission_bps={summaries[backend]['admission_bps']} "
+        f"canonical={summaries[backend]['canonical_admitted']} "
+        f"specialized={summaries[backend]['specialized_admitted']} "
+        f"plan_defs={specialized_plan_definition_count(backend)}"
         for backend in sorted(baseline)
     )
     print(f"PASS: fallback-census-ratchet-test - {checked}")

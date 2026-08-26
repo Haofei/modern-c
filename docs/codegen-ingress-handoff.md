@@ -392,6 +392,15 @@ executable body. This slice moved two module-visibility functions per backend
 from producer-incomplete to renderer-unsupported; it deliberately did not
 change the broad admitted/fallback totals above.
 
+The census now records the exact selected codegen path, separating the general
+canonical executable-MIR renderer from transitional specialized MIR plans and
+the AST fallback. Four zero-use paths (`simple_assert`,
+`scalar_local_checked_binary_return`, `slice_length_return`, and `place_store`)
+and their C/LLVM renderer helpers were deleted; both specialized-plan chains
+are ratcheted from 38 definitions to 34. Complete backend shards remain
+mandatory retirement evidence because the broad fixture census missed inline
+tests that still require three other specialized plans.
+
 The same producer now gives `phys(...)` its canonical `PAddr` result instead of
 leaving it `.unknown`. Nested checked integer operands therefore retain their
 overflow CFG and cross both mechanical renderers. This closes `pa_offset` and

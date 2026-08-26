@@ -201,13 +201,25 @@ execution). Each compiler invocation has private output, log, status, and
 scratch files; the parent concatenates JSONL parts in numeric launch order, so
 parallel execution does not change the raw census or ranked report.
 
-| Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
-|---|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 |
+| Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| C | 160 | 160 | 0 | 0 | 10000 | 54 | 106 | 34 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 42 | 118 | 34 |
 
-New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
-in that baseline when the checked corpus improves.
+Each census record also names the exact selected lowering path. New executable
+MIR admissions should increase `canonical_min`; transitional specialized
+admissions and plan definitions may only decrease. Four specialized plans that
+had no broad-corpus hits and were unneeded by either complete backend shard were
+retired from both emitters: `simple_assert`,
+`scalar_local_checked_binary_return`, `slice_length_return`, and `place_store`.
+Their renderer helpers were deleted with the entrances, reducing both plan
+chains from 38 to 34 definitions without changing strict admission.
+
+Broad-corpus zero hits alone are not retirement proof. The first retirement
+probe found three paths used only by inline backend tests (`scalar_control`,
+`simple_conditional_statement_return`, and `simple_loop_return`); those paths
+remain. A deletion is accepted only when the exact-path census and both complete
+backend shards agree that coverage is unchanged.
 
 ## Remaining families, by tractability
 

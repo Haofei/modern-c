@@ -4658,30 +4658,6 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
-test "MIR plans a checked pointer-root field store" {
-    const source =
-        \\struct Env { value: u32 }
-        \\fn store_value(env: *mut Env, value: u32) -> void {
-        \\    env.value = value;
-        \\}
-    ;
-    var parsed = try test_support.parseCheckedModule("mir_pointer_root_store.mc", source);
-    defer parsed.deinit();
-    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer typed_mir.deinit();
-
-    const function = functionByName(typed_mir, "store_value") orelse return error.TestUnexpectedResult;
-    const plan = mir_statement_plan.buildSingleBlockPlaceStore(function) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(mir_statement_plan.PlaceRootKind.parameter, plan.target.root_kind);
-    try std.testing.expect(plan.target.root_indirect);
-    try std.testing.expectEqualStrings("env", plan.target.root_name);
-    try std.testing.expectEqual(@as(usize, 1), plan.target.projection_count);
-    switch (plan.value) {
-        .parameter => |parameter| try std.testing.expectEqualStrings("value", parameter.name),
-        else => return error.TestUnexpectedResult,
-    }
-}
-
 test "MIR plans a checked pointer-to-integer cast" {
     const source =
         \\fn pointer_to_usize(p: *mut u32) -> usize {
@@ -4699,35 +4675,6 @@ test "MIR plans a checked pointer-to-integer cast" {
     try std.testing.expect(plan.source_id.isValid());
     try std.testing.expectEqual(.pointer, std.meta.activeTag(plan.source_fact.result_ty));
     try std.testing.expectEqual(.integer, std.meta.activeTag(plan.target_fact.result_ty));
-}
-
-test "MIR plans a checked scalar local generation and return" {
-    const source =
-        \\fn local_copy(n: u32) -> u32 {
-        \\    let x: u32 = n + 1;
-        \\    return x;
-        \\}
-    ;
-    var parsed = try test_support.parseCheckedModule("mir_scalar_local_checked_binary_return.mc", source);
-    defer parsed.deinit();
-    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer typed_mir.deinit();
-
-    const function = functionByName(typed_mir, "local_copy") orelse return error.TestUnexpectedResult;
-    const plan = mir_statement_plan.buildScalarLocalCheckedBinaryReturn(function) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("x", plan.local_name);
-    try std.testing.expect(plan.local_id.isValid());
-    try std.testing.expectEqualStrings("add", plan.operation);
-    switch (plan.left) {
-        .parameter => |parameter| try std.testing.expectEqualStrings("n", parameter.name),
-        else => return error.TestUnexpectedResult,
-    }
-    switch (plan.right) {
-        .integer_literal => |literal| try std.testing.expectEqual(@as(usize, 1), literal.value),
-        else => return error.TestUnexpectedResult,
-    }
-    try std.testing.expectEqual(@as(usize, 2), plan.declaration_location.source.line);
-    try std.testing.expectEqual(@as(usize, 3), plan.return_location.source.line);
 }
 
 test "MIR plans pure logical returns from typed operand identities" {
