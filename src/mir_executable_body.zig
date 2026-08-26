@@ -125,11 +125,15 @@ pub fn verify(function: *const mir.Function) !void {
     }
     if (body.complete and body.incomplete_reason != .none) return error.InvalidIncompleteReason;
     if (!body.complete and body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
+        body.aggregate_types.len == 0 and body.enum_types.len == 0 and
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
     try verifyType(function, body.return_type_id, function.return_ty, body.complete);
     for (body.aggregate_types, 0..) |aggregate, index| {
         try verifyAggregateType(function, aggregate, index);
+    }
+    for (body.enum_types, 0..) |enum_ty, index| {
+        try verifyEnumType(function, enum_ty, index);
     }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
@@ -233,6 +237,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         },
         .literal => |literal| switch (literal) {
             .float => |float| if (!mir.executableFloatMatchesType(float, value.result_ty)) return error.InvalidLiteral,
+            .signed_integer => switch (value.result_ty) {
+                .closed_enum, .open_enum, .integer => {},
+                else => return error.InvalidLiteral,
+            },
             else => {},
         },
         .unsupported => {},
@@ -705,6 +713,21 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
     }
     for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_spelling, field_ty, field_type_id| {
         if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
+    }
+}
+
+fn verifyEnumType(function: *const mir.Function, enum_ty: mir.ExecutableEnumType, index: usize) !void {
+    const body = &function.executable_body;
+    if (!enum_ty.type_id.isValid() or !enum_ty.repr_type_id.isValid()) return error.InvalidEnumType;
+    switch (enum_ty.ty) {
+        .closed_enum, .open_enum => {},
+        else => return error.InvalidEnumType,
+    }
+    if (enum_ty.repr_ty != .integer) return error.InvalidEnumType;
+    try verifyType(function, enum_ty.type_id, enum_ty.ty, body.complete);
+    try verifyType(function, enum_ty.repr_type_id, enum_ty.repr_ty, body.complete);
+    for (body.enum_types[0..index]) |previous| {
+        if (previous.type_id.eql(enum_ty.type_id) or sameValueType(previous.ty, enum_ty.ty)) return error.InvalidEnumType;
     }
 }
 

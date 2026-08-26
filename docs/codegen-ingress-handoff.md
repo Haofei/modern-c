@@ -10,8 +10,8 @@ cutovers.
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **759/1696 C** and **826/1762 LLVM** distinct functions using the AST
-  body (C admits 55.2%, LLVM 53.1%). Report mode intentionally preserves
+  finds **758/1696 C** and **825/1762 LLVM** distinct functions using the AST
+  body (C admits 55.3%, LLVM 53.2%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -380,8 +380,8 @@ relaxed to `monotonic` and loads bool storage as `i8` before truncating to `i1`.
 Nested pointers, local `atomic.init`, atomic aggregate fields and non-scalar
 payloads remain fail-closed. The pointer-depth rule was also corrected in sema
 and the legacy C shape helper, preventing `**atomic<T>` from being read as the
-payload at the wrong address. The 522-root census is now C **937/1696 (55.2%)**
-and LLVM **936/1762 (53.1%)**, with 759/826 fallbacks.
+payload at the wrong address. The 522-root census is now C **938/1696 (55.3%)**
+and LLVM **937/1762 (53.2%)**, with 758/825 fallbacks.
 
 Runtime `assert` now owns one typed statement-level `Assert/assert_stmt` edge
 whose source block, trap block and bool condition are verified before codegen.
@@ -410,6 +410,15 @@ the declaration artifact registry. This moved four broad-corpus C functions
 from specialized plans to canonical emission without changing the strict
 corpus. Canonical LLVM output uses stable `LocalId` parameter names; affected
 tests now assert those identities instead of legacy source-local spellings.
+
+Enum literals now cross the executable-MIR boundary as canonical numeric tags
+plus a verified nominal-enum/repr table. Both renderers consume that table;
+positive and signed enum cases no longer require source case spelling for a
+direct return or direct-call argument. This moved seven functions per backend
+to canonical emission (six from `simple_return`, one from AST fallback), and
+the direct enum-literal branch was deleted from both copies of the transitional
+`simple_return` recognizer. Local enum fold cases remain on the bounded legacy
+branch until their representation-check cleanup is explicit in executable MIR.
 
 The 34-plan existence checks are flat boolean registries, replacing the
 duplicated 34-term negated conjunctions. This does not

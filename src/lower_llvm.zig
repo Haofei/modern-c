@@ -2521,9 +2521,6 @@ const LlvmEmitter = struct {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             if (self.simpleMirLocalFloatLiteral(function, fn_mir, block, value_id, source)) |literal| return if (simpleMirNoTrap(fn_mir)) .{ .float_literal = literal } else null;
         }
-        if (self.simpleMirEnumLiteralAtSource(fn_mir, value_id, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| {
-            return if (simpleMirNoTrap(fn_mir)) .{ .enum_literal = literal } else null;
-        }
         if (simpleMirNullLiteralAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) {
             return if (simpleMirNoTrap(fn_mir)) .null_literal else null;
         }

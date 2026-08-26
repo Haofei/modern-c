@@ -1381,6 +1381,7 @@ fn emitLiteral(
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (literal) {
         .integer => |magnitude| try out.print(allocator, "{d}", .{magnitude}),
+        .signed_integer => |value| try out.print(allocator, "{d}", .{value}),
         .float => |value| switch (value) {
             .f32_bits => |bits| try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits}),
             .f64_bits => |bits| try out.print(allocator, "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))", .{bits}),

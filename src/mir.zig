@@ -6135,6 +6135,7 @@ const FunctionBuilder = struct {
     executable_locals: std.ArrayList(ExecutableLocalIdentity),
     executable_symbols: std.ArrayList(SymbolIdentity),
     executable_aggregate_types: std.ArrayList(mir_model.ExecutableAggregateType),
+    executable_enum_types: std.ArrayList(mir_model.ExecutableEnumType),
     executable_expressions: std.ArrayList(ExecutableExpression),
     executable_trap_edges: std.ArrayList(mir_model.ExecutableTrapEdge),
     executable_places: std.ArrayList(ExecutablePlace),
@@ -6266,6 +6267,7 @@ const FunctionBuilder = struct {
             .executable_locals = .empty,
             .executable_symbols = .empty,
             .executable_aggregate_types = .empty,
+            .executable_enum_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6296,8 +6298,10 @@ const FunctionBuilder = struct {
             .continue_targets = .empty,
             .current = 0,
         };
+        if (!try builder.internExecutableEnumType(builder.return_ty)) builder.executable_supported = false;
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
+            if (!try builder.internExecutableEnumType(param_ty)) builder.executable_supported = false;
             const atomic_payload_ty: ?ValueType = if (directAtomicPayloadTypeExprAlias(param.ty, aliases, true)) |payload|
                 valueTypeFromTypeAlias(payload, enums, structs, packed_bits, aliases)
             else
@@ -6390,6 +6394,7 @@ const FunctionBuilder = struct {
             .executable_locals = .empty,
             .executable_symbols = .empty,
             .executable_aggregate_types = .empty,
+            .executable_enum_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6465,6 +6470,7 @@ const FunctionBuilder = struct {
         self.executable_locals.deinit(self.allocator);
         self.executable_symbols.deinit(self.allocator);
         self.executable_aggregate_types.deinit(self.allocator);
+        self.executable_enum_types.deinit(self.allocator);
         self.executable_expressions.deinit(self.allocator);
         self.executable_trap_edges.deinit(self.allocator);
         self.executable_places.deinit(self.allocator);
@@ -6819,6 +6825,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(symbols);
         const aggregate_types = try self.executable_aggregate_types.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(aggregate_types);
+        const enum_types = try self.executable_enum_types.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(enum_types);
         const expressions = try self.executable_expressions.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(expressions);
         const executable_trap_edges = try self.executable_trap_edges.toOwnedSlice(self.allocator);
@@ -6841,6 +6849,7 @@ const FunctionBuilder = struct {
             .locals = locals,
             .symbols = symbols,
             .aggregate_types = aggregate_types,
+            .enum_types = enum_types,
             .expressions = expressions,
             .trap_edges = executable_trap_edges,
             .places = places,
@@ -7389,6 +7398,11 @@ const FunctionBuilder = struct {
             .struct_ => result_ty = expected,
             else => {},
         };
+        if (expr.kind == .enum_literal) if (expected_ty) |expected| switch (expected) {
+            .closed_enum, .open_enum => result_ty = expected,
+            else => {},
+        };
+        if (!try self.internExecutableEnumType(result_ty)) self.executable_supported = false;
         // Recursively materialize operands first. ExprId order is therefore
         // the language evaluation order, rather than an AST tree a backend is
         // free to visit in a different order.
@@ -7425,7 +7439,11 @@ const FunctionBuilder = struct {
             .null_literal => .{ .literal = .null },
             .uninit_literal => .{ .literal = .uninit },
             .void_literal => .{ .literal = .void },
-            .enum_literal => |literal| .{ .literal = .{ .enum_value = literal.text } },
+            .enum_literal => |literal| enum_literal: {
+                const canonical = self.canonicalExecutableEnumLiteral(literal.text, result_ty) orelse
+                    break :enum_literal .{ .literal = .{ .enum_value = literal.text } };
+                break :enum_literal .{ .literal = canonical };
+            },
             .unary => |node| .{ .unary = .{
                 .op = executableUnaryOp(node.op),
                 .operand = try self.ensureExecutableExprAs(node.expr.*, result_ty),
@@ -7817,6 +7835,33 @@ const FunctionBuilder = struct {
         return true;
     }
 
+    fn internExecutableEnumType(self: *FunctionBuilder, ty: ValueType) !bool {
+        const name = switch (ty) {
+            .closed_enum, .open_enum => |name| name,
+            else => return true,
+        };
+        const summary = self.enums.get(name) orelse return false;
+        const repr_ty: ValueType = if (summary.repr) |repr|
+            valueTypeFromTypeAlias(repr, self.enums, self.structs, self.packed_bits, self.aliases)
+        else
+            .{ .integer = "isize" };
+        if (std.meta.activeTag(repr_ty) != .integer) return false;
+        const type_id = try self.internTypeId(ty);
+        const repr_type_id = try self.internTypeId(repr_ty);
+        for (self.executable_enum_types.items) |enum_ty| {
+            if (!enum_ty.type_id.eql(type_id)) continue;
+            return sameValueType(enum_ty.ty, ty) and enum_ty.repr_type_id.eql(repr_type_id) and
+                sameValueType(enum_ty.repr_ty, repr_ty);
+        }
+        try self.executable_enum_types.append(self.allocator, .{
+            .type_id = type_id,
+            .ty = ty,
+            .repr_type_id = repr_type_id,
+            .repr_ty = repr_ty,
+        });
+        return true;
+    }
+
     fn executableReflectionConstant(self: *FunctionBuilder, expr: ast.Expr) ?u128 {
         var reflect_env = MirReflectEnv{
             .enums = self.enums,
@@ -8000,6 +8045,21 @@ const FunctionBuilder = struct {
         };
     }
 
+    fn canonicalExecutableEnumLiteral(self: *FunctionBuilder, case_name: []const u8, result_ty: ValueType) ?mir_model.ExecutableLiteral {
+        const summary = self.enumSummaryForType(result_ty) orelse return null;
+        for (summary.cases, 0..) |case, index| {
+            if (!std.mem.eql(u8, case.name.text, case_name)) continue;
+            const value = if (case.value) |explicit| numeric.integerLiteralValue(explicit) orelse return null else numeric.LiteralValue{
+                .negative = false,
+                .magnitude = index,
+            };
+            if (!value.negative) return .{ .integer = value.magnitude };
+            const magnitude = std.math.cast(i128, value.magnitude) orelse return null;
+            return .{ .signed_integer = -magnitude };
+        }
+        return null;
+    }
+
     /// Literal expressions are target-typed by their containing declaration or
     /// return. Preserve that checked semantic type in executable MIR instead
     /// of leaving a backend to reinterpret `comptime_int` source spelling.
@@ -8008,7 +8068,9 @@ const FunctionBuilder = struct {
         const expression = &self.executable_expressions.items[id.index()];
         switch (expression.operation) {
             .literal => |literal| switch (literal) {
-                .integer => if (std.meta.activeTag(target_ty) == .integer or std.meta.activeTag(target_ty) == .address) {
+                .integer => if (std.meta.activeTag(target_ty) == .integer or std.meta.activeTag(target_ty) == .address or
+                    std.meta.activeTag(target_ty) == .closed_enum or std.meta.activeTag(target_ty) == .open_enum)
+                {
                     expression.result_ty = target_ty;
                 },
                 .float => {
@@ -8016,6 +8078,13 @@ const FunctionBuilder = struct {
                 },
                 .boolean => {
                     if (std.meta.activeTag(target_ty) == .bool) expression.result_ty = target_ty;
+                },
+                .enum_value => |case_name| switch (target_ty) {
+                    .closed_enum, .open_enum => if (self.canonicalExecutableEnumLiteral(case_name, target_ty)) |canonical| {
+                        expression.result_ty = target_ty;
+                        expression.operation = .{ .literal = canonical };
+                    },
+                    else => {},
                 },
                 else => {},
             },
@@ -8428,6 +8497,7 @@ const FunctionBuilder = struct {
                     }
                 }
                 for (local.names) |name| {
+                    if (!try self.internExecutableEnumType(ty)) self.executable_supported = false;
                     const executable_local = try self.internExecutableLocal(name.text);
                     // `uninit` is a storage-initialization policy, not a value
                     // expression.  Canonical MIR represents it by omitting the

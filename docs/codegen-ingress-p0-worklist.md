@@ -15,9 +15,9 @@ which function shapes still fall back. The strict ratchet corpus now admits
 zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
-The strict corpus is not the P0 completion definition. The current 2026-08-23
+The strict corpus is not the P0 completion definition. The current 2026-08-26
 broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 759 C and 826 LLVM AST-body fallbacks. Report
+LLVM functions. It still found 758 C and 825 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -25,12 +25,16 @@ figures establish that final deletion now requires a
 general syntax-free executable MIR body and mechanical backend renderers; more
 strict-corpus recognizers are no longer an honest completion strategy.
 
-### Last completed broad census snapshot (2026-08-23)
+### Last completed broad census snapshot (2026-08-26)
 
-The 522-root sweep found C **937/1696 admitted (55.2%)**, 759 fallback, and
-LLVM **936/1762 admitted (53.1%)**, 826 fallback. There were no unsupported
+The 522-root sweep found C **938/1696 admitted (55.3%)**, 758 fallback, and
+LLVM **937/1762 admitted (53.2%)**, 825 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present. The latest slice
-makes scalar `raw.load<T>` / `raw.store<T>` and all three `fence.*` operations
+makes enum literals canonical numeric tags backed by a verified nominal/repr
+table. It moved seven functions per backend to canonical emission and deleted
+the direct enum-literal branch from both transitional `simple_return`
+recognizers. The preceding machine-effect slice makes scalar `raw.load<T>` /
+`raw.store<T>` and all three `fence.*` operations
 typed executable-MIR builtins. MIR
 owns the exact `PAddr` operand, payload/result type, lexical unsafe authority and
 left-to-right operand evaluation. C mechanically selects the existing volatile
@@ -132,15 +136,15 @@ comptime assertions stay fail-closed. In the broad census this moved two
 module-visibility functions per backend to the renderer boundary without yet
 changing the admitted totals.
 
-The census also ranks the canonical stopping layer. For C the remaining 759
-fallbacks are 708 `producer_incomplete`, 49 `renderer_unsupported`, and 2
-`ready`; LLVM is 748/75/0/3. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 758
+fallbacks are 706 `producer_incomplete`, 50 `renderer_unsupported`, and 2
+`ready`; LLVM is 746/76/3. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
 The leading C reasons are `producer_invariant` (141),
-`trap_projection` (112), `noncanonical_literal` (107),
+`trap_projection` (115), `noncanonical_literal` (102),
 `unsupported_member` (50), and
 `unlowered_index` (46). LLVM has `producer_invariant` 141,
-`trap_projection` 125, `noncanonical_literal` 110, `unlowered_index` 60 and
+`trap_projection` 128, `noncanonical_literal` 105, `unlowered_index` 60 and
 `unsupported_member` 50. By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 15 in each backend.

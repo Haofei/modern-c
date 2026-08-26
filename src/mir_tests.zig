@@ -467,6 +467,31 @@ test "executable MIR owns declared struct literal field order and types" {
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 
+test "executable MIR owns enum representation and signed case value" {
+    const source =
+        \\enum State: i8 { idle = 0, busy = -1 }
+        \\fn state() -> State { return .busy; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_enum_type.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByName(module_mir, "state") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.enum_types.len);
+    const enum_ty = function.executable_body.enum_types[0];
+    try std.testing.expect(mir.ValueType.eql(enum_ty.ty, .{ .closed_enum = "State" }));
+    try std.testing.expect(mir.ValueType.eql(enum_ty.repr_ty, .{ .integer = "i8" }));
+    const value = function.executable_body.expressions[function.executable_body.expressions.len - 1];
+    try std.testing.expectEqual(@as(i128, -1), value.operation.literal.signed_integer);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_function = functionByNameMut(&module_mir, "state") orelse return error.TestUnexpectedResult;
+    mutable_function.executable_body.enum_types[0].repr_ty = .{ .integer = "u8" };
+    try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
 test "executable MIR owns nested by-value struct member identity and spelling" {
     const source =
         \\struct Inner { value: u32 }

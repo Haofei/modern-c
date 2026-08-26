@@ -272,6 +272,7 @@ const Renderer = struct {
     fn typeTextDepth(self: *Renderer, ty: mir.ValueType, depth: usize) RenderError![]const u8 {
         if (scalarLlvmType(ty)) |scalar| return scalar;
         if (depth >= mir.max_executable_operands) return error.Unsupported;
+        if (enumTypeForValueType(self.body, ty)) |enum_ty| return self.typeTextDepth(enum_ty.repr_ty, depth + 1);
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.allocator, "{ ");
@@ -509,6 +510,7 @@ const Renderer = struct {
     fn literalValue(self: *Renderer, ty: []const u8, literal: mir.ExecutableLiteral) RenderError!Value {
         return switch (literal) {
             .integer => |magnitude| .{ .ty = ty, .spelling = try std.fmt.allocPrint(self.allocator, "{d}", .{magnitude}) },
+            .signed_integer => |value| .{ .ty = ty, .spelling = try std.fmt.allocPrint(self.allocator, "{d}", .{value}) },
             .boolean => |value| .{ .ty = ty, .spelling = if (value) "true" else "false" },
             .float => |value| switch (value) {
                 .f32_bits => |bits| if (std.mem.eql(u8, ty, "float"))
@@ -1200,6 +1202,7 @@ fn llvmTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
 fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
     if (scalarLlvmType(ty) != null) return true;
     if (depth >= mir.max_executable_operands) return false;
+    if (enumTypeForValueType(body, ty)) |enum_ty| return llvmTypeSupportedDepth(body, enum_ty.repr_ty, depth + 1);
     const aggregate = aggregateTypeForValueType(body, ty) orelse return false;
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
     for (aggregate.field_types[0..aggregate.field_count]) |field_ty| {
@@ -1216,6 +1219,11 @@ fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const m
 
 fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableAggregateType {
     for (body.aggregate_types) |*aggregate| if (sameValueType(aggregate.ty, ty)) return aggregate;
+    return null;
+}
+
+fn enumTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableEnumType {
+    for (body.enum_types) |*enum_ty| if (sameValueType(enum_ty.ty, ty)) return enum_ty;
     return null;
 }
 
@@ -1244,7 +1252,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .literal => |literal| switch (literal) {
-            .integer, .boolean, .null, .void => true,
+            .integer, .signed_integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             else => false,
         },

@@ -3632,7 +3632,9 @@ test "lower-c emits enum literal returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Color color(void)");
-    try expectContains(body, "return Color_blue;");
+    // Canonical executable MIR carries the enum's numeric tag and nominal
+    // result type; the C renderer no longer needs source case spelling.
+    try expectNeedlesInOrder(body, &.{ "= 1;", "return mc_exec_tmp_" });
     try expectNotContains(body, "mc_tmp");
 }
 
@@ -19391,9 +19393,9 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_write = 2") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "global_mode = Mode_read") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_read;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_write;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return sink(Mode_read);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= sink(mc_exec_tmp_0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mode == Mode_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Mode)(Mode_write));") != null);
 }

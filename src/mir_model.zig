@@ -630,6 +630,9 @@ pub const ExecutableLiteral = union(enum) {
     /// separate unary operation, so radix, separators and suffix spelling do
     /// not leak into backend syntax.
     integer: u128,
+    /// Canonical negative integer used when an enum case has a signed repr.
+    /// Ordinary negative expressions remain `unary.neg(integer)`.
+    signed_integer: i128,
     float: ExecutableFloatLiteral,
     string: []const u8,
     boolean: bool,
@@ -869,6 +872,16 @@ pub const ExecutableAggregateType = struct {
     field_count: usize = 0,
 };
 
+/// Canonical scalar representation for an enum used by an executable body.
+/// The enum's nominal `TypeId` remains distinct from its integer repr; LLVM
+/// consumes the repr while C keeps the nominal typedef spelling.
+pub const ExecutableEnumType = struct {
+    type_id: TypeId,
+    ty: ValueType,
+    repr_type_id: TypeId,
+    repr_ty: ValueType,
+};
+
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
     operation: union(enum) {
@@ -912,6 +925,7 @@ pub const ExecutableBody = struct {
     locals: []ExecutableLocalIdentity = &.{},
     symbols: []SymbolIdentity = &.{},
     aggregate_types: []ExecutableAggregateType = &.{},
+    enum_types: []ExecutableEnumType = &.{},
     expressions: []ExecutableExpression = &.{},
     trap_edges: []ExecutableTrapEdge = &.{},
     places: []ExecutablePlace = &.{},
@@ -927,6 +941,7 @@ pub const ExecutableBody = struct {
         if (self.locals.len != 0) allocator.free(self.locals);
         if (self.symbols.len != 0) allocator.free(self.symbols);
         if (self.aggregate_types.len != 0) allocator.free(self.aggregate_types);
+        if (self.enum_types.len != 0) allocator.free(self.enum_types);
         if (self.expressions.len != 0) allocator.free(self.expressions);
         if (self.trap_edges.len != 0) allocator.free(self.trap_edges);
         if (self.places.len != 0) allocator.free(self.places);
