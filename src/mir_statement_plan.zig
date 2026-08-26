@@ -101,18 +101,6 @@ pub const NullablePointerLocalReturnPlan = struct {
     }
 };
 
-pub const NullablePointerVoidCallPlan = struct {
-    callee_name: []const u8,
-    callee_id: mir.ValueId,
-    call_result_fact: mir.TargetTypeFact,
-    argument_name: []const u8,
-    argument_id: mir.ValueId,
-    argument_fact: mir.TargetTypeFact,
-    source_type_fact: mir.TargetTypeFact,
-    call_location: Location,
-    argument_location: Location,
-};
-
 pub const NullableTryPlan = struct {
     pub const Source = union(enum) {
         parameter: struct {
@@ -679,95 +667,6 @@ pub fn buildNullablePointerLocalReturn(function: mir.Function) ?NullablePointerL
         .source_type_fact = source_fact,
         .assignment_location = assignment_location,
         .return_location = locationFromInstruction(return_instruction),
-    };
-}
-
-/// Admit one void direct call whose nullable-pointer parameter is supplied by
-/// a non-null pointer parameter. The only trap edge is the statically satisfied
-/// representation check; call and argument identity are joined by the exact
-/// callee SpanId recorded in MIR.
-pub fn buildNullablePointerVoidCall(function: mir.Function) ?NullablePointerVoidCallPlan {
-    if (function.return_ty != .void or function.blocks.len != 2 or function.trap_edges.len != 1 or
-        function.bounds_facts.len != 0 or function.pointer_provenance_facts.len != 0 or
-        function.representation_facts.len != 2 or function.target_type_facts.len != 4) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const entry = function.blocks[0];
-    const trap = function.blocks[1];
-    if (entry.terminator != .fallthrough or entry.successors.len != 1 or entry.successors[0] != trap.id or trap.instructions.len != 0) return null;
-    switch (trap.terminator) {
-        .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
-        else => return null,
-    }
-
-    var call_instruction: ?mir.Instruction = null;
-    for (entry.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type, .typed_load, .representation_check, .expr => {},
-        .call => {
-            if (call_instruction != null) return null;
-            call_instruction = instruction;
-        },
-        else => return null,
-    };
-    const call = call_instruction orelse return null;
-    const callee_id = call.typed_value_id orelse return null;
-    if (!callee_id.isValid() or !call.typed_callee_span_id.isValid() or call.result_ty != .void) return null;
-    const callee_name = valueIdentityName(function, callee_id) orelse return null;
-    if (!std.mem.eql(u8, call.detail, callee_name)) return null;
-    const call_result_fact = targetFactBySpan(function, .direct_call_result, call.typed_callee_span_id) orelse return null;
-    if (call_result_fact.result_ty != .void or !typeNameIsVoid(call_result_fact.target_ty) or
-        !std.mem.eql(u8, call_result_fact.target_owner orelse "", callee_name) or
-        !call_result_fact.typed_target_owner_id.isValid()) return null;
-
-    var argument_fact: ?mir.TargetTypeFact = null;
-    for (function.target_type_facts) |fact| {
-        if (fact.kind != .direct_call_argument or !fact.typed_callee_span_id.eql(call.typed_callee_span_id)) continue;
-        if (argument_fact != null or fact.target_index != 0 or
-            !std.mem.eql(u8, fact.target_owner orelse "", callee_name) or
-            !fact.typed_target_owner_id.eql(call_result_fact.typed_target_owner_id)) return null;
-        argument_fact = fact;
-    }
-    const argument = argument_fact orelse return null;
-    const nullable_child = switch (argument.target_ty.kind) {
-        .nullable => |child| child.*,
-        else => return null,
-    };
-    if (std.meta.activeTag(nullable_child.kind) != .pointer or !argument.typed_span_id.isValid() or
-        !argument.typed_operand_value_id.isValid()) return null;
-    const argument_expr = expressionAtSpan(entry, argument.typed_span_id) orelse return null;
-    const argument_id = argument_expr.typed_value_id orelse return null;
-    if (!argument_id.eql(argument.typed_operand_value_id)) return null;
-    const argument_name = valueIdentityName(function, argument_id) orelse return null;
-    const parameter_ty = parameterType(function, argument_name) orelse return null;
-    const parameter_shape = switch (parameter_ty) {
-        .pointer => |shape| shape,
-        else => return null,
-    };
-    const argument_shape = switch (argument.result_ty) {
-        .nullable_pointer => |shape| shape,
-        else => return null,
-    };
-    if (!samePointerShape(parameter_shape, argument_shape) or !std.mem.eql(u8, argument_expr.detail, argument_name)) return null;
-    const source_fact = targetFactBySpan(function, .expression_result, argument.typed_span_id) orelse return null;
-    const source_shape = switch (source_fact.result_ty) {
-        .pointer => |shape| shape,
-        else => return null,
-    };
-    if (!type_syntax.sameTypeSyntax(source_fact.target_ty, nullable_child) or
-        !samePointerShape(source_shape, argument_shape) or !sameRepresentationType(source_fact.result_ty, parameter_ty)) return null;
-    if (!validateNonnullRepresentationPromotion(function, entry, argument.typed_span_id, argument_id, source_fact.result_ty)) return null;
-
-    return .{
-        .callee_name = callee_name,
-        .callee_id = callee_id,
-        .call_result_fact = call_result_fact,
-        .argument_name = argument_name,
-        .argument_id = argument_id,
-        .argument_fact = argument,
-        .source_type_fact = source_fact,
-        .call_location = locationFromInstruction(call),
-        .argument_location = locationFromInstruction(argument_expr),
     };
 }
 

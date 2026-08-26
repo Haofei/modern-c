@@ -4656,12 +4656,24 @@ test "MIR plans nullable pointer local promotions with typed identities" {
     try std.testing.expect(assigned_plan.initializesWithNull());
     try std.testing.expect(assigned_plan.assignment_location != null);
 
-    const call_plan = mir_statement_plan.buildNullablePointerVoidCall(functionByName(typed_mir, "call_promotion").?) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("consume_nullable", call_plan.callee_name);
-    try std.testing.expectEqualStrings("p", call_plan.argument_name);
-    try std.testing.expect(call_plan.callee_id.isValid());
-    try std.testing.expect(call_plan.argument_id.isValid());
+    const call_function = functionByName(typed_mir, "call_promotion").?;
+    try std.testing.expect(call_function.executable_body.complete);
+    try mir_executable_body.verify(&call_function);
+    var saw_call = false;
+    var saw_guard = false;
+    for (call_function.executable_body.expressions) |expression| switch (expression.operation) {
+        .direct_call => |call| {
+            try std.testing.expectEqual(@as(usize, 1), call.argument_count);
+            try std.testing.expect(call.callee.isValid());
+            saw_call = true;
+        },
+        .representation_check => {
+            try std.testing.expectEqual(.pointer, std.meta.activeTag(expression.result_ty));
+            saw_guard = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_call and saw_guard);
 }
 
 test "MIR plans typed indirect call arguments and canonical callee roots" {

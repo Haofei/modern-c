@@ -219,8 +219,8 @@ parallel execution does not change the raw census or ranked report.
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 | 62 | 98 | 29 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 60 | 100 | 29 |
+| C | 160 | 160 | 0 | 0 | 10000 | 63 | 97 | 28 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 60 | 100 | 28 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized
@@ -244,7 +244,11 @@ executable MIR owns the recursively verified proof that eager evaluation of a
 pure boolean tree is equivalent to source short-circuit evaluation.
 `pointer_to_integer_cast` is now canonical too: its typed cast preserves the
 pointer representation guard and target integer type in both renderers. The
-registry is down to 29 plans. `simple_loop_return` remains.
+`nullable_pointer_void_call` plan is gone as well. Direct non-C-ABI calls may
+now admit only the verified representation-preserving non-null-to-nullable
+pointer widening; C consequently retains the same `InvalidRepresentation`
+guard that LLVM already emitted. The registry is down to 28 plans.
+`simple_loop_return` remains.
 
 A complete-shard retirement probe for `simple_void_body` found 17 real users,
 covering aggregate, Result, enum, and statement-oriented void bodies that are

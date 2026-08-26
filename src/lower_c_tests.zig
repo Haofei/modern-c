@@ -3474,8 +3474,10 @@ test "lower-c preserves nullable pointer promotion locals from MIR without body 
     try expectNotContains(assigned_body, "mc_trap_InvalidRepresentation");
 
     const call_body = try cFunctionBody(output.items, "static void call_promotion(uint8_t * p)");
-    try expectContains(call_body, "consume_nullable(p);");
-    try expectNotContains(call_body, "mc_trap_InvalidRepresentation");
+    try expectContains(call_body, "/* canonical executable MIR */");
+    const guard = std.mem.indexOf(u8, call_body, "== NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const call = std.mem.indexOf(u8, call_body, "consume_nullable(mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(guard < call);
 }
 
 test "lower-c emits nullable pointer try from MIR without body fallback" {
