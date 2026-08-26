@@ -219,8 +219,8 @@ parallel execution does not change the raw census or ranked report.
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 | 63 | 97 | 28 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 60 | 100 | 28 |
+| C | 160 | 160 | 0 | 0 | 10000 | 65 | 95 | 27 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 62 | 98 | 27 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized
@@ -247,7 +247,10 @@ pointer representation guard and target integer type in both renderers. The
 `nullable_pointer_void_call` plan is gone as well. Direct non-C-ABI calls may
 now admit only the verified representation-preserving non-null-to-nullable
 pointer widening; C consequently retains the same `InvalidRepresentation`
-guard that LLVM already emitted. The registry is down to 28 plans.
+guard that LLVM already emitted. Nullable-pointer local initialization and
+assignment now use the same bounded typed cast, and the mechanical renderers
+preserve the guard before creating the nullable value. Their dedicated local-
+return plan has also been deleted. The registry is down to 27 plans.
 `simple_loop_return` remains.
 
 A complete-shard retirement probe for `simple_void_body` found 17 real users,

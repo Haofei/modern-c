@@ -3614,19 +3614,25 @@ test "LLVM preserves nullable pointer promotion locals from MIR without body fal
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_pointer_promotions.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal ptr @local_promotion");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectContains(local_body, "alloca ptr");
-    try expectContains(local_body, "store ptr %p, ptr");
+    const local_guard = std.mem.indexOf(u8, local_body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const local_store = std.mem.indexOf(u8, local_body, "store ptr %mc_arg_0, ptr") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(local_guard < local_store);
     try expectContains(local_body, "load ptr, ptr");
     try expectContains(local_body, "ret ptr");
-    try expectNotContains(local_body, "mc_trap_InvalidRepresentation");
+    try expectContains(local_body, "mc_trap_InvalidRepresentation");
 
     const assigned_body = try llvmFunctionBody(output.items, "define internal ptr @assigned_promotion");
+    try expectContains(assigned_body, "; canonical executable MIR");
     try expectContains(assigned_body, "alloca ptr");
     try expectContains(assigned_body, "store ptr null, ptr");
-    try expectContains(assigned_body, "store ptr %p, ptr");
+    const assigned_guard = std.mem.indexOf(u8, assigned_body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
+    const assigned_store = std.mem.indexOf(u8, assigned_body, "store ptr %mc_arg_0, ptr") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(assigned_guard < assigned_store);
     try expectContains(assigned_body, "load ptr, ptr");
     try expectContains(assigned_body, "ret ptr");
-    try expectNotContains(assigned_body, "mc_trap_InvalidRepresentation");
+    try expectContains(assigned_body, "mc_trap_InvalidRepresentation");
 
     const call_body = try llvmFunctionBody(output.items, "define internal void @call_promotion");
     try expectContains(call_body, "; canonical executable MIR");

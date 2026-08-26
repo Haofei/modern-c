@@ -3463,15 +3463,20 @@ test "lower-c preserves nullable pointer promotion locals from MIR without body 
     try expectNotContains(none_body, ".present");
 
     const local_body = try cFunctionBody(output.items, "static uint8_t * local_promotion(uint8_t * p)");
-    try expectContains(local_body, "uint8_t * maybe = p;");
-    try expectContains(local_body, "return maybe;");
-    try expectNotContains(local_body, "mc_trap_InvalidRepresentation");
+    try expectContains(local_body, "/* canonical executable MIR */");
+    const local_guard = std.mem.indexOf(u8, local_body, "== NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const local_init = std.mem.indexOf(u8, local_body, "uint8_t * maybe = mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(local_guard < local_init);
+    try expectContains(local_body, "return mc_exec_tmp_");
 
     const assigned_body = try cFunctionBody(output.items, "static uint8_t * assigned_promotion(uint8_t * p)");
-    try expectContains(assigned_body, "uint8_t * maybe = NULL;");
-    try expectContains(assigned_body, "maybe = p;");
-    try expectContains(assigned_body, "return maybe;");
-    try expectNotContains(assigned_body, "mc_trap_InvalidRepresentation");
+    try expectContains(assigned_body, "/* canonical executable MIR */");
+    try expectContains(assigned_body, "= NULL;");
+    try expectContains(assigned_body, "uint8_t * maybe = mc_exec_tmp_");
+    const assigned_guard = std.mem.indexOf(u8, assigned_body, "== NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
+    const assigned_store = std.mem.indexOfPos(u8, assigned_body, assigned_guard, "\n        maybe = mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(assigned_guard < assigned_store);
+    try expectContains(assigned_body, "return mc_exec_tmp_");
 
     const call_body = try cFunctionBody(output.items, "static void call_promotion(uint8_t * p)");
     try expectContains(call_body, "/* canonical executable MIR */");

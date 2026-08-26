@@ -4641,20 +4641,24 @@ test "MIR plans nullable pointer local promotions with typed identities" {
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer typed_mir.deinit();
 
-    const local_plan = mir_statement_plan.buildNullablePointerLocalReturn(functionByName(typed_mir, "local_promotion").?) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("maybe", local_plan.local_name);
-    try std.testing.expectEqualStrings("p", local_plan.source_name);
-    try std.testing.expect(local_plan.local_id.isValid());
-    try std.testing.expect(local_plan.source_id.isValid());
-    try std.testing.expect(!local_plan.initializesWithNull());
-
-    const assigned_plan = mir_statement_plan.buildNullablePointerLocalReturn(functionByName(typed_mir, "assigned_promotion").?) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("maybe", assigned_plan.local_name);
-    try std.testing.expectEqualStrings("p", assigned_plan.source_name);
-    try std.testing.expect(assigned_plan.initializesWithNull());
-    try std.testing.expect(assigned_plan.assignment_location != null);
+    for ([_][]const u8{ "local_promotion", "assigned_promotion" }) |name| {
+        const function = functionByName(typed_mir, name).?;
+        try std.testing.expect(function.executable_body.complete);
+        try mir_executable_body.verify(&function);
+        var saw_nullable_cast = false;
+        var saw_guard = false;
+        for (function.executable_body.expressions) |expression| switch (expression.operation) {
+            .cast => |cast| if (cast.kind == .pointer_to_nullable) {
+                saw_nullable_cast = true;
+            },
+            .representation_check => {
+                try std.testing.expectEqual(.pointer, std.meta.activeTag(expression.result_ty));
+                saw_guard = true;
+            },
+            else => {},
+        };
+        try std.testing.expect(saw_nullable_cast and saw_guard);
+    }
 
     const call_function = functionByName(typed_mir, "call_promotion").?;
     try std.testing.expect(call_function.executable_body.complete);

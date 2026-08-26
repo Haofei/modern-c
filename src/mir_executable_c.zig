@@ -878,13 +878,14 @@ fn memoryStoreSupported(
     statement: mir.ExecutableStatement,
     store: @FieldType(mir.ExecutableStatement.Operation, "store"),
 ) bool {
-    const scalar = scalarMemoryInfo(store.ty) orelse return false;
-    if (store.access.alignment != scalar.alignment) return false;
+    const alignment = mir.ExecutableMemoryAccess.scalarAlignment(store.ty) orelse return false;
+    if (store.access.alignment != alignment) return false;
     const value = expressionById(body, store.value) orelse return false;
     if (!mir.ValueType.eql(store.ty, value.result_ty)) return false;
     const place = placeById(body, store.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
+        _ = scalarMemoryInfo(store.ty) orelse return false;
         const shape = switch (place.root_ty) {
             .pointer => |pointer| pointer,
             else => return false,
@@ -900,7 +901,7 @@ fn memoryStoreSupported(
     return switch (place.root) {
         .local => |local| localById(body, local) != null and store.access.kind == .plain,
         .symbol => |id| if (symbolById(body, id)) |symbol|
-            symbol.kind == .global and symbol.mutable and store.access.kind == .race_unordered
+            symbol.kind == .global and symbol.mutable and store.access.kind == .race_unordered and scalarMemoryInfo(store.ty) != null
         else
             false,
         .value => false,

@@ -7375,10 +7375,10 @@ const FunctionBuilder = struct {
         return self.appendExecutableCast(input, operand, target_ty, kind);
     }
 
-    /// Keep the established return producer for conversions whose canonical
+    /// Keep the established producer for conversions whose canonical
     /// renderers have not cut over yet. These two pointer coercions preserve
     /// representation and are the deliberately bounded slice owned here.
-    fn ensureExecutablePointerReturnExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
+    fn ensureExecutablePointerCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
         const operand = try self.ensureExecutableExprAs(input, target_ty);
         const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
         if (sameValueType(operand_ty, target_ty)) return operand;
@@ -8575,7 +8575,7 @@ const FunctionBuilder = struct {
                         if (ast_query.isUninitLiteral(initializer) and mir_model.ExecutableMemoryAccess.scalarAlignment(ty) != null) null else initializer
                     else
                         null else null;
-                    const executable_initializer = if (initializer_expr) |initializer| try self.ensureExecutableExprAs(initializer, ty) else null;
+                    const executable_initializer = if (initializer_expr) |initializer| try self.ensureExecutablePointerCoercedExpr(initializer, ty) else null;
                     if (executable_initializer) |initializer| self.contextualizeExecutableLiteral(initializer, ty);
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
@@ -8651,7 +8651,7 @@ const FunctionBuilder = struct {
                     null;
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = place_id,
-                    .value = try self.ensureExecutableExprAs(node.value, assignment_target_ty),
+                    .value = try self.ensureExecutablePointerCoercedExpr(node.value, assignment_target_ty),
                     .ty = assignment_target_ty,
                     .access = self.executableMemoryAccess(node.target, assignment_target_ty),
                     .representation_source = representation_source,
@@ -8749,7 +8749,7 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"return" => |maybe| {
-                const executable_return = if (maybe) |expr| try self.ensureExecutablePointerReturnExpr(expr, self.return_ty) else null;
+                const executable_return = if (maybe) |expr| try self.ensureExecutablePointerCoercedExpr(expr, self.return_ty) else null;
                 if (executable_return) |value| self.contextualizeExecutableLiteral(value, self.return_ty);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
                 if (maybe) |expr| {

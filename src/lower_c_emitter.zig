@@ -1761,21 +1761,14 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const nullable_pointer_local_return_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildNullablePointerLocalReturn(fn_mir)) |plan|
-                if (self.mirNullablePointerLocalReturnPlanSupported(plan)) plan else null
-            else
-                null
-        else
-            null;
-        const nullable_try_plan = if (simple_trap == null and nullable_pointer_local_return_plan == null)
+        const nullable_try_plan = if (simple_trap == null)
             if (mir_statement_plan.buildNullableTry(fn_mir)) |plan|
                 if (self.mirNullableTryPlanSupported(plan)) plan else null
             else
                 null
         else
             null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and scalar_expression_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_pointer_local_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and access_local_address_update == null and scalar_expression_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1820,7 +1813,6 @@ pub const CEmitter = struct {
             direct_call_projected_return_plan != null,
             local_aggregate_place_update_return_plan != null,
             local_aggregate_assignment_return_plan != null,
-            nullable_pointer_local_return_plan != null,
             nullable_try_plan != null,
             simple_return != null,
             simple_void_body != null,
@@ -1902,9 +1894,6 @@ pub const CEmitter = struct {
         } else if (scalar_switch_return_plan) |plan| {
             selected_path.* = .scalar_switch_return;
             try self.emitMirScalarSwitchReturnPlan(plan);
-        } else if (nullable_pointer_local_return_plan) |plan| {
-            selected_path.* = .nullable_pointer_local_return;
-            try self.emitMirNullablePointerLocalReturnPlan(plan);
         } else if (nullable_try_plan) |plan| {
             selected_path.* = .nullable_try;
             try self.emitMirNullableTryPlan(plan);
@@ -5940,33 +5929,6 @@ pub const CEmitter = struct {
             return type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.condition_fact.target_ty));
         }
         return false;
-    }
-
-    fn mirNullablePointerLocalReturnPlanSupported(self: *CEmitter, plan: mir_statement_plan.NullablePointerLocalReturnPlan) bool {
-        const nullable_c = self.cTypeFor(plan.nullable_type_fact.target_ty, .typedef_name) catch return false;
-        const source_c = self.cTypeFor(plan.source_type_fact.target_ty, .typedef_name) catch return false;
-        return std.mem.eql(u8, nullable_c, source_c);
-    }
-
-    fn emitMirNullablePointerLocalReturnPlan(self: *CEmitter, plan: mir_statement_plan.NullablePointerLocalReturnPlan) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.declaration_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{
-            try self.cTypeFor(plan.nullable_type_fact.target_ty, .typedef_name),
-            try self.cIdent(plan.local_name),
-            if (plan.initializesWithNull()) "NULL" else try self.cIdent(plan.source_name),
-        });
-        if (plan.assignment_location) |location| {
-            try self.writeLineDirective(spanFromMirSourcePoint(location.source));
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} = {s};\n", .{
-                try self.cIdent(plan.local_name),
-                try self.cIdent(plan.source_name),
-            });
-        }
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.local_name)});
     }
 
     fn mirNullableTryPlanSupported(self: *CEmitter, plan: mir_statement_plan.NullableTryPlan) bool {
