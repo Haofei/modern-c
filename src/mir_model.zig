@@ -799,6 +799,84 @@ pub const ExecutableTrapEdge = struct {
     source: TrapSource,
 };
 
+/// Prove that eagerly evaluating a boolean expression tree preserves source
+/// short-circuit semantics. Only side-effect-free locals/literals and ordinary
+/// comparisons of those leaves are admitted; calls, loads, representation
+/// checks, and every expression owning a trap edge fail closed.
+pub fn executableEagerSafeBoolTree(
+    expressions: []const ExecutableExpression,
+    trap_edges: []const ExecutableTrapEdge,
+    root: ExprId,
+) bool {
+    return executableEagerSafeBoolTreeDepth(expressions, trap_edges, root, 0);
+}
+
+fn executableEagerSafeBoolTreeDepth(
+    expressions: []const ExecutableExpression,
+    trap_edges: []const ExecutableTrapEdge,
+    id: ExprId,
+    depth: usize,
+) bool {
+    if (!id.isValid() or id.index() >= expressions.len or depth >= expressions.len) return false;
+    const value = expressions[id.index()];
+    if (!value.id.eql(id) or value.result_ty != .bool or executableExpressionOwnsTrap(trap_edges, id)) return false;
+    return switch (value.operation) {
+        .local => true,
+        .literal => |literal| literal == .boolean,
+        .unary => |unary| unary.op == .logical_not and
+            executableEagerSafeBoolTreeDepth(expressions, trap_edges, unary.operand, depth + 1),
+        .binary => |binary| if (binary.op == .logical_and or binary.op == .logical_or)
+            binary.arithmetic == .ordinary and binary.eager_safe and
+                executableEagerSafeBoolTreeDepth(expressions, trap_edges, binary.left, depth + 1) and
+                executableEagerSafeBoolTreeDepth(expressions, trap_edges, binary.right, depth + 1)
+        else
+            executableComparisonIsPure(expressions, trap_edges, binary, depth + 1),
+        else => false,
+    };
+}
+
+fn executableComparisonIsPure(
+    expressions: []const ExecutableExpression,
+    trap_edges: []const ExecutableTrapEdge,
+    binary: @FieldType(ExecutableExpression.Operation, "binary"),
+    depth: usize,
+) bool {
+    if (binary.arithmetic != .ordinary or binary.eager_safe) return false;
+    switch (binary.op) {
+        .eq, .ne, .lt, .le, .gt, .ge => {},
+        else => return false,
+    }
+    return executablePureComparisonLeaf(expressions, trap_edges, binary.left, depth) and
+        executablePureComparisonLeaf(expressions, trap_edges, binary.right, depth);
+}
+
+fn executablePureComparisonLeaf(
+    expressions: []const ExecutableExpression,
+    trap_edges: []const ExecutableTrapEdge,
+    id: ExprId,
+    depth: usize,
+) bool {
+    if (!id.isValid() or id.index() >= expressions.len or depth >= expressions.len or
+        executableExpressionOwnsTrap(trap_edges, id)) return false;
+    const value = expressions[id.index()];
+    if (!value.id.eql(id)) return false;
+    return switch (value.operation) {
+        .local => true,
+        .literal => |literal| switch (literal) {
+            .integer, .signed_integer, .float, .boolean, .null => true,
+            .string, .uninit, .void, .enum_value => false,
+        },
+        else => false,
+    };
+}
+
+fn executableExpressionOwnsTrap(trap_edges: []const ExecutableTrapEdge, id: ExprId) bool {
+    for (trap_edges) |edge| if (edge.owner.expressionId()) |owner| {
+        if (owner.eql(id)) return true;
+    };
+    return false;
+}
+
 pub const ExecutablePlace = struct {
     id: PlaceId,
     source: SourcePoint,

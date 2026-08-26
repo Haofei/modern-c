@@ -10,7 +10,7 @@ const lower_c_runtime = @import("lower_c_runtime.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
-const mir_assert_plan = @import("mir_assert_plan.zig");
+const mir_executable_body = @import("mir_executable_body.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
 const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
@@ -297,7 +297,7 @@ test "lower-c emits assertion expression trees from MIR without body fallback" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ordered, "mc_trap_Assert();"));
 }
 
-test "MIR assertion plan admits require_complex" {
+test "MIR executable body admits pure logical assertion tree" {
     const source =
         \\fn require_complex(a: u32, b: u32, flag: bool) -> void {
         \\    assert(flag && (a == b || a != 0));
@@ -307,7 +307,9 @@ test "MIR assertion plan admits require_complex" {
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
-    try std.testing.expect(mir_assert_plan.build(module_mir.functions[0]) != null);
+    const function = &module_mir.functions[0];
+    try std.testing.expect(function.executable_body.complete);
+    try mir_executable_body.verify(function);
 }
 
 test "lower-c emits strict nullable control plans from MIR without body fallback" {
@@ -19788,7 +19790,11 @@ test "lower-c emits assert trap" {
     try expectContains(flag_body, "if (!(mc_exec_tmp_");
     try expectContains(flag_body, ")) goto mc_bb_");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, flag_body, "mc_trap_Assert();"));
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((a == b) || (a != 0)))) mc_trap_Assert();") != null);
+    const expr_body = try cFunctionBody(output.items, "static void require_expr(uint32_t a, uint32_t b)");
+    try expectContains(expr_body, "/* canonical executable MIR */");
+    try expectContains(expr_body, "if (!(mc_exec_tmp_");
+    try expectContains(expr_body, ")) goto mc_bb_");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expr_body, "mc_trap_Assert();"));
 }
 
 test "lower-c emits lexical defer cleanup before return" {

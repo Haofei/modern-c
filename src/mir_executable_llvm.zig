@@ -1450,7 +1450,8 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     if (!sameValueType(left_ty, right_ty)) return false;
     if (binary.op == .logical_and or binary.op == .logical_or) {
         return binary.eager_safe and binary.arithmetic == .ordinary and expression.result_ty == .bool and
-            pureBoolOperand(body, body.expressions[binary.left.index()]) and pureBoolOperand(body, body.expressions[binary.right.index()]) and
+            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, binary.left) and
+            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, binary.right) and
             ownedExpressionTrapCount(body, expression.id) == 0;
     }
     if (binary.eager_safe) return false;
@@ -1490,27 +1491,6 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         .lt, .le, .gt, .ge => binary.arithmetic == .ordinary and expression.result_ty == .bool and orderedIntegerType(left_ty),
         else => false,
     };
-}
-
-fn pureBoolOperand(body: *const mir.ExecutableBody, value: mir.ExecutableExpression) bool {
-    return pureBoolOperandDepth(body, value, 0);
-}
-
-fn pureBoolOperandDepth(body: *const mir.ExecutableBody, value: mir.ExecutableExpression, depth: usize) bool {
-    if (depth >= body.expressions.len or value.result_ty != .bool) return false;
-    return switch (value.operation) {
-        .local => true,
-        .literal => |literal| literal == .boolean,
-        .unary => |unary| unary.op == .logical_not and pureBoolOperandId(body, unary.operand, depth),
-        .binary => |binary| (binary.op == .logical_and or binary.op == .logical_or) and binary.eager_safe and
-            pureBoolOperandId(body, binary.left, depth) and pureBoolOperandId(body, binary.right, depth),
-        else => false,
-    };
-}
-
-fn pureBoolOperandId(body: *const mir.ExecutableBody, id: mir.ExprId, depth: usize) bool {
-    if (!expressionValid(body, id)) return false;
-    return pureBoolOperandDepth(body, body.expressions[id.index()], depth + 1);
 }
 
 fn isFloatType(ty: mir.ValueType) bool {

@@ -11,7 +11,6 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
-const mir_assert_plan = @import("mir_assert_plan.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
 const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
@@ -1734,13 +1733,6 @@ const LlvmEmitter = struct {
         // cannot preserve declaration mechanics.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
-        const assert_expression_plan = if (simple_trap == null)
-            if (mir_assert_plan.build(fn_mir)) |plan|
-                plan
-            else
-                null
-        else
-            null;
         const nullable_control_plan = if (simple_trap == null)
             if (mir_nullable_control_plan.build(&fn_mir)) |plan|
                 if (self.mirNullableControlPlanSupported(function, fn_mir, plan)) plan else null
@@ -1883,13 +1875,12 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and assert_expression_plan == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and scalar_expression_plan == null and llvm_access_operation == null and llvm_local_address_update == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
             simple_trap != null,
-            assert_expression_plan != null,
             nullable_control_plan != null,
             nested_conditional_return_plan != null,
             aggregate_sequence_plan != null,
@@ -1971,9 +1962,6 @@ const LlvmEmitter = struct {
         if (simple_trap) |trap| {
             selected_path.* = .simple_trap;
             try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ trap.helper, try self.debugCallSuffix() });
-        } else if (assert_expression_plan) |plan| {
-            selected_path.* = .assert_expression;
-            try self.emitMirAssertPlan(plan);
         } else if (nullable_control_plan) |plan| {
             selected_path.* = .nullable_control;
             try self.emitMirNullableControlPlan(plan, ret_ty);
@@ -2286,52 +2274,6 @@ const LlvmEmitter = struct {
             if (mir.explicitTrapHelperForTarget(fn_mir.call_target_facts[0].kind)) |helper| return .{ .helper = helper };
         }
         return null;
-    }
-
-    fn emitMirAssertPlan(self: *LlvmEmitter, plan: mir_assert_plan.Plan) !void {
-        var rendered: [mir_assert_plan.max_nodes]?[]const u8 = [_]?[]const u8{null} ** mir_assert_plan.max_nodes;
-        const condition = try self.emitMirAssertPlanNode(plan, plan.root, &rendered);
-        const span = spanFromMirSourcePoint(plan.assert_location.source);
-        const cont = try self.nextLabel("assert_ok");
-        const trap = try self.nextLabel("trap_assert");
-        try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
-        try self.emitReturnVoid(span);
-    }
-
-    fn emitMirAssertPlanNode(self: *LlvmEmitter, plan: mir_assert_plan.Plan, index: usize, rendered: *[mir_assert_plan.max_nodes]?[]const u8) ![]const u8 {
-        if (index >= plan.count) return error.UnsupportedLlvmEmission;
-        if (rendered[index]) |value| return value;
-        const node = plan.nodes[index];
-        const span = spanFromMirSourcePoint(node.location.source);
-        self.current_debug_span = span;
-        const value = switch (node.operation) {
-            .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
-            .integer_literal => |literal| literal,
-            .direct_zero_arg_call => |call| blk: {
-                const callee = self.fn_sigs.get(call.callee_name) orelse return error.UnsupportedLlvmEmission;
-                const temporary = try self.nextTemp();
-                const ret_ext = if (callee.c_abi) self.cAbiExtension(callee.ret) else "";
-                try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(){s}\n", .{ temporary, ret_ext, try self.llvmType(callee.ret), call.callee_name, try self.debugCallSuffix() });
-                break :blk temporary;
-            },
-            .binary => |binary| blk: {
-                const left = try self.emitMirAssertPlanNode(plan, binary.left, rendered);
-                const right = try self.emitMirAssertPlanNode(plan, binary.right, rendered);
-                const temporary = try self.nextTemp();
-                switch (binary.op) {
-                    .logical_and => try self.out.print(self.allocator, "  {s} = and i1 {s}, {s}{s}\n", .{ temporary, left, right, try self.debugCallSuffix() }),
-                    .logical_or => try self.out.print(self.allocator, "  {s} = or i1 {s}, {s}{s}\n", .{ temporary, left, right, try self.debugCallSuffix() }),
-                    .eq, .ne => {
-                        const child = plan.nodes[binary.left];
-                        const predicate = if (binary.op == .eq) "eq" else "ne";
-                        try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {s}{s}\n", .{ temporary, predicate, try self.llvmType(child.type_fact.target_ty), left, right, try self.debugCallSuffix() });
-                    },
-                }
-                break :blk temporary;
-            },
-        };
-        rendered[index] = value;
-        return value;
     }
 
     fn simpleMirReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {

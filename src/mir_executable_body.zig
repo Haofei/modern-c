@@ -258,7 +258,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 const logical = operation.op == .logical_and or operation.op == .logical_or;
                 if (logical) {
                     if (!operation.eager_safe or value.result_ty != .bool or
-                        !pureBoolOperand(body, left.*) or !pureBoolOperand(body, right.*) or
+                        !mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) or
+                        !mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, right.id) or
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidLogicalOperation;
                 } else if (operation.eager_safe) {
@@ -401,28 +402,6 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) try verifyStructConstruction(function, value, operation);
         },
     }
-}
-
-fn pureBoolOperand(body: *const mir.ExecutableBody, value: mir.ExecutableExpression) bool {
-    return pureBoolOperandDepth(body, value, 0);
-}
-
-fn pureBoolOperandDepth(body: *const mir.ExecutableBody, value: mir.ExecutableExpression, depth: usize) bool {
-    if (depth >= body.expressions.len or value.result_ty != .bool) return false;
-    const recurse = struct {
-        fn operand(candidate_body: *const mir.ExecutableBody, id: mir.ExprId, candidate_depth: usize) bool {
-            const candidate = expression(candidate_body, id) orelse return false;
-            return pureBoolOperandDepth(candidate_body, candidate.*, candidate_depth + 1);
-        }
-    }.operand;
-    return switch (value.operation) {
-        .local => true,
-        .literal => |literal| literal == .boolean,
-        .unary => |unary| unary.op == .logical_not and recurse(body, unary.operand, depth),
-        .binary => |binary| (binary.op == .logical_and or binary.op == .logical_or) and binary.eager_safe and
-            recurse(body, binary.left, depth) and recurse(body, binary.right, depth),
-        else => false,
-    };
 }
 
 fn verifyTrapEdges(function: *const mir.Function) !void {

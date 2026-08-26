@@ -6916,17 +6916,11 @@ const FunctionBuilder = struct {
     }
 
     fn executablePureBoolOperand(self: *const FunctionBuilder, id: ExprId) bool {
-        if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return false;
-        const operand = self.executable_expressions.items[id.index()];
-        if (operand.result_ty != .bool) return false;
-        return switch (operand.operation) {
-            .local => true,
-            .literal => |literal| literal == .boolean,
-            .unary => |unary| unary.op == .logical_not and self.executablePureBoolOperand(unary.operand),
-            .binary => |binary| (binary.op == .logical_and or binary.op == .logical_or) and binary.eager_safe and
-                self.executablePureBoolOperand(binary.left) and self.executablePureBoolOperand(binary.right),
-            else => false,
-        };
+        return mir_model.executableEagerSafeBoolTree(
+            self.executable_expressions.items,
+            self.executable_trap_edges.items,
+            id,
+        );
     }
 
     fn executableRepresentationCheckComplete(

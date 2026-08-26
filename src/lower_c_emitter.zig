@@ -10,7 +10,6 @@ const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
-const mir_assert_plan = @import("mir_assert_plan.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
 const mir_scalar_expression_plan = @import("mir_scalar_expression_plan.zig");
 const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
@@ -1636,13 +1635,6 @@ pub const CEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
         const simple_trap = self.simpleMirTrapBody(fn_mir);
-        const assert_expression_plan = if (simple_trap == null)
-            if (mir_assert_plan.build(fn_mir)) |plan|
-                plan
-            else
-                null
-        else
-            null;
         const nullable_control_plan = if (simple_trap == null)
             if (mir_nullable_control_plan.build(&fn_mir)) |plan|
                 if (self.mirNullableControlPlanSupported(function, plan)) plan else null
@@ -1797,7 +1789,6 @@ pub const CEmitter = struct {
             null;
         const specialized_plans = [_]bool{
             simple_trap != null,
-            assert_expression_plan != null,
             nullable_control_plan != null,
             nested_conditional_return_plan != null,
             aggregate_sequence_plan != null,
@@ -1840,9 +1831,6 @@ pub const CEmitter = struct {
             selected_path.* = .simple_trap;
             try self.writeIndent();
             try self.out.print(self.allocator, "{s}();\n", .{trap.helper});
-        } else if (assert_expression_plan) |plan| {
-            selected_path.* = .assert_expression;
-            try self.emitMirAssertPlan(plan);
         } else if (nullable_control_plan) |plan| {
             selected_path.* = .nullable_control;
             try self.emitMirNullableControlPlan(plan);
@@ -2266,44 +2254,6 @@ pub const CEmitter = struct {
             if (mir.explicitTrapHelperForTarget(fn_mir.call_target_facts[0].kind)) |helper| return .{ .helper = helper };
         }
         return null;
-    }
-
-    fn emitMirAssertPlan(self: *CEmitter, plan: mir_assert_plan.Plan) !void {
-        var rendered: [mir_assert_plan.max_nodes]?[]const u8 = [_]?[]const u8{null} ** mir_assert_plan.max_nodes;
-        const condition = try self.emitMirAssertPlanNode(plan, plan.root, &rendered);
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.assert_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "if (!({s})) mc_trap_Assert();\n", .{condition});
-    }
-
-    fn emitMirAssertPlanNode(self: *CEmitter, plan: mir_assert_plan.Plan, index: usize, rendered: *[mir_assert_plan.max_nodes]?[]const u8) ![]const u8 {
-        if (index >= plan.count) return error.UnsupportedCEmission;
-        if (rendered[index]) |value| return value;
-        const node = plan.nodes[index];
-        const value = switch (node.operation) {
-            .parameter => |parameter| try self.cIdent(parameter.name),
-            .integer_literal => |literal| literal,
-            .direct_zero_arg_call => |call| blk: {
-                const temporary = try self.nextTempName();
-                try self.writeLineDirective(spanFromMirSourcePoint(node.location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = {s}();\n", .{ try self.cTypeFor(call.result_fact.target_ty, .typedef_name), temporary, try self.cIdent(call.callee_name) });
-                break :blk temporary;
-            },
-            .binary => |binary| blk: {
-                const left = try self.emitMirAssertPlanNode(plan, binary.left, rendered);
-                const right = try self.emitMirAssertPlanNode(plan, binary.right, rendered);
-                const op = switch (binary.op) {
-                    .logical_and => "&&",
-                    .logical_or => "||",
-                    .eq => "==",
-                    .ne => "!=",
-                };
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "({s} {s} {s})", .{ left, op, right });
-            },
-        };
-        rendered[index] = value;
-        return value;
     }
 
     fn mirNullableControlPlanSupported(self: *CEmitter, function: anytype, plan: mir_nullable_control_plan.Plan) bool {

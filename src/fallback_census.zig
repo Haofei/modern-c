@@ -60,7 +60,6 @@ pub const CanonicalStatus = enum {
 pub const SelectedPath = enum {
     canonical,
     simple_trap,
-    assert_expression,
     nullable_control,
     nested_conditional_return,
     aggregate_sequence,

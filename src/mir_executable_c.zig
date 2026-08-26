@@ -917,7 +917,8 @@ fn binarySupported(
     const right = expressionById(body, binary.right) orelse return false;
     if (binary.op == .logical_and or binary.op == .logical_or) {
         return binary.eager_safe and binary.arithmetic == .ordinary and expression.result_ty == .bool and
-            pureBoolOperand(body, left.*) and pureBoolOperand(body, right.*) and ownedTrapEdgeCount(body, expression.id) == 0;
+            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) and
+            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, right.id) and ownedTrapEdgeCount(body, expression.id) == 0;
     }
     if (binary.eager_safe) return false;
     if (!sameValueType(left.result_ty, right.result_ty)) return false;
@@ -944,27 +945,6 @@ fn binarySupported(
         .checked => checkedIntegerBinaryHasExactTrapEdges(body, expression),
         .wrapping, .saturating => false,
     };
-}
-
-fn pureBoolOperand(body: *const mir.ExecutableBody, value: mir.ExecutableExpression) bool {
-    return pureBoolOperandDepth(body, value, 0);
-}
-
-fn pureBoolOperandDepth(body: *const mir.ExecutableBody, value: mir.ExecutableExpression, depth: usize) bool {
-    if (depth >= body.expressions.len or value.result_ty != .bool) return false;
-    return switch (value.operation) {
-        .local => true,
-        .literal => |literal| literal == .boolean,
-        .unary => |unary| unary.op == .logical_not and pureBoolOperandId(body, unary.operand, depth),
-        .binary => |binary| (binary.op == .logical_and or binary.op == .logical_or) and binary.eager_safe and
-            pureBoolOperandId(body, binary.left, depth) and pureBoolOperandId(body, binary.right, depth),
-        else => false,
-    };
-}
-
-fn pureBoolOperandId(body: *const mir.ExecutableBody, id: mir.ExprId, depth: usize) bool {
-    const value = expressionById(body, id) orelse return false;
-    return pureBoolOperandDepth(body, value.*, depth + 1);
 }
 
 fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {

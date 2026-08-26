@@ -219,8 +219,8 @@ parallel execution does not change the raw census or ranked report.
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min | Canonical min | Specialized max | Plan definitions max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| C | 160 | 160 | 0 | 0 | 10000 | 65 | 95 | 27 |
-| LLVM | 160 | 160 | 0 | 0 | 10000 | 62 | 98 | 27 |
+| C | 160 | 160 | 0 | 0 | 10000 | 66 | 94 | 26 |
+| LLVM | 160 | 160 | 0 | 0 | 10000 | 63 | 97 | 26 |
 
 Each census record also names the exact selected lowering path. New executable
 MIR admissions should increase `canonical_min`; transitional specialized
@@ -250,7 +250,10 @@ pointer widening; C consequently retains the same `InvalidRepresentation`
 guard that LLVM already emitted. Nullable-pointer local initialization and
 assignment now use the same bounded typed cast, and the mechanical renderers
 preserve the guard before creating the nullable value. Their dedicated local-
-return plan has also been deleted. The registry is down to 27 plans.
+return plan has also been deleted. Pure logical assertion trees now use one
+MIR-owned eager-safety proof shared by the producer, verifier, and both
+renderers; the standalone assertion plan and file are deleted. The registry is
+down to 26 plans.
 `simple_loop_return` remains.
 
 A complete-shard retirement probe for `simple_void_body` found 17 real users,
