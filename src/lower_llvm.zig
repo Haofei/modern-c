@@ -1774,21 +1774,14 @@ const LlvmEmitter = struct {
             const body = access_body_plan orelse break :blk null;
             break :blk mir_access_plan.buildSliceOperation(body);
         } else null;
-        const while_control_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
-                if (self.mirWhileControlPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const sequence_foreach_update_plan = if (while_control_plan == null and simple_trap == null)
+        const sequence_foreach_update_plan = if (simple_trap == null)
             if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
                 if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null and while_control_plan == null and simple_trap == null)
+        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null and simple_trap == null)
             if (mir_statement_plan.buildSequenceForEachReturn(fn_mir)) |plan|
                 if (self.mirSequenceForEachReturnPlanSupported(function, plan)) plan else null
             else
@@ -1863,7 +1856,7 @@ const LlvmEmitter = struct {
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and while_control_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and statement_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1876,7 +1869,6 @@ const LlvmEmitter = struct {
             alloca_hoist_plan != null,
             llvm_access_operation != null,
             llvm_structural_access_operation != null,
-            while_control_plan != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
             local_aggregate_place_update_return_plan != null,
@@ -1969,9 +1961,6 @@ const LlvmEmitter = struct {
         } else if (llvm_structural_access_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirStructuralAccessPlan(access_body_plan.?, operation, ret_llvm);
-        } else if (while_control_plan) |plan| {
-            selected_path.* = .while_control;
-            try self.emitMirWhileControlPlan(plan);
         } else if (sequence_foreach_update_plan) |plan| {
             selected_path.* = .sequence_foreach_update;
             try self.emitMirSequenceForEachUpdatePlan(plan, ret_ty);
@@ -4055,14 +4044,6 @@ const LlvmEmitter = struct {
         return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(child_ty));
     }
 
-    fn mirWhileControlPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.WhileControlPlan) bool {
-        for (function.signature.params) |param| {
-            if (!std.mem.eql(u8, param.name.text, plan.condition_name)) continue;
-            return type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.condition_fact.target_ty));
-        }
-        return false;
-    }
-
     /// Admission for the deliberately small syntax-free nullable-control
     /// family. Declarations are used only for ABI/type validation; the body
     /// itself is entirely the MIR-owned plan.
@@ -5518,28 +5499,6 @@ const LlvmEmitter = struct {
             .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
             .integer_literal => |literal| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{literal.value}),
         };
-    }
-
-    fn emitMirWhileControlPlan(self: *LlvmEmitter, plan: mir_statement_plan.WhileControlPlan) !void {
-        const condition_label = try self.nextLabel("while_cond");
-        const body_label = try self.nextLabel("while_body");
-        const after_label = try self.nextLabel("while_after");
-        self.current_debug_span = spanFromMirSourcePoint(plan.loop_location.source);
-        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ condition_label, try self.debugCallSuffix(), condition_label });
-        try self.out.print(self.allocator, "  br i1 %{s}, label %{s}, label %{s}{s}\n{s}:\n", .{
-            plan.condition_name,
-            body_label,
-            after_label,
-            try self.debugCallSuffix(),
-            body_label,
-        });
-        self.current_debug_span = spanFromMirSourcePoint(plan.control_location.source);
-        const target = switch (plan.control) {
-            .break_ => after_label,
-            .continue_ => condition_label,
-        };
-        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ target, try self.debugCallSuffix(), after_label });
-        try self.emitReturnVoid(spanFromMirSourcePoint(plan.loop_location.source));
     }
 
     fn mirSequenceForEachUpdatePlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.SequenceForEachUpdatePlan) bool {

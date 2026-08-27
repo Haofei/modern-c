@@ -533,6 +533,13 @@ provenance fact for the guarded dereference store. The source-shaped plan and
 both dedicated emitters are deleted. The strict split is now C 68/92 and LLVM
 65/95, and the shared registry falls to 24.
 
+`while_control` is fully retired. The source-bearing `break`/`continue`
+statement is presentation metadata in executable MIR; the verified basic-block
+terminator is the sole control-flow authority. Both mechanical renderers now
+ignore that marker and emit the canonical CFG, while the dedicated plan,
+admission helpers, and C/LLVM emitters are deleted. The strict split remains C
+68/92 and moves to LLVM 67/93, and the shared registry falls to 23.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather

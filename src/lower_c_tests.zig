@@ -7705,11 +7705,15 @@ test "lower-c emits break and continue while CFG from MIR without body fallback"
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_while_control.mc", source, &output);
 
     const stop = try cFunctionBody(output.items, "static void stop(bool flag)");
-    try expectLegacyOrCanonicalLoop(stop, "while (flag)");
-    if (!isCanonicalExecutableCBody(stop)) try expectContains(stop, "break;");
+    try expectContains(stop, "/* canonical executable MIR */");
+    try expectContains(stop, "if (mc_exec_tmp_0) goto mc_bb_1; else goto mc_bb_2;");
+    try expectContains(stop, "mc_bb_1: ;");
+    try expectContains(stop, "goto mc_bb_2;");
     const repeat = try cFunctionBody(output.items, "static void repeat(bool flag)");
-    try expectLegacyOrCanonicalLoop(repeat, "while (flag)");
-    if (!isCanonicalExecutableCBody(repeat)) try expectContains(repeat, "continue;");
+    try expectContains(repeat, "/* canonical executable MIR */");
+    try expectContains(repeat, "if (mc_exec_tmp_0) goto mc_bb_1; else goto mc_bb_2;");
+    try expectContains(repeat, "mc_bb_1: ;");
+    try expectContains(repeat, "goto mc_bb_0;");
 }
 
 test "lower-c emits slice foreach local updates from MIR without body fallback" {

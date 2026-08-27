@@ -1685,21 +1685,14 @@ pub const CEmitter = struct {
             null;
         const access_structural_priority = access_structural_operation != null and
             mirAccessStructuralRequiresPriority(access_body_plan.?, access_structural_operation.?);
-        const while_control_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildWhileControl(fn_mir)) |plan|
-                if (self.mirWhileControlPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const sequence_foreach_update_plan = if (while_control_plan == null and simple_trap == null)
+        const sequence_foreach_update_plan = if (simple_trap == null)
             if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
                 if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null and while_control_plan == null and simple_trap == null)
+        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null and simple_trap == null)
             if (mir_statement_plan.buildSequenceForEachReturn(fn_mir)) |plan|
                 if (self.mirSequenceForEachReturnPlanSupported(function, plan)) plan else null
             else
@@ -1784,7 +1777,6 @@ pub const CEmitter = struct {
             alloca_hoist_plan != null,
             access_slice_plan != null,
             access_structural_operation != null,
-            while_control_plan != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
             direct_call_projected_return_plan != null,
@@ -1838,9 +1830,6 @@ pub const CEmitter = struct {
         } else if (access_structural_priority) {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, access_structural_operation.?);
-        } else if (while_control_plan) |plan| {
-            selected_path.* = .while_control;
-            try self.emitMirWhileControlPlan(plan);
         } else if (sequence_foreach_update_plan) |plan| {
             selected_path.* = .sequence_foreach_update;
             try self.emitMirSequenceForEachUpdatePlan(plan);
@@ -5747,14 +5736,6 @@ pub const CEmitter = struct {
         return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(child_ty));
     }
 
-    fn mirWhileControlPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.WhileControlPlan) bool {
-        for (function.signature.params) |param| {
-            if (!std.mem.eql(u8, param.name.text, plan.condition_name)) continue;
-            return type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.condition_fact.target_ty));
-        }
-        return false;
-    }
-
     fn mirNullableTryPlanSupported(self: *CEmitter, plan: mir_statement_plan.NullableTryPlan) bool {
         const nullable_c = self.cTypeFor(plan.nullable_fact.target_ty, .typedef_name) catch return false;
         const unwrapped_c = self.cTypeFor(plan.unwrapped_fact.target_ty, .typedef_name) catch return false;
@@ -5825,22 +5806,6 @@ pub const CEmitter = struct {
             .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
             .integer_literal => |literal| try self.out.print(self.allocator, "{d}", .{literal.value}),
         }
-    }
-
-    fn emitMirWhileControlPlan(self: *CEmitter, plan: mir_statement_plan.WhileControlPlan) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.loop_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "while ({s}) {{\n", .{try self.cIdent(plan.condition_name)});
-        self.indent += 1;
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.control_location.source));
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, switch (plan.control) {
-            .break_ => "break;\n",
-            .continue_ => "continue;\n",
-        });
-        self.indent -= 1;
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "}\n");
     }
 
     fn mirSequenceForEachUpdatePlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.SequenceForEachUpdatePlan) bool {

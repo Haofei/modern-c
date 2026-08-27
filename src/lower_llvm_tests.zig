@@ -460,13 +460,13 @@ test "LLVM emits break and continue while CFG from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_while_control.mc", source, &output);
 
     const stop = try llvmFunctionBody(output.items, "define internal void @stop");
-    try expectContains(stop, "br i1 %flag");
-    try expectContains(stop, "while_body");
-    try expectContains(stop, "while_after");
+    try expectContains(stop, "; canonical executable MIR");
+    try expectContains(stop, "br i1 %mc_arg_0, label %mc_block_1, label %mc_block_2");
+    try expectContains(stop, "mc_block_1:\n  br label %mc_block_2");
     const repeat = try llvmFunctionBody(output.items, "define internal void @repeat");
-    try expectContains(repeat, "br i1 %flag");
-    try expectContains(repeat, "while_cond");
-    try expectContains(repeat, "while_after");
+    try expectContains(repeat, "; canonical executable MIR");
+    try expectContains(repeat, "br i1 %mc_arg_0, label %mc_block_1, label %mc_block_2");
+    try expectContains(repeat, "mc_block_1:\n  br label %mc_block_0");
 }
 
 test "LLVM function symbol returns lower from MIR without body fallback" {

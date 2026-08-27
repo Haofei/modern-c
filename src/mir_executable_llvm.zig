@@ -199,7 +199,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .return_ => |value| if (value) |result| {
                 if (!expressionValid(body, result)) return false;
             },
-            .control_transfer, .defer_cleanup, .unsupported => return false,
+            .control_transfer => {},
+            .defer_cleanup, .unsupported => return false,
         }
     }
     for (body.terminators) |terminator| {
@@ -374,7 +375,10 @@ const Renderer = struct {
                 const rendered = if (value) |result| try self.emitExpression(result) else null;
                 try self.returns.put(statement.block_id.raw, rendered);
             },
-            .control_transfer, .defer_cleanup, .unsupported => return error.Unsupported,
+            // The verified CFG terminator owns the actual break/continue
+            // edge; the statement only preserves its source identity.
+            .control_transfer => {},
+            .defer_cleanup, .unsupported => return error.Unsupported,
         }
     }
 
