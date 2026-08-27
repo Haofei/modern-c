@@ -76,7 +76,6 @@ pub const SelectedPath = enum {
     indirect_call_return,
     simple_return,
     simple_void_body,
-    simple_loop_return,
     ast_fallback,
     unsupported,
 };
