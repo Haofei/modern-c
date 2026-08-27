@@ -12,7 +12,6 @@ const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
-const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
@@ -1716,28 +1715,21 @@ const LlvmEmitter = struct {
             if (self.mirNullableControlPlanSupported(function, fn_mir, plan)) plan else null
         else
             null;
-        const nested_conditional_return_plan = if (nullable_control_plan == null)
-            if (mir_nested_conditional_return_plan.build(fn_mir)) |plan|
-                if (self.mirNestedConditionalReturnPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const aggregate_sequence_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null)
+        const aggregate_sequence_plan = if (nullable_control_plan == null)
             if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
                 if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const workflow_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null)
+        const workflow_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null)
             if (mir_workflow_plan.build(&fn_mir)) |plan|
                 if (self.mirWorkflowPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const alloca_hoist_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null)
+        const alloca_hoist_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null)
             if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
                 if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
             else
@@ -1746,7 +1738,7 @@ const LlvmEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const llvm_access_operation = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
+        const llvm_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const body = access_body_plan orelse break :blk null;
             break :blk mir_access_plan.buildSliceOperation(body);
@@ -1798,7 +1790,7 @@ const LlvmEmitter = struct {
             if (self.mirNullableTryPlanSupported(plan)) plan else null
         else
             null;
-        const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1819,13 +1811,12 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const llvm_structural_access_operation = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
             nullable_control_plan != null,
-            nested_conditional_return_plan != null,
             aggregate_sequence_plan != null,
             workflow_plan != null,
             alloca_hoist_plan != null,
@@ -1900,9 +1891,6 @@ const LlvmEmitter = struct {
         if (nullable_control_plan) |plan| {
             selected_path.* = .nullable_control;
             try self.emitMirNullableControlPlan(plan, ret_ty);
-        } else if (nested_conditional_return_plan) |plan| {
-            selected_path.* = .nested_conditional_return;
-            try self.emitMirNestedConditionalReturnPlan(plan, ret_ty);
         } else if (aggregate_sequence_plan) |plan| {
             selected_path.* = .aggregate_sequence;
             try self.emitMirAggregateSequencePlan(plan, ret_ty);
@@ -4115,31 +4103,6 @@ const LlvmEmitter = struct {
             },
             else => false,
         };
-    }
-
-    fn mirNestedConditionalReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_nested_conditional_return_plan.Plan) bool {
-        if (!plan.dispatch_block.isValid() or !plan.nested_dispatch_block.isValid() or !plan.flag.id.isValid() or !plan.x.id.isValid()) return false;
-        if (function.signature.params.len != 2 or !self.mirPlanSourceTypeMatches(plan.flag.ty.value_ty, function.signature.params[1].ty) or
-            !self.mirPlanSourceTypeMatches(plan.x.ty.value_ty, function.signature.params[0].ty) or
-            !std.mem.eql(u8, plan.flag.name, function.signature.params[1].name.text) or !std.mem.eql(u8, plan.x.name, function.signature.params[0].name.text)) return false;
-        return self.mirPlanSourceTypeMatches(plan.first_return.ty.value_ty, function.signature.transitionalReturnType() orelse return false) and
-            plan.comparison_limit.value == 10 and plan.first_return.value == 5 and plan.second_return.value == 6 and plan.final_return.value == 7;
-    }
-
-    fn emitMirNestedConditionalReturnPlan(self: *LlvmEmitter, plan: mir_nested_conditional_return_plan.Plan, ret_ty: TransitionalTypeExpr) !void {
-        const first = try self.nextLabel("nested_first");
-        const nested = try self.nextLabel("nested_test");
-        const second = try self.nextLabel("nested_second");
-        const final = try self.nextLabel("nested_final");
-        const flag_not = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = xor i1 %{s}, true\n  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ flag_not, plan.flag.name, flag_not, first, nested, try self.debugCallSuffix(), first });
-        try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{plan.first_return.value}), spanFromMirSourcePoint(plan.first_return_location.source));
-        try self.out.print(self.allocator, "{s}:\n", .{nested});
-        const condition = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = icmp ugt i32 %{s}, {d}\n  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, plan.x.name, plan.comparison_limit.value, condition, second, final, try self.debugCallSuffix(), second });
-        try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{plan.second_return.value}), spanFromMirSourcePoint(plan.second_return_location.source));
-        try self.out.print(self.allocator, "{s}:\n", .{final});
-        try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{plan.final_return.value}), spanFromMirSourcePoint(plan.final_return_location.source));
     }
 
     fn mirAggregateSequencePlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_aggregate_sequence_plan.Plan) bool {

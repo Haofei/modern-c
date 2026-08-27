@@ -566,6 +566,13 @@ The strict corpus contains no enum-switch fixture, so its admission split stays
 C 72/88 and LLVM 71/89; the independently counted shared specialized-plan
 registry is the convergence signal here and falls from 21 definitions to 20.
 
+The dedicated `nested_conditional_return` plan is fully retired. Complete C
+and LLVM shards continue to lower its nested classify fixture through the
+canonical executable CFG, so the 317-line recognizer/model, its standalone
+tests, both backend-specific support and rendering branches, and its census
+path are deleted. Strict admission remains C 72/88 and LLVM 71/89; the shared
+specialized-plan registry falls from 20 definitions to 19.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather

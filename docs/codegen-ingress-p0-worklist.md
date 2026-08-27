@@ -257,9 +257,13 @@ integer literals are now contextualized before executable-MIR coercion
 classification, so checked shifts no longer mark an otherwise complete body
 incomplete. This moved the last `scalar_expression` user (`high_word`) to the
 canonical renderer; `flag_set` was already canonical. The 381-line plan, its
-tests, and both backend implementations are deleted. The registry is down to
-25 plans.
-`simple_loop_return` remains.
+tests, and both backend implementations are deleted. The registry was down to
+25 plans at that checkpoint. Subsequent retirement batches removed the
+remaining straight-line statement plan, enum-switch plan, and the now-
+redundant `nested_conditional_return` plan. The nested classify fixture stays
+canonical in both complete backend shards, while deleting its standalone
+recognizer/model and both backend renderers brings the current registry to 19
+plans. `simple_loop_return` remains.
 
 A complete-shard retirement probe for `simple_void_body` found 17 real users,
 covering aggregate, Result, enum, and statement-oriented void bodies that are

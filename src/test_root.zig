@@ -29,7 +29,6 @@ const mir_aggregate_sequence_plan_tests = @import("mir_aggregate_sequence_plan_t
 const mir_alloca_hoist_plan_tests = @import("mir_alloca_hoist_plan_tests.zig");
 const mir_workflow_plan_tests = @import("mir_workflow_plan_tests.zig");
 const mir_nullable_control_plan_tests = @import("mir_nullable_control_plan_tests.zig");
-const mir_nested_conditional_return_plan_tests = @import("mir_nested_conditional_return_plan_tests.zig");
 const module_graph = @import("module_graph.zig");
 const module_parser = @import("module_parser.zig");
 const monomorphize_tests = @import("monomorphize_tests.zig");
@@ -62,7 +61,6 @@ test {
     _ = mir_alloca_hoist_plan_tests;
     _ = mir_workflow_plan_tests;
     _ = mir_nullable_control_plan_tests;
-    _ = mir_nested_conditional_return_plan_tests;
     _ = module_graph;
     _ = module_parser;
     _ = monomorphize_tests;

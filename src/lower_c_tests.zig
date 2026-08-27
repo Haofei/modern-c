@@ -12,7 +12,6 @@ const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
-const mir_nested_conditional_return_plan = @import("mir_nested_conditional_return_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
@@ -504,8 +503,6 @@ test "lower-c emits nested classify conditional return from MIR without body fal
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try std.testing.expect(mir_nested_conditional_return_plan.build(module_mir.functions[0]) != null);
-
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "bool_switch.mc", .{}, false, null);
