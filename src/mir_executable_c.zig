@@ -506,7 +506,11 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
             .string, .enum_value => false,
             else => true,
         },
-        .unary => |unary| expressionById(body, unary.operand) != null,
+        .unary => |unary| expressionById(body, unary.operand) != null and
+            if (mir.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty) != null)
+                checkedIntegerUnaryHasExactTrapEdges(body, expression)
+            else
+                ownedTrapEdgeCount(body, expression.id) == 0,
         .binary => |binary| binarySupported(body, expression, binary),
         .cast => |cast| castSupported(body, expression, cast),
         .representation_check => |check| representationCheckSupported(body, expression, check),
@@ -1114,8 +1118,41 @@ fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expres
     return true;
 }
 
+fn checkedIntegerUnaryHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const unary = switch (expression.operation) {
+        .unary => |value| value,
+        else => return false,
+    };
+    const operand = expressionById(body, unary.operand) orelse return false;
+    if (!mir.ValueType.eql(expression.result_ty, operand.result_ty)) return false;
+    const requirements = mir.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty) orelse return false;
+    var total: usize = 0;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
+        total += 1;
+        if (!edge.from_block.eql(expression.block_id)) return false;
+    }
+    if (total != requirements.count) return false;
+    for (requirements.items[0..requirements.count]) |requirement| {
+        var matching: usize = 0;
+        for (body.trap_edges) |edge| {
+            if (!edgeOwnedByExpression(edge, expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
+            const trap_terminator = terminatorByBlock(body, edge.trap_block) orelse return false;
+            switch (trap_terminator.operation) {
+                .trap_ => |kind| {
+                    if (kind == requirement.kind) matching += 1;
+                },
+                else => return false,
+            }
+        }
+        if (matching != 1) return false;
+    }
+    return true;
+}
+
 fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return switch (expression.operation) {
+        .unary => checkedIntegerUnaryHasExactTrapEdges(body, expression),
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
         .load, .atomic_load, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         else => false,

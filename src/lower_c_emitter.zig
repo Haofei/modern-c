@@ -1602,7 +1602,7 @@ pub const CEmitter = struct {
             break :body &fn_mir.executable_body;
         } else null;
         if (!render_attrs.naked) if (executable_body) |body| {
-            try self.emitExecutableMirFunction(function, body, render_attrs);
+            try self.emitExecutableMirFunction(function, &fn_mir, body, render_attrs);
             selected_path.* = .canonical;
             return true;
         };
@@ -2051,7 +2051,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitExecutableMirFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
+    fn emitExecutableMirFunction(self: *CEmitter, function: anytype, fn_mir: *const mir.Function, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionRenderAttrs(render_attrs);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -2064,6 +2064,7 @@ pub const CEmitter = struct {
         {
             self.indent += 1;
             defer self.indent -= 1;
+            for (fn_mir.pointer_provenance_facts) |fact| try self.emitMirPointerProvenanceConsumedComment(fact);
             try mir_executable_c.emitBodyWithSourcePath(self.allocator, self.out, body, self.indent, self.source_path);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");

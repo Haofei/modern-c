@@ -156,6 +156,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                 if (!expressionValid(body, owner_id)) return false;
                 const owner = body.expressions[owner_id.index()];
                 switch (owner.operation) {
+                    .unary => if (!checkedIntegerUnaryHasExactTrapEdges(body, owner)) return false,
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
@@ -472,7 +473,7 @@ const Renderer = struct {
             .load => |load| try self.emitMemoryLoad(expression, load),
             .atomic_load => |load| try self.emitAtomicLoad(expression, load),
             .literal => |literal| try self.literalValue(ty, literal),
-            .unary => |unary| try self.emitUnary(ty, unary),
+            .unary => |unary| try self.emitUnary(expression, ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
             .direct_call => |call| try self.emitDirectCall(expression, ty, call),
             .builtin_call => |call| try self.emitBuiltinCall(expression, call),
@@ -599,9 +600,27 @@ const Renderer = struct {
         };
     }
 
-    fn emitUnary(self: *Renderer, ty: []const u8, unary: anytype) RenderError!Value {
+    fn emitUnary(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, unary: anytype) RenderError!Value {
         const operand = try self.emitExpression(unary.operand);
         if (!std.mem.eql(u8, operand.ty, ty)) return error.InvalidBody;
+        if (mir.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty) != null) {
+            const edge = checkedTrapEdge(self.body, expression, .{ .kind = .IntegerOverflow, .source = .checked_arithmetic }) orelse
+                return error.InvalidBody;
+            const pair = try self.temp();
+            const value = try self.temp();
+            const overflow = try self.temp();
+            const continuation = try std.fmt.allocPrint(self.allocator, "mc_checked_cont_{d}", .{expression.id.raw});
+            try self.output.print(
+                self.allocator,
+                "  {s} = call {{ {s}, i1 }} @llvm.ssub.with.overflow.{s}({s} 0, {s} {s})\n" ++
+                    "  {s} = extractvalue {{ {s}, i1 }} {s}, 0\n" ++
+                    "  {s} = extractvalue {{ {s}, i1 }} {s}, 1\n" ++
+                    "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                    "{s}:\n",
+                .{ pair, ty, ty, ty, operand.ty, operand.spelling, value, ty, pair, overflow, ty, pair, overflow, edge.trap_block.raw, continuation, continuation },
+            );
+            return .{ .ty = ty, .spelling = value };
+        }
         const value = try self.temp();
         switch (unary.op) {
             .bit_not => try self.output.print(self.allocator, "  {s} = xor {s} {s}, -1\n", .{ value, ty, operand.spelling }),
@@ -1401,7 +1420,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             else => false,
         },
-        .unary => |unary| unarySupported(body, expression.result_ty, unary),
+        .unary => |unary| unarySupported(body, expression, unary),
         .binary => |binary| binarySupported(body, expression, binary),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
         .builtin_call => |call| builtinSupported(body, expression, call),
@@ -1605,15 +1624,53 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     };
 }
 
-fn unarySupported(body: *const mir.ExecutableBody, result_ty: mir.ValueType, unary: anytype) bool {
+fn unarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, unary: anytype) bool {
     if (!expressionValid(body, unary.operand)) return false;
     const operand_ty = body.expressions[unary.operand.index()].result_ty;
+    const result_ty = expression.result_ty;
     if (!sameValueType(result_ty, operand_ty)) return false;
+    if (mir.executableCheckedUnaryTrapRequirements(unary.op, result_ty) != null) {
+        return checkedIntegerUnaryHasExactTrapEdges(body, expression);
+    }
     return switch (unary.op) {
         .bit_not => integerLike(result_ty),
         .logical_not => result_ty == .bool,
         .neg => isFloatType(result_ty),
     };
+}
+
+fn checkedIntegerUnaryHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const unary = switch (expression.operation) {
+        .unary => |value| value,
+        else => return false,
+    };
+    const operand = if (expressionValid(body, unary.operand)) body.expressions[unary.operand.index()] else return false;
+    if (!sameValueType(expression.result_ty, operand.result_ty)) return false;
+    const requirements = mir.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty) orelse return false;
+    var total: usize = 0;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
+        total += 1;
+        if (!edge.from_block.eql(expression.block_id)) return false;
+    }
+    if (total != requirements.count) return false;
+    for (requirements.items[0..requirements.count]) |requirement| {
+        var matches: usize = 0;
+        for (body.trap_edges) |edge| {
+            const owner = edge.owner.expressionId() orelse continue;
+            if (!owner.eql(expression.id) or edge.kind != requirement.kind or edge.source != requirement.source) continue;
+            const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return false;
+            switch (trap_terminator.operation) {
+                .trap_ => |kind| {
+                    if (kind == requirement.kind) matches += 1;
+                },
+                else => return false,
+            }
+        }
+        if (matches != 1) return false;
+    }
+    return true;
 }
 
 fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, binary: anytype) bool {
@@ -1726,7 +1783,12 @@ fn checkedTrapEdge(
     expression: mir.ExecutableExpression,
     requirement: mir.ExecutableTrapRequirement,
 ) ?mir.ExecutableTrapEdge {
-    if (!checkedIntegerBinaryHasExactTrapEdges(body, expression)) return null;
+    const valid = switch (expression.operation) {
+        .unary => checkedIntegerUnaryHasExactTrapEdges(body, expression),
+        .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
+        else => false,
+    };
+    if (!valid) return null;
     for (body.trap_edges) |edge| {
         const owner = edge.owner.expressionId() orelse continue;
         if (owner.eql(expression.id) and edge.kind == requirement.kind and edge.source == requirement.source) return edge;

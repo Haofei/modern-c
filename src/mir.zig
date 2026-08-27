@@ -7618,6 +7618,7 @@ const FunctionBuilder = struct {
         if (target_ty == .nullable_value and unwrapped.kind == .null_literal)
             return self.appendExecutableValueOptional(input, target_ty, null);
         const operand = try self.ensureExecutableExprAs(input, target_ty);
+        try self.contextualizeExecutableLiteral(operand, target_ty);
         const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
         if (sameValueType(operand_ty, target_ty)) return operand;
         if (target_ty == .nullable_value) return self.appendExecutableValueOptional(input, target_ty, operand);
@@ -10430,6 +10431,7 @@ const FunctionBuilder = struct {
                 if (node.op == .neg and !self.exprIsWrap(node.expr.*) and !self.exprIsFloat(node.expr.*)) {
                     try self.addInstr(.add_overflow, "checked_neg", .bool, expr.span);
                     try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, expr.span);
+                    try self.attachExecutableTrapEdge(expr.span, .IntegerOverflow, .checked_arithmetic);
                 }
                 try self.buildExpr(node.expr.*);
             },
@@ -11686,6 +11688,10 @@ const FunctionBuilder = struct {
             const expression = self.executable_expressions.items[index];
             if (!expression.block_id.eql(BlockId.fromIndex(self.current)) or !expression.span_id.eql(span_id)) continue;
             switch (expression.operation) {
+                .unary => |unary| if (mir_model.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty) != null) {
+                    owner = expression.id;
+                    break;
+                },
                 .binary => |binary| if (binary.arithmetic == .checked and
                     mir_model.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty) != null)
                 {

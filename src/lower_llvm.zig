@@ -1692,6 +1692,9 @@ const LlvmEmitter = struct {
         } else {
             try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
         }
+        for (fn_mir.pointer_provenance_facts) |fact| {
+            try self.emitMirPointerProvenanceConsumedComment(fact);
+        }
         try self.out.appendSlice(self.allocator, rendered);
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;

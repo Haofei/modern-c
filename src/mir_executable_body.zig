@@ -244,7 +244,23 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             else => {},
         },
         .unsupported => {},
-        .unary => |operation| try verifyOperand(body, value, operation.operand),
+        .unary => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            if (body.complete) {
+                const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
+                if (!sameValueType(value.result_ty, operand.result_ty)) return error.InvalidUnaryOperation;
+                if (mir.executableCheckedUnaryTrapRequirements(operation.op, value.result_ty)) |requirements| {
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != requirements.count)
+                        return error.InvalidUnaryOperation;
+                    for (requirements.items[0..requirements.count]) |requirement| {
+                        if (ownedTrapCount(body, .{ .expression = value.id }, requirement.kind, requirement.source) != 1)
+                            return error.InvalidUnaryOperation;
+                    }
+                } else if (ownedTrapCountAll(body, .{ .expression = value.id }) != 0) {
+                    return error.InvalidUnaryOperation;
+                }
+            }
+        },
         .binary => |operation| {
             try verifyOperand(body, value, operation.left);
             try verifyOperand(body, value, operation.right);
@@ -432,6 +448,8 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
             .expression => |id| expression_owner: {
                 const owner = expression(body, id) orelse return error.InvalidTrapEdge;
                 switch (owner.operation) {
+                    .unary => |unary| if (mir.executableCheckedUnaryTrapRequirements(unary.op, owner.result_ty) == null)
+                        return error.InvalidTrapEdge,
                     .binary => |binary| if (binary.arithmetic != .checked) return error.InvalidTrapEdge,
                     .load => |load| {
                         const target = place(body, load.place) orelse return error.InvalidTrapEdge;

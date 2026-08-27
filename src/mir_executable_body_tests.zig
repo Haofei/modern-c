@@ -866,6 +866,36 @@ test "checked add owns an explicit verified overflow edge" {
     try executable.verify(function);
 }
 
+test "checked neg owns an explicit verified overflow edge" {
+    const source = "fn checked(value: i32) -> i32 { return -value; }";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_checked_neg.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+    const edge = function.executable_body.trap_edges[0];
+    try std.testing.expectEqual(mir.TrapKind.IntegerOverflow, edge.kind);
+    try std.testing.expectEqual(mir.TrapSource.checked_arithmetic, edge.source);
+    const owner_id = edge.owner.expressionId() orelse return error.TestUnexpectedResult;
+    const owner = function.executable_body.expressions[owner_id.index()];
+    switch (owner.operation) {
+        .unary => |unary| try std.testing.expectEqual(mir.ExecutableUnaryOp.neg, unary.op),
+        else => return error.TestUnexpectedResult,
+    }
+
+    function.executable_body.trap_edges[0].source = .assert_stmt;
+    try std.testing.expectError(error.InvalidUnaryOperation, executable.verify(function));
+}
+
 test "checked div mod and shifts own their exact exceptional edges" {
     const source =
         \\fn div_u(left: u32, right: u32) -> u32 { return left / right; }

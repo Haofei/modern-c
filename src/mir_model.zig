@@ -374,6 +374,19 @@ pub const ExecutableTrapRequirements = struct {
     count: usize,
 };
 
+/// Exact exceptional effects for one checked unary operation. Integer
+/// negation is checked in MC; bitwise/logical operations are non-trapping.
+pub fn executableCheckedUnaryTrapRequirements(op: ExecutableUnaryOp, ty: ValueType) ?ExecutableTrapRequirements {
+    const info = ExecutableCastKind.integerInfo(ty) orelse return null;
+    return switch (op) {
+        .neg => if (info.signed) .{
+            .items = .{ .{ .kind = .IntegerOverflow, .source = .checked_arithmetic }, undefined },
+            .count = 1,
+        } else null,
+        .bit_not, .logical_not => null,
+    };
+}
+
 /// Exact exceptional effects for one checked integer binary operation.  This
 /// table is shared by the producer, verifier and both mechanical renderers so
 /// no backend can silently implement a weaker checked-arithmetic contract.
