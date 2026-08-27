@@ -492,6 +492,8 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n", .{ value, base.spelling });
                 break :blk .{ .ty = "i64", .spelling = value };
             },
+            .optional_some => |operand_id| try self.emitOptional(expression, operand_id),
+            .optional_none => .{ .ty = ty, .spelling = "zeroinitializer" },
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
             .struct_ => |aggregate| try self.emitStruct(expression, aggregate),
@@ -518,6 +520,26 @@ const Renderer = struct {
             },
         }
         return operand;
+    }
+
+    fn emitOptional(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
+        if (!optionalConstructionSupported(self.body, expression, operand_id)) return error.InvalidBody;
+        const aggregate = aggregateType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const optional_ty = try self.typeText(expression.result_ty);
+        const payload_ty = try self.typeText(aggregate.field_types[1]);
+        const operand = try self.emitExpression(operand_id);
+        if (!std.mem.eql(u8, operand.ty, payload_ty)) return error.InvalidBody;
+        const with_tag = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 true, 0\n", .{ with_tag, optional_ty });
+        const with_payload = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{
+            with_payload,
+            optional_ty,
+            with_tag,
+            payload_ty,
+            operand.spelling,
+        });
+        return .{ .ty = optional_ty, .spelling = with_payload };
     }
 
     fn emitStruct(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
@@ -1401,8 +1423,22 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .cast => |cast| castSupported(body, expression, cast),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
         .member => |member| memberSupported(body, expression, member),
+        .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
+        .optional_none => optionalConstructionSupported(body, expression, null),
         .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn optionalConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: ?mir.ExprId) bool {
+    if (expression.result_ty != .nullable_value) return false;
+    const shape = aggregateType(body, expression.type_id) orelse return false;
+    if (shape.construction != .declared_struct or shape.ty != .nullable_value or shape.field_count != 2 or
+        !sameValueType(shape.field_types[0], .bool)) return false;
+    const id = operand_id orelse return true;
+    if (!expressionValid(body, id)) return false;
+    const operand = body.expressions[id.index()];
+    return sameValueType(operand.result_ty, shape.field_types[1]) and
+        operand.type_id.eql(shape.field_type_ids[1]);
 }
 
 fn indirectCallSupported(

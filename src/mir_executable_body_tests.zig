@@ -39,6 +39,67 @@ test "owned executable body is complete for scalar locals calls and returns" {
     }
 }
 
+test "value optional construction is explicit verified executable MIR" {
+    const source =
+        \\struct Point { x: u32, y: u32 }
+        \\fn maybe_scalar(present: bool, value: u32) -> ?u32 {
+        \\    if present { return value; }
+        \\    return null;
+        \\}
+        \\fn maybe_point(present: bool) -> ?Point {
+        \\    if present { return .{ .x = 3, .y = 4 }; }
+        \\    return null;
+        \\}
+        \\fn passthrough(value: ?u32) -> ?u32 { return value; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_value_optional.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions) |*function| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+    }
+
+    const scalar = &module.functions[0];
+    var some_index: ?usize = null;
+    var none_index: ?usize = null;
+    for (scalar.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .optional_some => |operand| {
+            some_index = index;
+            try std.testing.expect(operand.index() < expression.id.index());
+        },
+        .optional_none => none_index = index,
+        else => {},
+    };
+    const some = some_index orelse return error.TestUnexpectedResult;
+    _ = none_index orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), scalar.executable_body.aggregate_types.len);
+    const shape = scalar.executable_body.aggregate_types[0];
+    try std.testing.expect(shape.ty == .nullable_value);
+    try std.testing.expectEqual(@as(usize, 2), shape.field_count);
+    try std.testing.expect(shape.field_types[0] == .bool);
+    try std.testing.expectEqualStrings("u32", shape.field_types[1].name());
+
+    const saved_operation = scalar.executable_body.expressions[some].operation;
+    scalar.executable_body.expressions[some].operation = .{ .optional_some = scalar.executable_body.expressions[some].id };
+    try std.testing.expectError(error.InvalidEvaluationOrder, executable.verify(scalar));
+    scalar.executable_body.expressions[some].operation = saved_operation;
+
+    const saved_payload_type = scalar.executable_body.aggregate_types[0].field_type_ids[1];
+    scalar.executable_body.aggregate_types[0].field_type_ids[1] = scalar.executable_body.aggregate_types[0].field_type_ids[0];
+    try std.testing.expectError(error.InvalidAggregateType, executable.verify(scalar));
+    scalar.executable_body.aggregate_types[0].field_type_ids[1] = saved_payload_type;
+    try executable.verify(scalar);
+}
+
 test "executable type identities distinguish structural pointer shapes" {
     const source =
         \\fn pointer_shapes(left: *mut u8, right: *mut u32, maybe: ?*mut u8) -> void {}

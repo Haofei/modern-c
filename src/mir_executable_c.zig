@@ -53,7 +53,7 @@ pub fn emitBodyWithSourcePath(
         // materialization point instead of reconstructing syntax here.
         if (isSliceType(expression.result_ty) or expression.result_ty == .value) continue;
         try writeIndent(allocator, out, indent);
-        try appendCType(allocator, out, expression.result_ty);
+        try appendCType(allocator, out, body, expression.result_ty);
         try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
     }
 
@@ -91,7 +91,7 @@ fn emitStatement(
                 if (local.value == null) return error.UnsupportedType;
                 try out.appendSlice(allocator, "__auto_type ");
             } else {
-                try appendCType(allocator, out, local.ty);
+                try appendCType(allocator, out, body, local.ty);
                 try out.append(allocator, ' ');
             }
             try appendLocal(allocator, out, body, local.local);
@@ -260,7 +260,7 @@ fn emitExpressionOperation(
             try emitAtomicPlaceAddress(allocator, out, body, load.place);
             try out.print(allocator, ", {s}))", .{cAtomicOrdering(load.ordering)});
         },
-        .literal => |literal| try emitLiteral(allocator, out, expression.result_ty, literal),
+        .literal => |literal| try emitLiteral(allocator, out, literal),
         .unary => |unary| {
             if (unary.op == .neg and integerSuffix(expression.result_ty) != null) {
                 try out.print(allocator, "mc_checked_neg_{s}(", .{integerSuffix(expression.result_ty).?});
@@ -314,7 +314,7 @@ fn emitExpressionOperation(
         },
         .cast => |cast| {
             try out.appendSlice(allocator, "((");
-            try appendCType(allocator, out, expression.result_ty);
+            try appendCType(allocator, out, body, expression.result_ty);
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, cast.operand, depth + 1);
             try out.appendSlice(allocator, "))");
@@ -347,11 +347,23 @@ fn emitExpressionOperation(
             try emitExpression(allocator, out, body, base, depth + 1);
             try out.appendSlice(allocator, ".len");
         },
+        .optional_some => |operand| {
+            try out.append(allocator, '(');
+            try appendCType(allocator, out, body, expression.result_ty);
+            try out.appendSlice(allocator, "){ .present = true, .value = ");
+            try emitExpression(allocator, out, body, operand, depth + 1);
+            try out.appendSlice(allocator, " }");
+        },
+        .optional_none => {
+            try out.append(allocator, '(');
+            try appendCType(allocator, out, body, expression.result_ty);
+            try out.appendSlice(allocator, "){ .present = false }");
+        },
         .struct_ => |aggregate| {
             const shape = aggregateType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!structConstructionSupported(body, expression.*, aggregate)) return error.InvalidExpression;
             try out.append(allocator, '(');
-            try appendCType(allocator, out, shape.ty);
+            try appendCType(allocator, out, body, shape.ty);
             try out.appendSlice(allocator, "){ ");
             for (0..shape.field_count) |field_index| {
                 if (field_index != 0) try out.appendSlice(allocator, ", ");
@@ -384,7 +396,7 @@ fn emitExpressionOperation(
 /// consults source text, spans, or declaration ASTs.
 pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     if (!body.isComplete() or body.terminators.len == 0) return false;
-    for (body.parameters) |parameter| if (!(supportsType(parameter.ty) or
+    for (body.parameters) |parameter| if (!(supportsType(body, parameter.ty) or
         (parameter.ty == .value and callableLocalUsedAsIndirectCallee(body, parameter.local))) or
         localById(body, parameter.local) == null) return false;
     for (body.expressions) |expression| {
@@ -426,7 +438,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         if (!hasBlock(body, statement.block_id)) return false;
         switch (statement.operation) {
             .local_init => |local| {
-                if (!(supportsType(local.ty) or
+                if (!(supportsType(body, local.ty) or
                     (local.ty == .value and callableLocalUsedAsIndirectCallee(body, local.local))) or
                     localById(body, local.local) == null) return false;
                 if (local.value) |value| {
@@ -477,7 +489,7 @@ fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.Execu
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (functionSymbolExpressionSupported(body, expression)) return true;
     if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression);
-    if (!supportsType(expression.result_ty)) return false;
+    if (!supportsType(body, expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
         // A bare symbol does not state ordinary/atomic/volatile/MMIO access.
@@ -505,6 +517,8 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .address_of => |address| addressOfSupported(body, expression, address),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
         .member => |member| memberSupported(body, expression, member),
+        .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
+        .optional_none => optionalConstructionSupported(body, expression, null),
         .deref, .index, .range_slice, .array, .unsupported => false,
     };
 }
@@ -605,7 +619,7 @@ fn structConstructionSupported(
         seen[field_index] = true;
         const operand = expressionById(body, operand_id) orelse return false;
         if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
-            !operand.type_id.eql(shape.field_type_ids[field_index]) or !supportsType(operand.result_ty)) return false;
+            !operand.type_id.eql(shape.field_type_ids[field_index]) or !supportsType(body, operand.result_ty)) return false;
     }
     for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;
@@ -615,6 +629,22 @@ fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const m
     if (!type_id.isValid()) return null;
     for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
     return null;
+}
+
+fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableAggregateType {
+    for (body.aggregate_types) |*aggregate| if (sameValueType(aggregate.ty, ty)) return aggregate;
+    return null;
+}
+
+fn optionalConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: ?mir.ExprId) bool {
+    if (expression.result_ty != .nullable_value) return false;
+    const shape = aggregateType(body, expression.type_id) orelse return false;
+    if (shape.construction != .declared_struct or shape.ty != .nullable_value or shape.field_count != 2 or
+        !sameValueType(shape.field_types[0], .bool)) return false;
+    const id = operand_id orelse return true;
+    const operand = expressionById(body, id) orelse return false;
+    return sameValueType(operand.result_ty, shape.field_types[1]) and
+        operand.type_id.eql(shape.field_type_ids[1]);
 }
 
 fn builtinCallSupported(
@@ -658,20 +688,20 @@ fn emitBuiltinCall(
         },
         .conversion_from => {
             try out.appendSlice(allocator, "((");
-            try appendCType(allocator, out, result_ty);
+            try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
         },
         .wrapping_add => {
             try out.appendSlice(allocator, "((");
-            try appendCType(allocator, out, result_ty);
+            try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")((");
-            try appendCType(allocator, out, result_ty);
+            try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, ") + (");
-            try appendCType(allocator, out, result_ty);
+            try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.appendSlice(allocator, ")))");
@@ -681,7 +711,7 @@ fn emitBuiltinCall(
             // numerical cast would change values for integer/float pairs and
             // pointer-punning would violate strict aliasing.
             try out.appendSlice(allocator, "__builtin_bit_cast(");
-            try appendCType(allocator, out, result_ty);
+            try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ", ");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.append(allocator, ')');
@@ -701,7 +731,7 @@ fn emitBuiltinCall(
         },
         .raw_ptr => {
             try out.appendSlice(allocator, "((");
-            try appendCType(allocator, out, result_ty);
+            try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")((uintptr_t)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, ")))");
@@ -1228,7 +1258,7 @@ fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
     return mir.ValueType.eql(left, right);
 }
 
-fn supportsType(ty: mir.ValueType) bool {
+fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
     return switch (ty) {
         .void, .never, .bool, .cstr, .address => true,
         .integer, .float => |name| primitiveType(name) != null,
@@ -1236,6 +1266,7 @@ fn supportsType(ty: mir.ValueType) bool {
         .pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
         .nullable_pointer => |shape| shape.kind != .slice and (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
+        .nullable_value => aggregateTypeForValueType(body, ty) != null,
         else => false,
     };
 }
@@ -1511,7 +1542,6 @@ fn emitArguments(
 fn emitLiteral(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    result_ty: mir.ValueType,
     literal: mir.ExecutableLiteral,
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (literal) {
@@ -1525,16 +1555,12 @@ fn emitLiteral(
         .boolean => |value| try out.appendSlice(allocator, if (value) "true" else "false"),
         .null => try out.appendSlice(allocator, "NULL"),
         .void => try out.appendSlice(allocator, "((void)0)"),
-        .uninit => {
-            try out.appendSlice(allocator, "((");
-            try appendCType(allocator, out, result_ty);
-            try out.appendSlice(allocator, "){0})");
-        },
+        .uninit => return error.UnsupportedOperation,
         .enum_value => return error.UnsupportedOperation,
     }
 }
 
-fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
+fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
     switch (ty) {
         .void, .never => try out.appendSlice(allocator, "void"),
         .bool => try out.appendSlice(allocator, "bool"),
@@ -1549,6 +1575,23 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.Va
         },
         .address => try out.appendSlice(allocator, "uintptr_t"),
         .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
+        .nullable_value => {
+            const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
+            if (shape.construction != .declared_struct or shape.ty != .nullable_value or shape.field_count != 2) return error.UnsupportedType;
+            try out.appendSlice(allocator, "mc_opt_");
+            try appendCTypeSuffix(allocator, out, shape.field_types[1]);
+        },
+        else => return error.UnsupportedType,
+    }
+}
+
+fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
+    switch (ty) {
+        .bool => try out.appendSlice(allocator, "bool"),
+        .integer, .float => |name| try out.appendSlice(allocator, name),
+        .address => try out.appendSlice(allocator, ty.name()),
+        .struct_ => |name| try out.print(allocator, "mc_type_struct_{d}_{s}", .{ name.len, name }),
+        .closed_enum, .open_enum => |name| try out.print(allocator, "mc_type_name_{d}_{s}", .{ name.len, name }),
         else => return error.UnsupportedType,
     }
 }

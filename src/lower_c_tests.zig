@@ -105,6 +105,35 @@ test "lower-c valid slice representation check uses canonical executable MIR" {
     try expectContains(len_body, "/* canonical executable MIR */");
 }
 
+test "lower-c value optional construction needs no function body fallback" {
+    const source =
+        \\struct Point { x: u32, y: u32 }
+        \\fn scalar(present: bool, value: u32) -> ?u32 {
+        \\    if present { return value; }
+        \\    return null;
+        \\}
+        \\fn point(present: bool) -> ?Point {
+        \\    if present {
+        \\        let value: Point = .{ .x = 3, .y = 4 };
+        \\        return value;
+        \\    }
+        \\    return null;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_value_optional.mc", source, &output);
+
+    const scalar = try cFunctionBody(output.items, "mc_opt_u32 scalar");
+    try expectContains(scalar, "/* canonical executable MIR */");
+    try expectContains(scalar, "(mc_opt_u32){ .present = true, .value =");
+    try expectContains(scalar, "(mc_opt_u32){ .present = false }");
+    const point = try cFunctionBody(output.items, "mc_opt_mc_type_struct_5_Point point");
+    try expectContains(point, "/* canonical executable MIR */");
+    try expectContains(point, "(mc_opt_mc_type_struct_5_Point){ .present = true, .value =");
+    try expectContains(point, "(mc_opt_mc_type_struct_5_Point){ .present = false }");
+}
+
 test "lower-c atomic loads use canonical executable MIR" {
     const source =
         \\global relaxed_ticks: atomic<u32> = atomic.init(0);
@@ -3556,12 +3585,13 @@ test "lower-c emits nullable none returns from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_none_returns.mc", source, &output);
 
     const direct_body = try cFunctionBody(output.items, "static mc_opt_u32 direct_none(void)");
-    try expectContains(direct_body, "return (mc_opt_u32){ .present = false };");
+    try expectContains(direct_body, "/* canonical executable MIR */");
+    try expectContains(direct_body, "(mc_opt_u32){ .present = false }");
     try expectNotContains(direct_body, "mc_tmp");
 
     const local_body = try cFunctionBody(output.items, "static mc_opt_u32 local_none(void)");
-    try expectContains(local_body, "return (mc_opt_u32){ .present = false };");
-    try expectNotContains(local_body, "mc_opt_u32 x");
+    try expectContains(local_body, "/* canonical executable MIR */");
+    try expectContains(local_body, "(mc_opt_u32){ .present = false }");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static mc_opt_u32 assigned_none(void)");
@@ -3586,8 +3616,9 @@ test "lower-c emits conditional nullable none returns from MIR without body fall
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_nullable_none_returns.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_opt_u32 choose_none(bool flag)");
-    try expectContains(body, "if (flag) {");
-    try expectContains(body, "return (mc_opt_u32){ .present = false };");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "if (mc_exec_tmp_");
+    try expectContains(body, "(mc_opt_u32){ .present = false }");
     try expectNotContains(body, "mc_tmp");
 }
 
@@ -7548,8 +7579,8 @@ test "lower-c null inferred local lowers without function body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_null_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static mc_opt_u32 null_local(void)");
-    try expectContains(body, "return (mc_opt_u32){ .present = false };");
-    try expectNotContains(body, "mc_opt_u32 none");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "(mc_opt_u32){ .present = false }");
 }
 
 test "lower-c diagnoses source block expressions instead of inferring their result" {
@@ -12807,7 +12838,7 @@ test "lower-c impl blocks desugar to mangled free functions" {
     try appendCTest("impl.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Tensor__get") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Tensor__get(t)") != null);
+    try std.testing.expect(std.mem.count(u8, output.items, "Tensor__get(") >= 2);
 }
 
 test "lower-c tuple destructuring binds each name to temporary fields" {
@@ -16354,7 +16385,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectNotContains(direct_raw_many_offset_body, "return *(p + i);");
 
     const direct_call_raw_many_offset_body = try cFunctionBody(output.items, "static uint32_t direct_call_raw_many_offset_lowers_race_tolerant(void)");
-    try expectContains(direct_call_raw_many_offset_body, " = (uint32_t)mc_race_load_u32(mc_tmp");
+    try expectContains(direct_call_raw_many_offset_body, "mc_race_load_u32(");
     try expectNotContains(direct_call_raw_many_offset_body, "return *(external_raw_many_pointer()");
     try expectNotContains(direct_call_raw_many_offset_body, "return *mc_tmp");
 

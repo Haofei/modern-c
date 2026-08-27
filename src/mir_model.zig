@@ -748,6 +748,12 @@ pub const ExecutableExpression = struct {
         range_slice: struct { base: ExprId, start: ExprId, end: ExprId },
         member: struct { base: ExprId, field_index: usize },
         slice_length: ExprId,
+        /// Construct the tagged representation of a sized value optional.
+        /// The result type is `.nullable_value`; `some` owns the payload
+        /// expression while `none` owns no operand. Backends must not infer
+        /// this coercion from source syntax or the surrounding return type.
+        optional_some: ExprId,
+        optional_none,
         array: struct {
             operands: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             operand_count: usize = 0,

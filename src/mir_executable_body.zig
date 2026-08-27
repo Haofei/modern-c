@@ -398,6 +398,24 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyOperand(body, value, operation.base);
             if (body.complete) try verifyMemberProjection(function, value, operation);
         },
+        .optional_some => |operand_id| {
+            try verifyOperand(body, value, operand_id);
+            if (body.complete) {
+                const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
+                const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+                if (value.result_ty != .nullable_value or aggregate.construction != .declared_struct or
+                    aggregate.field_count != 2 or !sameValueType(aggregate.ty, value.result_ty) or
+                    !sameValueType(aggregate.field_types[0], .bool) or
+                    !sameValueType(aggregate.field_types[1], operand.result_ty) or
+                    !aggregate.field_type_ids[1].eql(operand.type_id)) return error.InvalidAggregateConstruction;
+            }
+        },
+        .optional_none => if (body.complete) {
+            const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
+            if (value.result_ty != .nullable_value or aggregate.construction != .declared_struct or
+                aggregate.field_count != 2 or !sameValueType(aggregate.ty, value.result_ty) or
+                !sameValueType(aggregate.field_types[0], .bool)) return error.InvalidAggregateConstruction;
+        },
         .array => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
         .struct_ => |operation| {
             try verifyArguments(body, value, operation.operands, operation.operand_count);
@@ -837,7 +855,9 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
     if (!aggregate.type_id.isValid() or aggregate.field_count == 0 or aggregate.field_count > mir.max_executable_operands or
         (aggregate.construction != .declared_struct and aggregate.construction != .c_union)) return error.InvalidAggregateType;
     try verifyType(function, aggregate.type_id, aggregate.ty, body.complete);
-    if (aggregate.ty != .struct_) return error.InvalidAggregateType;
+    if (aggregate.ty != .struct_ and aggregate.ty != .nullable_value) return error.InvalidAggregateType;
+    if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
+        !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;
     for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
     for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
         if (field_ty == .unknown or field_ty == .value) return error.InvalidAggregateType;
