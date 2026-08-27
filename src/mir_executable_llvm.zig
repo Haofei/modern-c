@@ -302,6 +302,11 @@ const Renderer = struct {
         if (depth >= mir.max_executable_operands) return error.Unsupported;
         if (enumTypeForValueType(self.body, ty)) |enum_ty| return self.typeTextDepth(enum_ty.repr_ty, depth + 1);
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
+        if (aggregate.ty == .array) {
+            if (aggregate.field_count == 0) return error.Unsupported;
+            const element_ty = try self.typeTextDepth(aggregate.field_types[0], depth + 1);
+            return std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{ aggregate.field_count, element_ty });
+        }
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.allocator, "{ ");
         for (aggregate.field_types[0..aggregate.field_count], 0..) |field_ty, index| {
@@ -497,9 +502,10 @@ const Renderer = struct {
             .optional_none => .{ .ty = ty, .spelling = "zeroinitializer" },
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
+            .array => |aggregate| try self.emitArray(expression, aggregate),
             .struct_ => |aggregate| try self.emitStruct(expression, aggregate),
             .member => |member| try self.emitMember(expression, member),
-            .index, .range_slice, .array, .unsupported => return error.Unsupported,
+            .index, .range_slice, .unsupported => return error.Unsupported,
         };
         self.values[id.index()] = result;
         return result;
@@ -560,6 +566,29 @@ const Renderer = struct {
                 field_ty,
                 operand.spelling,
                 field_index,
+            });
+            current = result;
+        }
+        return .{ .ty = aggregate_ty, .spelling = current };
+    }
+
+    fn emitArray(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
+        if (!arrayConstructionSupported(self.body, expression, operation)) return error.InvalidBody;
+        const shape = aggregateType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const aggregate_ty = try self.typeText(shape.ty);
+        var current: []const u8 = "zeroinitializer";
+        for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+            const operand = try self.emitExpression(operand_id);
+            const element_ty = try self.typeText(shape.field_types[index]);
+            if (!std.mem.eql(u8, operand.ty, element_ty)) return error.InvalidBody;
+            const result = try self.temp();
+            try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
+                result,
+                aggregate_ty,
+                current,
+                element_ty,
+                operand.spelling,
+                index,
             });
             current = result;
         }
@@ -1407,6 +1436,19 @@ fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.
     return true;
 }
 
+fn arrayConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
+    const shape = aggregateType(body, expression.type_id) orelse return false;
+    if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
+        shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
+    for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+        if (!expressionValid(body, operand_id)) return false;
+        const operand = body.expressions[operand_id.index()];
+        if (!sameValueType(operand.result_ty, shape.field_types[index]) or
+            !operand.type_id.eql(shape.field_type_ids[index]) or !llvmTypeSupported(body, operand.result_ty)) return false;
+    }
+    return true;
+}
+
 fn operationSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return switch (expression.operation) {
         .local => |id| localExists(body, id),
@@ -1440,11 +1482,12 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
             else => false,
         },
         .cast => |cast| castSupported(body, expression, cast),
+        .array => |aggregate| arrayConstructionSupported(body, expression, aggregate),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
         .member => |member| memberSupported(body, expression, member),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
-        .index, .range_slice, .array, .unsupported => false,
+        .index, .range_slice, .unsupported => false,
     };
 }
 
@@ -2138,9 +2181,21 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
 }
 
 fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool) bool {
-    if (!placeValid(body, place_id) or mir.ExecutableMemoryAccess.scalarAlignment(ty) != access.alignment) return false;
+    if (!placeValid(body, place_id)) return false;
     const place = body.places[place_id.index()];
     if (place.storage != .ordinary) return false;
+    const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse aggregate_local: {
+        if (place.projection_count != 0 or access.kind != .plain) return false;
+        switch (place.root) {
+            .local => {},
+            .symbol, .value => return false,
+        }
+        switch (ty) {
+            .array, .struct_, .nullable_value => break :aggregate_local 1,
+            else => return false,
+        }
+    };
+    if (access.alignment != expected_alignment) return false;
     if (place.projection_count != 0) {
         const local_alias = mir.executableLocalAddressDerefPlace(body, place, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;

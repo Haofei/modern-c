@@ -1339,13 +1339,6 @@ pub const CEmitter = struct {
         suffix_statements: SimpleMirVoidStatementSources,
     };
 
-    const SimpleMirConditionalReturn = struct {
-        prefix_calls: SimpleMirDirectCalls,
-        condition: SimpleMirCondition,
-        then_value: SimpleMirConditionalValue,
-        else_value: SimpleMirConditionalValue,
-    };
-
     const SimpleMirLoopReturn = struct {
         condition: SimpleMirCondition,
         body_block_index: usize,
@@ -1710,9 +1703,8 @@ pub const CEmitter = struct {
             break :blk null;
         };
         const simple_void_body = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and nullable_try_plan == null) self.simpleMirVoidBody(function, fn_mir) else null;
-        const simple_conditional_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        const simple_loop_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null)
+        const simple_loop_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_loop_return == null and place_return_plan == null)
             if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
                 if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
             else
@@ -1734,7 +1726,6 @@ pub const CEmitter = struct {
             nullable_try_plan != null,
             simple_return != null,
             simple_void_body != null,
-            simple_conditional_return != null,
             simple_loop_return != null,
             place_return_plan != null,
             indirect_call_return_plan != null,
@@ -2005,29 +1996,6 @@ pub const CEmitter = struct {
                     try self.emitSimpleMirVoidStatementSources(function, fn_mir, conditional.suffix_statements);
                 },
             }
-        } else if (simple_conditional_return) |conditional| {
-            selected_path.* = .simple_conditional_return;
-            try self.emitSimpleMirDirectCallStatements(conditional.prefix_calls);
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "if (");
-            try self.emitSimpleMirCondition(conditional.condition);
-            try self.out.appendSlice(self.allocator, ") {\n");
-            self.indent += 1;
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "return ");
-            try self.emitSimpleMirConditionalValue(conditional.then_value);
-            try self.out.appendSlice(self.allocator, ";\n");
-            self.indent -= 1;
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "} else {\n");
-            self.indent += 1;
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "return ");
-            try self.emitSimpleMirConditionalValue(conditional.else_value);
-            try self.out.appendSlice(self.allocator, ";\n");
-            self.indent -= 1;
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "}\n");
         } else if (simple_loop_return) |loop| {
             selected_path.* = .simple_loop_return;
             try self.writeIndent();
@@ -2090,7 +2058,10 @@ pub const CEmitter = struct {
                 if (!symbol.id.eql(call.callee)) return false;
                 const signature = self.mirFunctionByName(symbol.spelling) orelse return false;
                 if (signature.is_variadic or signature.param_types.len != call.argument_count or
-                    !mir.ValueType.eql(expression.result_ty, signature.return_ty)) return false;
+                    !mir.ValueType.eql(expression.result_ty, signature.return_ty))
+                {
+                    return false;
+                }
                 for (call.arguments[0..call.argument_count], signature.param_types) |argument_id, parameter_ty| {
                     if (!argument_id.isValid() or argument_id.index() >= body.expressions.len) return false;
                     const argument_ty = body.expressions[argument_id.index()].result_ty;
@@ -4773,74 +4744,6 @@ pub const CEmitter = struct {
             else => return false,
         };
         return true;
-    }
-
-    fn simpleMirConditionalReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalReturn {
-        if (fn_mir.return_ty == .void) return null;
-        if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
-        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
-        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
-        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
-        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
-        const then_index = entry.successors[0];
-        const else_index = entry.successors[1];
-        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
-        const then_block = fn_mir.blocks[then_index];
-        const else_block = fn_mir.blocks[else_index];
-        if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
-        const direct_then_value = self.simpleMirReturnValueInBlock(function, fn_mir, then_block);
-        const direct_else_value = self.simpleMirReturnValueInBlock(function, fn_mir, else_block);
-        const then_value, const else_value = if (direct_then_value != null and direct_else_value != null)
-            .{ direct_then_value.?, direct_else_value.? }
-        else if (self.simpleMirConditionalEarlyReturn(function, fn_mir, then_block, else_block)) |early|
-            early
-        else
-            self.simpleMirConditionalAssignedReturn(function, fn_mir, then_block, else_block) orelse return null;
-        for (fn_mir.blocks, 0..) |block, index| {
-            if (index == 0 or index == 1 or index == then_index or index == else_index) continue;
-            if (!std.mem.eql(u8, block.kind, "trap") or block.terminator != .trap_) return null;
-        }
-        if (fn_mir.trap_edges.len != simpleMirConditionalTrapCount(then_value) + simpleMirConditionalTrapCount(else_value)) return null;
-        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_value = then_value, .else_value = else_value };
-    }
-
-    fn simpleMirConditionalEarlyReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, then_block: mir.Block, else_block: mir.Block) ?struct { SimpleMirConditionalValue, SimpleMirConditionalValue } {
-        if (fn_mir.trap_edges.len != 0) return null;
-        if (fn_mir.blocks.len != 4) return null;
-        const after_block = fn_mir.blocks[1];
-        if (after_block.terminator != .return_) return null;
-        const after_value = self.simpleMirReturnValueInBlock(function, fn_mir, after_block) orelse return null;
-        const then_value = self.simpleMirEarlyReturnValueInBlock(function, fn_mir, then_block, after_value) orelse return null;
-        const else_value = self.simpleMirEarlyReturnValueInBlock(function, fn_mir, else_block, after_value) orelse return null;
-        if (then_block.terminator == .jump and else_block.terminator == .jump) return null;
-        return .{ then_value, else_value };
-    }
-
-    fn simpleMirEarlyReturnValueInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, after_value: SimpleMirConditionalValue) ?SimpleMirConditionalValue {
-        return switch (block.terminator) {
-            .return_ => self.simpleMirReturnValueInBlock(function, fn_mir, block),
-            .jump => |target| if (target == 1) after_value else null,
-            else => null,
-        };
-    }
-
-    fn simpleMirConditionalAssignedReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, then_block: mir.Block, else_block: mir.Block) ?struct { SimpleMirConditionalValue, SimpleMirConditionalValue } {
-        if (fn_mir.trap_edges.len != 0) return null;
-        if (fn_mir.blocks.len != 4) return null;
-        const after_block = fn_mir.blocks[1];
-        if (after_block.terminator != .return_) return null;
-        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
-        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        const ret = simpleMirReturnInstruction(after_block) orelse return null;
-        const local_name = ret.value_id orelse return null;
-        if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
-        const initial_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
-        const initial_value = self.simpleMirConditionalValueAtSource(function, fn_mir, initial_source) orelse return null;
-        const then_value = self.simpleMirAssignedValueInBlock(function, fn_mir, then_block, local_name) orelse initial_value;
-        const else_value = self.simpleMirAssignedValueInBlock(function, fn_mir, else_block, local_name) orelse initial_value;
-        return .{ then_value, else_value };
     }
 
     fn simpleMirLoopReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirLoopReturn {

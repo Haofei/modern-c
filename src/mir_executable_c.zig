@@ -359,6 +359,18 @@ fn emitExpressionOperation(
             try appendCType(allocator, out, body, expression.result_ty);
             try out.appendSlice(allocator, "){ .present = false }");
         },
+        .array => |aggregate| {
+            const shape = aggregateType(body, expression.type_id) orelse return error.InvalidExpression;
+            if (!arrayConstructionSupported(body, expression.*, aggregate)) return error.InvalidExpression;
+            try out.append(allocator, '(');
+            try appendCType(allocator, out, body, shape.ty);
+            try out.appendSlice(allocator, "){ .elems = { ");
+            for (aggregate.operands[0..aggregate.operand_count], 0..) |operand, index| {
+                if (index != 0) try out.appendSlice(allocator, ", ");
+                try emitExpression(allocator, out, body, operand, depth + 1);
+            }
+            try out.appendSlice(allocator, " } }");
+        },
         .struct_ => |aggregate| {
             const shape = aggregateType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!structConstructionSupported(body, expression.*, aggregate)) return error.InvalidExpression;
@@ -387,7 +399,7 @@ fn emitExpressionOperation(
             try out.appendSlice(allocator, ").");
             try appendIdent(allocator, out, shape.field_spellings[member.field_index]);
         },
-        .range_slice, .array, .unsupported => return error.UnsupportedOperation,
+        .range_slice, .unsupported => return error.UnsupportedOperation,
     }
 }
 
@@ -399,9 +411,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     for (body.parameters) |parameter| if (!(supportsType(body, parameter.ty) or
         (parameter.ty == .value and callableLocalUsedAsIndirectCallee(body, parameter.local))) or
         localById(body, parameter.local) == null) return false;
-    for (body.expressions) |expression| {
-        if (!supportsExpression(body, expression)) return false;
-    }
+    for (body.expressions) |expression| if (!supportsExpression(body, expression)) return false;
     // Every exceptional edge must be owned by an operation whose complete
     // trap set this renderer understands. This prevents a newly added edge
     // kind from being silently ignored while still emitting ordinary C.
@@ -519,11 +529,12 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call => |call| builtinCallSupported(body, expression, call),
         .address_of => |address| addressOfSupported(body, expression, address),
+        .array => |aggregate| arrayConstructionSupported(body, expression, aggregate),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
         .member => |member| memberSupported(body, expression, member),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
-        .deref, .index, .range_slice, .array, .unsupported => false,
+        .deref, .index, .range_slice, .unsupported => false,
     };
 }
 
@@ -626,6 +637,23 @@ fn structConstructionSupported(
             !operand.type_id.eql(shape.field_type_ids[field_index]) or !supportsType(body, operand.result_ty)) return false;
     }
     for (seen[0..shape.field_count]) |present| if (!present) return false;
+    return true;
+}
+
+fn arrayConstructionSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "array"),
+) bool {
+    const shape = aggregateType(body, expression.type_id) orelse return false;
+    if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
+        shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
+    if (!arrayElementTypeSupported(shape.field_types[0])) return false;
+    for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+        const operand = expressionById(body, operand_id) orelse return false;
+        if (!sameValueType(operand.result_ty, shape.field_types[index]) or
+            !operand.type_id.eql(shape.field_type_ids[index]) or !supportsType(body, operand.result_ty)) return false;
+    }
     return true;
 }
 
@@ -1010,12 +1038,22 @@ fn memoryStoreSupported(
     statement: mir.ExecutableStatement,
     store: @FieldType(mir.ExecutableStatement.Operation, "store"),
 ) bool {
-    const alignment = mir.ExecutableMemoryAccess.scalarAlignment(store.ty) orelse return false;
-    if (store.access.alignment != alignment) return false;
     const value = expressionById(body, store.value) orelse return false;
     if (!mir.ValueType.eql(store.ty, value.result_ty)) return false;
     const place = placeById(body, store.place) orelse return false;
     if (place.storage != .ordinary) return false;
+    const alignment = mir.ExecutableMemoryAccess.scalarAlignment(store.ty) orelse aggregate_local: {
+        if (place.projection_count != 0 or store.access.kind != .plain) return false;
+        switch (place.root) {
+            .local => {},
+            .symbol, .value => return false,
+        }
+        switch (store.ty) {
+            .array, .struct_, .nullable_value => break :aggregate_local 1,
+            else => return false,
+        }
+    };
+    if (store.access.alignment != alignment) return false;
     if (place.projection_count != 0) {
         _ = scalarMemoryInfo(store.ty) orelse return false;
         const shape = switch (place.root_ty) {
@@ -1303,6 +1341,10 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
         .nullable_pointer => |shape| shape.kind != .slice and (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
+        .array => if (aggregateTypeForValueType(body, ty)) |shape|
+            shape.field_count != 0 and arrayElementTypeSupported(shape.field_types[0])
+        else
+            false,
         .nullable_value => aggregateTypeForValueType(body, ty) != null,
         else => false,
     };
@@ -1611,6 +1653,13 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             try out.appendSlice(allocator, if (shape.mutability == .mut) " *" else " const *");
         },
         .address => try out.appendSlice(allocator, "uintptr_t"),
+        .array => {
+            const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
+            if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0) return error.UnsupportedType;
+            try out.appendSlice(allocator, "mc_array_");
+            try appendCTypeSuffix(allocator, out, shape.field_types[0]);
+            try out.print(allocator, "_{d}", .{shape.field_count});
+        },
         .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
         .nullable_value => {
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
@@ -1631,6 +1680,15 @@ fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: 
         .closed_enum, .open_enum => |name| try out.print(allocator, "mc_type_name_{d}_{s}", .{ name.len, name }),
         else => return error.UnsupportedType,
     }
+}
+
+fn arrayElementTypeSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .bool, .address => true,
+        .integer, .float => |name| primitiveType(name) != null,
+        .struct_, .closed_enum, .open_enum => |name| isSafeIdentifier(name),
+        else => false,
+    };
 }
 
 fn appendLocal(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, id: mir.LocalId) (RenderError || std.mem.Allocator.Error)!void {

@@ -318,6 +318,68 @@ test "indexed places receive identities after recursive index lowering" {
     }
 }
 
+test "array construction and local aggregate stores are verified executable MIR" {
+    const source =
+        \\fn reorder(left: u32, right: u32) -> [2]u32 {
+        \\    var values: [2]u32 = .{ left, right };
+        \\    values = .{ right, left };
+        \\    return values;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_array_store.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.aggregate_types.len);
+    const aggregate = &function.executable_body.aggregate_types[0];
+    try std.testing.expect(aggregate.ty == .array);
+    try std.testing.expectEqual(@as(usize, 2), aggregate.field_count);
+
+    const saved_element_type_id = aggregate.field_type_ids[1];
+    aggregate.field_type_ids[1] = .invalid;
+    try std.testing.expectError(error.InvalidAggregateType, executable.verify(function));
+    aggregate.field_type_ids[1] = saved_element_type_id;
+
+    var array_expression: ?*@TypeOf(function.executable_body.expressions[0]) = null;
+    for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .array => {
+            array_expression = expression;
+            break;
+        },
+        else => {},
+    };
+    const array_value = array_expression orelse return error.TestUnexpectedResult;
+    const saved_array_operation = array_value.operation;
+    array_value.operation.array.operand_count = 1;
+    try std.testing.expectError(error.InvalidAggregateConstruction, executable.verify(function));
+    array_value.operation = saved_array_operation;
+
+    var aggregate_store: ?*@TypeOf(function.executable_body.statements[0]) = null;
+    for (function.executable_body.statements) |*statement| switch (statement.operation) {
+        .store => |store| if (store.ty == .array) {
+            aggregate_store = statement;
+            break;
+        },
+        else => {},
+    };
+    const store = aggregate_store orelse return error.TestUnexpectedResult;
+    const saved_store_operation = store.operation;
+    store.operation.store.access.alignment = 2;
+    try std.testing.expectError(error.InvalidMemoryAccessAlignment, executable.verify(function));
+    store.operation = saved_store_operation;
+    try executable.verify(function);
+}
+
 test "value types distinguish every legacy spelling collision family" {
     const pointer_u8: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     const pointer_u32: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };

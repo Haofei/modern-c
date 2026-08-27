@@ -432,7 +432,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 aggregate.field_count != 2 or !sameValueType(aggregate.ty, value.result_ty) or
                 !sameValueType(aggregate.field_types[0], .bool)) return error.InvalidAggregateConstruction;
         },
-        .array => |operation| try verifyArguments(body, value, operation.operands, operation.operand_count),
+        .array => |operation| {
+            try verifyArguments(body, value, operation.operands, operation.operand_count);
+            if (body.complete) try verifyArrayConstruction(function, value, operation);
+        },
         .struct_ => |operation| {
             try verifyArguments(body, value, operation.operands, operation.operand_count);
             if (body.complete) try verifyStructConstruction(function, value, operation);
@@ -806,7 +809,7 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .deref, .index, .range_slice, .array => return true,
+        .unsupported, .deref, .index, .range_slice => return true,
         .builtin_call => |call| {
             if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return true;
             if (call.argument_count > mir.max_executable_operands) return true;
@@ -873,13 +876,20 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
     if (!aggregate.type_id.isValid() or aggregate.field_count == 0 or aggregate.field_count > mir.max_executable_operands or
         (aggregate.construction != .declared_struct and aggregate.construction != .c_union)) return error.InvalidAggregateType;
     try verifyType(function, aggregate.type_id, aggregate.ty, body.complete);
-    if (aggregate.ty != .struct_ and aggregate.ty != .nullable_value) return error.InvalidAggregateType;
+    if (aggregate.ty != .array and aggregate.ty != .struct_ and aggregate.ty != .nullable_value) return error.InvalidAggregateType;
+    if (aggregate.ty == .array and aggregate.construction != .declared_struct) return error.InvalidAggregateType;
     if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
         !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;
     for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
     for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
         if (field_ty == .unknown or field_ty == .value) return error.InvalidAggregateType;
         try verifyType(function, field_type_id, field_ty, body.complete);
+    }
+    if (aggregate.ty == .array) {
+        for (aggregate.field_spellings[0..aggregate.field_count], aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_spelling, field_ty, field_type_id| {
+            if (field_spelling.len != 0 or !sameValueType(field_ty, aggregate.field_types[0]) or
+                !field_type_id.eql(aggregate.field_type_ids[0])) return error.InvalidAggregateType;
+        }
     }
     for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_spelling, field_ty, field_type_id| {
         if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
@@ -938,6 +948,23 @@ fn verifyStructConstruction(
         return error.InvalidAggregateConstruction;
 }
 
+fn verifyArrayConstruction(
+    function: *const mir.Function,
+    value: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "array"),
+) !void {
+    const body = &function.executable_body;
+    const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
+    if (aggregate.construction != .declared_struct or aggregate.ty != .array or !sameValueType(aggregate.ty, value.result_ty) or
+        operation.operand_count == 0 or operation.operand_count != aggregate.field_count)
+        return error.InvalidAggregateConstruction;
+    for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+        const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+        if (!sameValueType(operand.result_ty, aggregate.field_types[index]) or
+            !operand.type_id.eql(aggregate.field_type_ids[index])) return error.InvalidAggregateConstruction;
+    }
+}
+
 pub fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableAggregateType {
     if (!type_id.isValid()) return null;
     for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
@@ -955,7 +982,17 @@ fn verifyMemoryAccess(
     const target = place(body, place_id) orelse return error.InvalidPlaceReference;
     if (target.storage != .ordinary) return error.InvalidMemoryAccessType;
     if (!sameValueType(target.ty, ty)) return error.InvalidPlaceType;
-    const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return error.InvalidMemoryAccessType;
+    const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse aggregate_local: {
+        if (target.projection_count != 0 or access.kind != .plain) return error.InvalidMemoryAccessType;
+        switch (target.root) {
+            .local => {},
+            .symbol, .value => return error.InvalidMemoryAccessType,
+        }
+        switch (ty) {
+            .array, .struct_, .nullable_value => break :aggregate_local 1,
+            else => return error.InvalidMemoryAccessType,
+        }
+    };
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
     if (target.projection_count != 0) {
         if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;

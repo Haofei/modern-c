@@ -6902,7 +6902,8 @@ const FunctionBuilder = struct {
 
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
-            .unsupported, .deref, .index, .range_slice, .array => false,
+            .unsupported, .deref, .index, .range_slice => false,
+            .array => |operation| self.executableArrayConstructionComplete(expression, operation),
             .optional_some => |operand| optional: {
                 if (expression.result_ty != .nullable_value or !operand.isValid() or
                     operand.index() >= expression.id.index() or operand.index() >= self.executable_expressions.items.len)
@@ -7035,6 +7036,30 @@ const FunctionBuilder = struct {
         for (seen[0..shape.field_count]) |present| if (!present) return false;
         for (operation.operands[operation.operand_count..]) |operand_id| if (operand_id.isValid()) return false;
         for (operation.field_indices[operation.operand_count..]) |field_index| if (field_index != std.math.maxInt(usize)) return false;
+        return true;
+    }
+
+    fn executableArrayConstructionComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "array"),
+    ) bool {
+        if (operation.operand_count == 0 or operation.operand_count > mir_model.max_executable_operands) return false;
+        var aggregate: ?mir_model.ExecutableAggregateType = null;
+        for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(expression.type_id)) {
+            aggregate = candidate;
+            break;
+        };
+        const shape = aggregate orelse return false;
+        if (shape.construction != .declared_struct or shape.ty != .array or !sameValueType(shape.ty, expression.result_ty) or
+            shape.field_count != operation.operand_count) return false;
+        for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+            if (!operand_id.isValid() or operand_id.index() >= self.executable_expressions.items.len) return false;
+            const operand = self.executable_expressions.items[operand_id.index()];
+            if (!sameValueType(operand.result_ty, shape.field_types[index]) or
+                !operand.type_id.eql(shape.field_type_ids[index])) return false;
+        }
+        for (operation.operands[operation.operand_count..]) |operand_id| if (operand_id.isValid()) return false;
         return true;
     }
 
@@ -7208,7 +7233,19 @@ const FunctionBuilder = struct {
         access: mir_model.ExecutableMemoryAccess,
         is_store: bool,
     ) bool {
-        if (!sameValueType(place.ty, ty) or access.alignment != mir_model.ExecutableMemoryAccess.scalarAlignment(ty)) return false;
+        if (!sameValueType(place.ty, ty)) return false;
+        const expected_alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse aggregate_local: {
+            if (place.projection_count != 0 or access.kind != .plain) return false;
+            switch (place.root) {
+                .local => {},
+                .symbol, .value => return false,
+            }
+            switch (ty) {
+                .array, .struct_, .nullable_value => break :aggregate_local 1,
+                else => return false,
+            }
+        };
+        if (access.alignment != expected_alignment) return false;
         if (place.projection_count != 0) {
             if (!self.executablePlaceComplete(place)) return false;
             const local_alias = switch (place.root) {
@@ -7589,6 +7626,15 @@ const FunctionBuilder = struct {
         return self.ensureExecutableExprAs(input, null);
     }
 
+    fn ensureExecutableExprAsType(
+        self: *FunctionBuilder,
+        input: ast.Expr,
+        expected_ty: ?ValueType,
+        expected_type_expr: ?ast.TypeExpr,
+    ) anyerror!ExprId {
+        return self.ensureExecutableExprAsInner(input, expected_ty, expected_type_expr);
+    }
+
     fn ensureExecutableCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
         const operand = try self.ensureExecutableExprAs(input, target_ty);
         // Targetless integer/character literals acquire their storage type
@@ -7609,6 +7655,15 @@ const FunctionBuilder = struct {
     /// renderers have not cut over yet. These two pointer coercions preserve
     /// representation and are the deliberately bounded slice owned here.
     fn ensureExecutablePointerCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
+        return self.ensureExecutablePointerCoercedExprAsType(input, target_ty, null);
+    }
+
+    fn ensureExecutablePointerCoercedExprAsType(
+        self: *FunctionBuilder,
+        input: ast.Expr,
+        target_ty: ValueType,
+        target_type_expr: ?ast.TypeExpr,
+    ) anyerror!ExprId {
         var unwrapped = input;
         while (unwrapped.kind == .grouped or unwrapped.kind == .move_expr) unwrapped = switch (unwrapped.kind) {
             .grouped => |inner| inner.*,
@@ -7617,7 +7672,7 @@ const FunctionBuilder = struct {
         };
         if (target_ty == .nullable_value and unwrapped.kind == .null_literal)
             return self.appendExecutableValueOptional(input, target_ty, null);
-        const operand = try self.ensureExecutableExprAs(input, target_ty);
+        const operand = try self.ensureExecutableExprAsInner(input, target_ty, target_type_expr);
         try self.contextualizeExecutableLiteral(operand, target_ty);
         const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
         if (sameValueType(operand_ty, target_ty)) return operand;
@@ -7663,6 +7718,15 @@ const FunctionBuilder = struct {
     }
 
     fn ensureExecutableExprAs(self: *FunctionBuilder, input: ast.Expr, expected_ty: ?ValueType) anyerror!ExprId {
+        return self.ensureExecutableExprAsInner(input, expected_ty, null);
+    }
+
+    fn ensureExecutableExprAsInner(
+        self: *FunctionBuilder,
+        input: ast.Expr,
+        expected_ty: ?ValueType,
+        expected_type_expr: ?ast.TypeExpr,
+    ) anyerror!ExprId {
         var expr = input;
         while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
             .grouped => |inner| inner.*,
@@ -7691,6 +7755,10 @@ const FunctionBuilder = struct {
         };
         if (expr.kind == .struct_literal) if (expected_ty) |expected| switch (expected) {
             .struct_ => result_ty = expected,
+            else => {},
+        };
+        if (expr.kind == .array_literal) if (expected_ty) |expected| switch (expected) {
+            .array => result_ty = expected,
             else => {},
         };
         if (expr.kind == .enum_literal) if (expected_ty) |expected| switch (expected) {
@@ -7974,6 +8042,12 @@ const FunctionBuilder = struct {
                         .argument_count = node.args.len,
                     };
                     const summary = self.summaries.get(callee_name);
+                    // A call used as a statement has no contextual expected
+                    // type. Its checked signature is still authoritative;
+                    // otherwise a void call is recorded as `.unknown` and
+                    // prevents an otherwise complete executable body from
+                    // reaching either canonical renderer.
+                    if (summary) |callee_summary| result_ty = callee_summary.return_ty;
                     for (node.args, 0..) |argument, index| {
                         const parameter_ty: ?ValueType = if (summary) |callee_summary|
                             if (index < callee_summary.params.len)
@@ -7982,7 +8056,12 @@ const FunctionBuilder = struct {
                                 null
                         else
                             null;
-                        call_value.arguments[index] = try self.ensureExecutableExprAs(argument, parameter_ty);
+                        call_value.arguments[index] = try self.ensureExecutableExprAsType(
+                            argument,
+                            parameter_ty,
+                            if (summary) |callee_summary| if (index < callee_summary.params.len) callee_summary.params[index].ty else null else null,
+                        );
+                        if (parameter_ty) |target_ty| try self.contextualizeExecutableLiteral(call_value.arguments[index], target_ty);
                     }
                     break :call .{ .direct_call = call_value };
                 };
@@ -8012,15 +8091,31 @@ const FunctionBuilder = struct {
                     .argument_count = node.args.len,
                 };
                 for (node.args, 0..) |argument, index| {
-                    call_value.arguments[index] = try self.ensureExecutableExprAs(argument, signature.parameter_types[index]);
+                    call_value.arguments[index] = try self.ensureExecutableExprAsType(argument, signature.parameter_types[index], indirect_target.params[index]);
                 }
                 break :call .{ .indirect_call = call_value };
             },
             .array_literal => |items| array: {
                 if (items.len > mir_model.max_executable_operands)
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
+                const target_type_expr = expected_type_expr orelse
+                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
+                const target = switch (aggregateTargetTypeAlias(target_type_expr, self.aliases).kind) {
+                    .array => |value| value,
+                    else => break :array self.unsupportedExecutableExpression(.unsupported_array_literal),
+                };
+                const length = parseArrayLen(target.len, self.const_fns, self.const_globals) orelse
+                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
+                if (length != items.len or length == 0)
+                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
+                const element_ty = valueTypeFromTypeAlias(target.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
+                if (!try self.internExecutableArrayType(result_ty, element_ty, length))
+                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 var aggregate: @FieldType(ExecutableExpression.Operation, "array") = .{ .operand_count = items.len };
-                for (items, 0..) |item, index| aggregate.operands[index] = try self.ensureExecutableExpr(item);
+                for (items, 0..) |item, index| {
+                    aggregate.operands[index] = try self.ensureExecutableExprAsType(item, element_ty, target.child.*);
+                    try self.contextualizeExecutableLiteral(aggregate.operands[index], element_ty);
+                }
                 break :array .{ .array = aggregate };
             },
             .struct_literal => |fields| aggregate: {
@@ -8052,7 +8147,7 @@ const FunctionBuilder = struct {
                     seen[field_index] = true;
                     value.field_indices[source_index] = field_index;
                     const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
-                    value.operands[source_index] = try self.ensureExecutableExprAs(field.value, field_ty);
+                    value.operands[source_index] = try self.ensureExecutableExprAsType(field.value, field_ty, summary.fields[field_index].ty);
                     try self.contextualizeExecutableLiteral(value.operands[source_index], field_ty);
                 }
                 for (seen[0..fields.len]) |present| if (!present)
@@ -8135,6 +8230,42 @@ const FunctionBuilder = struct {
         fields: []const ast.Field,
     ) !bool {
         return self.internExecutableAggregateTypeDepth(ty, construction, fields, 0);
+    }
+
+    fn internExecutableArrayType(self: *FunctionBuilder, ty: ValueType, element_ty: ValueType, length: usize) !bool {
+        if (std.meta.activeTag(ty) != .array or element_ty == .unknown or element_ty == .value or
+            length == 0 or length > mir_model.max_executable_operands) return false;
+        const type_id = try self.internTypeId(ty);
+        const element_type_id = try self.internTypeId(element_ty);
+        for (self.executable_aggregate_types.items) |aggregate| {
+            if (!aggregate.type_id.eql(type_id)) continue;
+            if (!sameValueType(aggregate.ty, ty) or aggregate.construction != .declared_struct or aggregate.field_count != length)
+                return false;
+            for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
+                if (!sameValueType(field_ty, element_ty) or !field_type_id.eql(element_type_id)) return false;
+            }
+            return true;
+        }
+        var aggregate: mir_model.ExecutableAggregateType = .{
+            .type_id = type_id,
+            .ty = ty,
+            .construction = .declared_struct,
+            .field_count = length,
+        };
+        for (0..length) |index| {
+            aggregate.field_types[index] = element_ty;
+            aggregate.field_type_ids[index] = element_type_id;
+        }
+        try self.executable_aggregate_types.append(self.allocator, aggregate);
+        if (!try self.internExecutableEnumType(element_ty)) return false;
+        switch (element_ty) {
+            .struct_ => |name| {
+                const summary = self.structs.get(name) orelse return false;
+                if (!try self.internExecutableAggregateTypeDepth(element_ty, executableAggregateConstruction(summary), summary.fields, 0)) return false;
+            },
+            else => {},
+        }
+        return true;
     }
 
     fn internExecutableAggregateTypeDepth(
@@ -8299,9 +8430,16 @@ const FunctionBuilder = struct {
     }
 
     fn executableMemoryAccess(self: *FunctionBuilder, place_expr: ast.Expr, ty: ValueType) mir_model.ExecutableMemoryAccess {
-        const alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse 0;
-        if (alignment == 0) self.executable_supported = false;
         const root = executablePlaceRootIdent(place_expr);
+        const aggregate_local = !self.executablePlaceHasDeref(place_expr) and if (root) |name|
+            self.executable_local_ids.contains(name) and switch (ty) {
+                .array, .struct_, .nullable_value => true,
+                else => false,
+            }
+        else
+            false;
+        const alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse if (aggregate_local) @as(u16, 1) else 0;
+        if (alignment == 0) self.executable_supported = false;
         const kind: mir_model.ExecutableMemoryAccessKind = if (self.executablePlaceHasDeref(place_expr))
             if (root) |name| local_alias: {
                 const local = self.executable_local_ids.get(name) orelse break :local_alias .race_unordered;
@@ -8918,7 +9056,10 @@ const FunctionBuilder = struct {
                         if (ast_query.isUninitLiteral(initializer) and mir_model.ExecutableMemoryAccess.scalarAlignment(ty) != null) null else initializer
                     else
                         null else null;
-                    const executable_initializer = if (initializer_expr) |initializer| try self.ensureExecutablePointerCoercedExpr(initializer, ty) else null;
+                    const executable_initializer = if (initializer_expr) |initializer|
+                        try self.ensureExecutablePointerCoercedExprAsType(initializer, ty, ty_expr)
+                    else
+                        null;
                     if (executable_initializer) |initializer| try self.contextualizeExecutableLiteral(initializer, ty);
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
@@ -8995,7 +9136,7 @@ const FunctionBuilder = struct {
                     null;
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = place_id,
-                    .value = try self.ensureExecutablePointerCoercedExpr(node.value, assignment_target_ty),
+                    .value = try self.ensureExecutablePointerCoercedExprAsType(node.value, assignment_target_ty, assignment_target_type_expr),
                     .ty = assignment_target_ty,
                     .access = self.executableMemoryAccess(node.target, assignment_target_ty),
                     .representation_source = representation_source,
@@ -9105,7 +9246,7 @@ const FunctionBuilder = struct {
                     if (self.return_ty == .void and executableExprIsVoidLiteral(expr))
                         null
                     else
-                        try self.ensureExecutablePointerCoercedExpr(expr, self.return_ty)
+                        try self.ensureExecutablePointerCoercedExprAsType(expr, self.return_ty, self.return_type_expr)
                 else
                     null else null;
                 if (executable_return) |value| try self.contextualizeExecutableLiteral(value, self.return_ty);
