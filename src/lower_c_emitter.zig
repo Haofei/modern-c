@@ -1301,10 +1301,6 @@ pub const CEmitter = struct {
         fact: mir.TargetTypeFact,
     };
 
-    const SimpleMirTrapBody = struct {
-        helper: []const u8,
-    };
-
     const max_simple_mir_void_calls = 8;
     const max_simple_mir_void_statements = 8;
     const max_simple_mir_global_stores = 8;
@@ -1633,36 +1629,32 @@ pub const CEmitter = struct {
         // the legacy definition emitter, which still renders every attribute.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
-        const simple_trap = self.simpleMirTrapBody(fn_mir);
-        const nullable_control_plan = if (simple_trap == null)
-            if (mir_nullable_control_plan.build(&fn_mir)) |plan|
-                if (self.mirNullableControlPlanSupported(function, plan)) plan else null
-            else
-                null
+        const nullable_control_plan = if (mir_nullable_control_plan.build(&fn_mir)) |plan|
+            if (self.mirNullableControlPlanSupported(function, plan)) plan else null
         else
             null;
-        const nested_conditional_return_plan = if (simple_trap == null and nullable_control_plan == null)
+        const nested_conditional_return_plan = if (nullable_control_plan == null)
             if (mir_nested_conditional_return_plan.build(fn_mir)) |plan|
                 if (self.mirNestedConditionalReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const aggregate_sequence_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null)
+        const aggregate_sequence_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null)
             if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
                 if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const workflow_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null)
+        const workflow_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null)
             if (mir_workflow_plan.build(&fn_mir)) |plan|
                 if (self.mirWorkflowPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const alloca_hoist_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null)
+        const alloca_hoist_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null)
             if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
                 if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
             else
@@ -1671,7 +1663,7 @@ pub const CEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const access_slice_plan = if (simple_trap == null and nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
+        const access_slice_plan = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const plan = access_body_plan orelse break :blk null;
             break :blk if (self.mirAccessSlicePlanSupported(function, plan)) plan else null;
@@ -1685,64 +1677,58 @@ pub const CEmitter = struct {
             null;
         const access_structural_priority = access_structural_operation != null and
             mirAccessStructuralRequiresPriority(access_body_plan.?, access_structural_operation.?);
-        const sequence_foreach_update_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
-                if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
-            else
-                null
+        const sequence_foreach_update_plan = if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
+            if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
         else
             null;
-        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null and simple_trap == null)
+        const sequence_foreach_return_plan = if (sequence_foreach_update_plan == null)
             if (mir_statement_plan.buildSequenceForEachReturn(fn_mir)) |plan|
                 if (self.mirSequenceForEachReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const direct_call_projected_return_plan = if (sequence_foreach_return_plan == null and simple_trap == null)
+        const direct_call_projected_return_plan = if (sequence_foreach_return_plan == null)
             if (mir_statement_plan.buildDirectCallProjectedReturn(fn_mir)) |plan|
                 if (self.mirDirectCallProjectedReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const local_aggregate_place_update_return_plan = if (direct_call_projected_return_plan == null and simple_trap == null)
+        const local_aggregate_place_update_return_plan = if (direct_call_projected_return_plan == null)
             if (mir_statement_plan.buildLocalAggregatePlaceUpdateReturn(fn_mir)) |plan|
                 if (self.mirLocalAggregatePlaceUpdateReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const local_aggregate_assignment_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and simple_trap == null)
+        const local_aggregate_assignment_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null)
             if (mir_statement_plan.buildLocalAggregateAssignmentReturn(fn_mir)) |plan|
                 if (self.mirLocalAggregateAssignmentReturnPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const place_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and simple_trap == null)
+        const place_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null)
             if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
                 if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
             else
                 null
         else
             null;
-        const scalar_switch_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and simple_trap == null)
+        const scalar_switch_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null)
             if (mir_statement_plan.buildScalarSwitchReturn(fn_mir)) |plan|
                 if (self.mirScalarSwitchPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const nullable_try_plan = if (simple_trap == null)
-            if (mir_statement_plan.buildNullableTry(fn_mir)) |plan|
-                if (self.mirNullableTryPlanSupported(plan)) plan else null
-            else
-                null
+        const nullable_try_plan = if (mir_statement_plan.buildNullableTry(fn_mir)) |plan|
+            if (self.mirNullableTryPlanSupported(plan)) plan else null
         else
             null;
         const simple_return = if (nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
-        const simple_return_prefix_calls = if (simple_trap == null) blk: {
+        const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
                     .aggregate_return_pointer_load => break :blk SimpleMirDirectCalls{},
@@ -1752,24 +1738,23 @@ pub const CEmitter = struct {
                 break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, self.simpleMirReturnAllowsTrapBlocks(fn_mir, ret)) orelse return false;
             }
             break :blk null;
-        } else null;
-        const simple_void_body = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and nullable_try_plan == null) self.simpleMirVoidBody(function, fn_mir) else null;
-        const simple_conditional_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        const simple_enum_switch_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
-        const simple_loop_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
+        };
+        const simple_void_body = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and nullable_try_plan == null) self.simpleMirVoidBody(function, fn_mir) else null;
+        const simple_conditional_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
+        const simple_enum_switch_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
+        const simple_loop_return = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
             if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
                 if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
             else
                 null
         else
             null;
-        const statement_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
+        const statement_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
         const specialized_plans = [_]bool{
-            simple_trap != null,
             nullable_control_plan != null,
             nested_conditional_return_plan != null,
             aggregate_sequence_plan != null,
@@ -1805,11 +1790,7 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
 
-        if (simple_trap) |trap| {
-            selected_path.* = .simple_trap;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s}();\n", .{trap.helper});
-        } else if (nullable_control_plan) |plan| {
+        if (nullable_control_plan) |plan| {
             selected_path.* = .nullable_control;
             try self.emitMirNullableControlPlan(plan);
         } else if (nested_conditional_return_plan) |plan| {
@@ -2196,32 +2177,6 @@ pub const CEmitter = struct {
 
     fn mirFunctionByName(self: *const CEmitter, name: []const u8) ?mir.Function {
         for (self.mir_module.functions) |function| if (std.mem.eql(u8, function.name, name)) return function;
-        return null;
-    }
-
-    fn simpleMirTrapBody(self: *CEmitter, fn_mir: mir.Function) ?SimpleMirTrapBody {
-        _ = self;
-        if (fn_mir.blocks.len != 2 or fn_mir.trap_edges.len != 1) return null;
-        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
-        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-        const edge = fn_mir.trap_edges[0];
-        if (edge.from_block != 0 or edge.trap_block != 1) return null;
-        const entry = fn_mir.blocks[0];
-        const trap_block = fn_mir.blocks[1];
-        if (!std.mem.eql(u8, trap_block.kind, "trap") or trap_block.terminator != .trap_) return null;
-        switch (entry.terminator) {
-            .return_, .unreachable_ => {},
-            else => return null,
-        }
-        if (edge.kind == .Unreachable) return .{ .helper = "mc_trap_Unreachable" };
-        if (edge.kind != .ExplicitTrap) return null;
-        for (fn_mir.call_target_facts) |fact| {
-            if (!sameMirSourceLocation(fact.source, .{ .line = edge.line, .column = edge.column, .offset = 0, .len = 0 })) continue;
-            if (mir.explicitTrapHelperForTarget(fact.kind)) |helper| return .{ .helper = helper };
-        }
-        if (fn_mir.call_target_facts.len == 1) {
-            if (mir.explicitTrapHelperForTarget(fn_mir.call_target_facts[0].kind)) |helper| return .{ .helper = helper };
-        }
         return null;
     }
 

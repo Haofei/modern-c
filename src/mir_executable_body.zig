@@ -506,16 +506,51 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
         }
     }
     if (body.complete) {
-        if (body.trap_edges.len != function.trap_edges.len) return error.InvalidCompletionClaim;
+        var terminal_projections: usize = 0;
         for (function.trap_edges) |legacy| {
             var matches: usize = 0;
             for (body.trap_edges) |edge| {
                 if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
                     legacy.kind == edge.kind and legacy.source == edge.source) matches += 1;
             }
+            if (matches == 0 and terminalTrapProjectionMatches(function, legacy)) {
+                terminal_projections += 1;
+                continue;
+            }
             if (matches != 1) return error.InvalidCompletionClaim;
         }
+        if (body.trap_edges.len + terminal_projections != function.trap_edges.len) return error.InvalidCompletionClaim;
     }
+}
+
+fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.TrapEdge) bool {
+    const body = &function.executable_body;
+    const source = executableTerminator(body, mir.BlockId.fromIndex(legacy.from_block)) orelse return false;
+    const target = executableTerminator(body, mir.BlockId.fromIndex(legacy.trap_block)) orelse return false;
+    const destination = switch (source.operation) {
+        .jump => |block| block,
+        else => return false,
+    };
+    if (!destination.eql(mir.BlockId.fromIndex(legacy.trap_block))) return false;
+    const kind = switch (target.operation) {
+        .trap_ => |value| value,
+        else => return false,
+    };
+    return switch (legacy.source) {
+        .unreachable_expr => legacy.kind == .Unreachable and kind == .Unreachable,
+        .explicit_trap => explicit: {
+            if (legacy.kind != .ExplicitTrap) break :explicit false;
+            var matches: usize = 0;
+            for (function.call_target_facts) |fact| {
+                if (!fact.typed_span_id.eql(legacy.typed_span_id)) continue;
+                if (mir.explicitTrapKindForTarget(fact.kind)) |expected| {
+                    if (expected == kind) matches += 1;
+                }
+            }
+            break :explicit matches == 1;
+        },
+        else => false,
+    };
 }
 
 fn ownedTrapCount(body: *const mir.ExecutableBody, owner: mir.ExecutableTrapOwner, kind: mir.TrapKind, source: mir.TrapSource) usize {
@@ -635,6 +670,7 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
 
 fn verifyTerminator(function: *const mir.Function, terminator: mir.ExecutableTerminator) !void {
     const body = &function.executable_body;
+    if (terminator.span_id.isValid()) try verifySpan(function, terminator.span_id, terminator.source);
     switch (terminator.operation) {
         .fallthrough, .trap_, .unreachable_ => {},
         .return_ => {

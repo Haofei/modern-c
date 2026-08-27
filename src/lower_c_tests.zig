@@ -21137,6 +21137,19 @@ test "lower-c emits explicit traps and unreachable" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void trap_statement(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidShift();") != null);
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_mir_explicit_traps.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var source_map: std.ArrayList(u8) = .empty;
+    defer source_map.deinit(std.testing.allocator);
+    try appendCSourceMapDeclsTest(std.testing.allocator, parsed.decls, &source_map, .kernel, "c_mir_explicit_traps.mc", "c_mir_explicit_traps.c");
+    try std.testing.expect(std.mem.indexOf(u8, source_map.items, "generated_c_line=0") == null);
 }
 
 test "lower-c rejects non-static global initializers instead of zeroing" {

@@ -540,6 +540,14 @@ ignore that marker and emit the canonical CFG, while the dedicated plan,
 admission helpers, and C/LLVM emitters are deleted. The strict split remains C
 68/92 and moves to LLVM 67/93, and the shared registry falls to 23.
 
+`simple_trap` is fully retired. A terminal `trap(.Reason)` or `unreachable`
+is now normalized to a verified CFG jump into a trap block; the explicit trap
+reason is joined to its call-target fact by opaque `SpanId` and projected to an
+exact executable `TrapKind`. Both mechanical renderers consume that CFG,
+including `never` functions, and the duplicated source-location recognizers
+and helper-selection branches are deleted. The strict split remains C 68/92
+and LLVM 67/93, while the shared registry falls to 22.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather

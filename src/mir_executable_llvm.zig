@@ -1270,7 +1270,7 @@ const Renderer = struct {
 
 fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
     return switch (ty) {
-        .void => "void",
+        .void, .never => "void",
         .bool => "i1",
         .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) "i8" else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) "i16" else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) "i32" else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) "i64" else null,
         .domain_integer => |shape| scalarLlvmType(.{ .integer = shape.child }),

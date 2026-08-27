@@ -66,7 +66,7 @@ pub fn emitBodyWithSourcePath(
             if (!statement.block_id.eql(terminator.block_id)) continue;
             try emitStatement(allocator, out, body, statement, indent + 1, source_path);
         }
-        try emitTerminator(allocator, out, body, terminator, indent + 1);
+        try emitTerminator(allocator, out, body, terminator, indent + 1, source_path);
     }
 }
 
@@ -160,6 +160,7 @@ fn emitTerminator(
     body: *const mir.ExecutableBody,
     terminator: mir.ExecutableTerminator,
     indent: usize,
+    source_path: ?[]const u8,
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (terminator.operation) {
         .fallthrough => return error.UnsupportedOperation,
@@ -186,10 +187,12 @@ fn emitTerminator(
         },
         .trap_ => |kind| {
             const helper = trapHelper(kind) orelse return error.UnsupportedOperation;
+            try writeSourceLineDirective(allocator, out, source_path, terminator.source);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "{s}();\n", .{helper});
         },
         .unreachable_ => {
+            try writeSourceLineDirective(allocator, out, source_path, terminator.source);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "mc_trap_Unreachable();\n");
         },

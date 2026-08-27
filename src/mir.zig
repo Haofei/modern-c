@@ -3492,13 +3492,16 @@ pub const LoweringAdmissionError = error{
 /// facts such as pointer provenance may still be `unknown`, but codegen-owned
 /// type facts must not use the `.unknown` ValueType placeholder.
 pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
+    // Exact call identities are inputs to canonical CFG projection (notably
+    // explicit trap reasons), so reject missing/stale identities before the
+    // executable-body verifier checks their projection.
+    try validateCallTargetFactsForLowering(module);
     for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
     try validateBoolFactsForLowering(module);
     try validateFloatFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
-    try validateCallTargetFactsForLowering(module);
     try validateBindThunkFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
     try validateTypeOwnershipFactsForLowering(module);
@@ -6591,7 +6594,7 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(representation_facts);
         const elided_bounds = try self.elided_bounds.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(elided_bounds);
-        var executable_body = try self.finishExecutableBody(trap_edges);
+        var executable_body = try self.finishExecutableBody(trap_edges, call_target_facts, span_identities);
         errdefer executable_body.deinit(self.allocator);
         const param_types = try self.allocator.alloc(ValueType, executable_body.parameters.len);
         errdefer self.allocator.free(param_types);
@@ -6686,9 +6689,14 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn finishExecutableBody(self: *FunctionBuilder, trap_edges: []const TrapEdge) !ExecutableBody {
+    fn finishExecutableBody(
+        self: *FunctionBuilder,
+        trap_edges: []const TrapEdge,
+        call_target_facts: []const CallTargetFact,
+        span_identities: []const SpanIdentity,
+    ) !ExecutableBody {
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
-        if (!self.executableTrapProjectionComplete(trap_edges)) complete = false;
+        if (!self.executableTrapProjectionComplete(trap_edges, call_target_facts)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
             parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
@@ -6821,10 +6829,22 @@ const FunctionBuilder = struct {
                     break :switch_op .{ .switch_ = .{ .subject = subject } };
                 },
                 .return_ => .return_,
-                .trap_ => |kind| .{ .trap_ = kind },
+                .trap_ => |kind| trap: {
+                    const executable_kind = self.executableTrapKindForBlock(block.id, kind, trap_edges, call_target_facts) orelse {
+                        complete = false;
+                        break :trap .{ .trap_ = kind };
+                    };
+                    break :trap .{ .trap_ = executable_kind };
+                },
                 .unreachable_ => .unreachable_,
             };
-            try self.executable_terminators.append(self.allocator, .{ .block_id = BlockId.fromIndex(block.id), .operation = operation });
+            const terminator_source = executableTerminatorSource(block.id, operation, trap_edges, span_identities);
+            try self.executable_terminators.append(self.allocator, .{
+                .block_id = BlockId.fromIndex(block.id),
+                .source = terminator_source.source,
+                .span_id = terminator_source.span_id,
+                .operation = operation,
+            });
         }
         self.executable_boolean_branches.deinit(self.allocator);
         self.executable_boolean_branches = .empty;
@@ -7234,12 +7254,26 @@ const FunctionBuilder = struct {
             call.representation_source == null and !call.representation_span_id.isValid();
     }
 
-    fn executableTrapProjectionComplete(self: *const FunctionBuilder, legacy_edges: []const TrapEdge) bool {
-        if (self.executable_trap_edges.items.len != legacy_edges.len) return false;
-        for (self.executable_trap_edges.items, legacy_edges) |edge, legacy| {
+    fn executableTrapProjectionComplete(
+        self: *const FunctionBuilder,
+        legacy_edges: []const TrapEdge,
+        call_target_facts: []const CallTargetFact,
+    ) bool {
+        var executable_index: usize = 0;
+        for (legacy_edges) |legacy| {
+            if (executable_index >= self.executable_trap_edges.items.len) {
+                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts)) return false;
+                continue;
+            }
+            const edge = self.executable_trap_edges.items[executable_index];
             if (!edge.from_block.eql(BlockId.fromIndex(legacy.from_block)) or
                 !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
-                edge.kind != legacy.kind or edge.source != legacy.source) return false;
+                edge.kind != legacy.kind or edge.source != legacy.source)
+            {
+                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts)) return false;
+                continue;
+            }
+            executable_index += 1;
             const OwnerIdentity = struct { block_id: BlockId, span_id: SpanId };
             const owner_identity: OwnerIdentity = switch (edge.owner) {
                 .expression => |id| expression: {
@@ -7267,7 +7301,73 @@ const FunctionBuilder = struct {
             };
             if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) return false;
         }
-        return true;
+        return executable_index == self.executable_trap_edges.items.len;
+    }
+
+    fn executableTerminalTrapProjectionComplete(
+        self: *const FunctionBuilder,
+        legacy: TrapEdge,
+        legacy_edges: []const TrapEdge,
+        call_target_facts: []const CallTargetFact,
+    ) bool {
+        if (legacy.from_block >= self.blocks.items.len or legacy.trap_block >= self.blocks.items.len) return false;
+        const source = self.blocks.items[legacy.from_block];
+        const target = self.blocks.items[legacy.trap_block];
+        const jump_target = switch (source.terminator) {
+            .jump => |block| block,
+            else => return false,
+        };
+        if (jump_target != legacy.trap_block) return false;
+        const target_kind = switch (target.terminator) {
+            .trap_ => |kind| self.executableTrapKindForBlock(legacy.trap_block, kind, legacy_edges, call_target_facts) orelse return false,
+            else => return false,
+        };
+        return switch (legacy.source) {
+            .unreachable_expr => legacy.kind == .Unreachable and target_kind == .Unreachable,
+            .explicit_trap => legacy.kind == .ExplicitTrap and target_kind != .ExplicitTrap and
+                target_kind != .CallMayTrap and target_kind != .Unknown,
+            else => false,
+        };
+    }
+
+    fn executableTrapKindForBlock(
+        self: *const FunctionBuilder,
+        block_id: usize,
+        legacy_kind: TrapKind,
+        legacy_edges: []const TrapEdge,
+        call_target_facts: []const CallTargetFact,
+    ) ?TrapKind {
+        _ = self;
+        if (legacy_kind != .ExplicitTrap) return legacy_kind;
+        for (legacy_edges) |edge| {
+            if (edge.trap_block != block_id or edge.kind != .ExplicitTrap or edge.source != .explicit_trap) continue;
+            var match: ?TrapKind = null;
+            for (call_target_facts) |fact| {
+                if (!fact.typed_span_id.eql(edge.typed_span_id)) continue;
+                const kind = explicitTrapKindForTarget(fact.kind) orelse continue;
+                if (match != null) return null;
+                match = kind;
+            }
+            return match;
+        }
+        return null;
+    }
+
+    fn executableTerminatorSource(
+        block_id: usize,
+        operation: @FieldType(ExecutableTerminator, "operation"),
+        trap_edges: []const TrapEdge,
+        span_identities: []const SpanIdentity,
+    ) struct { source: SourcePoint, span_id: SpanId } {
+        if (operation != .trap_) return .{ .source = .{ .line = 0, .column = 0 }, .span_id = .invalid };
+        for (trap_edges) |edge| {
+            if (edge.trap_block != block_id or !edge.typed_span_id.isValid() or
+                edge.typed_span_id.index() >= span_identities.len) continue;
+            const identity = span_identities[edge.typed_span_id.index()];
+            if (!identity.id.eql(edge.typed_span_id)) continue;
+            return .{ .source = identity.source, .span_id = identity.id };
+        }
+        return .{ .source = .{ .line = 0, .column = 0 }, .span_id = .invalid };
     }
 
     fn executableAssertGuardComplete(
@@ -8756,9 +8856,16 @@ const FunctionBuilder = struct {
                 return false;
             },
             .expr => |expr| {
-                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .eval = try self.ensureExecutableExpr(expr) });
+                const terminal_trap = terminalTrapForExpr(expr);
+                if (terminal_trap == null) {
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .eval = try self.ensureExecutableExpr(expr) });
+                }
                 try self.addResultExpressionStatementCheck(expr);
                 try self.buildExpr(expr);
+                if (terminal_trap) |trap| {
+                    self.finishExecutableTerminalTrap(trap);
+                    return true;
+                }
                 if (exprTerminates(expr)) {
                     self.setTerminator(.unreachable_);
                     return true;
@@ -8785,9 +8892,18 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"return" => |maybe| {
-                const executable_return = if (maybe) |expr| try self.ensureExecutablePointerCoercedExpr(expr, self.return_ty) else null;
+                const terminal_trap = if (maybe) |expr| terminalTrapForExpr(expr) else null;
+                const executable_return = if (terminal_trap == null) if (maybe) |expr|
+                    if (self.return_ty == .void and executableExprIsVoidLiteral(expr))
+                        null
+                    else
+                        try self.ensureExecutablePointerCoercedExpr(expr, self.return_ty)
+                else
+                    null else null;
                 if (executable_return) |value| self.contextualizeExecutableLiteral(value, self.return_ty);
-                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
+                if (terminal_trap == null) {
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
+                }
                 if (maybe) |expr| {
                     if (self.addressOriginIsLocal(expr)) {
                         try self.addInstr(.usage_check, "local_address_escape", .unknown, expr.span);
@@ -8807,6 +8923,10 @@ const FunctionBuilder = struct {
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
                     self.assignment_target_type_expr = previous_target_type_expr;
+                }
+                if (terminal_trap) |trap| {
+                    self.finishExecutableTerminalTrap(trap);
+                    return true;
                 }
                 try self.addInstrWithValue(.return_value, if (maybe) |_| "value" else "void", self.return_ty, stmt.span, if (maybe) |expr| exprText(expr) else null);
                 if (maybe) |expr| {
@@ -10489,7 +10609,11 @@ const FunctionBuilder = struct {
                 }
                 if (explicit_trap_target) |target| {
                     try self.addInstr(.call_target, @tagName(target), .never, expr.span);
-                    try self.addCallTargetFact(target, .never, node.callee.*.span);
+                    // The trap reason describes the complete diverging call,
+                    // so its typed identity is the call expression rather than
+                    // the callee token. This lets CFG trap projection match by
+                    // opaque SpanId without reconstructing line/column offsets.
+                    try self.addCallTargetFact(target, .never, expr.span);
                 }
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
@@ -11265,6 +11389,28 @@ const FunctionBuilder = struct {
             .source_len = span.len,
             .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
         });
+    }
+
+    fn finishExecutableTerminalTrap(self: *FunctionBuilder, trap: TerminalTrap) void {
+        if (self.trap_edges.items.len == 0) {
+            self.executable_supported = false;
+            self.setTerminator(.unreachable_);
+            return;
+        }
+        const edge = self.trap_edges.items[self.trap_edges.items.len - 1];
+        const edge_kind_valid = switch (trap.source) {
+            .explicit_trap => edge.kind == .ExplicitTrap,
+            .unreachable_expr => edge.kind == trap.kind,
+            else => false,
+        };
+        if (edge.from_block != self.current or edge.source != trap.source or !edge_kind_valid or
+            edge.trap_block >= self.blocks.items.len)
+        {
+            self.executable_supported = false;
+            self.setTerminator(.unreachable_);
+            return;
+        }
+        self.setTerminator(.{ .jump = edge.trap_block });
     }
 
     fn addBinaryTrapEdges(self: *FunctionBuilder, node: anytype, span: ast.Span) !void {
@@ -15547,13 +15693,23 @@ fn verifyFunctionCfg(function: Function, reporter: *diagnostics.Reporter) void {
 fn terminatorSuccessorsAreConsistent(function: Function, block: Block) bool {
     return switch (block.terminator) {
         .fallthrough => normalSuccessorCount(function, block) == 0,
-        .jump => |target| normalSuccessorCount(function, block) == 1 and normalSuccessorListed(function, block, target),
+        .jump => |target| (normalSuccessorCount(function, block) == 1 and normalSuccessorListed(function, block, target)) or
+            terminalTrapSuccessor(function, block, target),
         .branch => |branch| normalSuccessorCount(function, block) == 2 and
             successorListed(block, branch.true_block) and
             successorListed(block, branch.false_block),
         .return_, .trap_, .unreachable_ => normalSuccessorCount(function, block) == 0,
         .switch_ => normalSuccessorCount(function, block) > 0,
     };
+}
+
+fn terminalTrapSuccessor(function: Function, block: Block, target: usize) bool {
+    if (block.successors.len != 1 or block.successors[0] != target) return false;
+    for (function.trap_edges) |edge| {
+        if (edge.from_block != block.id or edge.trap_block != target) continue;
+        return edge.source == .explicit_trap or edge.source == .unreachable_expr;
+    }
+    return false;
 }
 
 fn normalSuccessorCount(function: Function, block: Block) usize {
@@ -15980,6 +16136,38 @@ pub fn explicitTrapCallTargetKind(call: anytype) ?CallTargetKind {
     if (std.mem.eql(u8, name, "Unreachable")) return .trap_unreachable;
     return null;
 }
+
+const TerminalTrap = struct {
+    kind: TrapKind,
+    source: TrapSource,
+};
+
+fn terminalTrapForExpr(input: ast.Expr) ?TerminalTrap {
+    var expr = input;
+    while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
+        .grouped => |inner| inner.*,
+        .move_expr => |inner| inner.*,
+        else => unreachable,
+    };
+    return switch (expr.kind) {
+        .unreachable_expr => .{ .kind = .Unreachable, .source = .unreachable_expr },
+        .call => |call| .{
+            .kind = explicitTrapKindForTarget(explicitTrapCallTargetKind(call) orelse return null) orelse return null,
+            .source = .explicit_trap,
+        },
+        else => null,
+    };
+}
+
+fn executableExprIsVoidLiteral(input: ast.Expr) bool {
+    return switch (input.kind) {
+        .void_literal => true,
+        .grouped, .move_expr => |inner| executableExprIsVoidLiteral(inner.*),
+        else => false,
+    };
+}
+
+pub const explicitTrapKindForTarget = mir_model.explicitTrapKindForTarget;
 
 fn explicitTrapReasonName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {

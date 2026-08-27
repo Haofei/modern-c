@@ -325,6 +325,7 @@ typed-unary operand-descendant bugs before commit.
 | Explicit scalar `uninit` storage | `var x: T = uninit` becomes `local_init(value=null)` for scalar storage; later assignment/store owns the first value generation | (current batch) |
 | Declared-struct construction | MIR owns a `TypeId`-keyed aggregate table, exact field types and resolved field indices; operands evaluate in source order while C/LLVM assemble declaration-order layout; duplicate/incomplete/mistyped fields fail verification | (current batch) |
 | Local-address scalar update | `let p: *mut T = &x; *p = x + 1`; executable MIR proves the immutable local-address alias, owns the checked store and representation edge, and both renderers consume the same proof | `access_local_address_update` retired |
+| Terminal explicit trap / unreachable | Return or expression-statement termination is a verified CFG jump to an exact trap terminator; explicit reasons join through opaque `SpanId`, and neither backend scans source locations or selects runtime helpers | `simple_trap` retired |
 
 ### Remaining strict-corpus families
 

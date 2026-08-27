@@ -1023,6 +1023,8 @@ pub const ExecutableEnumType = struct {
 
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
+    source: SourcePoint = .{ .line = 0, .column = 0 },
+    span_id: SpanId = .invalid,
     operation: union(enum) {
         fallthrough,
         jump: BlockId,
@@ -1319,6 +1321,20 @@ pub const CallTargetKind = enum {
     conversion_sat_from,
     conversion_from_mod,
 };
+
+pub fn explicitTrapKindForTarget(kind: CallTargetKind) ?TrapKind {
+    return switch (kind) {
+        .trap_bounds => .Bounds,
+        .trap_null_unwrap => .Unwrap,
+        .trap_integer_overflow => .IntegerOverflow,
+        .trap_divide_by_zero => .DivideByZero,
+        .trap_invalid_shift => .InvalidShift,
+        .trap_invalid_representation => .InvalidRepresentation,
+        .trap_assert => .Assert,
+        .trap_unreachable => .Unreachable,
+        else => null,
+    };
+}
 
 pub const CallTargetFact = struct {
     kind: CallTargetKind,
