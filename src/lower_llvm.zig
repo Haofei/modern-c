@@ -1406,21 +1406,6 @@ const LlvmEmitter = struct {
         after_block_index: usize,
     };
 
-    const max_simple_mir_switch_arms = 8;
-
-    const SimpleMirEnumSwitchArmReturn = struct {
-        case_name: []const u8,
-        value: SimpleMirConditionalValue,
-        span: diagnostics.Span,
-    };
-
-    const SimpleMirEnumSwitchReturn = struct {
-        subject_name: []const u8,
-        enum_name: []const u8,
-        arms: [max_simple_mir_switch_arms]SimpleMirEnumSwitchArmReturn = undefined,
-        arm_count: usize = 0,
-    };
-
     const SimpleMirLoopVoidBody = struct {
         condition: SimpleMirCondition,
         body_block_index: usize,
@@ -1826,16 +1811,15 @@ const LlvmEmitter = struct {
         };
         const simple_void_body = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and nullable_try_plan == null) self.simpleMirVoidBody(function, fn_mir) else null;
         const simple_conditional_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        const simple_enum_switch_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
-        const simple_loop_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null)
+        const simple_loop_return = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null)
             if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
                 if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
             else
                 null
         else
             null;
-        const llvm_structural_access_operation = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (nullable_control_plan == null and nested_conditional_return_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1856,7 +1840,6 @@ const LlvmEmitter = struct {
             simple_return != null,
             simple_void_body != null,
             simple_conditional_return != null,
-            simple_enum_switch_return != null,
             simple_loop_return != null,
             place_return_plan != null,
             scalar_switch_return_plan != null,
@@ -2154,25 +2137,6 @@ const LlvmEmitter = struct {
             try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.then_value, sig_facts.name.span);
             try self.out.print(self.allocator, "{s}:\n", .{else_label});
             try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.else_value, sig_facts.name.span);
-        } else if (simple_enum_switch_return) |switch_return| {
-            selected_path.* = .simple_enum_switch_return;
-            const subject_ty = simpleType(sig_facts.name.span, switch_return.enum_name);
-            const subject_llvm = try self.llvmType(subject_ty);
-            const enum_decl = self.enum_types.get(switch_return.enum_name) orelse return error.UnsupportedLlvmEmission;
-            const default_label = try self.nextLabel("switch_default");
-            var labels: [max_simple_mir_switch_arms][]const u8 = undefined;
-            try self.out.print(self.allocator, "  switch {s} %{s}, label %{s} [\n", .{ subject_llvm, switch_return.subject_name, default_label });
-            for (switch_return.arms[0..switch_return.arm_count], 0..) |arm, i| {
-                labels[i] = try self.nextLabel("switch_arm");
-                try self.out.print(self.allocator, "    {s} {s}, label %{s}\n", .{ subject_llvm, try self.enumCaseValueByName(enum_decl, arm.case_name), labels[i] });
-            }
-            try self.out.print(self.allocator, "  ]{s}\n", .{try self.debugCallSuffix()});
-            for (switch_return.arms[0..switch_return.arm_count], 0..) |arm, i| {
-                try self.out.print(self.allocator, "{s}:\n", .{labels[i]});
-                try self.emitSimpleMirConditionalReturnValue(ret_ty, arm.value, arm.span);
-            }
-            try self.out.print(self.allocator, "{s}:\n", .{default_label});
-            try self.out.print(self.allocator, "  call void @mc_trap_InvalidRepresentation(){s}\n  unreachable\n", .{try self.debugCallSuffix()});
         } else if (simple_loop_return) |loop| {
             selected_path.* = .simple_loop_return;
             const body_label = try self.nextLabel("while_body");
@@ -2961,98 +2925,6 @@ const LlvmEmitter = struct {
         const suffix_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, suffix_statements) orelse return null;
         if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls) + simpleMirDirectCallsTrapCount(then_calls) + simpleMirDirectCallsTrapCount(else_calls) + suffix_traps) return null;
         return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls, .suffix_statements = suffix_statements };
-    }
-
-    fn simpleMirEnumSwitchReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirEnumSwitchReturn {
-        if (fn_mir.return_ty == .void) return null;
-        if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
-        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
-        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .switch_) return null;
-        const subject_index = simpleMirSwitchSubjectIndex(entry) orelse return null;
-        const subject_source = simpleMirSwitchSubjectExprSource(entry, subject_index) orelse return null;
-        const fact = simpleMirTargetTypeFactKindAt(fn_mir, .switch_subject, subject_source) orelse return null;
-        const enum_name = typeName(fact.target_ty) orelse return null;
-        const enum_decl = self.enum_types.get(enum_name) orelse return null;
-        const subject_name = simpleMirSwitchSubjectParam(function, entry, subject_index, enum_name) orelse return null;
-        var result: SimpleMirEnumSwitchReturn = .{ .subject_name = subject_name, .enum_name = enum_name };
-        var trap_successors: usize = 0;
-        for (entry.successors) |successor| {
-            if (successor >= fn_mir.blocks.len) return null;
-            const arm_block = fn_mir.blocks[successor];
-            if (std.mem.eql(u8, arm_block.kind, "trap")) {
-                if (arm_block.terminator != .trap_) return null;
-                trap_successors += 1;
-                continue;
-            }
-            if (std.mem.eql(u8, arm_block.kind, "switch_after")) {
-                if (arm_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, arm_block)) return null;
-                continue;
-            }
-            if (!std.mem.eql(u8, arm_block.kind, "switch_arm") or arm_block.terminator != .return_) return null;
-            if (result.arm_count >= max_simple_mir_switch_arms) return null;
-            const case_name = simpleMirSwitchArmCaseName(arm_block) orelse return null;
-            var known_case = false;
-            for (enum_decl.cases) |case| {
-                if (std.mem.eql(u8, case.name.text, case_name)) {
-                    known_case = true;
-                    break;
-                }
-            }
-            if (!known_case) return null;
-            const value = self.simpleMirReturnValueInBlock(function, fn_mir, arm_block) orelse return null;
-            result.arms[result.arm_count] = .{
-                .case_name = case_name,
-                .value = value,
-                .span = spanFromMirSourcePoint(instructionSourcePoint(simpleMirReturnInstruction(arm_block) orelse return null)),
-            };
-            result.arm_count += 1;
-        }
-        if (result.arm_count < 2) return null;
-        var expected_traps = trap_successors;
-        for (result.arms[0..result.arm_count]) |arm| expected_traps += simpleMirConditionalTrapCount(arm.value);
-        if (fn_mir.trap_edges.len != expected_traps) return null;
-        return result;
-    }
-
-    fn simpleMirSwitchSubjectExprSource(block: mir.Block, subject_index: usize) ?mir.SourcePoint {
-        var index = subject_index + 1;
-        while (index < block.instructions.len) : (index += 1) {
-            const instruction = block.instructions[index];
-            switch (instruction.kind) {
-                .target_type, .typed_load, .representation_check, .representation_use => continue,
-                .expr => return instructionSourcePoint(instruction),
-                else => return null,
-            }
-        }
-        return null;
-    }
-
-    fn simpleMirSwitchSubjectParam(function: anytype, block: mir.Block, subject_index: usize, enum_name: []const u8) ?[]const u8 {
-        var index = subject_index + 1;
-        while (index < block.instructions.len) : (index += 1) {
-            const instruction = block.instructions[index];
-            switch (instruction.kind) {
-                .target_type, .typed_load, .representation_check, .representation_use => continue,
-                .expr => {
-                    if (!std.mem.eql(u8, instruction.result_ty.name(), enum_name)) return null;
-                    for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return param.name.text;
-                    }
-                    return null;
-                },
-                else => return null,
-            }
-        }
-        return null;
-    }
-
-    fn simpleMirSwitchArmCaseName(block: mir.Block) ?[]const u8 {
-        for (block.instructions) |instruction| {
-            if (instruction.kind == .expr and instruction.result_ty == .branch) return instruction.detail;
-        }
-        return null;
     }
 
     fn simpleMirVoidStatements(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirVoidStatements {

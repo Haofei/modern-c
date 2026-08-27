@@ -196,7 +196,14 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             },
             .eval => |value| if (!expressionValid(body, value)) return false,
             .guard => |guard| {
-                if (!expressionValid(body, guard.condition) or body.expressions[guard.condition.index()].result_ty != .bool) return false;
+                if (!expressionValid(body, guard.condition)) return false;
+                const condition_ty = body.expressions[guard.condition.index()].result_ty;
+                if (guard.kind == .switch_) {
+                    switch (condition_ty) {
+                        .bool, .integer, .domain_integer, .closed_enum, .open_enum => {},
+                        else => return false,
+                    }
+                } else if (condition_ty != .bool) return false;
                 if (guard.kind == .assert_ and !assertTrapEdgeIsExact(body, statement)) return false;
             },
             .return_ => |value| if (value) |result| {
@@ -212,12 +219,23 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .fallthrough => return false,
             .jump => |target| if (!blockExists(body, target)) return false,
             .branch => |branch| if (!expressionValid(body, branch.condition) or !blockExists(body, branch.true_block) or !blockExists(body, branch.false_block)) return false,
-            .switch_ => return false,
+            .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
             .trap_ => |kind| if (trapHelper(kind) == null) return false,
             .return_ => if (!hasReturnStatement(body, terminator.block_id) and return_ty != .void) return false,
             .unreachable_ => {},
         }
     }
+    return true;
+}
+
+fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.ExecutableSwitchTerminator) bool {
+    if (switch_.case_count == 0 or switch_.case_count > switch_.cases.len or
+        !blockExists(body, switch_.default_block) or !expressionValid(body, switch_.subject)) return false;
+    switch (body.expressions[switch_.subject.index()].result_ty) {
+        .integer, .domain_integer, .closed_enum, .open_enum => {},
+        else => return false,
+    }
+    for (switch_.cases[0..switch_.case_count]) |case| if (!blockExists(body, case.target)) return false;
     return true;
 }
 
@@ -362,7 +380,7 @@ const Renderer = struct {
             .eval => |value| _ = try self.emitExpression(value),
             .guard => |guard| {
                 const condition = try self.emitExpression(guard.condition);
-                if (!std.mem.eql(u8, condition.ty, "i1")) return error.InvalidBody;
+                if (guard.kind != .switch_ and !std.mem.eql(u8, condition.ty, "i1")) return error.InvalidBody;
                 if (guard.kind == .assert_) {
                     const edge = assertTrapEdge(self.body, statement) orelse return error.InvalidBody;
                     const continuation = try std.fmt.allocPrint(self.allocator, "mc_assert_ready_{d}", .{statement.id.raw});
@@ -406,7 +424,20 @@ const Renderer = struct {
             },
             .trap_ => |kind| try self.output.print(self.allocator, "  call void @{s}()\n  unreachable\n", .{trapHelper(kind) orelse return error.Unsupported}),
             .unreachable_ => try self.output.appendSlice(self.allocator, "  unreachable\n"),
-            .fallthrough, .switch_ => return error.Unsupported,
+            .switch_ => |switch_| {
+                const subject = try self.emitExpression(switch_.subject);
+                try self.output.print(self.allocator, "  switch {s} {s}, label %mc_block_{d} [\n", .{ subject.ty, subject.spelling, switch_.default_block.raw });
+                for (switch_.cases[0..switch_.case_count]) |case| {
+                    try self.output.print(self.allocator, "    {s} ", .{subject.ty});
+                    switch (case.value) {
+                        .unsigned => |value| try self.output.print(self.allocator, "{d}", .{value}),
+                        .signed => |value| try self.output.print(self.allocator, "{d}", .{value}),
+                    }
+                    try self.output.print(self.allocator, ", label %mc_block_{d}\n", .{case.target.raw});
+                }
+                try self.output.appendSlice(self.allocator, "  ]\n");
+            },
+            .fallthrough => return error.Unsupported,
         }
     }
 

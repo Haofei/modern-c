@@ -196,7 +196,26 @@ fn emitTerminator(
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "mc_trap_Unreachable();\n");
         },
-        .switch_ => return error.UnsupportedOperation,
+        .switch_ => |switch_| {
+            if (!switchTerminatorSupported(body, switch_)) return error.InvalidBlock;
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "switch (");
+            try emitExpression(allocator, out, body, switch_.subject, 0);
+            try out.appendSlice(allocator, ") {\n");
+            for (switch_.cases[0..switch_.case_count]) |case| {
+                try writeIndent(allocator, out, indent + 1);
+                try out.appendSlice(allocator, "case ");
+                switch (case.value) {
+                    .unsigned => |value| try out.print(allocator, "{d}", .{value}),
+                    .signed => |value| try out.print(allocator, "{d}", .{value}),
+                }
+                try out.print(allocator, ": goto mc_bb_{d};\n", .{case.target.raw});
+            }
+            try writeIndent(allocator, out, indent + 1);
+            try out.print(allocator, "default: goto mc_bb_{d};\n", .{switch_.default_block.raw});
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "}\n");
+        },
     }
 }
 
@@ -439,8 +458,19 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         .trap_ => |kind| if (trapHelper(kind) == null) return false,
         .jump => |target| if (!hasBlock(body, target)) return false,
         .branch => |branch| if (expressionById(body, branch.condition) == null or !hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block)) return false,
-        .switch_ => return false,
+        .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
     };
+    return true;
+}
+
+fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.ExecutableSwitchTerminator) bool {
+    if (switch_.case_count == 0 or switch_.case_count > switch_.cases.len or !hasBlock(body, switch_.default_block)) return false;
+    const subject = expressionById(body, switch_.subject) orelse return false;
+    switch (subject.result_ty) {
+        .integer, .domain_integer, .closed_enum, .open_enum => {},
+        else => return false,
+    }
+    for (switch_.cases[0..switch_.case_count]) |case| if (!hasBlock(body, case.target)) return false;
     return true;
 }
 

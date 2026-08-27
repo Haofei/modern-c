@@ -79,7 +79,6 @@ pub const SelectedPath = enum {
     simple_return,
     simple_void_body,
     simple_conditional_return,
-    simple_enum_switch_return,
     simple_loop_return,
     ast_fallback,
     unsupported,

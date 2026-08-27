@@ -9173,8 +9173,9 @@ test "LLVM emits enum switch returns from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_switch_returns.mc", source, &output);
+    try expectContains(output.items, "; canonical executable MIR");
     try expectContains(output.items, "switch ");
-    try expectContains(output.items, "label %bb_switch_arm");
+    try expectContains(output.items, "label %mc_block_");
     try expectContains(output.items, "ret i32 1");
     try expectContains(output.items, "ret i32 2");
     try expectContains(output.items, "call void @mc_trap_InvalidRepresentation()");
@@ -9194,8 +9195,9 @@ test "LLVM emits multi-arm enum switch returns from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_switch_multi_arm_returns.mc", source, &output);
+    try expectContains(output.items, "; canonical executable MIR");
     try expectContains(output.items, "switch ");
-    try expectContains(output.items, "label %bb_switch_arm");
+    try expectContains(output.items, "label %mc_block_");
     try expectContains(output.items, "ret i32 1");
     try expectContains(output.items, "ret i32 2");
     try expectContains(output.items, "ret i32 3");

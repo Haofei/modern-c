@@ -1033,6 +1033,38 @@ pub const ExecutableEnumType = struct {
     repr_ty: ValueType,
 };
 
+pub const max_executable_switch_cases: usize = 8;
+
+pub const ExecutableSwitchValue = union(enum) {
+    unsigned: u128,
+    signed: i128,
+
+    pub fn eql(self: ExecutableSwitchValue, other: ExecutableSwitchValue) bool {
+        return switch (self) {
+            .unsigned => |left| switch (other) {
+                .unsigned => |right| left == right,
+                .signed => |right| right >= 0 and left == @as(u128, @intCast(right)),
+            },
+            .signed => |left| switch (other) {
+                .unsigned => |right| left >= 0 and @as(u128, @intCast(left)) == right,
+                .signed => |right| left == right,
+            },
+        };
+    }
+};
+
+pub const ExecutableSwitchCase = struct {
+    value: ExecutableSwitchValue,
+    target: BlockId,
+};
+
+pub const ExecutableSwitchTerminator = struct {
+    subject: ExprId,
+    cases: [max_executable_switch_cases]ExecutableSwitchCase = undefined,
+    case_count: usize = 0,
+    default_block: BlockId = .invalid,
+};
+
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
     source: SourcePoint = .{ .line = 0, .column = 0 },
@@ -1041,7 +1073,7 @@ pub const ExecutableTerminator = struct {
         fallthrough,
         jump: BlockId,
         branch: struct { condition: ExprId, true_block: BlockId, false_block: BlockId },
-        switch_: struct { subject: ExprId },
+        switch_: ExecutableSwitchTerminator,
         return_,
         trap_: TrapKind,
         unreachable_,

@@ -8542,11 +8542,12 @@ test "lower-c emits enum switch returns from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_switch_returns.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (value)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_left:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_right:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 1:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= 2;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
 }
 
@@ -8564,12 +8565,13 @@ test "lower-c emits multi-arm enum switch returns from MIR without body fallback
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_switch_multi_arm_returns.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_left:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_middle:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 2;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_right:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 3;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 1:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= 2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 2:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= 3;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
 }
 
@@ -19388,7 +19390,10 @@ test "lower-c emits closed enum switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_timer:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_keyboard:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_read_irq(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq mc_tmp0 = read_irq();\n    switch (mc_tmp0) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= read_irq();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 32:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 33:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_local_irq(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq irq = read_irq();\n    switch (irq) {") != null);
 }

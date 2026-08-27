@@ -530,6 +530,7 @@ fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.Trap
     const target = executableTerminator(body, mir.BlockId.fromIndex(legacy.trap_block)) orelse return false;
     const destination = switch (source.operation) {
         .jump => |block| block,
+        .switch_ => |switch_| switch_.default_block,
         else => return false,
     };
     if (!destination.eql(mir.BlockId.fromIndex(legacy.trap_block))) return false;
@@ -550,6 +551,8 @@ fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.Trap
             }
             break :explicit matches == 1;
         },
+        .representation_check => source.operation == .switch_ and
+            legacy.kind == .InvalidRepresentation and kind == .InvalidRepresentation,
         else => false,
     };
 }
@@ -698,6 +701,23 @@ fn verifyTerminator(function: *const mir.Function, terminator: mir.ExecutableTer
         .switch_ => |operation| {
             const subject = expression(body, operation.subject) orelse return error.InvalidExpressionReference;
             if (!subject.block_id.eql(terminator.block_id)) return error.InvalidTerminatorCondition;
+            // Incomplete bodies retain a structurally valid switch subject as
+            // migration telemetry even when a typed case table could not yet
+            // be formed. Complete bodies must carry the whole dispatch table.
+            if (!body.complete and operation.case_count == 0 and !operation.default_block.isValid()) return;
+            if (operation.case_count == 0 or operation.case_count > operation.cases.len or
+                !blockExists(function, operation.default_block)) return error.InvalidTerminatorCondition;
+            switch (subject.result_ty) {
+                .integer, .domain_integer, .closed_enum, .open_enum => {},
+                else => return error.InvalidTerminatorCondition,
+            }
+            for (operation.cases[0..operation.case_count], 0..) |case, index| {
+                if (!blockExists(function, case.target)) return error.InvalidBlockReference;
+                if (!switchValueFitsType(body, subject.result_ty, case.value)) return error.InvalidTerminatorCondition;
+                for (operation.cases[0..index]) |previous| {
+                    if (previous.value.eql(case.value)) return error.InvalidTerminatorCondition;
+                }
+            }
         },
     }
 }
@@ -777,10 +797,39 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         else => {},
     };
     for (body.terminators) |value| switch (value.operation) {
-        .switch_ => return true,
+        .switch_ => |operation| if (operation.case_count == 0 or !operation.default_block.isValid()) return true,
         else => {},
     };
     return false;
+}
+
+fn switchValueFitsType(body: *const mir.ExecutableBody, subject_ty: mir.ValueType, value: mir.ExecutableSwitchValue) bool {
+    const storage_ty: mir.ValueType = switch (subject_ty) {
+        .integer, .domain_integer => subject_ty,
+        .closed_enum, .open_enum => enum_storage: {
+            for (body.enum_types) |enum_ty| if (mir.ValueType.eql(enum_ty.ty, subject_ty)) break :enum_storage enum_ty.repr_ty;
+            return false;
+        },
+        else => return false,
+    };
+    const info = mir.ExecutableCastKind.integerInfo(storage_ty) orelse return false;
+    return switch (value) {
+        .unsigned => |magnitude| if (info.signed)
+            magnitude <= (@as(u128, 1) << @intCast(info.bits - 1)) - 1
+        else if (info.bits == 128)
+            true
+        else
+            magnitude <= (@as(u128, 1) << @intCast(info.bits)) - 1,
+        .signed => |signed| if (!info.signed)
+            signed >= 0 and @as(u128, @intCast(signed)) <= (if (info.bits == 128)
+                std.math.maxInt(u128)
+            else
+                (@as(u128, 1) << @intCast(info.bits)) - 1)
+        else if (signed >= 0)
+            @as(u128, @intCast(signed)) <= (@as(u128, 1) << @intCast(info.bits - 1)) - 1
+        else
+            @as(u128, @intCast(-(signed + 1))) + 1 <= (@as(u128, 1) << @intCast(info.bits - 1)),
+    };
 }
 
 fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableAggregateType, index: usize) !void {

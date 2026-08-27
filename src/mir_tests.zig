@@ -293,6 +293,52 @@ test "executable MIR owns assertion trap edges and rejects semantic drift" {
     condition.type_id = saved_condition_type_id;
     try mir_executable_body.verify(function);
 }
+
+test "executable MIR owns typed enum switch dispatch and rejects case drift" {
+    const source =
+        \\enum Choice { left, right }
+        \\fn choose(value: Choice) -> u32 {
+        \\    switch value {
+        \\        .left => { return 1; },
+        \\        .right => { return 2; },
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_enum_switch.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "choose") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    var switch_index: ?usize = null;
+    for (function.executable_body.terminators, 0..) |terminator, index| switch (terminator.operation) {
+        .switch_ => switch_index = index,
+        else => {},
+    };
+    const index = switch_index orelse return error.TestUnexpectedResult;
+    const saved = function.executable_body.terminators[index].operation.switch_;
+    try std.testing.expectEqual(@as(usize, 2), saved.case_count);
+    try std.testing.expect(saved.default_block.isValid());
+    try mir_executable_body.verify(function);
+
+    function.executable_body.terminators[index].operation.switch_.cases[0].target = .invalid;
+    try std.testing.expectError(error.InvalidBlockReference, mir_executable_body.verify(function));
+    function.executable_body.terminators[index].operation.switch_ = saved;
+
+    function.executable_body.terminators[index].operation.switch_.cases[1].value = .{ .signed = 0 };
+    try std.testing.expectError(error.InvalidTerminatorCondition, mir_executable_body.verify(function));
+    function.executable_body.terminators[index].operation.switch_ = saved;
+
+    function.executable_body.terminators[index].operation.switch_.cases[0].value = .{ .unsigned = std.math.maxInt(u128) };
+    try std.testing.expectError(error.InvalidTerminatorCondition, mir_executable_body.verify(function));
+    function.executable_body.terminators[index].operation.switch_ = saved;
+
+    function.executable_body.terminators[index].operation.switch_.case_count = 0;
+    try std.testing.expectError(error.InvalidTerminatorCondition, mir_executable_body.verify(function));
+    function.executable_body.terminators[index].operation.switch_ = saved;
+    try mir_executable_body.verify(function);
+}
 const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;

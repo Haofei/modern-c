@@ -6594,7 +6594,7 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(representation_facts);
         const elided_bounds = try self.elided_bounds.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(elided_bounds);
-        var executable_body = try self.finishExecutableBody(trap_edges, call_target_facts, span_identities);
+        var executable_body = try self.finishExecutableBody(trap_edges, call_target_facts, span_identities, blocks.items);
         errdefer executable_body.deinit(self.allocator);
         const param_types = try self.allocator.alloc(ValueType, executable_body.parameters.len);
         errdefer self.allocator.free(param_types);
@@ -6694,9 +6694,10 @@ const FunctionBuilder = struct {
         trap_edges: []const TrapEdge,
         call_target_facts: []const CallTargetFact,
         span_identities: []const SpanIdentity,
+        legacy_blocks: []const Block,
     ) !ExecutableBody {
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
-        if (!self.executableTrapProjectionComplete(trap_edges, call_target_facts)) complete = false;
+        if (!self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
             parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
@@ -6788,7 +6789,6 @@ const FunctionBuilder = struct {
                 else => {},
             }
         }
-
         for (self.blocks.items) |block| {
             const operation: @FieldType(ExecutableTerminator, "operation") = switch (block.terminator) {
                 .fallthrough => fallthrough: {
@@ -6824,9 +6824,15 @@ const FunctionBuilder = struct {
                             .false_block = BlockId.fromIndex(branch.false_block),
                         } };
                     }
-                    // General switch arm patterns need a typed case table.
-                    complete = false;
-                    break :switch_op .{ .switch_ = .{ .subject = subject } };
+                    if (block.id >= legacy_blocks.len) {
+                        complete = false;
+                        break :switch_op .{ .switch_ = .{ .subject = subject } };
+                    }
+                    const switch_value = self.executableTypedSwitch(legacy_blocks[block.id], legacy_blocks, subject) orelse {
+                        complete = false;
+                        break :switch_op .{ .switch_ = .{ .subject = subject } };
+                    };
+                    break :switch_op .{ .switch_ = switch_value };
                 },
                 .return_ => .return_,
                 .trap_ => |kind| trap: {
@@ -7258,11 +7264,12 @@ const FunctionBuilder = struct {
         self: *const FunctionBuilder,
         legacy_edges: []const TrapEdge,
         call_target_facts: []const CallTargetFact,
+        legacy_blocks: []const Block,
     ) bool {
         var executable_index: usize = 0;
         for (legacy_edges) |legacy| {
             if (executable_index >= self.executable_trap_edges.items.len) {
-                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts)) return false;
+                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) return false;
                 continue;
             }
             const edge = self.executable_trap_edges.items[executable_index];
@@ -7270,7 +7277,7 @@ const FunctionBuilder = struct {
                 !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
                 edge.kind != legacy.kind or edge.source != legacy.source)
             {
-                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts)) return false;
+                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) return false;
                 continue;
             }
             executable_index += 1;
@@ -7309,15 +7316,17 @@ const FunctionBuilder = struct {
         legacy: TrapEdge,
         legacy_edges: []const TrapEdge,
         call_target_facts: []const CallTargetFact,
+        legacy_blocks: []const Block,
     ) bool {
-        if (legacy.from_block >= self.blocks.items.len or legacy.trap_block >= self.blocks.items.len) return false;
-        const source = self.blocks.items[legacy.from_block];
-        const target = self.blocks.items[legacy.trap_block];
-        const jump_target = switch (source.terminator) {
-            .jump => |block| block,
-            else => return false,
+        if (legacy.from_block >= legacy_blocks.len or legacy.trap_block >= legacy_blocks.len) return false;
+        const source = legacy_blocks[legacy.from_block];
+        const target = legacy_blocks[legacy.trap_block];
+        const reaches_trap = switch (source.terminator) {
+            .jump => |block| block == legacy.trap_block,
+            .switch_ => std.mem.indexOfScalar(usize, source.successors, legacy.trap_block) != null,
+            else => false,
         };
-        if (jump_target != legacy.trap_block) return false;
+        if (!reaches_trap) return false;
         const target_kind = switch (target.terminator) {
             .trap_ => |kind| self.executableTrapKindForBlock(legacy.trap_block, kind, legacy_edges, call_target_facts) orelse return false,
             else => return false,
@@ -7326,6 +7335,8 @@ const FunctionBuilder = struct {
             .unreachable_expr => legacy.kind == .Unreachable and target_kind == .Unreachable,
             .explicit_trap => legacy.kind == .ExplicitTrap and target_kind != .ExplicitTrap and
                 target_kind != .CallMayTrap and target_kind != .Unknown,
+            .representation_check => source.terminator == .switch_ and
+                legacy.kind == .InvalidRepresentation and target_kind == .InvalidRepresentation,
             else => false,
         };
     }
@@ -7421,6 +7432,75 @@ const FunctionBuilder = struct {
             };
         }
         return null;
+    }
+
+    fn executableTypedSwitch(self: *FunctionBuilder, dispatch: Block, legacy_blocks: []const Block, subject: ExprId) ?mir_model.ExecutableSwitchTerminator {
+        if (!subject.isValid() or subject.index() >= self.executable_expressions.items.len) return null;
+        const subject_ty = self.executable_expressions.items[subject.index()].result_ty;
+        switch (subject_ty) {
+            .closed_enum, .open_enum => {},
+            else => return null,
+        }
+        var result: mir_model.ExecutableSwitchTerminator = .{ .subject = subject };
+        for (dispatch.successors) |successor| {
+            if (successor >= legacy_blocks.len) return null;
+            const target = legacy_blocks[successor];
+            if (target.terminator == .trap_) {
+                if (result.default_block.isValid()) return null;
+                result.default_block = BlockId.fromIndex(successor);
+                continue;
+            }
+            var marker: ?Instruction = null;
+            for (target.instructions) |instruction| {
+                if (instruction.kind == .expr and instruction.result_ty == .branch) {
+                    marker = instruction;
+                    break;
+                }
+            }
+            const arm = marker orelse return null;
+            if (std.mem.eql(u8, arm.detail, "_")) {
+                if (result.default_block.isValid()) return null;
+                result.default_block = BlockId.fromIndex(successor);
+                continue;
+            }
+            if (arm.typed_switch_pattern_count != 0) {
+                for (arm.typed_switch_patterns[0..arm.typed_switch_pattern_count]) |pattern| {
+                    const value: mir_model.ExecutableSwitchValue = switch (pattern) {
+                        .scalar => |scalar| if (scalar.negative)
+                            .{ .signed = -(std.math.cast(i128, scalar.magnitude) orelse return null) }
+                        else
+                            .{ .unsigned = scalar.magnitude },
+                        .wildcard => {
+                            if (result.default_block.isValid()) return null;
+                            result.default_block = BlockId.fromIndex(successor);
+                            continue;
+                        },
+                        .unused => return null,
+                    };
+                    if (!appendExecutableSwitchCase(&result, value, BlockId.fromIndex(successor))) return null;
+                }
+                continue;
+            }
+            const literal = self.canonicalExecutableEnumLiteral(arm.detail, subject_ty) orelse return null;
+            const value: mir_model.ExecutableSwitchValue = switch (literal) {
+                .integer => |integer| .{ .unsigned = integer },
+                .signed_integer => |integer| .{ .signed = integer },
+                else => return null,
+            };
+            if (!appendExecutableSwitchCase(&result, value, BlockId.fromIndex(successor))) return null;
+        }
+        if (result.case_count == 0 or !result.default_block.isValid()) return null;
+        return result;
+    }
+
+    fn appendExecutableSwitchCase(result: *mir_model.ExecutableSwitchTerminator, value: mir_model.ExecutableSwitchValue, target: BlockId) bool {
+        if (result.case_count >= result.cases.len) return false;
+        for (result.cases[0..result.case_count]) |existing| {
+            if (existing.value.eql(value)) return false;
+        }
+        result.cases[result.case_count] = .{ .value = value, .target = target };
+        result.case_count += 1;
+        return true;
     }
 
     fn buildBody(self: *FunctionBuilder, body: ast.Block) anyerror!void {

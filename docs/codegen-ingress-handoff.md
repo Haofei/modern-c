@@ -555,6 +555,17 @@ slice is deliberately narrow: only verified zero-argument ordinary function
 pointers returning void are canonical here; closures and value-producing
 indirect calls remain on their existing qualified paths.
 
+The `simple_enum_switch_return` plan is fully retired. Executable MIR now owns
+an enum switch's subject `ExprId`, normalized signed/unsigned case values,
+default trap block, and exact arm `BlockId`s. The verifier rejects missing,
+duplicate, or dangling dispatch entries, and both mechanical renderers emit
+the same table without enum AST declarations or source case names. The old
+plan structs, source-shaped recognizer, C/LLVM emitters, admission-chain term,
+and census path are deleted rather than left dormant.
+The strict corpus contains no enum-switch fixture, so its admission split stays
+C 72/88 and LLVM 71/89; the independently counted shared specialized-plan
+registry is the convergence signal here and falls from 21 definitions to 20.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather
