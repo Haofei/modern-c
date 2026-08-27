@@ -1693,18 +1693,11 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const scalar_switch_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null)
-            if (mir_statement_plan.buildScalarSwitchReturn(fn_mir)) |plan|
-                if (self.mirScalarSwitchPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
         const nullable_try_plan = if (mir_statement_plan.buildNullableTry(fn_mir)) |plan|
             if (self.mirNullableTryPlanSupported(plan)) plan else null
         else
             null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1744,7 +1737,6 @@ pub const CEmitter = struct {
             simple_conditional_return != null,
             simple_loop_return != null,
             place_return_plan != null,
-            scalar_switch_return_plan != null,
             indirect_call_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
@@ -1795,9 +1787,6 @@ pub const CEmitter = struct {
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan);
-        } else if (scalar_switch_return_plan) |plan| {
-            selected_path.* = .scalar_switch_return;
-            try self.emitMirScalarSwitchReturnPlan(plan);
         } else if (nullable_try_plan) |plan| {
             selected_path.* = .nullable_try;
             try self.emitMirNullableTryPlan(plan);
@@ -5305,65 +5294,6 @@ pub const CEmitter = struct {
             },
             else => true,
         };
-    }
-
-    fn mirScalarSwitchPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.ScalarSwitchReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        var matched_subject = false;
-        for (function.signature.params) |param| {
-            if (!std.mem.eql(u8, param.name.text, plan.subject_name)) continue;
-            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.subject_fact.target_ty))) return false;
-            matched_subject = true;
-        }
-        if (!matched_subject) return false;
-        for (plan.arms[0..plan.arm_count]) |arm| {
-            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(arm.result.type_fact.target_ty))) return false;
-        }
-        return true;
-    }
-
-    fn emitMirScalarSwitchReturnPlan(self: *CEmitter, plan: mir_statement_plan.ScalarSwitchReturnPlan) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.subject_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "switch ({s}) {{\n", .{try self.cIdent(plan.subject_name)});
-        self.indent += 1;
-        defer self.indent -= 1;
-        for (plan.arms[0..plan.arm_count]) |arm| {
-            const is_default = for (arm.patterns[0..arm.pattern_count]) |pattern| {
-                switch (pattern) {
-                    .wildcard => break true,
-                    else => {},
-                }
-            } else false;
-            if (is_default) {
-                try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "default:\n");
-            } else {
-                for (arm.patterns[0..arm.pattern_count]) |pattern| {
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "case ");
-                    try self.emitMirScalarSwitchPattern(pattern);
-                    try self.out.appendSlice(self.allocator, ":\n");
-                }
-            }
-            self.indent += 1;
-            try self.writeLineDirective(spanFromMirSourcePoint(arm.location.source));
-            try self.writeIndent();
-            try self.out.print(self.allocator, "return {d};\n", .{arm.result.value});
-            self.indent -= 1;
-        }
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "}\n");
-    }
-
-    fn emitMirScalarSwitchPattern(self: *CEmitter, pattern: mir.Instruction.SwitchPattern) !void {
-        switch (pattern) {
-            .unused, .wildcard => return error.UnsupportedCEmission,
-            .scalar => |scalar| {
-                if (scalar.negative) try self.out.append(self.allocator, '-');
-                try self.out.print(self.allocator, "{d}", .{scalar.magnitude});
-            },
-        }
     }
 
     fn mirDirectCallArgumentSupported(self: *CEmitter, function: anytype, argument: mir_statement_plan.DirectCallArgument) bool {

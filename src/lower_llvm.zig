@@ -1772,14 +1772,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const scalar_switch_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null)
-            if (mir_statement_plan.buildScalarSwitchReturn(fn_mir)) |plan|
-                if (self.mirScalarSwitchPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const direct_call_projected_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null)
+        const direct_call_projected_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null)
             if (mir_statement_plan.buildDirectCallProjectedReturn(fn_mir)) |plan|
                 if (self.mirDirectCallProjectedReturnPlanSupported(function, plan)) plan else null
             else
@@ -1790,7 +1783,7 @@ const LlvmEmitter = struct {
             if (self.mirNullableTryPlanSupported(plan)) plan else null
         else
             null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and scalar_switch_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1811,7 +1804,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const llvm_structural_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null and scalar_switch_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_loop_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1833,7 +1826,6 @@ const LlvmEmitter = struct {
             simple_conditional_return != null,
             simple_loop_return != null,
             place_return_plan != null,
-            scalar_switch_return_plan != null,
             indirect_call_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
@@ -1924,9 +1916,6 @@ const LlvmEmitter = struct {
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan, ret_ty);
-        } else if (scalar_switch_return_plan) |plan| {
-            selected_path.* = .scalar_switch_return;
-            try self.emitMirScalarSwitchReturnPlan(plan, ret_ty);
         } else if (nullable_try_plan) |plan| {
             selected_path.* = .nullable_try;
             try self.emitMirNullableTryPlan(plan);
@@ -3665,60 +3654,6 @@ const LlvmEmitter = struct {
                 break :blk type_bridge.sameTypeSyntax(self.resolveAliasType(place_ty), self.resolveAliasType(plan.callee_fact.target_ty));
             },
             else => true,
-        };
-    }
-
-    fn mirScalarSwitchPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.ScalarSwitchReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        var matched_subject = false;
-        for (function.signature.params) |param| {
-            if (!std.mem.eql(u8, param.name.text, plan.subject_name)) continue;
-            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(plan.subject_fact.target_ty))) return false;
-            matched_subject = true;
-        }
-        if (!matched_subject) return false;
-        for (plan.arms[0..plan.arm_count]) |arm| {
-            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(arm.result.type_fact.target_ty))) return false;
-        }
-        return true;
-    }
-
-    fn emitMirScalarSwitchReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.ScalarSwitchReturnPlan, ret_ty: anytype) !void {
-        if (plan.default_arm_index >= plan.arm_count) return error.UnsupportedLlvmEmission;
-        const subject_ty = try self.llvmType(plan.subject_fact.target_ty);
-        var labels: [mir_statement_plan.max_switch_arms][]const u8 = undefined;
-        for (plan.arms[0..plan.arm_count], 0..) |_, index| labels[index] = try self.nextLabel("scalar_switch_arm");
-
-        try self.out.print(self.allocator, "  switch {s} %{s}, label %{s} [\n", .{
-            subject_ty,
-            plan.subject_name,
-            labels[plan.default_arm_index],
-        });
-        for (plan.arms[0..plan.arm_count], 0..) |arm, arm_index| {
-            if (arm_index == plan.default_arm_index) continue;
-            for (arm.patterns[0..arm.pattern_count]) |pattern| {
-                try self.out.print(self.allocator, "    {s} {s}, label %{s}\n", .{
-                    subject_ty,
-                    try self.mirScalarSwitchPattern(pattern),
-                    labels[arm_index],
-                });
-            }
-        }
-        try self.out.print(self.allocator, "  ]{s}\n", .{try self.debugCallSuffix()});
-        for (plan.arms[0..plan.arm_count], 0..) |arm, arm_index| {
-            try self.out.print(self.allocator, "{s}:\n", .{labels[arm_index]});
-            const value = try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{arm.result.value});
-            try self.emitReturnValue(ret_ty, value, spanFromMirSourcePoint(arm.location.source));
-        }
-    }
-
-    fn mirScalarSwitchPattern(self: *LlvmEmitter, pattern: mir.Instruction.SwitchPattern) ![]const u8 {
-        return switch (pattern) {
-            .unused, .wildcard => error.UnsupportedLlvmEmission,
-            .scalar => |scalar| if (scalar.negative)
-                try std.fmt.allocPrint(self.scratch.allocator(), "-{d}", .{scalar.magnitude})
-            else
-                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{scalar.magnitude}),
         };
     }
 

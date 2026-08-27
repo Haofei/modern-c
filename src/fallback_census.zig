@@ -72,7 +72,6 @@ pub const SelectedPath = enum {
     local_aggregate_place_update_return,
     local_aggregate_assignment_return,
     place_return,
-    scalar_switch_return,
     nullable_try,
     indirect_call_return,
     simple_return,

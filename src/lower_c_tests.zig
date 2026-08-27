@@ -4022,12 +4022,13 @@ test "lower-c scalar switch returns lower from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_switch.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t classify(int32_t n)");
-    try expectContains(body, "switch (n)");
-    try expectContains(body, "case -1:");
-    try expectContains(body, "case 0:");
-    try expectContains(body, "case 2:");
-    try expectContains(body, "default:");
-    try expectContains(body, "return 3;");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "switch (mc_exec_tmp_");
+    try expectContains(body, "case -1: goto mc_bb_");
+    try expectContains(body, "case 0: goto mc_bb_");
+    try expectContains(body, "case 2: goto mc_bb_");
+    try expectContains(body, "default: goto mc_bb_");
+    try expectContains(body, "return mc_exec_tmp_");
 }
 
 test "lower-c emits local global returns from MIR" {
@@ -19334,13 +19335,14 @@ test "lower-c emits integer switch arms" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_switch.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (n) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 1:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 2:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "default:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 10;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 30;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0: goto mc_bb_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 1: goto mc_bb_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 2: goto mc_bb_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "default: goto mc_bb_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
 }
 
 test "lower-c emits closed enum switch arms" {

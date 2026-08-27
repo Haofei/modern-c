@@ -7438,7 +7438,7 @@ const FunctionBuilder = struct {
         if (!subject.isValid() or subject.index() >= self.executable_expressions.items.len) return null;
         const subject_ty = self.executable_expressions.items[subject.index()].result_ty;
         switch (subject_ty) {
-            .closed_enum, .open_enum => {},
+            .integer, .domain_integer, .closed_enum, .open_enum => {},
             else => return null,
         }
         var result: mir_model.ExecutableSwitchTerminator = .{ .subject = subject };
@@ -9402,8 +9402,16 @@ const FunctionBuilder = struct {
             const terminated = switch (arm.body) {
                 .block => |body| try self.buildBlock(body),
                 .expr => |expr| blk: {
+                    const terminal_trap = terminalTrapForExpr(expr);
+                    if (terminal_trap == null) {
+                        try self.appendExecutableStatement(self.sourcePoint(expr.span), .{ .eval = try self.ensureExecutableExpr(expr) });
+                    }
                     try self.addResultExpressionStatementCheck(expr);
                     try self.buildExpr(expr);
+                    if (terminal_trap) |trap| {
+                        self.finishExecutableTerminalTrap(trap);
+                        break :blk true;
+                    }
                     break :blk exprTerminates(expr);
                 },
             };

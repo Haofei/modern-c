@@ -262,8 +262,11 @@ tests, and both backend implementations are deleted. The registry was down to
 remaining straight-line statement plan, enum-switch plan, and the now-
 redundant `nested_conditional_return` plan. The nested classify fixture stays
 canonical in both complete backend shards, while deleting its standalone
-recognizer/model and both backend renderers brings the current registry to 19
-plans. `simple_loop_return` remains.
+recognizer/model and both backend renderers brought the registry to 19 plans.
+Scalar integer/character switches now use the same canonical executable switch
+table as enums; deleting their dedicated plan brings the current registry to
+18 plans and moves the strict split to C 75/85 and LLVM 74/86.
+`simple_loop_return` remains.
 
 A complete-shard retirement probe for `simple_void_body` found 17 real users,
 covering aggregate, Result, enum, and statement-oriented void bodies that are

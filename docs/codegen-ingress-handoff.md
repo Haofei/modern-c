@@ -573,6 +573,17 @@ tests, both backend-specific support and rendering branches, and its census
 path are deleted. Strict admission remains C 72/88 and LLVM 71/89; the shared
 specialized-plan registry falls from 20 definitions to 19.
 
+The `scalar_switch_return` plan is fully retired. The canonical executable
+switch table now accepts verified integer/domain subjects as well as enums, so
+the strict corpus moves three functions per backend to canonical emission (C
+75/85, LLVM 74/86). During the cutover, the full C shard exposed an expression-
+arm effect hole: MMIO reads in expression-form arms were not present in the
+executable statement stream. Switch construction now records those evaluations
+before deciding canonical completeness, preserving their barriers and keeping
+unsupported effects on the general path. The standalone scalar plan model,
+recognizer, both backend renderers, and census path are deleted; the registry
+falls from 19 definitions to 18.
+
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void
 families absent from complete executable MIR. The probe was reverted rather

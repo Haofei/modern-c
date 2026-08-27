@@ -4168,10 +4168,11 @@ test "LLVM scalar switch returns lower from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_switch.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @classify");
-    try expectContains(body, "switch i32 %n");
-    try expectContains(body, "i32 -1, label %bb_scalar_switch_arm");
-    try expectContains(body, "i32 0, label %bb_scalar_switch_arm");
-    try expectContains(body, "i32 2, label %bb_scalar_switch_arm");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "switch i32 %mc_arg_0");
+    try expectContains(body, "i32 -1, label %mc_block_");
+    try expectContains(body, "i32 0, label %mc_block_");
+    try expectContains(body, "i32 2, label %mc_block_");
     try expectContains(body, "ret i32 3");
 }
 
