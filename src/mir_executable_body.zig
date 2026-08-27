@@ -358,6 +358,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .indirect_call => |call| {
             try verifyOperand(body, value, call.callee);
             try verifyArguments(body, value, call.arguments, call.argument_count);
+            try verifyCallSignature(function, body, value, call);
         },
         .address_of => |address| {
             const target = place(body, address.place) orelse return error.InvalidPlaceReference;
@@ -711,6 +712,35 @@ fn verifyArguments(body: *const mir.ExecutableBody, consumer: mir.ExecutableExpr
     if (count > mir.max_executable_operands) return error.InvalidArgumentCount;
     for (arguments[0..count]) |argument| try verifyOperand(body, consumer, argument);
     for (arguments[count..]) |argument| if (argument.isValid()) return error.InvalidArgumentCount;
+}
+
+fn verifyCallSignature(
+    function: *const mir.Function,
+    body: *const mir.ExecutableBody,
+    consumer: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "indirect_call"),
+) !void {
+    const callee = expression(body, call.callee) orelse return error.InvalidExpressionReference;
+    if (callee.result_ty != .value or call.signature.parameter_count != call.argument_count or
+        call.signature.parameter_count > mir.max_executable_operands) return error.InvalidFunctionSignature;
+    // Incomplete bodies are migration telemetry, not a codegen authority.
+    // Their partial indirect-call nodes still need structurally valid
+    // references, but exact signature/type identity is required only before a
+    // body can cross the verified executable boundary.
+    if (!body.complete) return;
+    if (!sameValueType(call.signature.return_ty, consumer.result_ty) or
+        !call.signature.return_type_id.eql(consumer.type_id)) return error.InvalidFunctionSignature;
+    try verifyType(function, call.signature.return_type_id, call.signature.return_ty, body.complete);
+    for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
+        const argument = expression(body, argument_id) orelse return error.InvalidExpressionReference;
+        if (!sameValueType(argument.result_ty, call.signature.parameter_types[index]) or
+            !argument.type_id.eql(call.signature.parameter_type_ids[index])) return error.InvalidFunctionSignature;
+        try verifyType(function, call.signature.parameter_type_ids[index], call.signature.parameter_types[index], body.complete);
+    }
+    for (call.signature.parameter_types[call.signature.parameter_count..]) |ty| if (ty != .unknown)
+        return error.InvalidFunctionSignature;
+    for (call.signature.parameter_type_ids[call.signature.parameter_count..]) |id| if (id.isValid())
+        return error.InvalidFunctionSignature;
 }
 
 fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableStatement, id: mir.ExprId) !void {

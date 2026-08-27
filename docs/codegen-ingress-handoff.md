@@ -165,14 +165,14 @@ armed by `MC_FALLBACK_CENSUS=<path>`, hooks the real admission branch in each
 backend's `emitFunctionDefinitions`, dumps JSONL, ranks remaining fallbacks.
 Worklist: `docs/codegen-ingress-p0-worklist.md` (has the current census snapshot).
 
-The first backend-neutral statement slice lives in
-`src/mir_statement_plan.zig`. It admits a one-block, no-trap, no-cleanup void
-body containing a discarded direct-call result or a zero-argument ordinary
-function-pointer call through a parameter/local. The local form keeps
-`entry_of()` and `entry()` as two ordered statements. Calls carry a separate
-`typed_callee_span_id`, so plan/fact association uses an opaque SpanId without
-changing the enclosing expression span used by diagnostics and source maps.
-The same module now owns a typed plan for a value-producing function-pointer
+The original backend-neutral straight-line statement slice has been retired.
+Discarded direct-call results and zero-argument ordinary function-pointer calls
+through a parameter or direct-call-initialized local now use canonical
+executable MIR. `ExecutableCallSignature` owns the bounded parameter/return
+contract, the verifier checks it, and both mechanical renderers preserve the
+ordered `entry_of()` then `entry()` evaluation without source-shape recovery.
+The old builder, C/LLVM emitters, selected-path census entry, and shared plan
+machinery are deleted. The same module still owns a typed plan for a value-producing function-pointer
 call returned immediately. MIR records indexed `indirect_call_argument` facts
 plus the canonical callee root and optional field projection; both backends
 consume the shared admission result for parameter, global, and global-field
@@ -547,6 +547,13 @@ exact executable `TrapKind`. Both mechanical renderers consume that CFG,
 including `never` functions, and the duplicated source-location recognizers
 and helper-selection branches are deleted. The strict split remains C 68/92
 and LLVM 67/93, while the shared registry falls to 22.
+
+The straight-line `statement` plan is fully retired. The strict ratchet corpus
+now reports C 72 canonical / 88 specialized and LLVM 71 canonical / 89
+specialized, with 21 remaining specialized plan definitions. The callable
+slice is deliberately narrow: only verified zero-argument ordinary function
+pointers returning void are canonical here; closures and value-producing
+indirect calls remain on their existing qualified paths.
 
 A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
 tests still exercise aggregate, Result, enum, and statement-oriented void

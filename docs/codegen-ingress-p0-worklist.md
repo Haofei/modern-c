@@ -295,7 +295,7 @@ typed-unary operand-descendant bugs before commit.
 | Nested local call initializer (C) | `let x = f(g(a), b); return h(x)` | (current batch) |
 | Leaf-operand typed unary call targets | numeric conversion, `phys`, `bitcast`, `enum.raw`; root keyed by `typed_unary_operand` SpanId/type fact | (current batch) |
 | Leaf-operand typed binary domain calls | `wrapping.add`, serial before/after/distance, counter delta; indexed roots keyed by owner-qualified `typed_call_operand` facts | (current batch) |
-| Shared straight-line statement plan | discarded non-void call; zero-argument function-pointer call through param/local | (current batch) |
+| Straight-line indirect-call statement | discarded non-void calls and zero-argument function-pointer calls now use canonical executable MIR with a verified callable signature; the shared specialized statement plan and both emitters are deleted | `statement` retired |
 | Typed indirect call return plan | `return op(x,y)`, global/local function-pointer, global struct-field function-pointer, and checked constant-index global table projections such as `ops[1](x,y)` / `boxes[1].combine(x,y)` | (current batch) |
 | Pure logical return tree | `return a && b`, `return !a || (b && c)`; MIR owns typed operand edges | (current batch) |
 | Shared field-place read/store plan | global, by-value parameter, and non-local-initialized local fields, including `box.pair.left`; MIR owns local initializer, member-base, field-index, assignment, and return edges | (current batch) |
@@ -347,10 +347,10 @@ artifact type plus legacy branches are physically deleted.
 
 The remaining chunk is no longer mostly recognizer-shaped. Pure boolean
 parameter trees now use explicit operator operand `SpanId` edges and one shared
-plan; neither backend reconstructs their shape from source. The shared
-statement-level plan admits discarded non-void calls and zero-argument
+plan; neither backend reconstructs their shape from source. Canonical
+executable MIR now admits discarded non-void calls and zero-argument
 function-pointer calls through params or one direct-call-initialized local. A
-second shared plan admits value-producing indirect calls returned immediately;
+remaining shared plan admits value-producing indirect calls returned immediately;
 MIR owns the indexed argument values and canonical callee root/projection, and
 both backends only render that plan. Closures, non-leaf arguments,
 reassignment, traps, and cleanup still fail closed. The next expansion must add

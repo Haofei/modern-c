@@ -3943,15 +3943,18 @@ test "lower-c emits discarded and indirect calls from MIR without body fallback"
     try expectNotContains(discard_body, "mc_tmp");
 
     const parameter_body = try cFunctionBody(output.items, "static void call_entry_param(mc_fnptr_4_void entry)");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, parameter_body, "entry();"));
+    try expectContains(parameter_body, "/* canonical executable MIR */");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, parameter_body, "__auto_type mc_exec_tmp_0 = entry;"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, parameter_body, "(mc_exec_tmp_0)();"));
     try expectNotContains(parameter_body, "mc_tmp");
 
     const local_body = try cFunctionBody(output.items, "static void call_fn_pointer(void)");
-    const init = std.mem.indexOf(u8, local_body, "mc_fnptr_4_void entry = entry_of();") orelse return error.TestUnexpectedResult;
-    const call = std.mem.indexOfPos(u8, local_body, init + 1, "entry();") orelse return error.TestUnexpectedResult;
+    try expectContains(local_body, "/* canonical executable MIR */");
+    const init = std.mem.indexOf(u8, local_body, "__auto_type mc_exec_tmp_0 = entry_of();") orelse return error.TestUnexpectedResult;
+    const call = std.mem.indexOfPos(u8, local_body, init + 1, "(mc_exec_tmp_1)();") orelse return error.TestUnexpectedResult;
     try std.testing.expect(init < call);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "entry_of();"));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "entry();"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "__auto_type entry = mc_exec_tmp_0;"));
     try expectNotContains(local_body, "entry_of()();");
     try expectNotContains(local_body, "mc_tmp");
 }

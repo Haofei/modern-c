@@ -1750,10 +1750,6 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const statement_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
-            mir_statement_plan.buildSingleBlockVoid(fn_mir)
-        else
-            null;
         const specialized_plans = [_]bool{
             nullable_control_plan != null,
             nested_conditional_return_plan != null,
@@ -1776,7 +1772,6 @@ pub const CEmitter = struct {
             place_return_plan != null,
             scalar_switch_return_plan != null,
             indirect_call_return_plan != null,
-            statement_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
 
@@ -1838,9 +1833,6 @@ pub const CEmitter = struct {
         } else if (indirect_call_return_plan) |plan| {
             selected_path.* = .indirect_call_return;
             try self.emitMirIndirectCallReturnPlan(plan);
-        } else if (statement_plan) |plan| {
-            selected_path.* = .statement;
-            try self.emitMirStatementPlan(function, fn_mir, plan);
         } else if (simple_return) |ret| {
             selected_path.* = .simple_return;
             if (simple_return_prefix_calls) |calls| {
@@ -5464,34 +5456,6 @@ pub const CEmitter = struct {
             try self.emitSimpleMirDirectCall(call);
             try self.out.appendSlice(self.allocator, ";\n");
         }
-    }
-
-    fn emitMirStatementPlan(self: *CEmitter, function: anytype, fn_mir: mir.Function, plan: mir_statement_plan.Plan) !void {
-        for (plan.statements[0..plan.count]) |statement| switch (statement) {
-            .discard_direct_call => |location| {
-                const call = self.simpleMirDirectCallAtSource(function, fn_mir, location.source) orelse return error.UnsupportedCEmission;
-                try self.writeLineDirective(spanFromMirSourcePoint(location.source));
-                try self.writeIndent();
-                try self.emitSimpleMirDirectCall(call);
-                try self.out.appendSlice(self.allocator, ";\n");
-            },
-            .local_direct_call => |local| {
-                const call = self.simpleMirDirectCallAtSource(function, fn_mir, local.call_location.source) orelse return error.UnsupportedCEmission;
-                try self.writeLineDirective(spanFromMirSourcePoint(local.local_location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = ", .{
-                    try self.cTypeFor(local.result_fact.target_ty, .typedef_name),
-                    try self.cIdent(local.local_name),
-                });
-                try self.emitSimpleMirDirectCall(call);
-                try self.out.appendSlice(self.allocator, ";\n");
-            },
-            .indirect_void_call => |call| {
-                try self.writeLineDirective(spanFromMirSourcePoint(call.location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s}();\n", .{try self.cIdent(call.callee_name)});
-            },
-        };
     }
 
     fn emitMirIndirectCallReturnPlan(self: *CEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) !void {

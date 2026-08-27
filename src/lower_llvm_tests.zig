@@ -4337,8 +4337,9 @@ test "LLVM zero-argument function-pointer calls lower from MIR without body fall
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_zero_arg_function_pointer_calls.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @call_entry_param");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, param_body, "call void %entry()"));
-    const param_call = std.mem.indexOf(u8, param_body, "call void %entry()") orelse return error.TestUnexpectedResult;
+    try expectContains(param_body, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, param_body, "call void %mc_arg_0()"));
+    const param_call = std.mem.indexOf(u8, param_body, "call void %mc_arg_0()") orelse return error.TestUnexpectedResult;
     const param_ret = std.mem.indexOf(u8, param_body, "ret void") orelse return error.TestUnexpectedResult;
     try std.testing.expect(param_call < param_ret);
     try expectNotContains(param_body, "alloca");
@@ -4346,6 +4347,7 @@ test "LLVM zero-argument function-pointer calls lower from MIR without body fall
     try expectNotContains(param_body, "load ptr");
 
     const local_body = try llvmFunctionBody(output.items, "define internal void @call_fn_pointer");
+    try expectContains(local_body, "; canonical executable MIR");
     const producer_text = "call ptr @entry_of()";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, producer_text));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_body, "call void %"));
@@ -4354,9 +4356,9 @@ test "LLVM zero-argument function-pointer calls lower from MIR without body fall
     const local_ret = std.mem.indexOfPos(u8, local_body, indirect, "ret void") orelse return error.TestUnexpectedResult;
     try std.testing.expect(producer < indirect);
     try std.testing.expect(indirect < local_ret);
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "store ptr");
-    try expectNotContains(local_body, "load ptr");
+    try expectContains(local_body, "%mc_local_0 = alloca ptr");
+    try expectContains(local_body, "store ptr %mc_expr_tmp_0, ptr %mc_local_0");
+    try expectContains(local_body, "%mc_expr_tmp_1 = load ptr, ptr %mc_local_0");
 }
 
 test "LLVM typed indirect call returns lower from MIR without body fallback" {

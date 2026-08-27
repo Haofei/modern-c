@@ -734,6 +734,7 @@ pub const ExecutableExpression = struct {
         },
         indirect_call: struct {
             callee: ExprId,
+            signature: ExecutableCallSignature,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
@@ -759,6 +760,17 @@ pub const ExecutableExpression = struct {
         },
         unsupported,
     };
+};
+
+/// Canonical callable contract carried by an indirect call. Function values
+/// intentionally remain opaque machine values; this bounded signature is the
+/// semantic proof that the value is callable with these operands and result.
+pub const ExecutableCallSignature = struct {
+    parameter_types: [max_executable_operands]ValueType = [_]ValueType{.unknown} ** max_executable_operands,
+    parameter_type_ids: [max_executable_operands]TypeId = [_]TypeId{.invalid} ** max_executable_operands,
+    parameter_count: usize = 0,
+    return_ty: ValueType = .unknown,
+    return_type_id: TypeId = .invalid,
 };
 
 /// Typed exceptional control-flow owned by one executable operation.  The

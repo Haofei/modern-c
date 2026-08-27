@@ -7831,7 +7831,7 @@ const FunctionBuilder = struct {
                     }
                     break :call .{ .builtin_call = call_value };
                 }
-                if (directCalleeName(node.callee.*)) |callee_name| {
+                if (directCalleeName(node.callee.*)) |callee_name| if (self.isKnownDirectCall(node.callee.*, callee_name)) {
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     var call_value: @FieldType(ExecutableExpression.Operation, "direct_call") = .{
                         .callee = try self.internExecutableFunctionSymbol(callee_name),
@@ -7851,12 +7851,35 @@ const FunctionBuilder = struct {
                         call_value.arguments[index] = try self.ensureExecutableExprAs(argument, parameter_ty);
                     }
                     break :call .{ .direct_call = call_value };
+                };
+                const indirect_target = self.indirectCallTarget(node) orelse
+                    break :call self.unsupportedExecutableExpression(.unsupported_call);
+                if (indirect_target.params.len != node.args.len or indirect_target.params.len > mir_model.max_executable_operands)
+                    break :call self.unsupportedExecutableExpression(.unsupported_call);
+                const canonical_indirect_slice = switch (aggregateTargetTypeAlias(indirect_target.callee_type_expr, self.aliases).kind) {
+                    .fn_pointer => indirect_target.params.len == 0 and indirect_target.result_ty == .void,
+                    else => false,
+                };
+                if (!canonical_indirect_slice) self.executable_supported = false;
+                result_ty = indirect_target.result_ty;
+                var signature: mir_model.ExecutableCallSignature = .{
+                    .parameter_count = indirect_target.params.len,
+                    .return_ty = indirect_target.result_ty,
+                    .return_type_id = try self.internTypeId(indirect_target.result_ty),
+                };
+                for (indirect_target.params, 0..) |parameter, index| {
+                    const parameter_ty = valueTypeFromTypeAlias(parameter, self.enums, self.structs, self.packed_bits, self.aliases);
+                    signature.parameter_types[index] = parameter_ty;
+                    signature.parameter_type_ids[index] = try self.internTypeId(parameter_ty);
                 }
                 var call_value: @FieldType(ExecutableExpression.Operation, "indirect_call") = .{
-                    .callee = try self.ensureExecutableExpr(node.callee.*),
+                    .callee = try self.ensureExecutableExprAs(node.callee.*, indirect_target.callee_ty),
+                    .signature = signature,
                     .argument_count = node.args.len,
                 };
-                for (node.args, 0..) |argument, index| call_value.arguments[index] = try self.ensureExecutableExpr(argument);
+                for (node.args, 0..) |argument, index| {
+                    call_value.arguments[index] = try self.ensureExecutableExprAs(argument, signature.parameter_types[index]);
+                }
                 break :call .{ .indirect_call = call_value };
             },
             .array_literal => |items| array: {
@@ -9227,7 +9250,11 @@ const FunctionBuilder = struct {
         if (subject_type_expr) |ty| {
             try self.appendTargetTypeFact(.switch_subject, ty, valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases), node.subject.span);
         } else return error.InvalidMirTargetTypeFacts;
-        try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = try self.ensureExecutableExpr(node.subject) } });
+        const executable_subject = try self.ensureExecutableExpr(node.subject);
+        const executable_boolean_subject = executable_subject.isValid() and
+            executable_subject.index() < self.executable_expressions.items.len and
+            sameValueType(self.executable_expressions.items[executable_subject.index()].result_ty, .bool);
+        try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = executable_subject } });
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
         try self.addSwitchPatternChecks(node);
@@ -9243,7 +9270,10 @@ const FunctionBuilder = struct {
                 if (patternBoolValue(arm.patterns[0])) |value| {
                     if (value) executable_true_arm = arm_id else executable_false_arm = arm_id;
                 }
-            } else if (arm.patterns.len == 0) {
+            }
+            if (arm.patterns.len == 0 or
+                (executable_boolean_subject and arm.patterns.len == 1 and arm.patterns[0].kind == .wildcard))
+            {
                 executable_false_arm = arm_id;
             }
             self.current = arm_id;
@@ -9326,7 +9356,7 @@ const FunctionBuilder = struct {
             self.proven_facts.items.len = facts_save;
         }
         self.blocks.items[dispatch_id].terminator = .switch_;
-        if (executable_true_arm != null and executable_false_arm != null) {
+        if (executable_boolean_subject and executable_true_arm != null and executable_false_arm != null) {
             try self.executable_boolean_branches.append(self.allocator, .{
                 .dispatch_block = dispatch_id,
                 .true_block = executable_true_arm.?,

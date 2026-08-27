@@ -51,7 +51,7 @@ pub fn emitBodyWithSourcePath(
         // MC slices use a declaration-owned typedef whose spelling is not a
         // MIR semantic identity. Infer the exact C type at the single
         // materialization point instead of reconstructing syntax here.
-        if (isSliceType(expression.result_ty)) continue;
+        if (isSliceType(expression.result_ty) or expression.result_ty == .value) continue;
         try writeIndent(allocator, out, indent);
         try appendCType(allocator, out, expression.result_ty);
         try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
@@ -87,7 +87,7 @@ fn emitStatement(
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
-            if (isSliceType(local.ty)) {
+            if (isSliceType(local.ty) or local.ty == .value) {
                 if (local.value == null) return error.UnsupportedType;
                 try out.appendSlice(allocator, "__auto_type ");
             } else {
@@ -365,7 +365,9 @@ fn emitExpressionOperation(
 /// consults source text, spans, or declaration ASTs.
 pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     if (!body.isComplete() or body.terminators.len == 0) return false;
-    for (body.parameters) |parameter| if (!supportsType(parameter.ty) or localById(body, parameter.local) == null) return false;
+    for (body.parameters) |parameter| if (!(supportsType(parameter.ty) or
+        (parameter.ty == .value and callableLocalUsedAsIndirectCallee(body, parameter.local))) or
+        localById(body, parameter.local) == null) return false;
     for (body.expressions) |expression| {
         if (!supportsExpression(body, expression)) return false;
     }
@@ -405,11 +407,14 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         if (!hasBlock(body, statement.block_id)) return false;
         switch (statement.operation) {
             .local_init => |local| {
-                if (!supportsType(local.ty) or localById(body, local.local) == null) return false;
+                if (!(supportsType(local.ty) or
+                    (local.ty == .value and callableLocalUsedAsIndirectCallee(body, local.local))) or
+                    localById(body, local.local) == null) return false;
                 if (local.value) |value| {
                     const expression = expressionById(body, value) orelse return false;
                     if (!sameValueType(local.ty, expression.result_ty)) return false;
-                } else if (isSliceType(local.ty)) return false;
+                    if (local.ty == .value and !callableValueExpressionSupported(body, expression.*)) return false;
+                } else if (isSliceType(local.ty) or local.ty == .value) return false;
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
             .eval => |value| if (expressionById(body, value) == null) return false,
@@ -441,6 +446,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
 
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (functionSymbolExpressionSupported(body, expression)) return true;
+    if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression);
     if (!supportsType(expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
@@ -463,7 +469,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .cast => |cast| castSupported(body, expression, cast),
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
-        .indirect_call => |call| call.argument_count <= call.arguments.len and expressionById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
+        .indirect_call => |call| indirectCallSupported(body, expression, call),
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call => |call| builtinCallSupported(body, expression, call),
         .address_of => |address| addressOfSupported(body, expression, address),
@@ -471,6 +477,60 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .deref, .index, .range_slice, .array, .unsupported => false,
     };
+}
+
+fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (expression.result_ty != .value) return false;
+    return switch (expression.operation) {
+        .local => |local| localById(body, local) != null and callableLocalUsedAsIndirectCallee(body, local),
+        .symbol => functionSymbolExpressionSupported(body, expression),
+        .direct_call => |call| call.argument_count <= call.arguments.len and
+            symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]) and
+            callableProducerInitializesUsedLocal(body, expression.id),
+        else => false,
+    };
+}
+
+fn callableLocalUsedAsIndirectCallee(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    for (body.expressions) |expression| switch (expression.operation) {
+        .indirect_call => |call| {
+            const callee = expressionById(body, call.callee) orelse continue;
+            switch (callee.operation) {
+                .local => |candidate| if (candidate.eql(local) and call.signature.parameter_count == call.argument_count)
+                    return true,
+                else => {},
+            }
+        },
+        else => {},
+    };
+    return false;
+}
+
+fn callableProducerInitializesUsedLocal(body: *const mir.ExecutableBody, producer: mir.ExprId) bool {
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| if (local.value != null and local.value.?.eql(producer) and
+            callableLocalUsedAsIndirectCallee(body, local.local)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn indirectCallSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "indirect_call"),
+) bool {
+    if (call.argument_count > call.arguments.len or call.signature.parameter_count != call.argument_count or
+        !sameValueType(call.signature.return_ty, expression.result_ty) or
+        !call.signature.return_type_id.eql(expression.type_id)) return false;
+    const callee = expressionById(body, call.callee) orelse return false;
+    if (!callableValueExpressionSupported(body, callee.*)) return false;
+    for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
+        const argument = expressionById(body, argument_id) orelse return false;
+        if (!sameValueType(argument.result_ty, call.signature.parameter_types[index]) or
+            !argument.type_id.eql(call.signature.parameter_type_ids[index])) return false;
+    }
+    return true;
 }
 
 fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -1182,7 +1242,7 @@ fn prepareStatementExpressions(
         try writeSourceLineDirective(allocator, out, source_path, expression.source);
         try writeIndent(allocator, out, indent);
         if (expressionNeedsTemporary(expression)) {
-            if (isSliceType(expression.result_ty)) {
+            if (isSliceType(expression.result_ty) or expression.result_ty == .value) {
                 try out.print(allocator, "__auto_type mc_exec_tmp_{d} = ", .{expression.id.raw});
             } else {
                 try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
