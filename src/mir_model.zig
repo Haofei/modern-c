@@ -536,6 +536,15 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             else => false,
         },
         .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
+        .conversion_try_from => conversion_try: {
+            if (operands.len != 1) break :conversion_try false;
+            const shape = switch (result) {
+                .result => |value| value,
+                else => break :conversion_try false,
+            };
+            if (!std.mem.eql(u8, shape.err, "ConversionError")) break :conversion_try false;
+            break :conversion_try executableIntegerConversion(operands[0], .{ .integer = shape.ok }) != null;
+        },
         .conversion_trap_from => operands.len == 1 and executableTrapConversion(operands[0], result) != null,
         .conversion_wrap_from, .conversion_from_mod => operands.len == 1 and executableIntegerConversion(operands[0], result) != null,
         .conversion_sat_from => operands.len == 1 and executableIntegerConversion(operands[0], result) != null,

@@ -14801,6 +14801,10 @@ test "LLVM canonical executable MIR owns scalar integer conversions" {
         \\fn narrow_sat(value: u32) -> u8 { return u8.sat_from(value); }
         \\fn signed_sat(value: i32) -> u8 { return u8.sat_from(value); }
         \\fn unsigned_signed_sat(value: u32) -> i8 { return i8.sat_from(value); }
+        \\fn narrow_try(value: u32) -> Result<u8, ConversionError> { return u8.try_from(value); }
+        \\fn widen_try(value: u8) -> Result<u64, ConversionError> { return u64.try_from(value); }
+        \\fn conversion_source() -> u32 { return 300; }
+        \\fn narrow_try_call() -> Result<u8, ConversionError> { return u8.try_from(conversion_source()); }
         \\fn make_wrap(value: u8) -> W { return W.from(value); }
         \\fn make_wrap_mod() -> W { return W.from_mod(300); }
     ;
@@ -14831,6 +14835,17 @@ test "LLVM canonical executable MIR owns scalar integer conversions" {
     try expectContains(sat_crossed, "icmp sgt i32 %mc_arg_0, 255");
     const sat_signed = try llvmFunctionBody(output.items, "define internal i8 @unsigned_signed_sat");
     try expectContains(sat_signed, "icmp ugt i32 %mc_arg_0, 127");
+    const tried = try llvmFunctionBody(output.items, "define internal { i1, i8, i8 } @narrow_try");
+    try expectContains(tried, "icmp ugt i32 %mc_arg_0, 255");
+    try expectContains(tried, "xor i1");
+    try expectContains(tried, "insertvalue { i1, i8, i8 }");
+    const tried_widen = try llvmFunctionBody(output.items, "define internal { i1, i64, i8 } @widen_try");
+    try expectContains(tried_widen, "zext i8 %mc_arg_0 to i64");
+    try expectContains(tried_widen, "i1 true, 0");
+    try expectNotContains(tried_widen, "icmp");
+    const tried_call = try llvmFunctionBody(output.items, "define internal { i1, i8, i8 } @narrow_try_call");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tried_call, "call i32 @conversion_source()"));
+    try expectContains(tried_call, "icmp ugt i32");
     const domain = try llvmFunctionBody(output.items, "define internal i8 @make_wrap");
     try expectContains(domain, "ret i8 %mc_arg_0");
     const modulo = try llvmFunctionBody(output.items, "define internal i8 @make_wrap_mod");

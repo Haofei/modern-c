@@ -1133,6 +1133,7 @@ const Renderer = struct {
                 return .{ .ty = result_ty, .spelling = result };
             },
             .conversion_from, .conversion_wrap_from, .conversion_from_mod => return self.emitIntegerConversion(expression, call, operands[0]),
+            .conversion_try_from => return self.emitTryConversionCall(expression, call, operands[0]),
             .conversion_sat_from => return self.emitSaturatingConversionCall(expression, call, operands[0]),
             .conversion_trap_from => return self.emitTrapConversion(expression, call, operands[0]),
             .bitcast => {
@@ -1269,6 +1270,75 @@ const Renderer = struct {
             clamped = .{ .ty = operand.ty, .spelling = selected };
         }
         return self.emitIntegerConversion(expression, call, clamped);
+    }
+
+    fn emitTryConversionCall(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+        operand: Value,
+    ) RenderError!Value {
+        const shape = resultType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
+        const conversion = mir.executableTrapConversion(source_ty, shape.ok_ty) orelse return error.InvalidBody;
+        const ok_ty = try self.typeText(shape.ok_ty);
+
+        const converted = if (conversion.source.bits == conversion.target.bits)
+            operand
+        else converted: {
+            const value = try self.temp();
+            const operation: []const u8 = if (conversion.target.bits < conversion.source.bits)
+                "trunc"
+            else if (conversion.source.signed)
+                "sext"
+            else
+                "zext";
+            try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ value, operation, operand.ty, operand.spelling, ok_ty });
+            break :converted Value{ .ty = ok_ty, .spelling = value };
+        };
+        if (!std.mem.eql(u8, converted.ty, ok_ty)) return error.InvalidBody;
+
+        var out_of_range: ?[]const u8 = null;
+        if (conversion.need_lower) {
+            const below = try self.temp();
+            try self.output.print(self.allocator, "  {s} = icmp slt {s} {s}, {d}\n", .{
+                below,
+                operand.ty,
+                operand.spelling,
+                if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0),
+            });
+            out_of_range = below;
+        }
+        if (conversion.need_upper) {
+            const above = try self.temp();
+            try self.output.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{
+                above,
+                if (conversion.source.signed) "sgt" else "ugt",
+                operand.ty,
+                operand.spelling,
+                if (conversion.target.signed)
+                    @as(u128, @intCast(signedMaximum(conversion.target.bits)))
+                else
+                    unsignedMaximum(conversion.target.bits),
+            });
+            if (out_of_range) |below| {
+                const combined = try self.temp();
+                try self.output.print(self.allocator, "  {s} = or i1 {s}, {s}\n", .{ combined, below, above });
+                out_of_range = combined;
+            } else out_of_range = above;
+        }
+
+        const is_ok = if (out_of_range) |condition| ok: {
+            const value = try self.temp();
+            try self.output.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ value, condition });
+            break :ok value;
+        } else "true";
+        const result_ty = try self.typeText(expression.result_ty);
+        const tagged = try self.temp();
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, is_ok });
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ result, result_ty, tagged, ok_ty, converted.spelling });
+        return .{ .ty = result_ty, .spelling = result };
     }
 
     fn emitCall(self: *Renderer, ty: []const u8, callee: []const u8, arguments: []const mir.ExprId, abi: ?DirectCallAbi) RenderError!Value {
@@ -1917,7 +1987,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -1928,6 +1998,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
+    if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .raw_ptr) {
         if (call.representation_source == null or !call.representation_span_id.isValid() or
             !representationTrapEdgeIsExact(body, expression)) return false;
@@ -1938,6 +2009,12 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
         (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
+}
+
+fn conversionTryResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    return sameValueType(shape.ty, expression.result_ty) and shape.ok_ty == .integer and
+        sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn enumRawSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {

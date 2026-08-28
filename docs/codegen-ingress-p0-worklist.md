@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1785 C and 1858 LLVM
-functions. It found 627 C and 682 LLVM AST-body fallbacks. Report
+functions. It found 625 C and 680 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1158/1785 admitted (64.9%)**, 627 fallback, and
-LLVM **1176/1858 admitted (63.3%)**, 682 fallback. There were no unsupported
+The 522-root sweep found C **1160/1785 admitted (65.0%)**, 625 fallback, and
+LLVM **1178/1858 admitted (63.4%)**, 680 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
@@ -41,8 +41,8 @@ builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. The current broad split is 1025
-canonical / 133 specialized for C and 1020 canonical / 156 specialized for
+specialized plan definitions from 15 to **14**. The current broad split is 1027
+canonical / 133 specialized for C and 1022 canonical / 156 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
 
 Target-typed negative integer literals now lower as canonical signed values.
@@ -66,6 +66,13 @@ syntax. Saturation has no trap edge and clamps both signed/unsigned boundaries;
 modular forms use the verified integer resize. The conversion fixture is 8/8
 canonical in both backends. This removes two more broad fallbacks and three
 `simple_return` admissions per backend.
+
+Fallible `try_from` conversions now consume the same relation and a canonical
+`Result<T, ConversionError>` type fact. The C renderer evaluates its operand
+once and selects a typed success/error aggregate; LLVM emits the equivalent
+tagged aggregate. This removes the `narrow_try` and `widen_try` fallbacks in
+both backends. The scalar conversion family is therefore no longer a source of
+AST fallback in `tests/c_emit/conversions.mc` or for those two result helpers.
 
 Fixed-array `ValueType` identity now includes the immediate element spelling
 and known length instead of collapsing every array to the same `"array"` key.

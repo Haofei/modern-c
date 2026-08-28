@@ -768,7 +768,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -779,6 +779,7 @@ fn builtinCallSupported(
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
+    if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     return if (call.kind == .raw_ptr)
         call.representation_source != null and call.representation_span_id.isValid() and
             representationOperationHasExactTrapEdge(body, expression)
@@ -788,6 +789,12 @@ fn builtinCallSupported(
     else
         call.representation_source == null and !call.representation_span_id.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn conversionTryResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    return sameValueType(shape.ty, expression.result_ty) and shape.ok_ty == .integer and
+        sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn enumRawSupported(
@@ -826,6 +833,30 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
+        },
+        .conversion_try_from => {
+            const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const shape = resultTypeForValueType(body, result_ty) orelse return error.UnsupportedType;
+            const conversion = mir.executableTrapConversion(operand.result_ty, shape.ok_ty) orelse return error.UnsupportedType;
+            const has_bounds = conversion.need_lower or conversion.need_upper;
+            try out.append(allocator, '(');
+            if (has_bounds) {
+                try out.append(allocator, '(');
+                try emitConversionOutOfRange(allocator, out, body, call.arguments[0], conversion, depth + 1);
+                try out.appendSlice(allocator, ") ? (");
+                try appendCType(allocator, out, body, result_ty);
+                try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = (");
+                try appendCType(allocator, out, body, shape.err_ty);
+                try out.appendSlice(allocator, ")0 } : ");
+            }
+            try out.append(allocator, '(');
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = true, .payload.ok = (");
+            try appendCType(allocator, out, body, shape.ok_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ") }");
+            try out.append(allocator, ')');
         },
         .conversion_sat_from => {
             const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
@@ -976,6 +1007,30 @@ fn emitBuiltinCall(
             else => unreachable,
         }),
         else => return error.UnsupportedOperation,
+    }
+}
+
+fn emitConversionOutOfRange(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    operand: mir.ExprId,
+    conversion: mir.ExecutableTrapConversion,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (conversion.need_lower) {
+        try out.appendSlice(allocator, "((__int128)(");
+        try emitExpression(allocator, out, body, operand, depth + 1);
+        try out.print(allocator, ") < (__int128){d})", .{if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0)});
+    }
+    if (conversion.need_lower and conversion.need_upper) try out.appendSlice(allocator, " || ");
+    if (conversion.need_upper) {
+        try out.appendSlice(allocator, if (conversion.source.signed) "((__int128)(" else "((unsigned __int128)(");
+        try emitExpression(allocator, out, body, operand, depth + 1);
+        if (conversion.target.signed)
+            try out.print(allocator, ") > (__int128){d})", .{signedMaximum(conversion.target.bits)})
+        else
+            try out.print(allocator, ") > (unsigned __int128){d})", .{unsignedMaximum(conversion.target.bits)});
     }
 }
 
@@ -1992,12 +2047,15 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             try out.appendSlice(allocator, "mc_opt_");
             try appendCTypeSuffix(allocator, out, shape.field_types[1]);
         },
-        .result => {
+        .result => |identity| {
             const shape = resultTypeForValueType(body, ty) orelse return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_result_");
             try appendCTypeSuffix(allocator, out, shape.ok_ty);
             try out.append(allocator, '_');
-            try appendCTypeSuffix(allocator, out, shape.err_ty);
+            if (std.mem.eql(u8, identity.err, "ConversionError"))
+                try out.appendSlice(allocator, "ConversionError")
+            else
+                try appendCTypeSuffix(allocator, out, shape.err_ty);
         },
         else => return error.UnsupportedType,
     }

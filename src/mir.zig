@@ -8260,6 +8260,15 @@ const FunctionBuilder = struct {
                         result_ty = target.result_ty;
                     } else if (conversion_target) |target| {
                         result_ty = self.conversionCallResultValueType(target);
+                        if (target.kind == .conversion_try_from) {
+                            var result_args = [_]ast.TypeExpr{
+                                target.target_ty,
+                                ast_query.simpleNameType("ConversionError", target.target_ty.span),
+                            };
+                            const result_type = genericTypeExpr("Result", &result_args, target.target_ty.span);
+                            if (!try self.internExecutableResultType(result_ty, result_type))
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        }
                     } else if (kind == .forget_unchecked or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
@@ -8759,7 +8768,14 @@ const FunctionBuilder = struct {
         };
         if (!std.mem.eql(u8, generic.base.text, "Result") or generic.args.len != 2 or ty != .result) return false;
         const ok_ty = valueTypeFromTypeAlias(generic.args[0], self.enums, self.structs, self.packed_bits, self.aliases);
-        const err_ty = valueTypeFromTypeAlias(generic.args[1], self.enums, self.structs, self.packed_bits, self.aliases);
+        const err_name: ?[]const u8 = switch (aggregateTargetTypeAlias(generic.args[1], self.aliases).kind) {
+            .name => |name| name.text,
+            else => null,
+        };
+        const err_ty: ValueType = if (err_name) |name|
+            if (std.mem.eql(u8, name, "ConversionError")) .{ .integer = "u8" } else valueTypeFromTypeAlias(generic.args[1], self.enums, self.structs, self.packed_bits, self.aliases)
+        else
+            valueTypeFromTypeAlias(generic.args[1], self.enums, self.structs, self.packed_bits, self.aliases);
         if (ok_ty == .unknown or ok_ty == .value or err_ty == .unknown or err_ty == .value) return false;
         const type_id = try self.internTypeId(ty);
         const ok_type_id = try self.internTypeId(ok_ty);

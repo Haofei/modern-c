@@ -21912,6 +21912,10 @@ test "C canonical executable MIR owns scalar integer conversions" {
         \\fn narrow_sat(value: u32) -> u8 { return u8.sat_from(value); }
         \\fn signed_sat(value: i32) -> u8 { return u8.sat_from(value); }
         \\fn unsigned_signed_sat(value: u32) -> i8 { return i8.sat_from(value); }
+        \\fn narrow_try(value: u32) -> Result<u8, ConversionError> { return u8.try_from(value); }
+        \\fn widen_try(value: u8) -> Result<u64, ConversionError> { return u64.try_from(value); }
+        \\fn conversion_source() -> u32 { return 300; }
+        \\fn narrow_try_call() -> Result<u8, ConversionError> { return u8.try_from(conversion_source()); }
         \\fn make_wrap(value: u8) -> W { return W.from(value); }
         \\fn make_wrap_mod() -> W { return W.from_mod(300); }
     ;
@@ -21919,7 +21923,7 @@ test "C canonical executable MIR owns scalar integer conversions" {
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_trap_conversion.mc", source, &output);
 
-    try std.testing.expectEqual(@as(usize, 10), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
+    try std.testing.expectEqual(@as(usize, 14), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
     const narrow = try cFunctionBody(output.items, "MC_UNUSED static uint8_t narrow_unsigned(uint32_t value)");
     try expectContains(narrow, "(unsigned __int128)255");
     try expectContains(narrow, "mc_trap_IntegerOverflow()");
@@ -21940,6 +21944,16 @@ test "C canonical executable MIR owns scalar integer conversions" {
     try expectContains(sat_crossed, "(unsigned __int128)255");
     const sat_signed = try cFunctionBody(output.items, "MC_UNUSED static int8_t unsigned_signed_sat(uint32_t value)");
     try expectContains(sat_signed, "(__int128)127");
+    const tried = try cFunctionBody(output.items, "MC_UNUSED static mc_result_u8_ConversionError narrow_try(uint32_t value)");
+    try expectContains(tried, ".is_ok = false");
+    try expectContains(tried, ".payload.err = (uint8_t)0");
+    try expectContains(tried, ".is_ok = true");
+    const tried_widen = try cFunctionBody(output.items, "MC_UNUSED static mc_result_u64_ConversionError widen_try(uint8_t value)");
+    try expectContains(tried_widen, ".is_ok = true");
+    try expectNotContains(tried_widen, ".is_ok = false");
+    const tried_call = try cFunctionBody(output.items, "MC_UNUSED static mc_result_u8_ConversionError narrow_try_call(void)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tried_call, "conversion_source()"));
+    try expectContains(tried_call, ".is_ok = false");
     const domain = try cFunctionBody(output.items, "MC_UNUSED static uint8_t make_wrap(uint8_t value)");
     try expectContains(domain, "/* canonical executable MIR */");
     const modulo = try cFunctionBody(output.items, "MC_UNUSED static uint8_t make_wrap_mod(void)");

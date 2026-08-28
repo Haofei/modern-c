@@ -2686,6 +2686,7 @@ test "MIR owns all scalar conversion builtin call targets" {
         try std.testing.expect(function.target_type_facts.len >= 2);
         try std.testing.expect(targetTypeFactByKind(function, .conversion_source) != null);
         try std.testing.expect(targetTypeFactByKind(function, .conversion_target) != null);
+        try std.testing.expect(function.executable_body.isComplete());
     }
     const mod_result = functionByName(typed_mir, "mod_value").?.call_target_facts[0].result_ty;
     try std.testing.expect(mod_result == .domain_integer);
