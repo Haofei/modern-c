@@ -142,7 +142,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         (!llvmTypeSupported(body, return_ty) and !functionSymbolReturnSupported(body, return_ty))) return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
-            (parameter.ty == .value and callableLocalUsedAsIndirectCallee(body, parameter.local)))) return false;
+            (parameter.ty == .value and callableParameter(body, parameter.local)))) return false;
     }
     for (body.expressions) |expression| {
         if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
@@ -1530,13 +1530,20 @@ fn indirectCallSupported(
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (expression.result_ty != .value) return false;
     return switch (expression.operation) {
-        .local => |local| localExists(body, local) and callableLocalUsedAsIndirectCallee(body, local),
+        .local => |local| localExists(body, local) and
+            (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and
             symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
         else => false,
     };
+}
+
+fn callableParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    for (body.parameters) |parameter| if (parameter.local.eql(local))
+        return parameter.ty == .value and parameter.callable_signature != null;
+    return false;
 }
 
 fn callableLocalUsedAsIndirectCallee(body: *const mir.ExecutableBody, local: mir.LocalId) bool {

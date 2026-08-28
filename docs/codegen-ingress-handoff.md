@@ -584,10 +584,18 @@ unsupported effects on the general path. The standalone scalar plan model,
 recognizer, both backend renderers, and census path are deleted; the registry
 falls from 19 definitions to 18.
 
-A complete-shard probe showed that `simple_void_body` is not yet deletable: 17
-tests still exercise aggregate, Result, enum, and statement-oriented void
-families absent from complete executable MIR. The probe was reverted rather
-than weakening coverage; retirement waits for those facts to become canonical.
+The `simple_void_body` plan is now fully retired. Callable parameter signatures
+are carried by executable MIR, lexical contract calls and fixed-array bodies are
+canonical, and write-only locals no longer fail admission. These changes move
+the two production users (`fmt_put_hex32`/`fmt_put_hex64`) to the canonical
+renderer. The complete shards also exposed several synthetic aggregate-global
+and pointer-projection cases which were never complete executable MIR; those
+remain explicit AST fallback instead of retaining a second specialized void-body
+implementation. Both plan models, recognizers, renderers, census path, and the
+obsolete write-only-local admission heuristic were deleted.
+The strict corpus remains fully admitted (C 84 canonical/76 specialized,
+LLVM 83 canonical/77 specialized), while the shared specialized-plan registry
+falls to 15 definitions.
 
 The first local-declaration statement primitive is complete for the strict
 single-local call chain `let x = f(); return g(x)`. It preserves evaluations and

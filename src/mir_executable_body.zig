@@ -83,37 +83,6 @@ pub fn symbol(body: *const mir.ExecutableBody, id: mir.SymbolId) ?mir.SymbolIden
 /// materializes every declared local. The specialized path already removes
 /// locals that are only initialized or assigned and never read; keep those
 /// bodies there until executable-MIR owns a shared dead-local elimination pass.
-pub fn hasOnlyWriteOnlyLocals(body: *const mir.ExecutableBody) bool {
-    var saw_local = false;
-    for (body.statements) |statement_value| switch (statement_value.operation) {
-        .local_init => |init| {
-            saw_local = true;
-            if (localIsRead(body, init.local)) return false;
-        },
-        else => {},
-    };
-    return saw_local;
-}
-
-fn localIsRead(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
-    for (body.expressions) |expression_value| switch (expression_value.operation) {
-        .local => |local_id| if (local_id.eql(id)) return true,
-        .load => |load| if (placeRootIsLocal(body, load.place, id)) return true,
-        .atomic_load => |load| if (placeRootIsLocal(body, load.place, id)) return true,
-        .address_of => |address| if (placeRootIsLocal(body, address.place, id)) return true,
-        else => {},
-    };
-    return false;
-}
-
-fn placeRootIsLocal(body: *const mir.ExecutableBody, id: mir.PlaceId, local_id: mir.LocalId) bool {
-    const value = place(body, id) orelse return false;
-    return switch (value.root) {
-        .local => |root| root.eql(local_id),
-        .symbol, .value => false,
-    };
-}
-
 pub fn verify(function: *const mir.Function) !void {
     const body = &function.executable_body;
     if (function.param_types.len != function.param_count) return error.InvalidFunctionSignature;
@@ -145,6 +114,10 @@ pub fn verify(function: *const mir.Function) !void {
         try verifyLocal(body, parameter.local);
         try verifySpan(function, parameter.span_id, parameter.source);
         try verifyType(function, parameter.type_id, parameter.ty, body.complete);
+        if (parameter.callable_signature) |signature| {
+            if (parameter.ty != .value) return error.InvalidFunctionSignature;
+            try verifyCallableSignature(function, signature, body.complete);
+        } else if (body.complete and parameter.ty == .value) return error.InvalidFunctionSignature;
     }
 
     for (body.expressions, 0..) |value, index| {
@@ -813,6 +786,15 @@ fn verifyCallSignature(
     // references, but exact signature/type identity is required only before a
     // body can cross the verified executable boundary.
     if (!body.complete) return;
+    switch (callee.operation) {
+        .local => |local_id| for (body.parameters) |parameter| {
+            if (!parameter.local.eql(local_id)) continue;
+            const declared = parameter.callable_signature orelse return error.InvalidFunctionSignature;
+            if (!callableSignaturesEqual(declared, call.signature)) return error.InvalidFunctionSignature;
+            break;
+        },
+        else => {},
+    }
     if (!sameValueType(call.signature.return_ty, consumer.result_ty) or
         !call.signature.return_type_id.eql(consumer.type_id)) return error.InvalidFunctionSignature;
     try verifyType(function, call.signature.return_type_id, call.signature.return_ty, body.complete);
@@ -825,6 +807,32 @@ fn verifyCallSignature(
     for (call.signature.parameter_types[call.signature.parameter_count..]) |ty| if (ty != .unknown)
         return error.InvalidFunctionSignature;
     for (call.signature.parameter_type_ids[call.signature.parameter_count..]) |id| if (id.isValid())
+        return error.InvalidFunctionSignature;
+}
+
+fn callableSignaturesEqual(a: mir.ExecutableCallSignature, b: mir.ExecutableCallSignature) bool {
+    if (a.parameter_count != b.parameter_count or
+        !sameValueType(a.return_ty, b.return_ty) or
+        !a.return_type_id.eql(b.return_type_id)) return false;
+    for (a.parameter_types[0..a.parameter_count], b.parameter_types[0..b.parameter_count]) |a_ty, b_ty|
+        if (!sameValueType(a_ty, b_ty)) return false;
+    for (a.parameter_type_ids[0..a.parameter_count], b.parameter_type_ids[0..b.parameter_count]) |a_id, b_id|
+        if (!a_id.eql(b_id)) return false;
+    return true;
+}
+
+fn verifyCallableSignature(function: *const mir.Function, signature: mir.ExecutableCallSignature, complete: bool) !void {
+    if (signature.parameter_count > mir.max_executable_operands) return error.InvalidFunctionSignature;
+    if (!complete) return;
+    if (signature.return_ty == .unknown or signature.return_ty == .value) return error.InvalidFunctionSignature;
+    try verifyType(function, signature.return_type_id, signature.return_ty, true);
+    for (signature.parameter_types[0..signature.parameter_count], signature.parameter_type_ids[0..signature.parameter_count]) |ty, id| {
+        if (ty == .unknown or ty == .value) return error.InvalidFunctionSignature;
+        try verifyType(function, id, ty, true);
+    }
+    for (signature.parameter_types[signature.parameter_count..]) |ty| if (ty != .unknown)
+        return error.InvalidFunctionSignature;
+    for (signature.parameter_type_ids[signature.parameter_count..]) |id| if (id.isValid())
         return error.InvalidFunctionSignature;
 }
 

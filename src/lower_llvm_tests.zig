@@ -82,6 +82,22 @@ test "LLVM fixed-array signatures and direct calls use canonical executable MIR"
     try expectContains(passed, "call void @consume_array([2 x i32]");
 }
 
+test "LLVM callable parameters forward through canonical executable MIR" {
+    const source =
+        \\extern fn target(sink: fn(u8) -> void, value: u64, shift: i32) -> void;
+        \\fn forward(sink: fn(u8) -> void, value: u32) -> void {
+        \\    target(sink, value as u64, 28);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_callable_parameter.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal void @forward(ptr %mc_arg_0, i32 %mc_arg_1)");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "call void @target(ptr %mc_arg_0,");
+}
+
 test "LLVM valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {
@@ -2023,14 +2039,16 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectNotContains(body, "switch");
 
     const local_body = try llvmFunctionBody(output.items, "define internal void @local_then_call");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectContains(local_body, "call void @hit(i32 2)");
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "store");
+    try expectContains(local_body, "alloca i32");
+    try expectContains(local_body, "store i32 1");
 
     const assign_body = try llvmFunctionBody(output.items, "define internal void @assign_then_call");
+    try expectContains(assign_body, "; canonical executable MIR");
     try expectContains(assign_body, "call void @hit(i32 2)");
-    try expectNotContains(assign_body, "alloca");
-    try expectNotContains(assign_body, "store");
+    try expectContains(assign_body, "alloca i32");
+    try expectContains(assign_body, "store i32 1");
 
     const local_arg_body = try llvmFunctionBody(output.items, "define internal void @call_local_arg");
     try expectContains(local_arg_body, "call void @hit(i32 %mc_expr_tmp_");
@@ -2097,49 +2115,54 @@ test "LLVM emits pure local-only void functions from MIR" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_local_only.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal void @local_only");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectContains(local_body, "ret void");
-    if (std.mem.indexOf(u8, local_body, "; canonical executable MIR") == null) {
-        try expectNotContains(local_body, "alloca");
-        try expectNotContains(local_body, "store");
-    }
+    try expectContains(local_body, "alloca i32");
+    try expectContains(local_body, "store i32 1");
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @param_local");
+    try expectContains(param_body, "; canonical executable MIR");
     try expectContains(param_body, "ret void");
-    try expectNotContains(param_body, "alloca");
-    try expectNotContains(param_body, "store");
+    try expectContains(param_body, "alloca i32");
+    try expectContains(param_body, "store i32 %mc_arg_0");
 
     const var_body = try llvmFunctionBody(output.items, "define internal void @var_only");
+    try expectContains(var_body, "; canonical executable MIR");
     try expectContains(var_body, "ret void");
-    try expectNotContains(var_body, "alloca");
-    try expectNotContains(var_body, "store");
+    try expectContains(var_body, "alloca i32");
+    try expectContains(var_body, "store i32 2");
 
     const if_local_body = try llvmFunctionBody(output.items, "define internal void @if_local");
+    try expectContains(if_local_body, "; canonical executable MIR");
     try expectContains(if_local_body, "ret void");
-    try expectNotContains(if_local_body, "br i1");
-    try expectNotContains(if_local_body, "alloca");
-    try expectNotContains(if_local_body, "store");
+    try expectContains(if_local_body, "br i1");
+    try expectContains(if_local_body, "alloca i32");
+    try expectContains(if_local_body, "store i32 1");
 
     const if_assign_body = try llvmFunctionBody(output.items, "define internal void @if_assign");
+    try expectContains(if_assign_body, "; canonical executable MIR");
     try expectContains(if_assign_body, "ret void");
-    try expectNotContains(if_assign_body, "br i1");
-    try expectNotContains(if_assign_body, "alloca");
-    try expectNotContains(if_assign_body, "store");
+    try expectContains(if_assign_body, "br i1");
+    try expectContains(if_assign_body, "alloca i32");
+    try expectContains(if_assign_body, "store i32 2");
 
     const if_no_else_body = try llvmFunctionBody(output.items, "define internal void @if_no_else");
+    try expectContains(if_no_else_body, "; canonical executable MIR");
     try expectContains(if_no_else_body, "ret void");
-    try expectNotContains(if_no_else_body, "br i1");
-    try expectNotContains(if_no_else_body, "alloca");
-    try expectNotContains(if_no_else_body, "store");
+    try expectContains(if_no_else_body, "br i1");
+    try expectContains(if_no_else_body, "alloca i32");
+    try expectContains(if_no_else_body, "store i32 1");
 
     const call_then_empty_body = try llvmFunctionBody(output.items, "define internal void @call_then_if_empty");
-    try expectContains(call_then_empty_body, "call void @hit(i32 %value)");
+    try expectContains(call_then_empty_body, "; canonical executable MIR");
+    try expectContains(call_then_empty_body, "call void @hit(i32 %mc_arg_1)");
     try expectContains(call_then_empty_body, "ret void");
-    try expectNotContains(call_then_empty_body, "br i1");
-    try expectNotContains(call_then_empty_body, "alloca");
-    try expectNotContains(call_then_empty_body, "store");
+    try expectContains(call_then_empty_body, "br i1");
+    try expectContains(call_then_empty_body, "alloca i32");
+    try expectContains(call_then_empty_body, "store i32 1");
 }
 
-test "LLVM emits simple global stores from MIR" {
+test "LLVM emits simple global stores after specialized plan retirement" {
     const source =
         \\enum Color {
         \\    red,
@@ -2324,7 +2347,7 @@ test "LLVM emits simple global stores from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_store.mc", source, &output);
+    try appendLlvmTest("llvm_mir_global_store.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @store_param");
     try expectContains(param_body, "store atomic i32 %mc_arg_0, ptr @g unordered, align 4");
@@ -2450,23 +2473,19 @@ test "LLVM emits simple global stores from MIR" {
     try expectNotContains(none_body, "alloca");
 
     const pair_body = try llvmFunctionBody(output.items, "define internal void @store_pair");
-    try expectContains(pair_body, "insertvalue { i32, i32 } zeroinitializer, i32 %x, 0");
-    try expectContains(pair_body, "insertvalue { i32, i32 }");
-    try expectContains(pair_body, "i32 7, 1");
+    try expectContains(pair_body, "getelementptr { i32, i32 }");
+    try expectContains(pair_body, "store i32 7");
     try expectContains(pair_body, "ptr @pair");
-    try expectNotContains(pair_body, "alloca");
 
     const result_ok_body = try llvmFunctionBody(output.items, "define internal void @store_result_ok");
     try expectContains(result_ok_body, "insertvalue { i1, i32, i64 } zeroinitializer, i1 true, 0");
     try expectContains(result_ok_body, "i32 %x, 1");
     try expectContains(result_ok_body, "ptr @result");
-    try expectNotContains(result_ok_body, "alloca");
 
     const result_err_body = try llvmFunctionBody(output.items, "define internal void @store_result_err");
     try expectContains(result_err_body, "insertvalue { i1, i32, i64 } zeroinitializer, i1 false, 0");
     try expectContains(result_err_body, "i64 0, 2");
     try expectContains(result_err_body, "ptr @result");
-    try expectNotContains(result_err_body, "alloca");
 
     const neg_body = try llvmFunctionBody(output.items, "define internal void @store_neg");
     try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");
@@ -11047,7 +11066,7 @@ test "LLVM aggregate-return bounded call prefixes are MIR-owned" {
     try expectNotContains(missing_local_call_body, "load i32, ptr %");
 }
 
-test "LLVM lowers pointer parameter field stores without body fallback" {
+test "LLVM lowers pointer parameter field stores after specialized plan retirement" {
     const source =
         \\struct Cell { value: u32 }
         \\fn store_cell(cell: *mut Cell) -> void {
@@ -11057,9 +11076,9 @@ test "LLVM lowers pointer parameter field stores without body fallback" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_param_field_store.mc", source, &output);
+    try appendLlvmTest("llvm_mir_pointer_param_field_store.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @store_cell");
-    try expectContains(body, "getelementptr { i32 }, ptr %cell, i32 0, i32 0");
+    try expectContains(body, "getelementptr { i32 }, ptr %cell, i64 0, i32 0");
     try expectContains(body, "store i32 7, ptr %");
 }
 

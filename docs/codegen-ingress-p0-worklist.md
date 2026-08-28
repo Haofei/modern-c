@@ -268,13 +268,16 @@ table as enums; deleting their dedicated plan brings the current registry to
 18 plans and moves the strict split to C 75/85 and LLVM 74/86.
 `simple_loop_return` remains.
 
-A complete-shard retirement probe for `simple_void_body` found 17 real users,
-covering aggregate, Result, enum, and statement-oriented void bodies that are
-not yet represented completely by executable MIR. It therefore remains a
-live transitional plan; zero hits in the strict census would not be sufficient
-deletion evidence.
-A deletion is accepted only when the exact-path census and both complete
-backend shards agree that coverage is unchanged.
+`simple_void_body` is retired. Executable MIR now carries callable parameter
+signatures and accepts write-only locals, while lexical contract calls and
+fixed-array bodies are canonical. The two production users in `std/fmt` use the
+canonical renderer. Synthetic aggregate-global and pointer-projection fixtures
+which still lack complete executable facts deliberately take the general AST
+fallback; they no longer justify keeping a parallel specialized plan. The plan,
+recognizer, both renderers, census path, and write-only-local admission
+heuristic were deleted only after both complete backend shards agreed.
+The strict corpus remains C 84 canonical/76 specialized and LLVM 83/77; the
+shared specialized-plan registry is now 15 definitions.
 
 ## Remaining families, by tractability
 

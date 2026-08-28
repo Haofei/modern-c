@@ -1281,16 +1281,6 @@ pub const CEmitter = struct {
         pointee_ty: mir.ValueType,
     };
 
-    const SimpleMirVoidBody = union(enum) {
-        empty,
-        statements: SimpleMirVoidStatements,
-        conditional_statements: SimpleMirConditionalVoidStatements,
-        loop_statements: SimpleMirLoopVoidBody,
-        direct_call: SimpleMirDirectCall,
-        direct_calls: SimpleMirDirectCalls,
-        conditional_direct_calls: SimpleMirConditionalVoidBody,
-    };
-
     const SimpleMirEnumLiteral = struct {
         enum_name: []const u8,
         case_name: []const u8,
@@ -1301,62 +1291,10 @@ pub const CEmitter = struct {
     };
 
     const max_simple_mir_void_calls = 8;
-    const max_simple_mir_void_statements = 8;
-    const max_simple_mir_global_stores = 8;
 
     const SimpleMirDirectCalls = struct {
         calls: [max_simple_mir_void_calls]SimpleMirDirectCall = undefined,
         count: usize = 0,
-    };
-
-    const SimpleMirVoidStatementSource = union(enum) {
-        direct_call: mir.SourcePoint,
-        global_store: struct {
-            name: []const u8,
-            value_source: mir.SourcePoint,
-            source: mir.SourcePoint,
-        },
-    };
-
-    const SimpleMirVoidStatementSources = struct {
-        sources: [max_simple_mir_void_statements]SimpleMirVoidStatementSource = undefined,
-        count: usize = 0,
-    };
-
-    const SimpleMirConditionalVoidBody = struct {
-        prefix_calls: SimpleMirDirectCalls,
-        condition: SimpleMirCondition,
-        then_calls: SimpleMirDirectCalls,
-        else_calls: SimpleMirDirectCalls,
-        suffix_statements: SimpleMirVoidStatementSources,
-    };
-
-    const SimpleMirConditionalVoidStatements = struct {
-        prefix_calls: SimpleMirDirectCalls,
-        condition: SimpleMirCondition,
-        then_statements: SimpleMirVoidStatements,
-        else_statements: SimpleMirVoidStatements,
-        suffix_statements: SimpleMirVoidStatementSources,
-    };
-
-    const SimpleMirLoopVoidBody = struct {
-        condition: SimpleMirCondition,
-        body_block_index: usize,
-        body_returns: bool = false,
-    };
-
-    const SimpleMirCondition = union(enum) {
-        param: struct {
-            name: []const u8,
-            inverted: bool = false,
-        },
-        param_field: struct {
-            field: SimpleMirParamField,
-            inverted: bool = false,
-        },
-        bool_literal: bool,
-        direct_call: SimpleMirNestedCall,
-        compare_binary: SimpleMirCompareBinary,
     };
 
     const SimpleMirParamField = struct {
@@ -1461,54 +1399,6 @@ pub const CEmitter = struct {
         source_fact: mir.TargetTypeFact,
         target_fact: mir.TargetTypeFact,
         operand: SimpleMirCallArg,
-    };
-
-    const SimpleMirGlobalStore = struct {
-        name: []const u8,
-        value: SimpleMirGlobalStoreValue,
-        source: mir.SourcePoint,
-    };
-
-    const SimpleMirGlobalStores = struct {
-        stores: [max_simple_mir_global_stores]SimpleMirGlobalStore = undefined,
-        count: usize = 0,
-    };
-
-    const SimpleMirVoidStatement = union(enum) {
-        direct_call: SimpleMirDirectCall,
-        global_store: SimpleMirGlobalStore,
-        param_field_store: SimpleMirParamFieldStore,
-    };
-
-    const SimpleMirVoidStatements = struct {
-        statements: [max_simple_mir_void_statements]SimpleMirVoidStatement = undefined,
-        count: usize = 0,
-    };
-
-    const SimpleMirGlobalStoreValue = union(enum) {
-        arg: SimpleMirArg,
-        float_literal: SimpleMirFloatLiteral,
-        global_load: []const u8,
-        direct_call: SimpleMirDirectCall,
-        checked_binary: SimpleMirCheckedBinary,
-        checked_unary: SimpleMirCheckedUnary,
-        wrapping_binary: SimpleMirWrappingBinary,
-        explicit_cast: SimpleMirExplicitCastReturn,
-        conversion: SimpleMirConversionReturn,
-        compare_binary: SimpleMirCompareBinary,
-        logical_not: SimpleMirArg,
-        enum_literal: SimpleMirEnumLiteral,
-        null_literal: SimpleMirNullLiteral,
-        struct_literal: SimpleMirStructLiteralReturn,
-        result_constructor: SimpleMirResultConstructorReturn,
-    };
-
-    const SimpleMirParamFieldStore = struct {
-        param_name: []const u8,
-        field_name: []const u8,
-        field_index: usize,
-        value: SimpleMirArg,
-        source: mir.SourcePoint,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -1677,8 +1567,7 @@ pub const CEmitter = struct {
             }
             break :blk null;
         };
-        const simple_void_body = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and nullable_try_plan == null) self.simpleMirVoidBody(function, fn_mir) else null;
-        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and simple_void_body == null and place_return_plan == null)
+        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and place_return_plan == null)
             if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
                 if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
             else
@@ -1699,7 +1588,6 @@ pub const CEmitter = struct {
             local_aggregate_assignment_return_plan != null,
             nullable_try_plan != null,
             simple_return != null,
-            simple_void_body != null,
             place_return_plan != null,
             indirect_call_return_plan != null,
         };
@@ -1900,75 +1788,6 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, ");\n");
                 },
             }
-        } else if (simple_void_body) |body| {
-            selected_path.* = .simple_void_body;
-            switch (body) {
-                .empty => {},
-                .statements => |statements| {
-                    try self.emitSimpleMirVoidStatements(statements);
-                },
-                .conditional_statements => |conditional| {
-                    try self.emitSimpleMirDirectCallStatements(conditional.prefix_calls);
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "if (");
-                    try self.emitSimpleMirCondition(conditional.condition);
-                    try self.out.appendSlice(self.allocator, ") {\n");
-                    self.indent += 1;
-                    try self.emitSimpleMirVoidStatements(conditional.then_statements);
-                    self.indent -= 1;
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "} else {\n");
-                    self.indent += 1;
-                    try self.emitSimpleMirVoidStatements(conditional.else_statements);
-                    self.indent -= 1;
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "}\n");
-                    try self.emitSimpleMirVoidStatementSources(function, fn_mir, conditional.suffix_statements);
-                },
-                .loop_statements => |loop| {
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "while (");
-                    try self.emitSimpleMirCondition(loop.condition);
-                    try self.out.appendSlice(self.allocator, ") {\n");
-                    self.indent += 1;
-                    if (loop.body_returns) {
-                        try self.writeIndent();
-                        try self.out.appendSlice(self.allocator, "return;\n");
-                    } else {
-                        try self.emitSimpleMirVoidStatementSources(function, fn_mir, self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, fn_mir.blocks[loop.body_block_index]).?);
-                    }
-                    self.indent -= 1;
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "}\n");
-                },
-                .direct_call => |call| {
-                    if (self.simpleMirCallSource(fn_mir)) |source| try self.writeLineDirective(spanFromMirSourcePoint(source));
-                    try self.writeIndent();
-                    try self.emitSimpleMirDirectCall(call);
-                    try self.out.appendSlice(self.allocator, ";\n");
-                },
-                .direct_calls => |calls| {
-                    try self.emitSimpleMirDirectCallStatements(calls);
-                },
-                .conditional_direct_calls => |conditional| {
-                    try self.emitSimpleMirDirectCallStatements(conditional.prefix_calls);
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "if (");
-                    try self.emitSimpleMirCondition(conditional.condition);
-                    try self.out.appendSlice(self.allocator, ") {\n");
-                    self.indent += 1;
-                    try self.emitSimpleMirDirectCallStatements(conditional.then_calls);
-                    self.indent -= 1;
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "} else {\n");
-                    self.indent += 1;
-                    try self.emitSimpleMirDirectCallStatements(conditional.else_calls);
-                    self.indent -= 1;
-                    try self.writeIndent();
-                    try self.out.appendSlice(self.allocator, "}\n");
-                    try self.emitSimpleMirVoidStatementSources(function, fn_mir, conditional.suffix_statements);
-                },
-            }
         } else if (access_structural_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, operation);
@@ -2004,7 +1823,6 @@ pub const CEmitter = struct {
         for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
         const body = &function.executable_body;
         if (!mir_executable_c.canEmitBody(body)) return false;
-        if (mir_executable_body.hasOnlyWriteOnlyLocals(body)) return false;
         if (body.parameters.len != function.param_types.len or body.parameters.len != function.param_count) return false;
         for (body.parameters, function.param_types) |parameter, parameter_ty| {
             if (!mir.ValueType.eql(parameter.ty, parameter_ty)) return false;
@@ -4300,580 +4118,11 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn simpleMirVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirVoidBody {
-        if (fn_mir.return_ty != .void) return null;
-        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
-        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-        if (self.simpleMirConditionalEmptyVoidCalls(function, fn_mir)) |calls| {
-            if (calls.count == 1) return .{ .direct_call = calls.calls[0] };
-            return .{ .direct_calls = calls };
-        }
-        if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
-        if (self.simpleMirConditionalVoidStatements(function, fn_mir)) |conditional| return .{ .conditional_statements = conditional };
-        if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
-        if (self.simpleMirLoopVoidBody(function, fn_mir)) |loop| return .{ .loop_statements = loop };
-        const block = fn_mir.blocks[0];
-        if (block.terminator != .fallthrough) return null;
-        if (self.simpleMirVoidStatements(function, fn_mir, block)) |statements| return .{ .statements = statements };
-        if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
-            if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(calls)) return null;
-            if (calls.count == 1) return .{ .direct_call = calls.calls[0] };
-            if (calls.count > 1) return .{ .direct_calls = calls };
-        }
-        const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, fn_mir, block)) .empty else null;
-        if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
-        const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
-        if (fn_mir.trap_edges.len != simpleMirDirectCallTrapCount(call)) return null;
-        return .{ .direct_call = call };
-    }
-
-    fn simpleMirConditionalEmptyVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) bool {
-        if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return false;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .switch_ or entry.successors.len != 2) return false;
-        _ = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return false;
-        const after_block = fn_mir.blocks[1];
-        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return false;
-        const then_index = entry.successors[0];
-        const else_index = entry.successors[1];
-        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return false;
-        const then_block = fn_mir.blocks[then_index];
-        const else_block = fn_mir.blocks[else_index];
-        if (then_block.terminator != .jump or else_block.terminator != .jump) return false;
-        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return false;
-        return self.simpleMirEntrySwitchBlockIsPure(function, entry) and
-            simpleMirEmptyVoidBlock(function, fn_mir, then_block) and
-            simpleMirEmptyVoidBlock(function, fn_mir, else_block);
-    }
-
-    fn simpleMirLoopVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirLoopVoidBody {
-        if (fn_mir.return_ty != .void) return null;
-        if (fn_mir.blocks.len != 3 or fn_mir.pointer_provenance_facts.len != 0) return null;
-        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
-        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .branch or entry.successors.len != 2) return null;
-        if (simpleMirBlockHasCall(entry)) return null;
-        const condition = self.simpleMirLoopCondition(function, fn_mir, entry) orelse return null;
-        const body_index = entry.successors[0];
-        const after_index = entry.successors[1];
-        if (body_index >= fn_mir.blocks.len or after_index >= fn_mir.blocks.len) return null;
-        const body_block = fn_mir.blocks[body_index];
-        const after_block = fn_mir.blocks[after_index];
-        if (!std.mem.eql(u8, body_block.kind, "loop_body") or !std.mem.eql(u8, after_block.kind, "loop_after")) return null;
-        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return null;
-        if (body_block.terminator == .return_) {
-            if (!self.blockOnlyContainsSimpleMirReturnInstructionsInBlock(function, fn_mir, body_block)) return null;
-            const ret = simpleMirReturnInstruction(body_block) orelse return null;
-            if (ret.result_ty != .void or !std.mem.eql(u8, ret.detail, "void")) return null;
-            if (fn_mir.trap_edges.len != 0) return null;
-            return .{ .condition = condition, .body_block_index = body_index, .body_returns = true };
-        }
-        if (body_block.terminator != .jump or body_block.terminator.jump != body_index) return null;
-        const body_sources = self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, body_block) orelse return null;
-        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, body_block)) return null;
-        const body_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, body_sources) orelse return null;
-        if (fn_mir.trap_edges.len != body_traps) return null;
-        return .{ .condition = condition, .body_block_index = body_index };
-    }
-
-    fn simpleMirConditionalEmptyVoidCalls(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirDirectCalls {
-        if (fn_mir.blocks.len != 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
-        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
-        if (prefix_calls.count == 0) return null;
-        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
-        switch (condition) {
-            .direct_call => return null,
-            else => {},
-        }
-        if (!self.simpleMirEntrySwitchBlockIsPureWithPrefixVoidCalls(function, fn_mir, entry)) return null;
-        const after_block = fn_mir.blocks[1];
-        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return null;
-        const then_index = entry.successors[0];
-        const else_index = entry.successors[1];
-        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
-        const then_block = fn_mir.blocks[then_index];
-        const else_block = fn_mir.blocks[else_index];
-        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
-        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        if (!simpleMirEmptyVoidBlock(function, fn_mir, then_block) or !simpleMirEmptyVoidBlock(function, fn_mir, else_block)) return null;
-        if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls)) return null;
-        return prefix_calls;
-    }
-
-    fn simpleMirConditionalVoidStatements(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidStatements {
-        if (fn_mir.blocks.len != 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
-        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
-        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
-        const after_block = fn_mir.blocks[1];
-        if (after_block.terminator != .fallthrough) return null;
-        const suffix_statements = self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, after_block) orelse return null;
-        const then_index = entry.successors[0];
-        const else_index = entry.successors[1];
-        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
-        const then_block = fn_mir.blocks[then_index];
-        const else_block = fn_mir.blocks[else_index];
-        if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
-        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
-        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        const then_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, then_block, false) orelse return null;
-        const else_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, else_block, false) orelse return null;
-        const then_stores = simpleMirVoidStatementsGlobalStores(then_statements);
-        const else_stores = simpleMirVoidStatementsGlobalStores(else_statements);
-        if (then_stores.count + else_stores.count == 0) return null;
-        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, then_block)) return null;
-        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, else_block)) return null;
-        const suffix_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, suffix_statements) orelse return null;
-        if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls) + simpleMirVoidStatementsDirectCallTrapCount(then_statements) + simpleMirVoidStatementsDirectCallTrapCount(else_statements) + suffix_traps) return null;
-        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_statements = then_statements, .else_statements = else_statements, .suffix_statements = suffix_statements };
-    }
-
-    fn simpleMirConditionalVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidBody {
-        if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
-        const entry = fn_mir.blocks[0];
-        if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
-        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
-        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
-        const after_block = fn_mir.blocks[1];
-        if (after_block.terminator != .fallthrough) return null;
-        const suffix_statements = self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, after_block) orelse return null;
-        const then_index = entry.successors[0];
-        const else_index = entry.successors[1];
-        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
-        const then_block = fn_mir.blocks[then_index];
-        const else_block = fn_mir.blocks[else_index];
-        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
-        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        const then_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, then_block, true) orelse return null;
-        const else_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, else_block, true) orelse return null;
-        const suffix_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, suffix_statements) orelse return null;
-        if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls) + simpleMirDirectCallsTrapCount(then_calls) + simpleMirDirectCallsTrapCount(else_calls) + suffix_traps) return null;
-        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls, .suffix_statements = suffix_statements };
-    }
-
-    fn simpleMirVoidStatements(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirVoidStatements {
-        const result = self.simpleMirVoidStatementsInBlock(function, fn_mir, block, true) orelse return null;
-        const stores = simpleMirVoidStatementsGlobalStores(result);
-        if (fn_mir.trap_edges.len != simpleMirGlobalStoresTrapCount(stores) + simpleMirVoidStatementsDirectCallTrapCount(result)) return null;
-        for (fn_mir.blocks, 0..) |mir_block, index| {
-            if (index == 0) continue;
-            if (!std.mem.eql(u8, mir_block.kind, "trap") or mir_block.terminator != .trap_) return null;
-        }
-        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, block)) return null;
-        return result;
-    }
-
-    fn simpleMirVoidStatementsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, require_global_store: bool) ?SimpleMirVoidStatements {
-        var result: SimpleMirVoidStatements = .{};
-        var has_global_store = false;
-        var has_emitted_store = false;
-        for (block.instructions) |instruction| {
-            if (instruction.kind == .call) {
-                const source = instructionSourcePoint(instruction);
-                if (!simpleMirDirectCallResultVoid(fn_mir, source)) continue;
-                if (result.count >= max_simple_mir_void_statements) return null;
-                result.statements[result.count] = .{ .direct_call = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null };
-                result.count += 1;
-            } else if (instruction.kind == .assign and !mirFunctionHasLocal(fn_mir, instruction.detail)) {
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
-                }
-                if (self.simpleMirPointerParamFieldStore(function, fn_mir, block, instruction)) |store| {
-                    if (result.count >= max_simple_mir_void_statements) return null;
-                    result.statements[result.count] = .{ .param_field_store = store };
-                    result.count += 1;
-                    has_emitted_store = true;
-                    continue;
-                }
-                if (!self.globals.contains(instruction.detail)) return null;
-                if (result.count >= max_simple_mir_void_statements) return null;
-                const name = instruction.detail;
-                const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
-                result.statements[result.count] = .{ .global_store = .{
-                    .name = name,
-                    .value = self.simpleMirGlobalStoreValue(function, fn_mir, name, value_source) orelse return null,
-                    .source = instructionSourcePoint(instruction),
-                } };
-                result.count += 1;
-                has_global_store = true;
-                has_emitted_store = true;
-            }
-        }
-        if (require_global_store and !has_global_store and !has_emitted_store) return null;
-        return result;
-    }
-
-    fn simpleMirVoidStatementsGlobalStores(statements: SimpleMirVoidStatements) SimpleMirGlobalStores {
-        var stores: SimpleMirGlobalStores = .{};
-        for (statements.statements[0..statements.count]) |statement| switch (statement) {
-            .global_store => |store| {
-                if (stores.count < max_simple_mir_global_stores) {
-                    stores.stores[stores.count] = store;
-                    stores.count += 1;
-                }
-            },
-            .direct_call, .param_field_store => {},
-        };
-        return stores;
-    }
-
-    fn simpleMirVoidStatementsDirectCallTrapCount(statements: SimpleMirVoidStatements) usize {
-        var count: usize = 0;
-        for (statements.statements[0..statements.count]) |statement| switch (statement) {
-            .direct_call => |call| count += simpleMirDirectCallTrapCount(call),
-            .global_store => {},
-            .param_field_store => count += 1,
-        };
-        return count;
-    }
-
-    fn simpleMirPointerParamFieldStore(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, assign: mir.Instruction) ?SimpleMirParamFieldStore {
-        if (!self.noFunctionBodyFallbacksAvailable()) return null;
-        const source = instructionSourcePoint(assign);
-        const value_source = simpleMirPointerFieldAssignmentValueSource(block, assign) orelse return null;
-        const value = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
-        for (function.signature.params) |param| {
-            if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
-            const pointer = switch (self.resolveAliasType(param.ty).kind) {
-                .pointer => |pointer| pointer,
-                else => continue,
-            };
-            if (pointer.mutability != .mut) continue;
-            const struct_name = typeName(self.resolveAliasType(pointer.child.*)) orelse continue;
-            const struct_decl = self.structs.get(struct_name) orelse continue;
-            for (struct_decl.fields, 0..) |field, field_index| {
-                if (!std.mem.eql(u8, field.name.text, assign.detail)) continue;
-                const field_type_name = typeName(self.resolveAliasType(field.ty)) orelse return null;
-                if (!std.mem.eql(u8, field_type_name, assign.result_ty.name())) return null;
-                return .{
-                    .param_name = param.name.text,
-                    .field_name = field.name.text,
-                    .field_index = field_index,
-                    .value = value,
-                    .source = source,
-                };
-            }
-        }
-        return null;
-    }
-
-    fn simpleMirPointerFieldAssignmentValueSource(block: mir.Block, assign: mir.Instruction) ?mir.SourcePoint {
-        const assign_source = instructionSourcePoint(assign);
-        var after_assign = false;
-        for (block.instructions) |instruction| {
-            if (!after_assign) {
-                after_assign = instruction.kind == .assign and sameMirSourceLocation(instructionSourcePoint(instruction), assign_source) and std.mem.eql(u8, instruction.detail, assign.detail);
-                continue;
-            }
-            switch (instruction.kind) {
-                .target_type, .typed_load, .representation_check, .representation_use => continue,
-                .expr, .integer_literal_conversion, .binary, .unary, .call => {
-                    const source = instructionSourcePoint(instruction);
-                    if (sameMirSourceLocation(source, assign_source)) continue;
-                    return source;
-                },
-                else => return null,
-            }
-        }
-        return null;
-    }
-
-    fn simpleMirGlobalStoreValue(self: *CEmitter, function: anytype, fn_mir: mir.Function, store_name: []const u8, value_source: mir.SourcePoint) ?SimpleMirGlobalStoreValue {
-        const global_info = self.globals.get(store_name) orelse return null;
-        return if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, value_source)) |binary|
-            .{ .checked_binary = binary }
-        else if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, value_source)) |unary|
-            .{ .checked_unary = unary }
-        else if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, value_source, global_info.type_name)) |binary|
-            .{ .wrapping_binary = binary }
-        else if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, value_source, global_info.type_name, store_name)) |binary|
-            .{ .wrapping_binary = binary }
-        else if (self.simpleMirExplicitCastAtSource(function, fn_mir, value_source)) |cast|
-            .{ .explicit_cast = cast }
-        else if (self.simpleMirConversionAtSource(function, fn_mir, value_source)) |conversion|
-            .{ .conversion = conversion }
-        else if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
-            .{ .compare_binary = binary }
-        else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
-            .{ .logical_not = arg }
-        else if (self.simpleMirLocalFloatLiteralValueAtSource(function, fn_mir, value_source)) |literal|
-            .{ .float_literal = literal }
-        else if (self.simpleMirFloatLiteralAtSource(fn_mir, value_source)) |literal|
-            .{ .float_literal = literal }
-        else if (self.simpleMirEnumLiteralValueAtSource(fn_mir, value_source)) |literal|
-            .{ .enum_literal = literal }
-        else if (self.simpleMirNullLiteralAtSource(fn_mir, value_source)) |literal|
-            .{ .null_literal = literal }
-        else if (if (global_info.source_ty) |target_ty| self.simpleMirStructLiteralAtSourceWithType(function, fn_mir, value_source, target_ty) else null) |literal|
-            .{ .struct_literal = literal }
-        else if (if (global_info.source_ty) |target_ty| self.simpleMirResultConstructorAtSourceWithType(function, fn_mir, value_source, target_ty) else null) |constructor|
-            .{ .result_constructor = constructor }
-        else if (self.simpleMirDirectCallAtSource(function, fn_mir, value_source)) |call|
-            .{ .direct_call = call }
-        else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
-            .{ .arg = arg }
-        else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
-            .{ .global_load = source_name }
-        else
-            return null;
-    }
-
-    fn simpleMirGlobalStoreValueTrapCount(value: SimpleMirGlobalStoreValue) usize {
-        return switch (value) {
-            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
-            .checked_unary => 1,
-            .direct_call => |call| simpleMirDirectCallTrapCount(call),
-            .enum_literal => 1,
-            .struct_literal => |literal| simpleMirStructLiteralTrapCount(literal),
-            .result_constructor => |constructor| simpleMirResultConstructorPayloadTrapCount(constructor.payload),
-            else => 0,
-        };
-    }
-
-    fn simpleMirGlobalStoresTrapCount(stores: SimpleMirGlobalStores) usize {
-        var count: usize = 0;
-        for (stores.stores[0..stores.count]) |store| count += simpleMirGlobalStoreValueTrapCount(store.value);
-        return count;
-    }
-
-    fn blockOnlyContainsSimpleMirVoidStatementInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
-        for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .typed_load, .representation_check, .representation_use, .return_value => {},
-            .assign => {
-                if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
-                    const source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse return false;
-                    if (self.simpleMirArgAt(function, fn_mir, source) == null and
-                        self.simpleMirFloatLiteralAtSource(fn_mir, source) == null) return false;
-                    continue;
-                }
-                if (self.simpleMirPointerParamFieldStore(function, fn_mir, block, instruction) != null) continue;
-                if (!self.globals.contains(instruction.detail)) return false;
-            },
-            .binary => {
-                const source = instructionSourcePoint(instruction);
-                if (self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, source) == null and
-                    self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
-                    self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return false;
-            },
-            .unary => {
-                const source = instructionSourcePoint(instruction);
-                if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source) == null and
-                    self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
-            },
-            .call => {
-                const source = instructionSourcePoint(instruction);
-                if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
-                if (self.simpleMirConversionCallTargetKindAt(fn_mir, source) != null) continue;
-                if (simpleMirResultConstructorKindAtSource(fn_mir, source) != null) continue;
-                if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
-            },
-            .expr => {
-                if (std.mem.eql(u8, instruction.detail, "int") or
-                    std.mem.eql(u8, instruction.detail, "bool") or
-                    std.mem.eql(u8, instruction.detail, "char") or
-                    std.mem.eql(u8, instruction.detail, "float") or
-                    std.mem.eql(u8, instruction.detail, "literal")) continue;
-                if ((std.mem.eql(u8, instruction.detail, "add") or
-                    std.mem.eql(u8, instruction.detail, "sub") or
-                    std.mem.eql(u8, instruction.detail, "mul") or
-                    std.mem.eql(u8, instruction.detail, "wrapping") or
-                    std.mem.eql(u8, instruction.detail, "unchecked")) and
-                    simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
-                if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
-                if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
-                if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
-                if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
-                if (std.mem.eql(u8, instruction.detail, "struct_literal") and simpleMirTargetTypeFactKindAt(fn_mir, .struct_literal, instructionSourcePoint(instruction)) != null) continue;
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                } else {
-                    if (mirBlockHasLocal(block, instruction.detail)) continue;
-                    if (mirBlockHasCall(block, instruction.detail)) continue;
-                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
-                    if (self.noFunctionBodyFallbacksAvailable() and self.simpleMirExprCouldBePointerParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
-                    if (self.globals.contains(instruction.detail)) continue;
-                    return false;
-                }
-            },
-            else => return false,
-        };
-        return true;
-    }
-
-    fn simpleMirLoopCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirCondition {
-        var saw_loop_marker = false;
-        var index: usize = 0;
-        while (index < block.instructions.len) : (index += 1) {
-            const instruction = block.instructions[index];
-            if (!saw_loop_marker) {
-                saw_loop_marker = instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "while");
-                continue;
-            }
-            switch (instruction.kind) {
-                .target_type => continue,
-                .unary => {
-                    if (!std.mem.eql(u8, instruction.detail, "logical_not")) return null;
-                    var operand_index = index + 1;
-                    while (operand_index < block.instructions.len) : (operand_index += 1) {
-                        const operand = block.instructions[operand_index];
-                        if (operand.kind == .target_type) continue;
-                        if (operand.kind != .expr or operand.result_ty != .bool) return null;
-                        for (function.signature.params) |param| {
-                            if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
-                        }
-                        if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(operand))) |arg| {
-                            return switch (arg) {
-                                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
-                                else => null,
-                            };
-                        }
-                        return null;
-                    }
-                    return null;
-                },
-                .binary => {
-                    if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
-                    return null;
-                },
-                .call => {
-                    if (self.simpleMirNestedCallAtSource(function, fn_mir, instructionSourcePoint(instruction))) |call| {
-                        if (self.simpleMirNestedCallReturnsBool(call)) return .{ .direct_call = call };
-                    }
-                    return null;
-                },
-                .expr => {
-                    if (instruction.result_ty != .bool) return null;
-                    for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text } };
-                    }
-                    if (mirBlockHasLocal(block, instruction.detail)) {
-                        return self.simpleMirLocalCondition(function, fn_mir, instruction.detail);
-                    }
-                    if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
-                        return switch (arg) {
-                            .param_field => |field| .{ .param_field = .{ .field = field } },
-                            .bool_literal => |value| .{ .bool_literal = value },
-                            else => null,
-                        };
-                    }
-                    return null;
-                },
-                else => return null,
-            }
-        }
-        return null;
-    }
-
-    fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirCondition {
-        const subject_index = simpleMirSwitchSubjectIndex(block) orelse return null;
-        var index: usize = subject_index + 1;
-        while (index < block.instructions.len) : (index += 1) {
-            const instruction = block.instructions[index];
-            switch (instruction.kind) {
-                .target_type => continue,
-                .unary => {
-                    if (!std.mem.eql(u8, instruction.detail, "logical_not")) return null;
-                    var operand_index = index + 1;
-                    while (operand_index < block.instructions.len) : (operand_index += 1) {
-                        const operand = block.instructions[operand_index];
-                        if (operand.kind == .target_type) continue;
-                        if (operand.kind != .expr or operand.result_ty != .bool) return null;
-                        for (function.signature.params) |param| {
-                            if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
-                        }
-                        if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(operand))) |arg| {
-                            return switch (arg) {
-                                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
-                                else => null,
-                            };
-                        }
-                        return null;
-                    }
-                    return null;
-                },
-                .binary => {
-                    if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
-                    return null;
-                },
-                .call => {
-                    if (self.simpleMirNestedCallAtSource(function, fn_mir, instructionSourcePoint(instruction))) |call| {
-                        if (self.simpleMirNestedCallReturnsBool(call)) return .{ .direct_call = call };
-                    }
-                    return null;
-                },
-                .expr => {
-                    if (instruction.result_ty != .bool) return null;
-                    for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text } };
-                    }
-                    if (mirBlockHasLocal(block, instruction.detail)) {
-                        return self.simpleMirLocalCondition(function, fn_mir, instruction.detail);
-                    }
-                    if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
-                        return switch (arg) {
-                            .param_field => |field| .{ .param_field = .{ .field = field } },
-                            .bool_literal => |value| .{ .bool_literal = value },
-                            else => null,
-                        };
-                    }
-                    return null;
-                },
-                else => return null,
-            }
-        }
-        return null;
-    }
-
-    fn simpleMirLocalCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirCondition {
-        const init_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse
-            self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
-        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
-        if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| {
-            if (self.simpleMirNestedCallReturnsBool(call)) return .{ .direct_call = call };
-        }
-        if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
-            return switch (arg) {
-                .param => |name| .{ .param = .{ .name = name, .inverted = true } },
-                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
-                else => null,
-            };
-        }
-        if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
-            return switch (arg) {
-                .param => |name| .{ .param = .{ .name = name } },
-                .param_field => |field| .{ .param_field = .{ .field = field } },
-                .bool_literal => |value| .{ .bool_literal = value },
-                else => null,
-            };
-        }
-        return null;
-    }
-
     fn simpleMirSwitchSubjectIndex(block: mir.Block) ?usize {
         for (block.instructions, 0..) |instruction, index| {
             if (instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "switch_subject")) return index;
         }
         return null;
-    }
-
-    fn emitSimpleMirCondition(self: *CEmitter, condition: SimpleMirCondition) !void {
-        switch (condition) {
-            .param => |param| {
-                if (param.inverted) try self.out.appendSlice(self.allocator, "!");
-                try self.out.appendSlice(self.allocator, try self.cIdent(param.name));
-            },
-            .param_field => |param_field| {
-                if (param_field.inverted) try self.out.appendSlice(self.allocator, "!");
-                try self.emitSimpleMirArg(.{ .param_field = param_field.field });
-            },
-            .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
-            .direct_call => |call| try self.emitSimpleMirNestedCall(call),
-            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
-        }
     }
 
     fn simpleMirStructLiteralAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirStructLiteralReturn {
@@ -5886,61 +5135,6 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitSimpleMirVoidStatements(self: *CEmitter, statements: SimpleMirVoidStatements) !void {
-        for (statements.statements[0..statements.count]) |statement| {
-            switch (statement) {
-                .direct_call => |call| {
-                    try self.writeIndent();
-                    try self.emitSimpleMirDirectCall(call);
-                    try self.out.appendSlice(self.allocator, ";\n");
-                },
-                .global_store => |store| {
-                    try self.writeLineDirective(spanFromMirSourcePoint(store.source));
-                    try self.writeIndent();
-                    const target: GlobalAccess = .{
-                        .name = store.name,
-                        .info = self.globals.get(store.name) orelse return error.UnsupportedCEmission,
-                    };
-                    try self.emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(store.value);
-                    try appendGlobalStorePrefix(self.allocator, self.out, target);
-                    try self.emitSimpleMirGlobalStoreValue(store.value);
-                    try appendGlobalStoreSuffix(self.allocator, self.out, target);
-                },
-                .param_field_store => |store| {
-                    try self.writeLineDirective(spanFromMirSourcePoint(store.source));
-                    try self.writeIndent();
-                    try self.out.print(self.allocator, "{s}->{s} = ", .{ try self.cIdent(store.param_name), try self.cIdent(store.field_name) });
-                    try self.emitSimpleMirArg(store.value);
-                    try self.out.appendSlice(self.allocator, ";\n");
-                },
-            }
-        }
-    }
-
-    fn emitSimpleMirVoidStatementSources(self: *CEmitter, function: anytype, fn_mir: mir.Function, statements: SimpleMirVoidStatementSources) !void {
-        for (statements.sources[0..statements.count]) |statement| switch (statement) {
-            .direct_call => |source| {
-                const call = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return error.UnsupportedCEmission;
-                try self.writeIndent();
-                try self.emitSimpleMirDirectCall(call);
-                try self.out.appendSlice(self.allocator, ";\n");
-            },
-            .global_store => |store| {
-                try self.writeLineDirective(spanFromMirSourcePoint(store.source));
-                try self.writeIndent();
-                const target: GlobalAccess = .{
-                    .name = store.name,
-                    .info = self.globals.get(store.name) orelse return error.UnsupportedCEmission,
-                };
-                const value = self.simpleMirGlobalStoreValue(function, fn_mir, store.name, store.value_source) orelse return error.UnsupportedCEmission;
-                try self.emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(value);
-                try appendGlobalStorePrefix(self.allocator, self.out, target);
-                try self.emitSimpleMirGlobalStoreValue(value);
-                try appendGlobalStoreSuffix(self.allocator, self.out, target);
-            },
-        };
-    }
-
     fn simpleMirReturnAllowsTrapBlocks(self: *const CEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {
         return switch (ret) {
             // A bare param return emits `return p;` and never emits a trap; its
@@ -6099,41 +5293,6 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitSimpleMirGlobalStoreValue(self: *CEmitter, value: SimpleMirGlobalStoreValue) !void {
-        switch (value) {
-            .arg => |arg| try self.emitSimpleMirArg(arg),
-            .float_literal => |literal| try self.emitSimpleMirFloatLiteral(literal),
-            .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
-            .direct_call => |call| try self.emitSimpleMirDirectCall(call),
-            .checked_binary => |binary| {
-                const helper = try self.checkedHelperName(binary.op, binary.type_name);
-                try self.out.print(self.allocator, "{s}(", .{helper});
-                try self.emitSimpleMirArg(binary.left);
-                try self.out.appendSlice(self.allocator, ", ");
-                try self.emitSimpleMirArg(binary.right);
-                try self.out.appendSlice(self.allocator, ")");
-            },
-            .checked_unary => |unary| {
-                const helper = try self.checkedUnaryHelperName(unary.op, unary.type_name);
-                try self.out.print(self.allocator, "{s}(", .{helper});
-                try self.emitSimpleMirArg(unary.operand);
-                try self.out.appendSlice(self.allocator, ")");
-            },
-            .wrapping_binary => |binary| try self.emitSimpleMirWrappingBinaryExpr(binary),
-            .explicit_cast => |cast| try self.emitSimpleMirExplicitCastExpr(cast),
-            .conversion => |conversion| try self.emitSimpleMirConversionExpr(conversion),
-            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
-            .logical_not => |arg| {
-                try self.out.appendSlice(self.allocator, "!");
-                try self.emitSimpleMirArg(arg);
-            },
-            .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
-            .null_literal => |literal| try self.emitSimpleMirNullExpr(literal),
-            .struct_literal => |literal| try self.emitSimpleMirStructLiteral(literal),
-            .result_constructor => |constructor| try self.emitSimpleMirResultConstructorExpr(constructor),
-        }
-    }
-
     fn emitSimpleMirFloatLiteral(self: *CEmitter, literal: SimpleMirFloatLiteral) !void {
         try appendCFloatLiteral(self.allocator, self.out, literal.literal, std.mem.eql(u8, literal.target_type_name, "f32"));
     }
@@ -6143,20 +5302,6 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, constructor.tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
         try self.emitSimpleMirResultConstructorPayload(constructor.payload);
         try self.out.appendSlice(self.allocator, " })");
-    }
-
-    fn emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(self: *CEmitter, value: SimpleMirGlobalStoreValue) !void {
-        switch (value) {
-            .wrapping_binary => |binary| switch (binary.kind) {
-                .wrapping_add, .serial_before, .serial_after, .serial_distance, .counter_delta_mod => {},
-                .unchecked => {
-                    const fact = binary.range_fact orelse return error.UnsupportedCEmission;
-                    try self.out.print(self.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ fact.target, fact.op });
-                    try self.writeIndent();
-                },
-            },
-            else => {},
-        }
     }
 
     fn emitSimpleMirExplicitCastExpr(self: *CEmitter, cast: SimpleMirExplicitCastReturn) !void {
@@ -7245,42 +6390,6 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn simpleMirPrefixVoidCallsBeforeSwitch(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCalls {
-        var calls: SimpleMirDirectCalls = .{};
-        for (block.instructions) |instruction| {
-            if (instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "switch_subject")) return calls;
-            if (instruction.kind != .call) continue;
-            const source = instructionSourcePoint(instruction);
-            if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
-                if (self.simpleMirCallFeedsSwitchCondition(function, fn_mir, block, source)) continue;
-                return null;
-            }
-            if (calls.count >= max_simple_mir_void_calls) return null;
-            calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
-            calls.count += 1;
-        }
-        return null;
-    }
-
-    fn simpleMirCallFeedsSwitchCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint) bool {
-        _ = function;
-        _ = fn_mir;
-        const subject_index = simpleMirSwitchSubjectIndex(block) orelse return false;
-        var index: usize = subject_index + 1;
-        while (index < block.instructions.len) : (index += 1) {
-            const instruction = block.instructions[index];
-            if (instruction.kind == .target_type) continue;
-            if (instruction.kind == .call) return sameMirSourceLocation(instructionSourcePoint(instruction), source);
-            if (instruction.kind != .expr) return false;
-            if (sameMirSourceLocation(instructionSourcePoint(instruction), source)) return true;
-            if (!mirBlockHasLocal(block, instruction.detail)) return false;
-            const local_source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse
-                self.simpleMirLocalInitSourceInBlock(block, instruction.detail) orelse return false;
-            return sameMirSourceLocation(local_source, source);
-        }
-        return false;
-    }
-
     fn simpleMirCallFeedsReturnValue(self: *CEmitter, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint, value_id: []const u8) bool {
         if (std.mem.eql(u8, value_id, "struct_literal") or std.mem.eql(u8, value_id, "array_literal")) {
             var after_literal = false;
@@ -7338,163 +6447,6 @@ pub const CEmitter = struct {
             if (after_literal and instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) return true;
         }
         return false;
-    }
-
-    fn simpleMirDirectVoidCallsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, allow_empty: bool) ?SimpleMirDirectCalls {
-        var calls: SimpleMirDirectCalls = .{};
-        for (block.instructions) |instruction| {
-            switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .typed_load, .representation_check, .representation_use => {},
-                .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return null,
-                .binary => {
-                    if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
-                    const source = instructionSourcePoint(instruction);
-                    if (self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, source) == null and
-                        self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
-                        self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return null;
-                },
-                .unary => {
-                    const source = instructionSourcePoint(instruction);
-                    if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source) == null and
-                        self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return null;
-                },
-                .expr => {
-                    if (std.mem.eql(u8, instruction.detail, "int") or
-                        std.mem.eql(u8, instruction.detail, "bool") or
-                        std.mem.eql(u8, instruction.detail, "char") or
-                        std.mem.eql(u8, instruction.detail, "float") or
-                        std.mem.eql(u8, instruction.detail, "literal")) continue;
-                    if ((std.mem.eql(u8, instruction.detail, "add") or
-                        std.mem.eql(u8, instruction.detail, "sub") or
-                        std.mem.eql(u8, instruction.detail, "mul") or
-                        std.mem.eql(u8, instruction.detail, "wrapping") or
-                        std.mem.eql(u8, instruction.detail, "unchecked")) and
-                        simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
-                    if (self.globals.contains(instruction.detail)) continue;
-                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
-                    if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
-                    for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                    } else {
-                        if (mirBlockHasCall(block, instruction.detail)) continue;
-                        return null;
-                    }
-                },
-                .call => {
-                    const source = instructionSourcePoint(instruction);
-                    if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
-                    if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
-                        if (simpleMirReturnInstruction(block)) |ret| {
-                            if (ret.value_id) |value_id| {
-                                if (self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) continue;
-                            }
-                        }
-                        if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
-                        return null;
-                    }
-                    if (calls.count >= max_simple_mir_void_calls) return null;
-                    calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
-                    calls.count += 1;
-                },
-                else => return null,
-            }
-        }
-        if (!allow_empty and calls.count == 0) return null;
-        return calls;
-    }
-
-    fn simpleMirVoidStatementSourcesInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirVoidStatementSources {
-        var result: SimpleMirVoidStatementSources = .{};
-        for (block.instructions) |instruction| {
-            switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .typed_load, .representation_check, .representation_use => {},
-                .return_value => {},
-                .assign => {
-                    if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
-                    for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
-                    }
-                    if (!self.globals.contains(instruction.detail)) return null;
-                    if (result.count >= max_simple_mir_void_statements) return null;
-                    const name = instruction.detail;
-                    result.sources[result.count] = .{ .global_store = .{
-                        .name = name,
-                        .value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null,
-                        .source = instructionSourcePoint(instruction),
-                    } };
-                    result.count += 1;
-                },
-                .binary => {
-                    if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
-                    const source = instructionSourcePoint(instruction);
-                    if (self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, source) == null and
-                        self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
-                        self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return null;
-                },
-                .unary => {
-                    const source = instructionSourcePoint(instruction);
-                    if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source) == null and
-                        self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return null;
-                },
-                .expr => {
-                    if (std.mem.eql(u8, instruction.detail, "int") or
-                        std.mem.eql(u8, instruction.detail, "bool") or
-                        std.mem.eql(u8, instruction.detail, "char") or
-                        std.mem.eql(u8, instruction.detail, "float") or
-                        std.mem.eql(u8, instruction.detail, "literal")) continue;
-                    if ((std.mem.eql(u8, instruction.detail, "add") or
-                        std.mem.eql(u8, instruction.detail, "sub") or
-                        std.mem.eql(u8, instruction.detail, "mul") or
-                        std.mem.eql(u8, instruction.detail, "wrapping") or
-                        std.mem.eql(u8, instruction.detail, "unchecked")) and
-                        simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
-                    if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
-                    if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
-                    if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
-                    if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
-                    if (std.mem.eql(u8, instruction.detail, "struct_literal") and simpleMirTargetTypeFactKindAt(fn_mir, .struct_literal, instructionSourcePoint(instruction)) != null) continue;
-                    if (self.globals.contains(instruction.detail)) continue;
-                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
-                    if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
-                    for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                    } else {
-                        if (mirBlockHasCall(block, instruction.detail)) continue;
-                        return null;
-                    }
-                },
-                .call => {
-                    const source = instructionSourcePoint(instruction);
-                    if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
-                    if (self.simpleMirConversionCallTargetKindAt(fn_mir, source) != null) continue;
-                    if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
-                        if (simpleMirReturnInstruction(block)) |ret| {
-                            if (ret.value_id) |value_id| {
-                                if (self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) continue;
-                            }
-                        }
-                        if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
-                        return null;
-                    }
-                    if (result.count >= max_simple_mir_void_statements) return null;
-                    result.sources[result.count] = .{ .direct_call = source };
-                    result.count += 1;
-                },
-                else => return null,
-            }
-        }
-        return result;
-    }
-
-    fn simpleMirVoidStatementSourcesTrapCount(self: *CEmitter, function: anytype, fn_mir: mir.Function, sources: SimpleMirVoidStatementSources) ?usize {
-        var count: usize = 0;
-        for (sources.sources[0..sources.count]) |source| {
-            count += switch (source) {
-                .direct_call => |call_source| simpleMirDirectCallTrapCount(self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null),
-                .global_store => |store| simpleMirGlobalStoreValueTrapCount(self.simpleMirGlobalStoreValue(function, fn_mir, store.name, store.value_source) orelse return null),
-            };
-        }
-        return count;
     }
 
     fn simpleMirCallFeedsLaterDirectCallArg(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint) bool {
@@ -8030,26 +6982,6 @@ pub const CEmitter = struct {
         return source;
     }
 
-    fn simpleMirEmptyVoidBlock(function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
-        for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion => {},
-            .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return false,
-            .expr => {
-                if (std.mem.eql(u8, instruction.detail, "int") or
-                    std.mem.eql(u8, instruction.detail, "bool") or
-                    std.mem.eql(u8, instruction.detail, "char") or
-                    std.mem.eql(u8, instruction.detail, "float") or
-                    std.mem.eql(u8, instruction.detail, "literal")) continue;
-                if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                } else return false;
-            },
-            else => return false,
-        };
-        return true;
-    }
-
     fn simpleMirBlockHasCall(block: mir.Block) bool {
         for (block.instructions) |instruction| {
             if (instruction.kind == .call) return true;
@@ -8065,32 +6997,6 @@ pub const CEmitter = struct {
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
                 if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
-                if (mirBlockHasLocal(block, instruction.detail)) continue;
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                } else return false;
-            },
-            else => return false,
-        };
-        return true;
-    }
-
-    fn simpleMirEntrySwitchBlockIsPureWithPrefixVoidCalls(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
-        const subject_index = simpleMirSwitchSubjectIndex(block) orelse return false;
-        for (block.instructions, 0..) |instruction, index| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion => {},
-            .assign => if (!mirBlockHasLocal(block, instruction.detail)) return false,
-            .binary => if (!std.mem.eql(u8, instruction.detail, "switch_subject")) return false,
-            .call => {
-                if (index > subject_index) return false;
-                const source = instructionSourcePoint(instruction);
-                if (!simpleMirDirectCallResultVoid(fn_mir, source)) return false;
-                if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
-            },
-            .expr => {
-                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
-                if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
-                if (index < subject_index and mirBlockHasCall(block, instruction.detail)) continue;
                 if (mirBlockHasLocal(block, instruction.detail)) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
@@ -10355,7 +9261,10 @@ pub const CEmitter = struct {
 
     fn emitDefaultAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
-            const target_ty = simpleNameType(target.info.type_name, assignment.value.span);
+            // Preserve the source type for aggregate globals. The display name
+            // intentionally collapses nullable/Result/array shapes and cannot
+            // safely type a materialized C temporary.
+            const target_ty = target.info.source_ty orelse simpleNameType(target.info.type_name, assignment.value.span);
             const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, target_ty);
             try self.writeIndent();
             try appendGlobalStorePrefix(self.allocator, self.out, target);
@@ -11712,7 +10621,11 @@ pub const CEmitter = struct {
             try self.emitHookedMemberLoadExpr(node, locals, hook, op, field_name);
             return;
         }
+        // C parses `*p.field` as `*(p.field)`, not `(*p).field`.
+        const parenthesize_base = std.mem.eql(u8, op, ".") and node.base.kind == .deref;
+        if (parenthesize_base) try self.out.appendSlice(self.allocator, "(");
         try self.emitExpr(node.base.*, locals);
+        if (parenthesize_base) try self.out.appendSlice(self.allocator, ")");
         try self.out.print(self.allocator, "{s}{s}", .{ op, field_name });
     }
 

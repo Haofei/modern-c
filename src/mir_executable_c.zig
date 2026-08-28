@@ -87,6 +87,8 @@ fn emitStatement(
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
+            const identity = localById(body, local.local) orelse return error.InvalidLocal;
+            if (std.mem.startsWith(u8, identity.spelling, "_")) try out.appendSlice(allocator, "MC_UNUSED ");
             if (isSliceType(local.ty) or local.ty == .value) {
                 if (local.value == null) return error.UnsupportedType;
                 try out.appendSlice(allocator, "__auto_type ");
@@ -416,7 +418,7 @@ fn emitExpressionOperation(
 pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     if (!body.isComplete() or body.terminators.len == 0) return false;
     for (body.parameters) |parameter| if (!(supportsType(body, parameter.ty) or
-        (parameter.ty == .value and callableLocalUsedAsIndirectCallee(body, parameter.local))) or
+        (parameter.ty == .value and callableParameter(body, parameter.local))) or
         localById(body, parameter.local) == null) return false;
     for (body.expressions) |expression| if (!supportsExpression(body, expression)) return false;
     // Every exceptional edge must be owned by an operation whose complete
@@ -549,13 +551,20 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (expression.result_ty != .value) return false;
     return switch (expression.operation) {
-        .local => |local| localById(body, local) != null and callableLocalUsedAsIndirectCallee(body, local),
+        .local => |local| localById(body, local) != null and
+            (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
         else => false,
     };
+}
+
+fn callableParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    for (body.parameters) |parameter| if (parameter.local.eql(local))
+        return parameter.ty == .value and parameter.callable_signature != null;
+    return false;
 }
 
 fn callableLocalUsedAsIndirectCallee(body: *const mir.ExecutableBody, local: mir.LocalId) bool {

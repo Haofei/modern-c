@@ -1023,6 +1023,11 @@ pub const ExecutableParameter = struct {
     local: LocalId,
     ty: ValueType,
     type_id: TypeId = .invalid,
+    /// Syntax-free proof that an otherwise opaque `.value` parameter has a
+    /// function-pointer representation. This permits mechanical forwarding
+    /// and indirect calls without treating every opaque value (for example a
+    /// dynamic-trait payload) as an LLVM/C function pointer.
+    callable_signature: ?ExecutableCallSignature = null,
     /// Payload identity when the source parameter is `atomic<T>` or a direct
     /// pointer to it. This is canonical frontend metadata, not a backend
     /// inference from pointer spelling.

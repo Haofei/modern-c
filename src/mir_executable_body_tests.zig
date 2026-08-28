@@ -39,6 +39,56 @@ test "owned executable body is complete for scalar locals calls and returns" {
     }
 }
 
+test "callable parameter signatures are verified executable facts" {
+    const source =
+        \\extern fn target(sink: fn(u8) -> void, value: u64) -> void;
+        \\fn forward(sink: fn(u8) -> void, value: u32) -> void {
+        \\    sink(7);
+        \\    target(sink, value as u64);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_callable_parameter.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[1];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    const parameter = &function.executable_body.parameters[0];
+    try std.testing.expectEqual(mir_model.ValueType.value, parameter.ty);
+    try std.testing.expect(parameter.callable_signature != null);
+
+    const original = parameter.callable_signature.?;
+    parameter.callable_signature.?.parameter_count = mir_model.max_executable_operands + 1;
+    try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(function));
+    parameter.callable_signature = original;
+    try executable.verify(function);
+
+    parameter.callable_signature = null;
+    try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(function));
+    parameter.callable_signature = original;
+    try executable.verify(function);
+
+    parameter.callable_signature.?.parameter_types[0] = .bool;
+    parameter.callable_signature.?.parameter_type_ids[0] = try findTypeId(function, .bool);
+    try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(function));
+    parameter.callable_signature = original;
+    try executable.verify(function);
+}
+
+fn findTypeId(function: *const mir.Function, ty: mir_model.ValueType) !mir_model.TypeId {
+    for (function.type_identities, 0..) |identity, index| if (identity.matches(ty))
+        return .fromIndex(index);
+    return error.TypeNotFound;
+}
+
 test "value optional construction is explicit verified executable MIR" {
     const source =
         \\struct Point { x: u32, y: u32 }

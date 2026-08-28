@@ -6335,10 +6335,13 @@ const FunctionBuilder = struct {
             }
             const executable_local = try builder.internExecutableLocal(param.name.text);
             const parameter_source = builder.sourcePoint(param.name.span);
+            const callable_signature = try builder.executableCallableSignature(param.ty);
+            if (param_ty == .value and callable_signature == null) builder.executable_supported = false;
             try builder.executable_parameters.append(allocator, .{
                 .local = executable_local,
                 .ty = param_ty,
                 .type_id = try builder.internTypeId(param_ty),
+                .callable_signature = callable_signature,
                 .atomic_payload_type_id = if (atomic_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
                 .source = parameter_source,
                 .span_id = try builder.internSpanId(parameter_source),
@@ -8292,6 +8295,44 @@ const FunctionBuilder = struct {
         const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
         const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
         return self.internExecutableArrayType(ty, element_ty, length);
+    }
+
+    fn executableCallableSignature(self: *FunctionBuilder, type_expr: ast.TypeExpr) !?mir_model.ExecutableCallSignature {
+        const function = switch (aggregateTargetTypeAlias(type_expr, self.aliases).kind) {
+            .fn_pointer => |value| value,
+            else => return null,
+        };
+        if (function.params.len > mir_model.max_executable_operands) {
+            self.executable_supported = false;
+            return null;
+        }
+        var signature: mir_model.ExecutableCallSignature = .{
+            .parameter_count = function.params.len,
+            .return_ty = valueTypeFromTypeAlias(function.ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+        if (signature.return_ty == .unknown or signature.return_ty == .value) {
+            self.executable_supported = false;
+            return null;
+        }
+        signature.return_type_id = try self.internTypeId(signature.return_ty);
+        if (!try self.internExecutableArrayTypeExpr(signature.return_ty, function.ret.*)) {
+            self.executable_supported = false;
+            return null;
+        }
+        for (function.params, 0..) |parameter, index| {
+            const parameter_ty = valueTypeFromTypeAlias(parameter, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (parameter_ty == .unknown or parameter_ty == .value) {
+                self.executable_supported = false;
+                return null;
+            }
+            signature.parameter_types[index] = parameter_ty;
+            signature.parameter_type_ids[index] = try self.internTypeId(parameter_ty);
+            if (!try self.internExecutableArrayTypeExpr(parameter_ty, parameter)) {
+                self.executable_supported = false;
+                return null;
+            }
+        }
+        return signature;
     }
 
     fn internExecutableAggregateTypeDepth(

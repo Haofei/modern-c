@@ -139,6 +139,22 @@ test "lower-c fixed-array signatures and direct calls use canonical executable M
     try expectContains(passed, "consume_array(mc_exec_tmp_");
 }
 
+test "lower-c callable parameters forward through canonical executable MIR" {
+    const source =
+        \\extern fn target(sink: fn(u8) -> void, value: u64, shift: i32) -> void;
+        \\fn forward(sink: fn(u8) -> void, value: u32) -> void {
+        \\    target(sink, value as u64, 28);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_callable_parameter.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "MC_UNUSED static void forward");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "target(mc_exec_tmp_");
+}
+
 test "lower-c valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {
@@ -1666,14 +1682,15 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectNotContains(body, "switch");
 
     const local_body = try cFunctionBody(output.items, "static void local_then_call(void)");
+    try expectContains(local_body, "/* canonical executable MIR */");
     try expectContains(local_body, "hit(");
-    if (!isCanonicalExecutableCBody(local_body)) try expectNotContains(local_body, "uint32_t x");
-    try expectNotContains(local_body, "x =");
+    try expectContains(local_body, "uint32_t x =");
 
     const assign_body = try cFunctionBody(output.items, "static void assign_then_call(void)");
+    try expectContains(assign_body, "/* canonical executable MIR */");
     try expectContains(assign_body, "hit(");
-    try expectNotContains(assign_body, "uint32_t x");
-    try expectNotContains(assign_body, "x =");
+    try expectContains(assign_body, "uint32_t x =");
+    try expectContains(assign_body, "x =");
 
     const local_arg_body = try cFunctionBody(output.items, "static void call_local_arg(void)");
     try expectContains(local_arg_body, if (isCanonicalExecutableCBody(local_arg_body)) "hit(" else "hit(1);");
@@ -1787,7 +1804,7 @@ test "lower-c emits pure local-only void functions from MIR" {
     try expectNotContains(call_then_empty_body, "switch");
 }
 
-test "lower-c emits simple global stores from MIR" {
+test "lower-c emits simple global stores after specialized plan retirement" {
     const source =
         \\enum Color {
         \\    red,
@@ -1972,7 +1989,7 @@ test "lower-c emits simple global stores from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_store.mc", source, &output);
+    try appendCheckedCTest("c_mir_global_store.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static void store_param(uint32_t x)");
     try expectContains(param_body, "mc_race_store_u32(&g, (uint32_t)");
@@ -2069,12 +2086,10 @@ test "lower-c emits simple global stores from MIR" {
     const wrap_body = try cFunctionBody(output.items, "static void store_wrap(uint32_t a)");
     try expectContains(wrap_body, " + ");
     try expectContains(wrap_body, "mc_race_store_u32(&g, (uint32_t)");
-    try expectNotContains(wrap_body, "mc_tmp");
 
     const unchecked_body = try cFunctionBody(output.items, "static void store_unchecked(uint32_t a)");
     try expectContains(unchecked_body, "/* MC_MIR_RANGE no_overflow target=g op=add */");
-    try expectContains(unchecked_body, "mc_race_store_u32(&g, (uint32_t)(a + 1));");
-    try expectNotContains(unchecked_body, "mc_tmp");
+    try expectContains(unchecked_body, "mc_race_store_u32(&g, (uint32_t)");
 
     const cast_body = try cFunctionBody(output.items, "static void store_cast(uint32_t value)");
     try expectContains(cast_body, "((uint64_t)(");
@@ -2082,32 +2097,34 @@ test "lower-c emits simple global stores from MIR" {
     try expectNotContains(cast_body, "mc_tmp");
 
     const conversion_body = try cFunctionBody(output.items, "static void store_conversion(uint64_t value)");
-    try expectContains(conversion_body, "mc_race_store_u8(&byte, (uint8_t)((uint8_t)(value)));");
-    try expectNotContains(conversion_body, "mc_tmp");
+    try expectContains(conversion_body, "((uint8_t)(value))");
+    try expectContains(conversion_body, "mc_race_store_u8(&byte, (uint8_t)");
 
     const enum_body = try cFunctionBody(output.items, "static void store_enum(void)");
-    try expectContains(enum_body, "mc_race_store_isize(&current, (intptr_t)Color_blue);");
-    try expectNotContains(enum_body, "mc_tmp");
+    try expectContains(enum_body, "Color_blue");
+    try expectContains(enum_body, "mc_race_store_isize(&current, (intptr_t)");
 
     const none_body = try cFunctionBody(output.items, "static void store_none(void)");
-    try expectContains(none_body, "maybe = (mc_opt_u32)((mc_opt_u32){ .present = false });");
-    try expectNotContains(none_body, "mc_tmp");
+    try expectContains(none_body, "mc_opt_u32 mc_tmp");
+    try expectContains(none_body, ".present = false");
+    try expectContains(none_body, "maybe = (mc_opt_u32)(mc_tmp");
 
     const pair_body = try cFunctionBody(output.items, "static void store_pair(uint32_t x)");
-    try expectContains(pair_body, "pair = (Pair)((Pair){ .a = x, .b = 7 });");
-    try expectNotContains(pair_body, "mc_tmp");
+    try expectContains(pair_body, ".a = ");
+    try expectContains(pair_body, ".b = ");
+    try expectContains(pair_body, " = 7;");
+    try expectContains(pair_body, "pair = (Pair)(");
 
     const result_ok_body = try cFunctionBody(output.items, "static void store_result_ok(uint32_t x)");
     try expectContains(result_ok_body, "result = (");
     try expectContains(result_ok_body, ".is_ok = true");
-    try expectContains(result_ok_body, ".payload.ok = x");
-    try expectNotContains(result_ok_body, "mc_tmp");
+    try expectContains(result_ok_body, ".payload.ok = ");
+    try expectContains(result_ok_body, "mc_result_");
 
     const result_err_body = try cFunctionBody(output.items, "static void store_result_err(void)");
     try expectContains(result_err_body, "result = (");
     try expectContains(result_err_body, ".is_ok = false");
     try expectContains(result_err_body, ".payload.err = E_bad");
-    try expectNotContains(result_err_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_checked_neg_i32(");
@@ -10223,7 +10240,7 @@ test "lower-c aggregate-return bounded call prefixes are MIR-owned" {
     try expectContains(missing_local_call_body, "mc_race_load_u32");
 }
 
-test "lower-c lowers pointer parameter field stores without body fallback" {
+test "lower-c lowers pointer parameter field stores after specialized plan retirement" {
     const source =
         \\struct Cell { value: u32 }
         \\fn store_cell(cell: *mut Cell) -> void {
@@ -10233,9 +10250,9 @@ test "lower-c lowers pointer parameter field stores without body fallback" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_param_field_store.mc", source, &output);
+    try appendCheckedCTest("c_mir_pointer_param_field_store.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void store_cell(Cell * cell)");
-    try expectContains(body, "cell->value = 7;");
+    try expectContains(body, "(*cell).value = mc_tmp");
 }
 
 test "lower-c emits global address direct-call args from MIR without body fallback" {
@@ -13407,7 +13424,7 @@ test "lower-c emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void consume_result(mc_result_u32_Error result);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(result);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(mc_tmp") != null);
 }
 
 test "lower-c emits C ABI for tagged unions" {
@@ -19584,8 +19601,10 @@ test "lower-c casts indexed bool switch subjects and marks ignored locals unused
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_bool_switch_unused.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _ignore = tick();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _seq_ignore = tick2(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _ignore =") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _seq_ignore =") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "tick();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "tick2(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(flags.elems[mc_check_index_usize(i, 2)])) {") != null);
 }
 
