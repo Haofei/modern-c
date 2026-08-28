@@ -22,6 +22,31 @@ const maxUnsigned = numeric.maxUnsigned;
 const signedBounds = numeric.signedBounds;
 const typeText = mir_syntax.typeText;
 
+fn arrayShape(ty: ast.TypeExpr) mir_model.ArrayShape {
+    const node = switch (ty.kind) {
+        .array => |array| array,
+        else => unreachable,
+    };
+    const literal = integerLiteralValue(node.len);
+    return .{
+        .child = typeText(node.child.*),
+        .length = if (literal) |value| if (!value.negative) std.math.cast(usize, value.magnitude) else null else null,
+    };
+}
+
+fn arrayShapeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) mir_model.ArrayShape {
+    const resolved = aggregateTargetTypeAlias(ty, aliases);
+    const node = switch (resolved.kind) {
+        .array => |array| array,
+        else => unreachable,
+    };
+    const literal = integerLiteralValue(node.len);
+    return .{
+        .child = typeText(aggregateTargetTypeAlias(node.child.*, aliases)),
+        .length = if (literal) |value| if (!value.negative) std.math.cast(usize, value.magnitude) else null else null,
+    };
+}
+
 pub fn isVoidLike(ty: ValueType) bool {
     return ty == .void;
 }
@@ -369,7 +394,7 @@ pub fn valueTypeFromType(ty: ast.TypeExpr, enums: *const std.StringHashMap(EnumS
         .pointer => |node| .{ .pointer = pointerShape(.single, node.mutability, node.child.*) },
         .raw_many_pointer => |node| .{ .pointer = pointerShape(.raw_many, node.mutability, node.child.*) },
         .slice => |node| .{ .pointer = pointerShape(.slice, node.mutability, node.child.*) },
-        .array => .{ .array = "array" },
+        .array => .{ .array = arrayShape(ty) },
         .generic => |node| genericValueType(node, enums, structs),
     };
 }
@@ -402,7 +427,7 @@ fn valueTypeFromTypeAliasDepth(ty: ast.TypeExpr, enums: *const std.StringHashMap
         .pointer => |node| .{ .pointer = pointerShapeAlias(.single, node.mutability, node.child.*, aliases) },
         .raw_many_pointer => |node| .{ .pointer = pointerShapeAlias(.raw_many, node.mutability, node.child.*, aliases) },
         .slice => |node| .{ .pointer = pointerShapeAlias(.slice, node.mutability, node.child.*, aliases) },
-        .array => .{ .array = "array" },
+        .array => .{ .array = arrayShapeAlias(ty, aliases) },
         .generic => |node| genericValueTypeAlias(node, enums, structs, packed_bits, aliases),
     };
 }

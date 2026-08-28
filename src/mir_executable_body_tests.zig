@@ -394,6 +394,7 @@ test "array construction and local aggregate stores are verified executable MIR"
     const aggregate = &function.executable_body.aggregate_types[0];
     try std.testing.expect(aggregate.ty == .array);
     try std.testing.expectEqual(@as(usize, 2), aggregate.field_count);
+    try std.testing.expectEqual(@as(?usize, 2), aggregate.array_length);
 
     const saved_element_type_id = aggregate.field_type_ids[1];
     aggregate.field_type_ids[1] = .invalid;
@@ -430,6 +431,73 @@ test "array construction and local aggregate stores are verified executable MIR"
     try executable.verify(function);
 }
 
+test "aggregate layout facts include nested fixed-array fields" {
+    const source =
+        \\struct Ring { items: [8]u32, bytes: [16]u8, head: usize }
+        \\fn ring_init(ring: *mut Ring) -> void { ring.head = 0; }
+        \\fn ring_len(ring: *Ring) -> usize { return ring.head; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_nested_array_layout.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions) |*function| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        try std.testing.expectEqual(@as(usize, 3), function.executable_body.aggregate_types.len);
+        var saw_ring = false;
+        var saw_items = false;
+        var saw_bytes = false;
+        for (function.executable_body.aggregate_types) |aggregate| switch (aggregate.ty) {
+            .struct_ => |name| {
+                try std.testing.expectEqualStrings("Ring", name);
+                try std.testing.expectEqual(@as(usize, 3), aggregate.field_count);
+                try std.testing.expect(aggregate.field_layout_complete[0]);
+                try std.testing.expect(aggregate.field_layout_complete[1]);
+                saw_ring = true;
+            },
+            .array => |shape| {
+                const length = aggregate.array_length orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(shape.length, aggregate.array_length);
+                if (length == 8) {
+                    try std.testing.expectEqualStrings("u32", shape.child);
+                    for (aggregate.field_types[0..aggregate.field_count]) |field_ty|
+                        try std.testing.expect(mir.ValueType.eql(field_ty, .{ .integer = "u32" }));
+                    saw_items = true;
+                } else if (length == 16) {
+                    try std.testing.expectEqualStrings("u8", shape.child);
+                    try std.testing.expectEqual(@as(usize, 1), aggregate.field_count);
+                    try std.testing.expect(mir.ValueType.eql(aggregate.field_types[0], .{ .integer = "u8" }));
+                    saw_bytes = true;
+                } else return error.TestUnexpectedResult;
+            },
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(saw_ring);
+        try std.testing.expect(saw_items);
+        try std.testing.expect(saw_bytes);
+
+        for (function.executable_body.aggregate_types) |*aggregate| switch (aggregate.ty) {
+            .array => {
+                const saved = aggregate.array_length;
+                aggregate.array_length = if (saved.? == 8) 7 else 15;
+                try std.testing.expectError(error.InvalidAggregateType, executable.verify(function));
+                aggregate.array_length = saved;
+                try executable.verify(function);
+                break;
+            },
+            else => {},
+        };
+    }
+}
+
 test "value types distinguish every legacy spelling collision family" {
     const pointer_u8: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     const pointer_u32: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
@@ -442,13 +510,18 @@ test "value types distinguish every legacy spelling collision family" {
     const named_collisions = [_]mir.ValueType{
         .{ .nullable_value = "Payload" },
         .{ .slice = "Payload" },
-        .{ .array = "Payload" },
         .{ .struct_ = "Payload" },
     };
     for (named_collisions, 0..) |left, left_index| for (named_collisions[left_index + 1 ..]) |right| {
         try std.testing.expectEqualStrings(left.name(), right.name());
         try std.testing.expect(!mir.ValueType.eql(left, right));
     };
+    const array_payload: mir.ValueType = .{ .array = .{ .child = "Payload", .length = 4 } };
+    const array_other_length: mir.ValueType = .{ .array = .{ .child = "Payload", .length = 8 } };
+    const array_other_child: mir.ValueType = .{ .array = .{ .child = "Other", .length = 4 } };
+    try std.testing.expectEqualStrings("array", array_payload.name());
+    try std.testing.expect(!mir.ValueType.eql(array_payload, array_other_length));
+    try std.testing.expect(!mir.ValueType.eql(array_payload, array_other_child));
 
     const first_result: mir.ValueType = .{ .result = .{ .ok = "u32", .err = "IoError" } };
     const second_result: mir.ValueType = .{ .result = .{ .ok = "u64", .err = "IoError" } };

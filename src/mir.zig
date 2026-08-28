@@ -6057,7 +6057,16 @@ const ValueTypeContext = struct {
         const tag: u8 = @intCast(@intFromEnum(std.meta.activeTag(ty)));
         hasher.update(&.{tag});
         switch (ty) {
-            .integer, .float, .nullable_value, .slice, .array, .closed_enum, .open_enum, .struct_ => |name| hashTypeString(&hasher, name),
+            .integer, .float, .nullable_value, .slice, .closed_enum, .open_enum, .struct_ => |name| hashTypeString(&hasher, name),
+            .array => |shape| {
+                hashTypeString(&hasher, shape.child);
+                if (shape.length) |length| {
+                    hasher.update(&.{1});
+                    hasher.update(std.mem.asBytes(&length));
+                } else {
+                    hasher.update(&.{0});
+                }
+            },
             .domain_integer => |shape| {
                 const kind: u8 = @intCast(@intFromEnum(shape.kind));
                 hasher.update(&.{kind});
@@ -7096,6 +7105,7 @@ const FunctionBuilder = struct {
         };
         const shape = aggregate orelse return false;
         if (shape.construction != .declared_struct or shape.ty != .array or !sameValueType(shape.ty, expression.result_ty) or
+            shape.array_length == null or shape.array_length.? != operation.operand_count or
             shape.field_count != operation.operand_count) return false;
         for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
             if (!operand_id.isValid() or operand_id.index() >= self.executable_expressions.items.len) return false;
@@ -8518,13 +8528,16 @@ const FunctionBuilder = struct {
     }
 
     fn internExecutableArrayType(self: *FunctionBuilder, ty: ValueType, element_ty: ValueType, length: usize) !bool {
-        if (std.meta.activeTag(ty) != .array or element_ty == .unknown or element_ty == .value or
-            length == 0 or length > mir_model.max_executable_operands) return false;
+        if (std.meta.activeTag(ty) != .array or element_ty == .unknown or element_ty == .value or length == 0) return false;
+        if (ty.array.length == null or ty.array.length.? != length) return false;
         const type_id = try self.internTypeId(ty);
         const element_type_id = try self.internTypeId(element_ty);
+        const stored_field_count = if (length > mir_model.max_executable_operands) 1 else length;
         for (self.executable_aggregate_types.items) |aggregate| {
             if (!aggregate.type_id.eql(type_id)) continue;
-            if (!sameValueType(aggregate.ty, ty) or aggregate.construction != .declared_struct or aggregate.field_count != length)
+            if (!sameValueType(aggregate.ty, ty) or aggregate.construction != .declared_struct or
+                aggregate.array_length == null or aggregate.array_length.? != length or
+                aggregate.field_count != stored_field_count)
                 return false;
             for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
                 if (!sameValueType(field_ty, element_ty) or !field_type_id.eql(element_type_id)) return false;
@@ -8535,9 +8548,10 @@ const FunctionBuilder = struct {
             .type_id = type_id,
             .ty = ty,
             .construction = .declared_struct,
-            .field_count = length,
+            .array_length = length,
+            .field_count = stored_field_count,
         };
-        for (0..length) |index| {
+        for (0..stored_field_count) |index| {
             aggregate.field_types[index] = element_ty;
             aggregate.field_type_ids[index] = element_type_id;
         }
@@ -8645,9 +8659,10 @@ const FunctionBuilder = struct {
             aggregate.field_spellings[index] = field.name.text;
             aggregate.field_types[index] = field_ty;
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
+            if (field_ty == .array) aggregate.field_layout_complete[index] = false;
         }
         try self.executable_aggregate_types.append(self.allocator, aggregate);
-        for (aggregate.field_types[0..aggregate.field_count]) |field_ty| switch (field_ty) {
+        for (fields, aggregate.field_types[0..aggregate.field_count], 0..) |field, field_ty, index| switch (field_ty) {
             .struct_ => |name| {
                 const summary = self.structs.get(name) orelse return false;
                 if (!try self.internExecutableAggregateTypeDepth(
@@ -8658,6 +8673,15 @@ const FunctionBuilder = struct {
                 )) return false;
             },
             .closed_enum, .open_enum => if (!try self.internExecutableEnumType(field_ty)) return false,
+            .array => {
+                // Nested fixed arrays are an LLVM layout requirement, not a
+                // reason to invalidate an otherwise complete executable body.
+                // Record the exact bounded shape when possible and leave the
+                // field closed to LLVM otherwise; C can still use its nominal
+                // declaration without reopening the AST body.
+                if (try self.internExecutableTypeExpr(field_ty, field.ty))
+                    self.executable_aggregate_types.items[previous_len].field_layout_complete[index] = true;
+            },
             else => {},
         };
         complete = true;
@@ -10872,7 +10896,11 @@ const FunctionBuilder = struct {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
             },
             .array_literal => |items| {
-                try self.addInstr(.expr, "array_literal", .{ .array = "array" }, expr.span);
+                const array_ty: ValueType = if (self.assignment_target_ty == .array)
+                    self.assignment_target_ty
+                else
+                    .{ .array = .{ .child = "unknown", .length = items.len } };
+                try self.addInstr(.expr, "array_literal", array_ty, expr.span);
                 if (items.len <= Instruction.max_aggregate_operands) {
                     const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                     instruction.typed_aggregate_operand_count = items.len;

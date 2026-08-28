@@ -309,9 +309,9 @@ const Renderer = struct {
         }
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
         if (aggregate.ty == .array) {
-            if (aggregate.field_count == 0) return error.Unsupported;
+            if (aggregate.field_count == 0 or aggregate.array_length == null) return error.Unsupported;
             const element_ty = try self.typeTextDepth(aggregate.field_types[0], depth + 1);
-            return std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{ aggregate.field_count, element_ty });
+            return std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{ aggregate.array_length.?, element_ty });
         }
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.allocator, "{ ");
@@ -1546,7 +1546,11 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
             llvmTypeSupportedDepth(body, shape.err_ty, depth + 1);
     const aggregate = aggregateTypeForValueType(body, ty) orelse return false;
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
-    for (aggregate.field_types[0..aggregate.field_count]) |field_ty| {
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count]) |field_ty, layout_complete| {
+        // Only fixed arrays need the producer's explicit nested-layout bit.
+        // Other aggregates are resolved recursively from their canonical type
+        // metadata, and scalar fields have no nested layout to complete.
+        if (field_ty == .array and !layout_complete) return false;
         if (!llvmTypeSupportedDepth(body, field_ty, depth + 1)) return false;
     }
     return true;
@@ -1608,6 +1612,7 @@ fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.
 fn arrayConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
     if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
+        shape.array_length == null or shape.array_length.? != operation.operand_count or
         shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
     for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
         if (!expressionValid(body, operand_id)) return false;
@@ -2200,6 +2205,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
     if (pointer.kind != .single) return false;
     const aggregate = aggregateTypeForValueType(body, .{ .struct_ = pointer.child }) orelse return false;
     return aggregate.construction == .declared_struct and field_index < aggregate.field_count and
+        llvmTypeSupported(body, aggregate.ty) and
         aggregate.field_type_ids[field_index].eql(place.type_id) and
         sameValueType(aggregate.field_types[field_index], place.ty);
 }
@@ -3953,7 +3959,7 @@ test "mechanical renderer validates a slice once with an exact representation ed
         .{ .nullable_pointer = .{ .kind = .slice, .mutability = .@"const", .child = "u32" } },
         .{ .pointer = .{ .kind = .raw_many, .mutability = .@"const", .child = "u32" } },
         .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } },
-        .{ .array = "u32" },
+        .{ .array = .{ .child = "u32", .length = 4 } },
         .cstr,
         .{ .closed_enum = "State" },
     };

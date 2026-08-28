@@ -1027,10 +1027,31 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
         try verifyType(function, field_type_id, field_ty, body.complete);
     }
     if (aggregate.ty == .array) {
+        const length = aggregate.array_length orelse return error.InvalidAggregateType;
+        // The element spelling is presentation data and is not reversible
+        // from every ValueType (pointer name(), for example, returns only its
+        // child). Structural identity is already checked by type_id and by
+        // the repeated field type/type-id checks below.
+        if (aggregate.ty.array.length == null or aggregate.ty.array.length.? != length)
+            return error.InvalidAggregateType;
+        const stored_field_count = if (length > mir.max_executable_operands) 1 else length;
+        if (length == 0 or aggregate.field_count != stored_field_count)
+            return error.InvalidAggregateType;
         for (aggregate.field_spellings[0..aggregate.field_count], aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_spelling, field_ty, field_type_id| {
             if (field_spelling.len != 0 or !sameValueType(field_ty, aggregate.field_types[0]) or
                 !field_type_id.eql(aggregate.field_type_ids[0])) return error.InvalidAggregateType;
         }
+    }
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count]) |field_ty, field_type_id, layout_complete| {
+        if (field_ty != .array or !layout_complete) continue;
+        var found = false;
+        for (body.aggregate_types) |nested| {
+            if (nested.type_id.eql(field_type_id) and sameValueType(nested.ty, field_ty)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return error.InvalidAggregateType;
     }
     for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_spelling, field_ty, field_type_id| {
         if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
@@ -1109,7 +1130,8 @@ fn verifyArrayConstruction(
     const body = &function.executable_body;
     const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
     if (aggregate.construction != .declared_struct or aggregate.ty != .array or !sameValueType(aggregate.ty, value.result_ty) or
-        operation.operand_count == 0 or operation.operand_count != aggregate.field_count)
+        operation.operand_count == 0 or aggregate.array_length == null or
+        operation.operand_count != aggregate.array_length.? or operation.operand_count != aggregate.field_count)
         return error.InvalidAggregateConstruction;
     for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
         const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;

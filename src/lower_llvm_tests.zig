@@ -27,6 +27,25 @@ test "LLVM canonical executable MIR preserves function render attributes" {
     try expectContains(noinline_body, "; canonical executable MIR");
 }
 
+test "LLVM canonical executable MIR renders projected structs with fixed-array fields" {
+    const source =
+        \\struct Ring { items: [8]u32, bytes: [16]u8, head: usize }
+        \\fn ring_init(ring: *mut Ring) -> void { ring.head = 0; }
+        \\fn ring_len(ring: *Ring) -> usize { return ring.head; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_array_field_layout.mc", source, &output);
+
+    const init = try llvmFunctionBody(output.items, "define internal void @ring_init");
+    try expectContains(init, "; canonical executable MIR");
+    try expectContains(init, "getelementptr inbounds { [8 x i32], [16 x i8], i64 }, ptr %mc_arg_0, i32 0, i32 2");
+
+    const len = try llvmFunctionBody(output.items, "define internal i64 @ring_len");
+    try expectContains(len, "; canonical executable MIR");
+    try expectContains(len, "getelementptr inbounds { [8 x i32], [16 x i8], i64 }, ptr %mc_arg_0, i32 0, i32 2");
+}
+
 test "LLVM lexical unsafe and contract call bodies use canonical executable MIR" {
     const source =
         \\extern fn consume(value: u32) -> void;

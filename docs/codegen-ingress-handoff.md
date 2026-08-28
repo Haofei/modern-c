@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **647/1785 C** and **708/1858 LLVM** distinct functions using the AST
-  body (C admits 63.8%, LLVM 61.9%). Report mode intentionally preserves
+  finds **647/1785 C** and **702/1858 LLVM** distinct functions using the AST
+  body (C admits 63.8%, LLVM 62.2%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -39,7 +39,16 @@ remaining six belonging to those deliberately excluded shapes. The slice also
 fixed the canonical loop back-edge to re-enter the condition header; previously
 an effectful `while` condition could be evaluated once and then skipped on later
 iterations. Verifier mutation tests cover illegal MMIO orderings and forged
-bases, and the no-fallback ratchet now has 143 C / 142 LLVM focused tests.
+bases, and the no-fallback ratchet now has 143 C / 143 LLVM focused tests.
+
+Fixed-array identity is now structural over element spelling and known length;
+`[4]T` and `[8]T` no longer collide in the `ValueType`/`TypeId` map. Nested
+array layouts are producer-owned, large homogeneous arrays use one bounded
+element metadata slot plus their logical length, and LLVM rejects an incomplete
+nested layout during admission rather than failing during rendering. The broad
+census has no remaining canonical-ready ingress mismatch: C is 1138/1785 with
+1000 canonical bodies, while LLVM is 1156/1858 with 995 canonical bodies and
+702 AST fallbacks.
 
 The latest batch migrated another 10 C and 13 LLVM broad functions away from
 `simple_return`. A trial physical deletion exposed 50 no-fallback shard tests
@@ -86,12 +95,12 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-632 to an incomplete MIR producer and 15 to renderer support; LLVM attributes
-669/30 respectively, plus nine ready ingress mismatches. No C body marked
-canonical-ready falls through to AST codegen. The producer bucket is now
+631 to an incomplete MIR producer and 16 to renderer support; LLVM attributes
+671/31 respectively. No body marked canonical-ready falls through to AST
+codegen. The producer bucket is now
 classified by its first stable canonical-model gap. The largest C reasons are
 trap projection (139), producer invariants (92), unsupported members (85), and
-unresolved indexing (46); LLVM records 155/92/85/61 respectively. Direct pointer-member scalar access is
+unresolved indexing (48); LLVM records 155/92/85/63 respectively. Direct pointer-member scalar access is
 canonical in the targeted census; the remaining `unlowered_member` reason count
 is 15 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and

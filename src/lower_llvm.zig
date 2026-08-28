@@ -2959,7 +2959,8 @@ const LlvmEmitter = struct {
         return switch (value_ty) {
             .void => typeNameEql(resolved, "void"),
             .bool => typeNameEql(resolved, "bool"),
-            .integer, .float, .struct_, .closed_enum, .open_enum, .array, .slice => |name| typeNameEql(resolved, name),
+            .integer, .float, .struct_, .closed_enum, .open_enum, .slice => |name| typeNameEql(resolved, name),
+            .array => resolved.kind == .array,
             .pointer => switch (resolved.kind) {
                 .pointer => true,
                 else => false,

@@ -112,6 +112,14 @@ pub const DomainIntegerShape = struct {
     child: []const u8,
 };
 
+pub const ArrayShape = struct {
+    /// Presentation spelling of the immediate element type. Array identity is
+    /// structural: equal element spellings with different known lengths must
+    /// not share a TypeId or aggregate-layout entry.
+    child: []const u8,
+    length: ?usize,
+};
+
 pub const ValueType = union(enum) {
     void,
     never,
@@ -131,7 +139,7 @@ pub const ValueType = union(enum) {
     // `mc_opt_<T>` aggregate. Narrows to the bare payload under `if let` / `?`.
     nullable_value: []const u8,
     slice: []const u8,
-    array: []const u8,
+    array: ArrayShape,
     address: AddressClass,
     closed_enum: []const u8,
     open_enum: []const u8,
@@ -157,7 +165,9 @@ pub const ValueType = union(enum) {
             .nullable_dyn_trait => "?dyn",
             .nullable_value => |n| n,
             .slice => |n| n,
-            .array => |n| n,
+            // Array spelling is presentation-only. Structural identity lives
+            // in ArrayShape and must not be reconstructed from this label.
+            .array => "array",
             .address => |kind| addressClassName(kind),
             .closed_enum => |n| n,
             .open_enum => |n| n,
@@ -183,7 +193,7 @@ pub const ValueType = union(enum) {
             .nullable_pointer => |shape| pointerShapeEql(shape, right.nullable_pointer),
             .nullable_value => |spelling| std.mem.eql(u8, spelling, right.nullable_value),
             .slice => |spelling| std.mem.eql(u8, spelling, right.slice),
-            .array => |spelling| std.mem.eql(u8, spelling, right.array),
+            .array => |shape| shape.length == right.array.length and std.mem.eql(u8, shape.child, right.array.child),
             .address => |address_class| address_class == right.address,
             .closed_enum => |spelling| std.mem.eql(u8, spelling, right.closed_enum),
             .open_enum => |spelling| std.mem.eql(u8, spelling, right.open_enum),
@@ -1149,6 +1159,15 @@ pub const ExecutableAggregateType = struct {
     field_spellings: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
     field_types: [max_executable_operands]ValueType = [_]ValueType{.unknown} ** max_executable_operands,
     field_type_ids: [max_executable_operands]TypeId = [_]TypeId{.invalid} ** max_executable_operands,
+    /// Whether codegen has every nested layout needed to spell this field's
+    /// storage type mechanically. This is currently meaningful for fixed-array
+    /// fields: producers set it only after interning the nested layout. The
+    /// conservative default keeps hand-built and legacy MIR from claiming a
+    /// layout they do not own, so LLVM fails admission before a typed GEP.
+    field_layout_complete: [max_executable_operands]bool = [_]bool{false} ** max_executable_operands,
+    /// Logical element count for fixed arrays. Large arrays retain one
+    /// element-type slot instead of expanding one metadata slot per element.
+    array_length: ?usize = null,
     field_count: usize = 0,
 };
 

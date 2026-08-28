@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1785 C and 1858 LLVM
-functions. It found 647 C and 708 LLVM AST-body fallbacks. Report
+functions. It found 647 C and 702 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -28,23 +28,31 @@ strict-corpus recognizers are no longer an honest completion strategy.
 ### Last completed broad census snapshot (2026-08-28)
 
 The 522-root sweep found C **1138/1785 admitted (63.8%)**, 647 fallback, and
-LLVM **1150/1858 admitted (61.9%)**, 708 fallback. There were no unsupported
+LLVM **1156/1858 admitted (62.2%)**, 702 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
-canonical-ready C body fell through to that ingress; LLVM reports nine ready
-bodies still blocked at ingress and keeps them visible as debt. The latest
+canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
 shards proved that 50 no-fallback tests still rely on its fault-injection and
 edge-case semantics. That deletion was therefore reverted rather than masking
 the gap by changing tests. The plan remains as a bounded safety net, and its
-broad use has fallen to **33 C / 45 LLVM** functions (from 43/58 before this
+broad use has fallen to **35 C / 48 LLVM** functions (from 43/58 before this
 slice). The canonical producer now owns Result construction, domain/serial/counter
 builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. Compared with the prior broad
-snapshot, admitted functions increased by 163 C and 173 LLVM while the legacy
-path did not grow.
+specialized plan definitions from 15 to **14**. The current broad split is 1000
+canonical / 138 specialized for C and 995 canonical / 161 specialized for
+LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+
+Fixed-array `ValueType` identity now includes the immediate element spelling
+and known length instead of collapsing every array to the same `"array"` key.
+Executable aggregate metadata recursively records bounded nested arrays and
+represents large homogeneous arrays with one element-type slot plus their full
+logical length. LLVM admission validates that nested layout before typed GEP
+emission, so preflight and rendering cannot disagree. This removed all nine
+previous canonical-ready LLVM ingress mismatches and moved six broad LLVM
+functions off AST fallback without changing C fallback coverage.
 
 The scalar-MMIO slice makes plain `Reg<u8|u16|u32|u64, access>` reads and writes
 typed executable-MIR operations. MIR owns the MMIO parameter identity, aligned

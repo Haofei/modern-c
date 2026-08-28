@@ -707,6 +707,7 @@ fn arrayConstructionSupported(
 ) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
     if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
+        shape.array_length == null or shape.array_length.? != operation.operand_count or
         shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
     if (!arrayElementTypeSupported(shape.field_types[0])) return false;
     for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
@@ -1556,7 +1557,8 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .nullable_pointer => |shape| shape.kind != .slice and (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
-            shape.field_count != 0 and arrayElementTypeSupported(shape.field_types[0])
+            shape.array_length != null and shape.array_length.? != 0 and
+                shape.field_count != 0 and arrayElementTypeSupported(shape.field_types[0])
         else
             false,
         .nullable_value => aggregateTypeForValueType(body, ty) != null,
@@ -1886,10 +1888,10 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
         .address => try out.appendSlice(allocator, "uintptr_t"),
         .array => {
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
-            if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0) return error.UnsupportedType;
+            if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or shape.array_length == null) return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_array_");
             try appendCTypeSuffix(allocator, out, shape.field_types[0]);
-            try out.print(allocator, "_{d}", .{shape.field_count});
+            try out.print(allocator, "_{d}", .{shape.array_length.?});
         },
         .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
         .nullable_value => {
@@ -3405,7 +3407,7 @@ test "executable C renderer validates a slice once with an exact representation 
         .{ .nullable_pointer = .{ .kind = .slice, .mutability = .@"const", .child = "u32" } },
         .{ .pointer = .{ .kind = .raw_many, .mutability = .@"const", .child = "u32" } },
         .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } },
-        .{ .array = "u32" },
+        .{ .array = .{ .child = "u32", .length = 4 } },
         .cstr,
         .{ .closed_enum = "State" },
     };

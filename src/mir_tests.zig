@@ -3326,7 +3326,7 @@ fn valueTypeName(ty: mir.ValueType) []const u8 {
         .integer => |name| name,
         .float => |name| name,
         .slice => |name| name,
-        .array => |name| name,
+        .array => "array",
         .closed_enum => |name| name,
         .open_enum => |name| name,
         .struct_ => |name| name,
