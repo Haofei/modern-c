@@ -9103,6 +9103,21 @@ const FunctionBuilder = struct {
                 }
                 for (local.names) |name| {
                     if (!try self.internExecutableEnumType(ty)) self.executable_supported = false;
+                    if (ty == .nullable_value and !try self.internExecutableValueOptionalType(ty))
+                        self.executable_supported = false;
+                    if (ty_expr) |declared_ty| {
+                        if (!try self.internExecutableArrayTypeExpr(ty, declared_ty))
+                            self.executable_supported = false;
+                    }
+                    switch (ty) {
+                        .struct_ => |struct_name| {
+                            if (self.structs.get(struct_name)) |summary| {
+                                if (!try self.internExecutableAggregateType(ty, executableAggregateConstruction(summary), summary.fields))
+                                    self.executable_supported = false;
+                            } else self.executable_supported = false;
+                        },
+                        else => {},
+                    }
                     const executable_local = try self.internExecutableLocal(name.text);
                     // `uninit` is a storage-initialization policy, not a value
                     // expression.  Canonical MIR represents it by omitting the
@@ -9110,7 +9125,7 @@ const FunctionBuilder = struct {
                     // executable value generation.  This also removes raw
                     // `uninit` syntax from the renderer boundary.
                     const initializer_expr: ?ast.Expr = if (local.names.len == 1) if (local.init) |initializer|
-                        if (ast_query.isUninitLiteral(initializer) and mir_model.ExecutableMemoryAccess.scalarAlignment(ty) != null) null else initializer
+                        if (ast_query.isUninitLiteral(initializer)) null else initializer
                     else
                         null else null;
                     const executable_initializer = if (initializer_expr) |initializer|
@@ -9126,7 +9141,7 @@ const FunctionBuilder = struct {
                         .mutable = mutable,
                     } });
                     try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
-                    if (initializer_expr) |initializer| {
+                    if (local.init) |initializer| {
                         self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
                             try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(initializer).span));
                     }

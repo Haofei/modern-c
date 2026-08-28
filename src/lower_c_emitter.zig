@@ -1537,13 +1537,6 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const local_aggregate_assignment_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null)
-            if (mir_statement_plan.buildLocalAggregateAssignmentReturn(fn_mir)) |plan|
-                if (self.mirLocalAggregateAssignmentReturnPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
         const place_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null)
             if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
                 if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
@@ -1555,7 +1548,7 @@ pub const CEmitter = struct {
             if (self.mirNullableTryPlanSupported(plan)) plan else null
         else
             null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1567,7 +1560,7 @@ pub const CEmitter = struct {
             }
             break :blk null;
         };
-        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and place_return_plan == null)
+        const indirect_call_return_plan = if (direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null)
             if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
                 if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
             else
@@ -1585,7 +1578,6 @@ pub const CEmitter = struct {
             sequence_foreach_return_plan != null,
             direct_call_projected_return_plan != null,
             local_aggregate_place_update_return_plan != null,
-            local_aggregate_assignment_return_plan != null,
             nullable_try_plan != null,
             simple_return != null,
             place_return_plan != null,
@@ -1633,9 +1625,6 @@ pub const CEmitter = struct {
         } else if (local_aggregate_place_update_return_plan) |plan| {
             selected_path.* = .local_aggregate_place_update_return;
             try self.emitMirLocalAggregatePlaceUpdateReturnPlan(plan);
-        } else if (local_aggregate_assignment_return_plan) |plan| {
-            selected_path.* = .local_aggregate_assignment_return;
-            try self.emitMirLocalAggregateAssignmentReturnPlan(plan);
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan);
@@ -4900,71 +4889,7 @@ pub const CEmitter = struct {
         }
     }
 
-    /// The shared MIR plan retains this source-shaped storage sequence on
-    /// purpose: an explicit `uninit` declaration and its subsequent aggregate
-    /// assignment can be observable in source maps and debugging output.  The
-    /// C backend only validates types and materializes the plan; it never
-    /// consults the legacy function-body artifact.
-    fn mirLocalAggregateAssignmentReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.LocalAggregateAssignmentReturnPlan) bool {
-        const declared_return = function.signature.transitionalReturnType() orelse return false;
-        const local_ty = plan.local_type_fact.target_ty;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(local_ty))) return false;
-
-        switch (plan.value) {
-            .array_literal => |literal| {
-                if (plan.local_type_fact.result_ty != .array or literal.type_fact.result_ty != .array or !type_bridge.sameTypeSyntax(self.resolveAliasType(literal.type_fact.target_ty), self.resolveAliasType(local_ty))) return false;
-                const array = switch (self.resolveAliasType(local_ty).kind) {
-                    .array => |array| array,
-                    else => return false,
-                };
-                const declared_bound = self.arrayLenTextForExpr(array.len) catch return false;
-                const element_count = std.fmt.parseUnsigned(usize, declared_bound, 10) catch return false;
-                if (element_count != literal.element_count) return false;
-                for (literal.elements[0..literal.element_count]) |element| {
-                    if (element.type_fact.result_ty != .integer or !type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) return false;
-                }
-            },
-            .struct_literal => |literal| {
-                if (plan.local_type_fact.result_ty != .struct_ or literal.type_fact.result_ty != .struct_ or !type_bridge.sameTypeSyntax(self.resolveAliasType(literal.type_fact.target_ty), self.resolveAliasType(local_ty))) return false;
-                const struct_name = switch (literal.type_fact.result_ty) {
-                    .struct_ => |name| name,
-                    else => return false,
-                };
-                const struct_decl = self.structs.get(struct_name) orelse return false;
-                if (literal.field_count != struct_decl.fields.len) return false;
-                for (literal.fields[0..literal.field_count], 0..) |field, index| {
-                    if (field.field_index >= struct_decl.fields.len) return false;
-                    for (literal.fields[0..index]) |previous| {
-                        if (previous.field_index == field.field_index) return false;
-                    }
-                    if (field.value.type_fact.result_ty != .integer or !type_bridge.sameTypeSyntax(self.resolveAliasType(field.value.type_fact.target_ty), self.resolveAliasType(struct_decl.fields[field.field_index].ty))) return false;
-                }
-            },
-            else => return false,
-        }
-        return true;
-    }
-
-    fn emitMirLocalAggregateAssignmentReturnPlan(self: *CEmitter, plan: mir_statement_plan.LocalAggregateAssignmentReturnPlan) !void {
-        const local_ty = plan.local_type_fact.target_ty;
-
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.declaration_location.source));
-        try self.writeIndent();
-        try self.emitDeclarator(local_ty, plan.local_name);
-        try self.out.appendSlice(self.allocator, ";\n");
-
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.assignment_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = ", .{try self.cIdent(plan.local_name)});
-        try self.emitMirLocalAggregateAssignmentValue(local_ty, plan.value);
-        try self.out.appendSlice(self.allocator, ";\n");
-
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.local_name)});
-    }
-
-    fn emitMirLocalAggregateAssignmentValue(self: *CEmitter, local_ty: anytype, value: mir_statement_plan.PlaceStoreValue) !void {
+    fn emitMirAggregateAssignmentValue(self: *CEmitter, local_ty: anytype, value: mir_statement_plan.PlaceStoreValue) !void {
         switch (value) {
             .array_literal => |literal| {
                 try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(local_ty, .typedef_name)});
@@ -5031,7 +4956,7 @@ pub const CEmitter = struct {
                     }
                     try self.out.appendSlice(self.allocator, " } }");
                 },
-                .struct_literal => |literal| try self.emitMirLocalAggregateAssignmentValue(target_ty, .{ .struct_literal = literal }),
+                .struct_literal => |literal| try self.emitMirAggregateAssignmentValue(target_ty, .{ .struct_literal = literal }),
             }
             try self.out.appendSlice(self.allocator, ";\n");
             try self.writeIndent();

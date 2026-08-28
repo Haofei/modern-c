@@ -217,9 +217,9 @@ test "LLVM nullable initialization and race lowering follow representation" {
     try appendLlvmTest("llvm_nullable_representation.mc", source, &output);
 
     const reset_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @reset");
-    try expectContains(reset_body, "call void @llvm.memset.p0.i64(ptr align 4");
-    try expectContains(reset_body, "i64 8, i1 false)");
-    try expectNotContains(reset_body, "store { i1, i32 } null");
+    try expectContains(reset_body, "; canonical executable MIR");
+    try expectContains(reset_body, "store { i1, i32 } zeroinitializer");
+    try expectNotContains(reset_body, "call void @llvm.memset");
 
     const scalar_load = try llvmFunctionBody(output.items, "define internal { i1, i32 } @load_scalar");
     try expectContains(scalar_load, "load atomic i8");
@@ -373,17 +373,19 @@ test "LLVM local uninit aggregate assignment returns lower from MIR without body
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_uninit_aggregate_assignment.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_struct");
+    try expectContains(struct_body, "; canonical executable MIR");
     try expectContains(struct_body, "insertvalue { i32, i32 } zeroinitializer, i32 22, 1");
-    try expectContains(struct_body, "insertvalue { i32, i32 } %t");
+    try expectContains(struct_body, "insertvalue { i32, i32 } %mc_expr_tmp_");
     try expectContains(struct_body, "i32 11, 0");
-    try expectContains(struct_body, "ret { i32, i32 } %t");
-    try expectNotContains(struct_body, "alloca");
-    try expectNotContains(struct_body, "store");
+    try expectContains(struct_body, "store { i32, i32 } %mc_expr_tmp_");
+    try expectContains(struct_body, "ret { i32, i32 } %mc_expr_tmp_");
 
     const array_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @assigned_array");
-    try expectContains(array_body, "ret [2 x i32] [i32 7, i32 9]");
-    try expectNotContains(array_body, "alloca");
-    try expectNotContains(array_body, "store");
+    try expectContains(array_body, "; canonical executable MIR");
+    try expectContains(array_body, "insertvalue [2 x i32] zeroinitializer, i32 7, 0");
+    try expectContains(array_body, "insertvalue [2 x i32] %mc_expr_tmp_");
+    try expectContains(array_body, "store [2 x i32] %mc_expr_tmp_");
+    try expectContains(array_body, "ret [2 x i32] %mc_expr_tmp_");
 }
 
 test "LLVM local aggregate place updates return from MIR without body fallback" {

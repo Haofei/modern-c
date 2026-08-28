@@ -2838,25 +2838,29 @@ test "lower-c preserves local aggregate assignment and return from MIR without b
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_assignment_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_assignment_canonical.mc", source, &output);
 
     const array_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_assignment(void)");
+    try expectContains(array_body, "/* canonical executable MIR */");
     try expectContains(array_body, "mc_array_u32_2 values;");
-    try expectContains(array_body, "values = (mc_array_u32_2){ .elems = { 7, 9 } };");
-    try expectContains(array_body, "return values;");
+    try expectContains(array_body, "(mc_array_u32_2){ .elems = {");
+    try expectContains(array_body, "values = mc_exec_tmp_");
+    try expectContains(array_body, "return mc_exec_tmp_");
     const array_declaration = std.mem.indexOf(u8, array_body, "mc_array_u32_2 values;") orelse return error.TestUnexpectedResult;
-    const array_assignment = std.mem.indexOf(u8, array_body, "values = (mc_array_u32_2){ .elems = { 7, 9 } };") orelse return error.TestUnexpectedResult;
-    const array_return = std.mem.indexOf(u8, array_body, "return values;") orelse return error.TestUnexpectedResult;
+    const array_assignment = std.mem.indexOf(u8, array_body, "values = mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    const array_return = std.mem.indexOf(u8, array_body, "return mc_exec_tmp_") orelse return error.TestUnexpectedResult;
     try std.testing.expect(array_declaration < array_assignment);
     try std.testing.expect(array_assignment < array_return);
 
     const struct_body = try cFunctionBody(output.items, "static Pair struct_assignment(void)");
+    try expectContains(struct_body, "/* canonical executable MIR */");
     try expectContains(struct_body, "Pair value;");
-    try expectContains(struct_body, "value = (Pair){ .second = 11, .first = 22 };");
-    try expectContains(struct_body, "return value;");
+    try expectContains(struct_body, "(Pair){");
+    try expectContains(struct_body, "value = mc_exec_tmp_");
+    try expectContains(struct_body, "return mc_exec_tmp_");
     const struct_declaration = std.mem.indexOf(u8, struct_body, "Pair value;") orelse return error.TestUnexpectedResult;
-    const struct_assignment = std.mem.indexOf(u8, struct_body, "value = (Pair){ .second = 11, .first = 22 };") orelse return error.TestUnexpectedResult;
-    const struct_return = std.mem.indexOf(u8, struct_body, "return value;") orelse return error.TestUnexpectedResult;
+    const struct_assignment = std.mem.indexOf(u8, struct_body, "value = mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    const struct_return = std.mem.indexOf(u8, struct_body, "return mc_exec_tmp_") orelse return error.TestUnexpectedResult;
     try std.testing.expect(struct_declaration < struct_assignment);
     try std.testing.expect(struct_assignment < struct_return);
 }

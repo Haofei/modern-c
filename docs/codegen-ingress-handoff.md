@@ -597,6 +597,18 @@ The strict corpus remains fully admitted (C 84 canonical/76 specialized,
 LLVM 83 canonical/77 specialized), while the shared specialized-plan registry
 falls to 15 definitions.
 
+The `local_aggregate_assignment_return` plan is now fully retired. Executable
+MIR records declared nullable/array/struct local storage even when the source
+initializer is `uninit`, then owns the aggregate construction, assignment,
+reload, and return sequence. The old plan model and builder, both backend
+support/rendering branches, its census path, and plan-specific tests are
+deleted. More complex aggregate projections continue to use their existing
+qualified paths: retaining the legacy MIR initializer span keeps
+`aggregate_sequence` and `alloca_hoist` stable while executable MIR treats
+`uninit` only as a storage policy. The strict corpus remains fully admitted and
+moves two functions per backend to canonical emission (C 86/74, LLVM 85/75);
+the shared specialized-plan registry falls to 14 definitions.
+
 The first local-declaration statement primitive is complete for the strict
 single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer

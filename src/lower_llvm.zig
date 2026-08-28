@@ -1621,10 +1621,6 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const local_aggregate_assignment_return_plan = if (mir_statement_plan.buildLocalAggregateAssignmentReturn(fn_mir)) |plan|
-            if (self.mirLocalAggregateAssignmentReturnPlanSupported(function, plan)) plan else null
-        else
-            null;
         const place_return_plan = if (local_aggregate_place_update_return_plan == null)
             if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
                 if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
@@ -1632,7 +1628,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const direct_call_projected_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null)
+        const direct_call_projected_return_plan = if (local_aggregate_place_update_return_plan == null and place_return_plan == null)
             if (mir_statement_plan.buildDirectCallProjectedReturn(fn_mir)) |plan|
                 if (self.mirDirectCallProjectedReturnPlanSupported(function, plan)) plan else null
             else
@@ -1643,7 +1639,7 @@ const LlvmEmitter = struct {
             if (self.mirNullableTryPlanSupported(plan)) plan else null
         else
             null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and place_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1654,14 +1650,14 @@ const LlvmEmitter = struct {
             }
             break :blk null;
         };
-        const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and simple_return == null and place_return_plan == null)
+        const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null)
             if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
                 if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
             else
                 null
         else
             null;
-        const llvm_structural_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and local_aggregate_assignment_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1675,7 +1671,6 @@ const LlvmEmitter = struct {
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
             local_aggregate_place_update_return_plan != null,
-            local_aggregate_assignment_return_plan != null,
             direct_call_projected_return_plan != null,
             nullable_try_plan != null,
             simple_return != null,
@@ -1761,9 +1756,6 @@ const LlvmEmitter = struct {
         } else if (local_aggregate_place_update_return_plan) |plan| {
             selected_path.* = .local_aggregate_place_update_return;
             try self.emitMirLocalAggregatePlaceUpdateReturnPlan(plan, ret_ty);
-        } else if (local_aggregate_assignment_return_plan) |plan| {
-            selected_path.* = .local_aggregate_assignment_return;
-            try self.emitMirLocalAggregateAssignmentReturnPlan(plan, ret_ty);
         } else if (direct_call_projected_return_plan) |plan| {
             selected_path.* = .direct_call_projected_return;
             try self.emitMirDirectCallProjectedReturnPlan(plan, ret_ty);
@@ -4656,89 +4648,6 @@ const LlvmEmitter = struct {
                 }
             },
         };
-    }
-
-    fn mirLocalAggregateAssignmentReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.LocalAggregateAssignmentReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) return false;
-
-        return switch (plan.value) {
-            .array_literal => |literal| blk: {
-                if (literal.type_fact.result_ty != .array or !type_bridge.sameTypeSyntax(self.resolveAliasType(literal.type_fact.target_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) break :blk false;
-                const array = switch (self.resolveAliasType(plan.local_type_fact.target_ty).kind) {
-                    .array => |array| array,
-                    else => break :blk false,
-                };
-                const declared_bound = self.arrayLenValue(array.len) orelse break :blk false;
-                if (declared_bound != literal.element_count) break :blk false;
-                for (literal.elements[0..literal.element_count]) |element| {
-                    if (element.type_fact.result_ty != .integer or !type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) break :blk false;
-                }
-                break :blk true;
-            },
-            .struct_literal => |literal| blk: {
-                if (literal.type_fact.result_ty != .struct_ or !type_bridge.sameTypeSyntax(self.resolveAliasType(literal.type_fact.target_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) break :blk false;
-                const struct_decl = self.structDeclForType(plan.local_type_fact.target_ty) orelse break :blk false;
-                if (literal.field_count != struct_decl.fields.len) break :blk false;
-                for (literal.fields[0..literal.field_count], 0..) |field, index| {
-                    if (field.field_index >= struct_decl.fields.len or field.value.type_fact.result_ty != .integer) break :blk false;
-                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(field.value.type_fact.target_ty), self.resolveAliasType(struct_decl.fields[field.field_index].ty))) break :blk false;
-                    for (literal.fields[0..index]) |earlier| if (earlier.field_index == field.field_index) break :blk false;
-                }
-                break :blk true;
-            },
-            else => false,
-        };
-    }
-
-    fn emitMirLocalAggregateAssignmentReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.LocalAggregateAssignmentReturnPlan, ret_ty: anytype) !void {
-        const span = spanFromMirSourcePoint(plan.return_location.source);
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(ret_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) return error.UnsupportedLlvmEmission;
-
-        const value = switch (plan.value) {
-            .array_literal => |literal| blk: {
-                const array = switch (self.resolveAliasType(plan.local_type_fact.target_ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                const declared_bound = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
-                if (declared_bound != literal.element_count) return error.UnsupportedLlvmEmission;
-                var rendered: std.ArrayList(u8) = .empty;
-                try rendered.append(self.scratch.allocator(), '[');
-                for (literal.elements[0..literal.element_count], 0..) |element, index| {
-                    if (element.type_fact.result_ty != .integer or !type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) return error.UnsupportedLlvmEmission;
-                    if (index != 0) try rendered.appendSlice(self.scratch.allocator(), ", ");
-                    try rendered.print(self.scratch.allocator(), "{s} {d}", .{ try self.llvmType(array.child.*), element.value });
-                }
-                try rendered.append(self.scratch.allocator(), ']');
-                break :blk try rendered.toOwnedSlice(self.scratch.allocator());
-            },
-            .struct_literal => |literal| blk: {
-                const struct_decl = self.structDeclForType(plan.local_type_fact.target_ty) orelse return error.UnsupportedLlvmEmission;
-                if (literal.field_count != struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                const struct_llvm_ty = try self.llvmType(plan.local_type_fact.target_ty);
-                var aggregate: []const u8 = "zeroinitializer";
-                for (literal.fields[0..literal.field_count], 0..) |field, index| {
-                    if (field.field_index >= struct_decl.fields.len or field.value.type_fact.result_ty != .integer) return error.UnsupportedLlvmEmission;
-                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(field.value.type_fact.target_ty), self.resolveAliasType(struct_decl.fields[field.field_index].ty))) return error.UnsupportedLlvmEmission;
-                    for (literal.fields[0..index]) |earlier| if (earlier.field_index == field.field_index) return error.UnsupportedLlvmEmission;
-                    const next = try self.nextTemp();
-                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {d}, {d}{s}\n", .{
-                        next,
-                        struct_llvm_ty,
-                        aggregate,
-                        try self.llvmType(struct_decl.fields[field.field_index].ty),
-                        field.value.value,
-                        field.field_index,
-                        try self.debugCallSuffix(),
-                    });
-                    aggregate = next;
-                }
-                break :blk aggregate;
-            },
-            else => return error.UnsupportedLlvmEmission,
-        };
-        try self.emitReturnValue(ret_ty, value, span);
     }
 
     const MirPlacePointer = struct {

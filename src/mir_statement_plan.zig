@@ -848,16 +848,6 @@ pub const PlaceReturnPlan = struct {
     return_location: Location,
 };
 
-pub const LocalAggregateAssignmentReturnPlan = struct {
-    local_name: []const u8,
-    local_id: mir.ValueId,
-    local_type_fact: mir.TargetTypeFact,
-    declaration_location: Location,
-    assignment_location: Location,
-    value: PlaceStoreValue,
-    return_location: Location,
-};
-
 pub const LocalAggregatePlaceUpdateReturnPlan = struct {
     local_name: []const u8,
     local_id: mir.ValueId,
@@ -1208,79 +1198,6 @@ pub fn buildLocalAggregatePlaceUpdateReturn(function: mir.Function) ?LocalAggreg
     }
     if (consumed_expressions != expression_count or !localAggregateBoundsTrapsMatch(function, plan)) return null;
     return plan;
-}
-
-/// Admit the common storage-generation sequence `var x: T = uninit; x =
-/// aggregate; return x`. MIR owns the local identity, assignment edges,
-/// aggregate operand order/field indices, and literal values. Backends only
-/// materialize that verified value; they never reopen the function AST.
-pub fn buildLocalAggregateAssignmentReturn(function: mir.Function) ?LocalAggregateAssignmentReturnPlan {
-    if (function.return_ty == .void or function.blocks.len != 1 or function.trap_edges.len != 0) return null;
-    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const block = function.blocks[0];
-    if (block.terminator != .return_ or block.successors.len != 0) return null;
-    var local: ?mir.Instruction = null;
-    var assignment: ?mir.Instruction = null;
-    var returned: ?mir.Instruction = null;
-    var expression_count: usize = 0;
-    for (block.instructions) |instruction| switch (instruction.kind) {
-        .target_type, .integer_literal_conversion => {},
-        .expr => expression_count += 1,
-        .local => {
-            if (local != null) return null;
-            local = instruction;
-        },
-        .assign => {
-            if (assignment != null) return null;
-            assignment = instruction;
-        },
-        .return_value => {
-            if (returned != null) return null;
-            returned = instruction;
-        },
-        else => return null,
-    };
-
-    const local_instruction = local orelse return null;
-    const local_id = local_instruction.typed_value_id orelse return null;
-    if (!local_instruction.typed_value_operand_span_id.isValid()) return null;
-    const initializer = expressionAtSpan(block, local_instruction.typed_value_operand_span_id) orelse return null;
-    if (!std.mem.eql(u8, initializer.detail, "uninit")) return null;
-
-    const assignment_instruction = assignment orelse return null;
-    if (!assignment_instruction.typed_target_operand_span_id.isValid() or !assignment_instruction.typed_value_operand_span_id.isValid()) return null;
-    const target = buildPlace(function, block, assignment_instruction.typed_target_operand_span_id) orelse return null;
-    if (target.root_kind != .local or target.projection_count != 0 or !target.root_type_fact.typed_span_id.isValid()) return null;
-    const target_id = valueIdentityId(function, target.root_name) orelse return null;
-    if (!target_id.eql(local_id)) return null;
-
-    const value = buildPlaceStoreValue(function, block, assignment_instruction.typed_value_operand_span_id) orelse return null;
-    switch (value) {
-        .array_literal, .struct_literal => {},
-        else => return null,
-    }
-    if (!sameRepresentationType(value.resultType(), target.resultType())) return null;
-
-    const return_instruction = returned orelse return null;
-    if (!return_instruction.typed_value_operand_span_id.isValid()) return null;
-    const returned_place = buildPlace(function, block, return_instruction.typed_value_operand_span_id) orelse return null;
-    if (returned_place.root_kind != .local or returned_place.projection_count != 0) return null;
-    const returned_id = valueIdentityId(function, returned_place.root_name) orelse return null;
-    if (!returned_id.eql(local_id) or !sameRepresentationType(returned_place.resultType(), function.return_ty)) return null;
-    if (expression_count != 4 + value.expressionCount() - 1) return null;
-
-    return .{
-        .local_name = target.root_name,
-        .local_id = local_id,
-        .local_type_fact = target.root_type_fact,
-        .declaration_location = locationFromInstruction(local_instruction),
-        .assignment_location = locationFromInstruction(assignment_instruction),
-        .value = value,
-        .return_location = locationFromInstruction(return_instruction),
-    };
 }
 
 /// Admit a straight-line aggregate-place body from typed MIR edges. Fields and
