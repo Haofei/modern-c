@@ -3905,6 +3905,25 @@ test "lower-c emits enum literal returns from MIR without body fallback" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits enum variant raw values from MIR without body fallback" {
+    const source =
+        \\enum Color: u32 { red = 3, blue = 20 }
+        \\open enum OpenTag: u8 { lo = 1, hi = 2 }
+        \\fn closed_variant_raw() -> u32 { return Color.blue.raw(); }
+        \\fn open_variant_raw() -> u8 { return OpenTag.hi.raw(); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_variant_raw.mc", source, &output);
+
+    const closed = try cFunctionBody(output.items, "static uint32_t closed_variant_raw(void)");
+    try expectContains(closed, "/* canonical executable MIR */");
+    try expectContains(closed, "20");
+    const open = try cFunctionBody(output.items, "static uint8_t open_variant_raw(void)");
+    try expectContains(open, "/* canonical executable MIR */");
+    try expectContains(open, "2");
+}
+
 test "lower-c emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {

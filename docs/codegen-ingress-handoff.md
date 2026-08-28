@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **619/1787 C** and **668/1858 LLVM** distinct functions using the AST
-  body (C admits 65.4%, LLVM 64.0%). Report mode intentionally preserves
+  finds **610/1778 C** and **659/1849 LLVM** distinct functions using the AST
+  body (C admits 65.7%, LLVM 64.4%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -29,6 +29,17 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+Qualified enum variant paths now lower directly to canonical numeric literals.
+This removes the false runtime member load and representation trap formerly
+attached to `Enum.case`, while retaining the verifier proof marker required by
+closed-enum uses. In the focused enum raw fixture, fallback drops from three to
+two functions per backend; the focused no-fallback ratchet is now 150 tests per
+backend. The current broad split is C 1034 canonical / 134 specialized and LLVM
+1043 canonical / 147 specialized. Because this fresh broad sweep de-duplicated
+to nine fewer functions per backend than the preceding snapshot, its fallback
+totals are recorded as a new baseline rather than claimed as a nine-function
+migration delta.
 
 The latest slice moves plain scalar MMIO register reads/writes into executable
 MIR. The verified operation owns the MMIO parameter, aligned byte offset,

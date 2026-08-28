@@ -16,8 +16,8 @@ zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
-broad sweep over 522 repository MC roots de-duplicated to 1787 C and 1858 LLVM
-functions. It found 619 C and 668 LLVM AST-body fallbacks. Report
+broad sweep over 522 repository MC roots de-duplicated to 1778 C and 1849 LLVM
+functions. It found 610 C and 659 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1168/1787 admitted (65.4%)**, 619 fallback, and
-LLVM **1190/1858 admitted (64.0%)**, 668 fallback. There were no unsupported
+The 522-root sweep found C **1168/1778 admitted (65.7%)**, 610 fallback, and
+LLVM **1190/1849 admitted (64.4%)**, 659 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
@@ -44,6 +44,16 @@ backends**, while specialized admission falls from 76/77 to **64/64** and
 specialized plan definitions from 15 to **14**. The current broad split is 1034
 canonical / 134 specialized for C and 1043 canonical / 147 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+
+Qualified enum variants now become canonical executable-MIR literals before a
+`.raw()` projection is rendered. `Enum.case` no longer masquerades as a runtime
+aggregate member load or acquire a false representation trap; the legacy MIR
+still records the non-trapping proof marker required by closed-enum uses. A
+focused census over `enum_raw_closed_g25_g27.mc` reduces AST fallback from three
+to two functions in each backend, and the no-fallback ratchet is now 150 tests
+per backend. The broad totals above are a fresh de-duplicated snapshot; their
+denominators differ from the preceding run, so they are not presented as a
+nine-function migration delta.
 
 Wrapping-domain unary negation is now a fully mechanical LLVM operation. MIR
 already distinguished `wrap<T>` from checked integers; LLVM admission now

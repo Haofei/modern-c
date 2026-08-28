@@ -4139,6 +4139,25 @@ test "LLVM emits enum literal returns from MIR without body fallback" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits enum variant raw values from MIR without body fallback" {
+    const source =
+        \\enum Color: u32 { red = 3, blue = 20 }
+        \\open enum OpenTag: u8 { lo = 1, hi = 2 }
+        \\fn closed_variant_raw() -> u32 { return Color.blue.raw(); }
+        \\fn open_variant_raw() -> u8 { return OpenTag.hi.raw(); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_variant_raw.mc", source, &output);
+
+    const closed = try llvmFunctionBody(output.items, "define internal i32 @closed_variant_raw");
+    try expectContains(closed, "; canonical executable MIR");
+    try expectContains(closed, "ret i32 20");
+    const open = try llvmFunctionBody(output.items, "define internal i8 @open_variant_raw");
+    try expectContains(open, "; canonical executable MIR");
+    try expectContains(open, "ret i8 2");
+}
+
 test "LLVM emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {

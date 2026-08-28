@@ -8047,7 +8047,11 @@ const FunctionBuilder = struct {
                 .start = try self.ensureExecutableExpr(node.start.*),
                 .end = try self.ensureExecutableExpr(node.end.*),
             } },
-            .member => |node| if (std.mem.eql(u8, node.name.text, "len") and
+            .member => |node| if (self.enumVariantPathTypeExpr(node) != null) enum_variant: {
+                const canonical = self.canonicalExecutableEnumLiteral(node.name.text, result_ty) orelse
+                    break :enum_variant self.unsupportedExecutableExpression(.unsupported_member);
+                break :enum_variant .{ .literal = canonical };
+            } else if (std.mem.eql(u8, node.name.text, "len") and
                 switch (self.exprType(node.base.*)) {
                     .slice => true,
                     .pointer => |shape| shape.kind == .slice,
@@ -11800,6 +11804,16 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.end.*);
             },
             .member => |node| {
+                if (self.enumVariantPathTypeExpr(node) != null) {
+                    // `Enum.case` is a compile-time nominal literal. It has no
+                    // memory base to load and cannot fail representation
+                    // validation. Preserve the proof marker required by later
+                    // enum uses, but do not create a runtime trap edge.
+                    const ty = self.exprType(expr);
+                    try self.addInstr(.expr, node.name.text, ty, expr.span);
+                    try self.addInstrWithValue(.representation_check, representationTypeName(ty), ty, expr.span, exprText(expr));
+                    return;
+                }
                 if (isMirCVoidPointer(self.exprType(node.base.*))) {
                     try self.addInstr(.ffi_check, "c_void_no_layout", .unknown, expr.span);
                 }
@@ -13854,7 +13868,7 @@ const FunctionBuilder = struct {
 
     fn addTargetRepresentationCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
         if (representationCheckKind(target_ty) == null) return;
-        if (!exprNeedsTargetRepresentationCheck(expr)) return;
+        if (!self.exprNeedsTargetRepresentationCheck(expr)) return;
         try self.addInstrWithValue(.representation_check, representationTypeName(target_ty), target_ty, span, exprText(expr));
     }
 
@@ -13870,14 +13884,18 @@ const FunctionBuilder = struct {
         try self.addRepresentationUseForValue(ty, detail, expr.span, exprText(expr));
     }
 
-    fn exprNeedsTargetRepresentationCheck(expr: ast.Expr) bool {
+    fn exprNeedsTargetRepresentationCheck(self: *FunctionBuilder, expr: ast.Expr) bool {
         return switch (expr.kind) {
             .enum_literal => true,
-            .grouped => |inner| exprNeedsTargetRepresentationCheck(inner.*),
-            .cast => |node| exprNeedsTargetRepresentationCheck(node.value.*),
+            .grouped => |inner| self.exprNeedsTargetRepresentationCheck(inner.*),
+            .cast => |node| self.exprNeedsTargetRepresentationCheck(node.value.*),
             .address_of => true,
             .call => true,
-            .member, .index, .slice, .deref => true,
+            // A qualified enum variant is a compiler-known valid tag, not a
+            // memory projection. Its canonical integer literal needs no
+            // runtime representation edge.
+            .member => |member| self.enumVariantPathTypeExpr(member) == null,
+            .index, .slice, .deref => true,
             // A string literal is a non-null pointer to static storage by
             // construction, so its representation is statically proven at the
             // target site (like address_of); emitting the dominating check
@@ -13928,7 +13946,7 @@ const FunctionBuilder = struct {
                     try self.addConversionCheck(child_value_ty, item, ctx, item.span);
                     try self.addResultPayloadConversionCheck(child_value_ty, item, item.span);
                     try self.addTargetRepresentationCheck(child_value_ty, item, item.span);
-                    if (exprNeedsTargetRepresentationCheck(item)) try self.addRepresentationUseForValue(child_value_ty, "aggregate_element", item.span, exprText(item));
+                    if (self.exprNeedsTargetRepresentationCheck(item)) try self.addRepresentationUseForValue(child_value_ty, "aggregate_element", item.span, exprText(item));
                     try self.addAggregateRangeFactForUncheckedExpr("aggregate_element", child_value_ty, item);
                     try self.addAggregateConversionChecks(child_ty, item, ctx);
                 }
@@ -13943,7 +13961,7 @@ const FunctionBuilder = struct {
                     try self.addConversionCheck(field_value_ty, field.value, ctx, field.value.span);
                     try self.addResultPayloadConversionCheck(field_value_ty, field.value, field.value.span);
                     try self.addTargetRepresentationCheck(field_value_ty, field.value, field.value.span);
-                    if (exprNeedsTargetRepresentationCheck(field.value)) try self.addRepresentationUseForValue(field_value_ty, "aggregate_field", field.value.span, exprText(field.value));
+                    if (self.exprNeedsTargetRepresentationCheck(field.value)) try self.addRepresentationUseForValue(field_value_ty, "aggregate_field", field.value.span, exprText(field.value));
                     try self.addAggregateRangeFactForUncheckedExpr(field.name.text, field_value_ty, field.value);
                     try self.addAggregateConversionChecks(field_ty, field.value, ctx);
                 }
