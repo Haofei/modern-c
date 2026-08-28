@@ -16,8 +16,8 @@ zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
-broad sweep over 564 repository MC roots de-duplicated to 1773 C and 1846 LLVM
-functions. It found 629 C and 689 LLVM AST-body fallbacks. Report
+broad sweep over 522 repository MC roots de-duplicated to 1785 C and 1858 LLVM
+functions. It found 647 C and 708 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,10 +27,10 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 564-root sweep found C **1144/1773 admitted (64.5%)**, 629 fallback, and
-LLVM **1157/1846 admitted (62.7%)**, 689 fallback. There were no unsupported
+The 522-root sweep found C **1138/1785 admitted (63.8%)**, 647 fallback, and
+LLVM **1150/1858 admitted (61.9%)**, 708 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
-canonical-ready C body fell through to that ingress; LLVM reports eight ready
+canonical-ready C body fell through to that ingress; LLVM reports nine ready
 bodies still blocked at ingress and keeps them visible as debt. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
 shards proved that 50 no-fallback tests still rely on its fault-injection and
@@ -45,6 +45,17 @@ backends**, while specialized admission falls from 76/77 to **64/64** and
 specialized plan definitions from 15 to **14**. Compared with the prior broad
 snapshot, admitted functions increased by 163 C and 173 LLVM while the legacy
 path did not grow.
+
+The scalar-MMIO slice makes plain `Reg<u8|u16|u32|u64, access>` reads and writes
+typed executable-MIR operations. MIR owns the MMIO parameter identity, aligned
+byte offset, storage `TypeId`, access ordering and value evaluation; C and LLVM
+mechanically emit volatile access plus acquire/release barriers. `RegBits`,
+mapped addresses and computed receivers remain fail-closed. Mutation tests
+reject illegal read/write orderings and non-MMIO bases. The slice also exposed
+and fixed a pre-existing CFG bug: a `while` back-edge jumped directly to the
+body, so an effectful condition was evaluated only once. The back-edge now
+returns to the condition header, and both ordinary loop plans and MMIO loop
+tests enforce that invariant.
 
 The preceding slice
 adds transitive by-value aggregate/enum metadata with bounded failure rollback,
@@ -164,16 +175,16 @@ comptime assertions stay fail-closed. In the broad census this moved two
 module-visibility functions per backend to the renderer boundary without yet
 changing the admitted totals.
 
-The census also ranks the canonical stopping layer. For C the remaining 757
-fallbacks are 707 `producer_incomplete` and 50 `renderer_unsupported`; LLVM is
-747/76. The ready-but-fallback bucket is zero in both backends. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 647
+fallbacks are 632 `producer_incomplete` and 15 `renderer_unsupported`; LLVM is
+669/30 plus 9 canonical-ready ingress mismatches. The ready-but-fallback bucket
+is zero for C and remains explicit for LLVM. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `producer_invariant` (141),
-`trap_projection` (116), `noncanonical_literal` (102),
-`unsupported_member` (50), and
-`unlowered_index` (46). LLVM has `producer_invariant` 141,
-`trap_projection` 129, `noncanonical_literal` 105, `unlowered_index` 60 and
-`unsupported_member` 50. By-value struct member
+The leading C reasons are `trap_projection` (139),
+`producer_invariant` (92), `unsupported_member` (85), and
+`unlowered_index` (46). LLVM has `trap_projection` 155,
+`producer_invariant` 92, `unsupported_member` 85 and `unlowered_index` 61.
+By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 15 in each backend.
 Therefore producer work is the dominant next step and renderer work can be

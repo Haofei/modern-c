@@ -644,6 +644,23 @@ pub const ExecutableAtomicUpdateKind = enum {
     fetch_sub,
 };
 
+/// Canonical ordering for a typed MMIO access.  Unlike atomic ordering, MMIO
+/// ordering is implemented by a volatile access plus an explicit compiler/CPU
+/// fence on one side of that access.
+pub const ExecutableMmioOrdering = enum {
+    relaxed,
+    acquire,
+    release,
+
+    pub fn validForRead(ordering: ExecutableMmioOrdering) bool {
+        return ordering == .relaxed or ordering == .acquire;
+    }
+
+    pub fn validForWrite(ordering: ExecutableMmioOrdering) bool {
+        return ordering == .relaxed or ordering == .release;
+    }
+};
+
 pub const ExecutablePlaceStorage = enum {
     ordinary,
     atomic,
@@ -766,6 +783,26 @@ pub const ExecutableExpression = struct {
             ordering: ExecutableAtomicOrdering,
             representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
+        },
+        /// A syntax-free typed MMIO register read.  The frontend has already
+        /// resolved the register field and layout; codegen must not reopen the
+        /// declaring struct or infer ordering from an enum literal.
+        mmio_read: struct {
+            base: LocalId,
+            byte_offset: u64,
+            storage_ty: ValueType,
+            storage_type_id: TypeId,
+            ordering: ExecutableMmioOrdering,
+        },
+        /// A syntax-free typed MMIO register write.  Operand ExprIds preserve
+        /// source evaluation order before the release fence and volatile store.
+        mmio_write: struct {
+            base: LocalId,
+            byte_offset: u64,
+            storage_ty: ValueType,
+            storage_type_id: TypeId,
+            value: ExprId,
+            ordering: ExecutableMmioOrdering,
         },
         literal: ExecutableLiteral,
         unary: struct { op: ExecutableUnaryOp, operand: ExprId },

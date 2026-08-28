@@ -43,13 +43,13 @@ pub fn build(function: *const mir.Function) ?Plan {
     const entry = function.blocks[0];
     const body = function.blocks[1];
     const after = function.blocks[2];
-    if (!validBlock(entry) or !validBlock(body) or !validBlock(after) or !exactSuccessors(entry, &.{ 1, 2 }) or !exactSuccessors(body, &.{ 3, 4, 5, 6, 7, 1 })) return null;
+    if (!validBlock(entry) or !validBlock(body) or !validBlock(after) or !exactSuccessors(entry, &.{ 1, 2 }) or !exactSuccessors(body, &.{ 3, 4, 5, 6, 7, 0 })) return null;
     switch (entry.terminator) {
         .branch => |branch| if (branch.true_block != 1 or branch.false_block != 2) return null,
         else => return null,
     }
     switch (body.terminator) {
-        .jump => |target| if (target != 1) return null,
+        .jump => |target| if (target != 0) return null,
         else => return null,
     }
     switch (after.terminator) {

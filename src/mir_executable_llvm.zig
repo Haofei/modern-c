@@ -489,6 +489,8 @@ const Renderer = struct {
             .atomic_load => |load| try self.emitAtomicLoad(expression, load),
             .atomic_init => |operand| try self.emitExpression(operand),
             .atomic_update => |update| try self.emitAtomicUpdate(expression, update),
+            .mmio_read => |read| try self.emitMmioRead(expression, read),
+            .mmio_write => |write| try self.emitMmioWrite(expression, write),
             .literal => |literal| try self.literalValue(ty, literal),
             .unary => |unary| try self.emitUnary(expression, ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
@@ -1245,6 +1247,37 @@ const Renderer = struct {
         return .{ .ty = "i1", .spelling = converted };
     }
 
+    fn emitMmioRead(self: *Renderer, expression: mir.ExecutableExpression, read: anytype) RenderError!Value {
+        if (!mmioReadSupported(self.body, expression, read)) return error.InvalidBody;
+        const storage_ty = try self.typeText(read.storage_ty);
+        const pointer = try self.emitMmioPointer(read.base, read.byte_offset);
+        const loaded = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ loaded, storage_ty, pointer });
+        if (read.ordering == .acquire) try self.output.appendSlice(self.allocator, "  fence acquire\n");
+        return .{ .ty = storage_ty, .spelling = loaded };
+    }
+
+    fn emitMmioWrite(self: *Renderer, expression: mir.ExecutableExpression, write: anytype) RenderError!Value {
+        if (!mmioWriteSupported(self.body, expression, write)) return error.InvalidBody;
+        const operand = try self.emitExpression(write.value);
+        const storage_ty = try self.typeText(write.storage_ty);
+        if (!std.mem.eql(u8, operand.ty, storage_ty)) return error.InvalidBody;
+        if (write.ordering == .release) try self.output.appendSlice(self.allocator, "  fence release\n");
+        const pointer = try self.emitMmioPointer(write.base, write.byte_offset);
+        try self.output.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ storage_ty, operand.spelling, pointer });
+        return .{ .ty = "void", .spelling = "" };
+    }
+
+    fn emitMmioPointer(self: *Renderer, base: mir.LocalId, byte_offset: u64) RenderError![]const u8 {
+        if (!mmioBaseSupported(self.body, base)) return error.InvalidBody;
+        const local = self.locals.get(base.raw) orelse return error.InvalidBody;
+        if (local.addressable) return error.InvalidBody;
+        if (byte_offset == 0) return local.storage;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {d}\n", .{ pointer, local.storage, byte_offset });
+        return pointer;
+    }
+
     fn emitAtomicPlacePointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
@@ -1595,6 +1628,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .atomic_init => |operand| atomicInitSupported(body, expression, operand),
         .atomic_update => |update| atomicUpdateSupported(body, expression, update),
+        .mmio_read => |read| mmioReadSupported(body, expression, read),
+        .mmio_write => |write| mmioWriteSupported(body, expression, write),
         .literal => |literal| switch (literal) {
             .integer, .signed_integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
@@ -2259,6 +2294,40 @@ fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
         !update.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
     return update.representation_source != null and update.representation_span_id.isValid() and
         representationTrapEdgeIsExact(body, expression);
+}
+
+fn mmioReadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, read: anytype) bool {
+    return read.ordering.validForRead() and mmioBaseSupported(body, read.base) and
+        mmioStorageSupported(read.storage_ty) and sameValueType(expression.result_ty, read.storage_ty) and
+        expression.type_id.eql(read.storage_type_id) and ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn mmioWriteSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, write: anytype) bool {
+    if (!expressionValid(body, write.value)) return false;
+    const operand = body.expressions[write.value.index()];
+    return write.ordering.validForWrite() and mmioBaseSupported(body, write.base) and
+        mmioStorageSupported(write.storage_ty) and expression.result_ty == .void and
+        sameValueType(operand.result_ty, write.storage_ty) and operand.type_id.eql(write.storage_type_id) and
+        ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn mmioBaseSupported(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
+    for (body.parameters) |parameter| {
+        if (!parameter.local.eql(id)) continue;
+        return switch (parameter.ty) {
+            .address => |class| class == .mmio_ptr,
+            else => false,
+        };
+    }
+    return false;
+}
+
+fn mmioStorageSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .integer => |name| std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+            std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64"),
+        else => false,
+    };
 }
 
 fn atomicPayloadTypeSupported(ty: mir.ValueType) bool {

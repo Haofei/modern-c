@@ -250,6 +250,31 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 }
             }
         },
+        .mmio_read => |operation| {
+            try verifyLocal(body, operation.base);
+            try verifyType(function, operation.storage_type_id, operation.storage_ty, body.complete);
+            if (body.complete and (!operation.ordering.validForRead() or
+                !mmioBaseSupported(body, operation.base) or
+                !mmioStorageSupported(operation.storage_ty) or
+                !sameValueType(value.result_ty, operation.storage_ty) or
+                !value.type_id.eql(operation.storage_type_id) or
+                ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
+                return error.InvalidMmioAccess;
+        },
+        .mmio_write => |operation| {
+            try verifyLocal(body, operation.base);
+            try verifyOperand(body, value, operation.value);
+            try verifyType(function, operation.storage_type_id, operation.storage_ty, body.complete);
+            const operand = expression(body, operation.value) orelse return error.InvalidExpressionReference;
+            if (body.complete and (!operation.ordering.validForWrite() or
+                !mmioBaseSupported(body, operation.base) or
+                !mmioStorageSupported(operation.storage_ty) or
+                value.result_ty != .void or
+                !sameValueType(operand.result_ty, operation.storage_ty) or
+                !operand.type_id.eql(operation.storage_type_id) or
+                ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
+                return error.InvalidMmioAccess;
+        },
         .literal => |literal| switch (literal) {
             .float => |float| if (!mir.executableFloatMatchesType(float, value.result_ty)) return error.InvalidLiteral,
             .signed_integer => switch (value.result_ty) {
@@ -1333,6 +1358,25 @@ fn atomicPayloadSupported(ty: mir.ValueType) bool {
         .integer => mir.ExecutableMemoryAccess.scalarAlignment(ty) != null,
         else => false,
     };
+}
+
+fn mmioStorageSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .integer => |name| std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+            std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64"),
+        else => false,
+    };
+}
+
+fn mmioBaseSupported(body: *const mir.ExecutableBody, local_id: mir.LocalId) bool {
+    for (body.parameters) |parameter| {
+        if (!parameter.local.eql(local_id)) continue;
+        return switch (parameter.ty) {
+            .address => |class| class == .mmio_ptr and parameter.type_id.isValid(),
+            else => false,
+        };
+    }
+    return false;
 }
 
 fn verifyExpr(body: *const mir.ExecutableBody, id: mir.ExprId) !void {

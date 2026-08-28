@@ -202,6 +202,32 @@ test "LLVM atomic updates use canonical executable MIR" {
     try expectContains(body, "i32 1 acq_rel");
 }
 
+test "LLVM MMIO scalar accesses use canonical executable MIR" {
+    const source =
+        \\extern mmio struct Device {
+        \\    status: Reg<u32, .read> @offset(8),
+        \\    command: Reg<u32, .write> @offset(16),
+        \\}
+        \\extern fn next_value() -> u32;
+        \\fn read_relaxed(device: MmioPtr<Device>) -> u32 { return device.status.read(.relaxed); }
+        \\fn read_after_call(device: MmioPtr<Device>) -> u32 { return next_value() + device.status.read(.acquire); }
+        \\fn write_release(device: MmioPtr<Device>) -> void { device.command.write(next_value(), .release); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_mmio_scalar.mc", source, &output);
+
+    const read = try llvmFunctionBody(output.items, "@read_relaxed");
+    try expectContains(read, "; canonical executable MIR");
+    try expectContains(read, "getelementptr i8, ptr %mc_arg_0, i64 8");
+    try expectContains(read, "load volatile i32");
+    try expectNotContains(read, "fence acquire");
+    const ordered_read = try llvmFunctionBody(output.items, "@read_after_call");
+    try expectNeedlesInOrder(ordered_read, &.{ "call i32 @next_value()", "getelementptr i8", "load volatile i32", "fence acquire", "@llvm.uadd.with.overflow.i32" });
+    const write = try llvmFunctionBody(output.items, "@write_release");
+    try expectNeedlesInOrder(write, &.{ "call i32 @next_value()", "fence release", "getelementptr i8, ptr %mc_arg_0, i64 16", "store volatile i32" });
+}
+
 test "LLVM shared structural body plans cover nested, aggregate, workflow, and hoisted-loop families" {
     const Case = struct { name: []const u8, path: []const u8, function_header: []const u8, needle: []const u8 };
     const cases = [_]Case{

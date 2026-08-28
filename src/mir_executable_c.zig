@@ -283,6 +283,20 @@ fn emitExpressionOperation(
             try emitExpression(allocator, out, body, update.value, depth + 1);
             try out.print(allocator, "), {s})", .{cAtomicOrdering(update.ordering)});
         },
+        .mmio_read => |read| {
+            const scalar = scalarMemoryInfo(read.storage_ty) orelse return error.UnsupportedType;
+            try out.print(allocator, "(({s})mc_mmio_read_{s}(", .{ scalar.c_type, scalar.helper_suffix });
+            try emitMmioPointer(allocator, out, body, read.base, read.byte_offset, read.storage_ty, false);
+            try out.appendSlice(allocator, "))");
+        },
+        .mmio_write => |write| {
+            const scalar = scalarMemoryInfo(write.storage_ty) orelse return error.UnsupportedType;
+            try out.print(allocator, "mc_mmio_write_{s}(", .{scalar.helper_suffix});
+            try emitMmioPointer(allocator, out, body, write.base, write.byte_offset, write.storage_ty, true);
+            try out.print(allocator, ", (({s})", .{scalar.c_type});
+            try emitExpression(allocator, out, body, write.value, depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
         .literal => |literal| try emitLiteral(allocator, out, literal),
         .unary => |unary| {
             if (unary.op == .neg and integerSuffix(expression.result_ty) != null) {
@@ -544,6 +558,8 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .atomic_init => |operand| atomicInitSupported(body, expression, operand),
         .atomic_update => |update| atomicUpdateSupported(body, expression, update),
+        .mmio_read => |read| mmioReadSupported(body, expression, read),
+        .mmio_write => |write| mmioWriteSupported(body, expression, write),
         .literal => |literal| switch (literal) {
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             // Raw source string spelling is not a canonical byte payload and
@@ -980,6 +996,39 @@ fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
         ownedTrapEdgeCount(body, expression.id) == 0;
 }
 
+fn mmioReadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, read: anytype) bool {
+    return read.ordering.validForRead() and mmioBaseSupported(body, read.base) and
+        mmioStorageSupported(read.storage_ty) and sameValueType(expression.result_ty, read.storage_ty) and
+        expression.type_id.eql(read.storage_type_id) and ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn mmioWriteSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, write: anytype) bool {
+    const operand = expressionById(body, write.value) orelse return false;
+    return write.ordering.validForWrite() and mmioBaseSupported(body, write.base) and
+        mmioStorageSupported(write.storage_ty) and expression.result_ty == .void and
+        sameValueType(operand.result_ty, write.storage_ty) and operand.type_id.eql(write.storage_type_id) and
+        ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn mmioBaseSupported(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
+    for (body.parameters) |parameter| {
+        if (!parameter.local.eql(id)) continue;
+        return switch (parameter.ty) {
+            .address => |class| class == .mmio_ptr,
+            else => false,
+        };
+    }
+    return false;
+}
+
+fn mmioStorageSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .integer => |name| std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+            std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64"),
+        else => false,
+    };
+}
+
 fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid() or
         scalarMemoryInfo(place.ty) == null) return false;
@@ -1040,6 +1089,25 @@ fn cAtomicOrdering(ordering: mir.ExecutableAtomicOrdering) []const u8 {
         .release => "__ATOMIC_RELEASE",
         .acq_rel => "__ATOMIC_ACQ_REL",
     };
+}
+
+fn emitMmioPointer(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    base: mir.LocalId,
+    byte_offset: u64,
+    storage_ty: mir.ValueType,
+    mutable: bool,
+) (RenderError || std.mem.Allocator.Error)!void {
+    const scalar = scalarMemoryInfo(storage_ty) orelse return error.UnsupportedType;
+    try out.print(allocator, "(({s} volatile{s} *)((uintptr_t)", .{
+        scalar.c_type,
+        if (mutable) "" else " const",
+    });
+    try appendLocal(allocator, out, body, base);
+    if (byte_offset != 0) try out.print(allocator, " + UINT64_C({d})", .{byte_offset});
+    try out.appendSlice(allocator, "))");
 }
 
 fn addressOfSupported(
@@ -1526,6 +1594,14 @@ fn prepareStatementExpressions(
             try writeSourceLineDirective(allocator, out, source_path, guard.source);
             try emitRepresentationGuard(allocator, out, body, guard, indent);
         }
+        switch (expression.operation) {
+            .mmio_write => |write| if (write.ordering == .release) {
+                try writeSourceLineDirective(allocator, out, source_path, expression.source);
+                try writeIndent(allocator, out, indent);
+                try out.appendSlice(allocator, "mc_barrier_release_before();\n");
+            },
+            else => {},
+        }
         try writeSourceLineDirective(allocator, out, source_path, expression.source);
         try writeIndent(allocator, out, indent);
         if (expressionNeedsTemporary(expression)) {
@@ -1537,6 +1613,13 @@ fn prepareStatementExpressions(
         }
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
+        switch (expression.operation) {
+            .mmio_read => |read| if (read.ordering == .acquire) {
+                try writeIndent(allocator, out, indent);
+                try out.appendSlice(allocator, "mc_barrier_acquire_after();\n");
+            },
+            else => {},
+        }
         if (resultRepresentationGuard(expression)) |guard| {
             try writeSourceLineDirective(allocator, out, source_path, guard.source);
             try writeIndent(allocator, out, indent);

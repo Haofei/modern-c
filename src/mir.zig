@@ -744,6 +744,7 @@ pub const ExecutableParameter = mir_model.ExecutableParameter;
 pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
 pub const ExecutableExpression = mir_model.ExecutableExpression;
 pub const ExecutableAtomicOrdering = mir_model.ExecutableAtomicOrdering;
+pub const ExecutableMmioOrdering = mir_model.ExecutableMmioOrdering;
 pub const ExecutablePlaceStorage = mir_model.ExecutablePlaceStorage;
 pub const ExecutableTrapOwner = mir_model.ExecutableTrapOwner;
 pub const ExecutableTrapEdge = mir_model.ExecutableTrapEdge;
@@ -922,7 +923,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         switch (decl.kind) {
             .enum_decl => |enum_decl| try enums.put(enum_decl.name.text, .{ .is_open = enum_decl.is_open, .cases = enum_decl.cases, .repr = enum_decl.repr }),
             .struct_decl => |struct_decl| {
-                try structs.put(struct_decl.name.text, .{ .fields = struct_decl.fields, .is_c_union = struct_decl.is_c_union });
+                try structs.put(struct_decl.name.text, .{
+                    .fields = struct_decl.fields,
+                    .is_c_union = struct_decl.is_c_union,
+                    .is_mmio = if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false,
+                });
                 try ast_structs.put(struct_decl.name.text, struct_decl);
             },
             .union_decl => |union_decl| try unions.put(union_decl.name.text, .{ .cases = union_decl.cases }),
@@ -8079,6 +8084,57 @@ const FunctionBuilder = struct {
                     result_ty = .{ .integer = "usize" };
                     break :call .{ .literal = .{ .integer = value } };
                 }
+                if (self.mmioCallTarget(node)) |target| {
+                    const register_call = memberExpr(node.callee.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const register_member = memberExpr(register_call.base.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const base_name = calleeIdentName(register_member.base.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const base_local = self.executable_local_ids.get(base_name) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (!self.executableLocalIsParameter(base_local))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const struct_name = switch (target.struct_ty) {
+                        .struct_ => |name| name,
+                        else => break :call self.unsupportedExecutableExpression(.unsupported_call),
+                    };
+                    const byte_offset = self.executableMmioFieldOffset(struct_name, register_member.name.text) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    // This first canonical slice covers Reg<T>. RegBits has a
+                    // distinct nominal result representation and remains closed
+                    // until that representation is a typed executable fact.
+                    if (!sameValueType(target.storage_ty, target.value_ty) or
+                        !executableMmioStorageSupported(target.storage_ty))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const storage_type_id = try self.internTypeId(target.storage_ty);
+                    const ordering_index: usize = if (target.kind == .mmio_read) 0 else 1;
+                    const ordering = executableMmioOrdering(node.args[ordering_index]) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (target.kind == .mmio_read) {
+                        if (!ordering.validForRead())
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        result_ty = target.storage_ty;
+                        break :call .{ .mmio_read = .{
+                            .base = base_local,
+                            .byte_offset = byte_offset,
+                            .storage_ty = target.storage_ty,
+                            .storage_type_id = storage_type_id,
+                            .ordering = ordering,
+                        } };
+                    }
+                    if (!ordering.validForWrite())
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    result_ty = .void;
+                    break :call .{ .mmio_write = .{
+                        .base = base_local,
+                        .byte_offset = byte_offset,
+                        .storage_ty = target.storage_ty,
+                        .storage_type_id = storage_type_id,
+                        .value = try self.ensureExecutableCoercedExpr(node.args[0], target.storage_ty),
+                        .ordering = ordering,
+                    } };
+                }
                 if (self.atomicInitCallTargetForExpected(node, expected_type_expr)) |target| {
                     if (!executableAtomicPayloadSupported(target.payload_ty))
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
@@ -8122,8 +8178,7 @@ const FunctionBuilder = struct {
                         const ordering = executableAtomicOrdering(node.args[1]) orelse
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
                         const update_kind: mir_model.ExecutableAtomicUpdateKind = switch (atomic_kind) {
-                            .atomic_store => if (ordering.validForStore()) .store else
-                                break :call self.unsupportedExecutableExpression(.unsupported_call),
+                            .atomic_store => if (ordering.validForStore()) .store else break :call self.unsupportedExecutableExpression(.unsupported_call),
                             .atomic_fetch_add => if (ordering.validForRmw()) .fetch_add else unreachable,
                             .atomic_fetch_sub => if (ordering.validForRmw()) .fetch_sub else unreachable,
                             else => unreachable,
@@ -9060,6 +9115,35 @@ const FunctionBuilder = struct {
             place.root_type_id = payload_type_id;
         }
         return place_id;
+    }
+
+    fn executableLocalIsParameter(self: *const FunctionBuilder, local: LocalId) bool {
+        for (self.executable_parameters.items) |parameter| {
+            if (parameter.local.eql(local)) return true;
+        }
+        return false;
+    }
+
+    fn executableMmioFieldOffset(self: *const FunctionBuilder, struct_name: []const u8, field_name: []const u8) ?u64 {
+        const summary = self.structs.get(struct_name) orelse return null;
+        if (!summary.is_mmio or summary.is_c_union) return null;
+        var running: i128 = 0;
+        for (summary.fields) |field| {
+            const storage_expr = mmioRegisterStorageTypeExprAlias(field.ty, self.aliases) orelse return null;
+            const storage_ty = valueTypeFromTypeAlias(storage_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+            const size = mir_model.ExecutableMemoryAccess.scalarAlignment(storage_ty) orelse return null;
+            if (!executableMmioStorageSupported(storage_ty)) return null;
+            if (field.offset) |explicit| {
+                const explicit_offset: i128 = @intCast(explicit);
+                if (explicit_offset < running) return null;
+                running = explicit_offset;
+            } else {
+                running = numeric.alignForward(running, @as(i128, size)) orelse return null;
+            }
+            if (std.mem.eql(u8, field.name.text, field_name)) return std.math.cast(u64, running);
+            running = std.math.add(i128, running, @as(i128, size)) catch return null;
+        }
+        return null;
     }
 
     fn executableRawManyOffsetDerefOperand(self: *FunctionBuilder, input: ast.Expr) ?ast.Expr {
@@ -10698,8 +10782,12 @@ const FunctionBuilder = struct {
         _ = self.break_targets.pop();
         _ = self.continue_targets.pop();
         if (!terminated) {
-            try self.addSuccessor(self.current, body_id);
-            self.setTerminator(.{ .jump = body_id });
+            // Re-enter through the loop header so the condition (and any
+            // observable reads used to compute it) is evaluated on every
+            // iteration. Jumping directly to body_id would turn `while` into
+            // a one-shot condition followed by an infinite body loop.
+            try self.addSuccessor(self.current, header_id);
+            self.setTerminator(.{ .jump = header_id });
         }
         self.current = after_id;
         return false;
@@ -16753,6 +16841,22 @@ fn executableAtomicOrdering(expr: ast.Expr) ?mir_model.ExecutableAtomicOrdering 
     if (std.mem.eql(u8, spelling, "acq_rel")) return .acq_rel;
     if (std.mem.eql(u8, spelling, "seq_cst")) return .seq_cst;
     return null;
+}
+
+fn executableMmioOrdering(expr: ast.Expr) ?mir_model.ExecutableMmioOrdering {
+    const spelling = enumLiteralText(expr) orelse return null;
+    if (std.mem.eql(u8, spelling, "relaxed")) return .relaxed;
+    if (std.mem.eql(u8, spelling, "acquire")) return .acquire;
+    if (std.mem.eql(u8, spelling, "release")) return .release;
+    return null;
+}
+
+fn executableMmioStorageSupported(ty: ValueType) bool {
+    return switch (ty) {
+        .integer => |name| std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+            std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64"),
+        else => false,
+    };
 }
 
 fn executableAtomicPayloadSupported(ty: ValueType) bool {

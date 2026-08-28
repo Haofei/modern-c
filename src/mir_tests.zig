@@ -245,6 +245,61 @@ test "executable MIR owns atomic initialization and updates" {
     try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(function));
 }
 
+test "executable MIR owns scalar MMIO access facts and rejects semantic drift" {
+    const source =
+        \\extern mmio struct Device {
+        \\    status: Reg<u32, .read> @offset(8),
+        \\    command: Reg<u32, .write> @offset(16),
+        \\}
+        \\fn read(device: MmioPtr<Device>, other: u32) -> u32 {
+        \\    return device.status.read(.acquire) + other;
+        \\}
+        \\fn write(device: MmioPtr<Device>, value: u32) -> void {
+        \\    device.command.write(value, .release);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_mmio_scalar.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const read = functionByNameMut(&module_mir, "read") orelse return error.TestUnexpectedResult;
+    const write = functionByNameMut(&module_mir, "write") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(read.executable_body.complete);
+    try std.testing.expect(write.executable_body.complete);
+    try mir_executable_body.verify(read);
+    try mir_executable_body.verify(write);
+
+    var read_index: ?usize = null;
+    for (read.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .mmio_read => |access| {
+            try std.testing.expectEqual(@as(u64, 8), access.byte_offset);
+            try std.testing.expectEqual(mir.ExecutableMmioOrdering.acquire, access.ordering);
+            read_index = index;
+        },
+        else => {},
+    };
+    const read_expression = &read.executable_body.expressions[read_index orelse return error.TestUnexpectedResult];
+    read_expression.operation.mmio_read.ordering = .release;
+    try std.testing.expectError(error.InvalidMmioAccess, mir_executable_body.verify(read));
+    read_expression.operation.mmio_read.ordering = .acquire;
+    read_expression.operation.mmio_read.base = read.executable_body.parameters[1].local;
+    try std.testing.expectError(error.InvalidMmioAccess, mir_executable_body.verify(read));
+
+    var write_index: ?usize = null;
+    for (write.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .mmio_write => |access| {
+            try std.testing.expectEqual(@as(u64, 16), access.byte_offset);
+            try std.testing.expectEqual(mir.ExecutableMmioOrdering.release, access.ordering);
+            write_index = index;
+        },
+        else => {},
+    };
+    const write_expression = &write.executable_body.expressions[write_index orelse return error.TestUnexpectedResult];
+    write_expression.operation.mmio_write.ordering = .acquire;
+    try std.testing.expectError(error.InvalidMmioAccess, mir_executable_body.verify(write));
+}
+
 test "executable MIR owns assertion trap edges and rejects semantic drift" {
     const source =
         \\fn require_flag(flag: bool) -> void {

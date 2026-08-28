@@ -9,9 +9,9 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
-  checkpoint, not the deletion boundary: the current 564-root broad census
-  finds **629/1773 C** and **689/1846 LLVM** distinct functions using the AST
-  body (C admits 64.5%, LLVM 62.7%). Report mode intentionally preserves
+  checkpoint, not the deletion boundary: the current 522-root broad census
+  finds **647/1785 C** and **708/1858 LLVM** distinct functions using the AST
+  body (C admits 63.8%, LLVM 61.9%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -29,6 +29,17 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+The latest slice moves plain scalar MMIO register reads/writes into executable
+MIR. The verified operation owns the MMIO parameter, aligned byte offset,
+storage identity, ordering and evaluated value. Both renderers are mechanical;
+`RegBits`, mapped/computed receivers and unsupported storage stay closed. A
+focused census admits 11/17 functions canonically in both backends, with the
+remaining six belonging to those deliberately excluded shapes. The slice also
+fixed the canonical loop back-edge to re-enter the condition header; previously
+an effectful `while` condition could be evaluated once and then skipped on later
+iterations. Verifier mutation tests cover illegal MMIO orderings and forged
+bases, and the no-fallback ratchet now has 143 C / 142 LLVM focused tests.
 
 The latest batch migrated another 10 C and 13 LLVM broad functions away from
 `simple_return`. A trial physical deletion exposed 50 no-fallback shard tests
@@ -75,13 +86,12 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-707 to an incomplete MIR producer and 50 to renderer support; LLVM attributes
-747/76 respectively. There are no bodies marked canonical-ready that still
-fall through to AST codegen. The producer bucket is now
+632 to an incomplete MIR producer and 15 to renderer support; LLVM attributes
+669/30 respectively, plus nine ready ingress mismatches. No C body marked
+canonical-ready falls through to AST codegen. The producer bucket is now
 classified by its first stable canonical-model gap. The largest C reasons are
-producer invariants (141), trap projection (116), non-canonical literals (102),
-unsupported members (50), and unresolved indexing (46); LLVM records
-141/129/105/50/60 respectively. Direct pointer-member scalar access is
+trap projection (139), producer invariants (92), unsupported members (85), and
+unresolved indexing (46); LLVM records 155/92/85/61 respectively. Direct pointer-member scalar access is
 canonical in the targeted census; the remaining `unlowered_member` reason count
 is 15 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and

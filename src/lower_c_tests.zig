@@ -255,6 +255,32 @@ test "lower-c atomic updates use canonical executable MIR" {
     try expectContains(body, "__ATOMIC_ACQ_REL)");
 }
 
+test "lower-c MMIO scalar accesses use canonical executable MIR" {
+    const source =
+        \\extern mmio struct Device {
+        \\    status: Reg<u32, .read> @offset(8),
+        \\    command: Reg<u32, .write> @offset(16),
+        \\}
+        \\extern fn next_value() -> u32;
+        \\fn read_relaxed(device: MmioPtr<Device>) -> u32 { return device.status.read(.relaxed); }
+        \\fn read_after_call(device: MmioPtr<Device>) -> u32 { return next_value() + device.status.read(.acquire); }
+        \\fn write_release(device: MmioPtr<Device>) -> void { device.command.write(next_value(), .release); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_mmio_scalar.mc", source, &output);
+
+    const read = try cFunctionBody(output.items, "read_relaxed(");
+    try expectContains(read, "/* canonical executable MIR */");
+    try expectContains(read, "mc_mmio_read_u32(((uint32_t volatile const *)((uintptr_t)device + UINT64_C(8))))");
+    try expectNotContains(read, "mc_barrier_acquire_after");
+    const ordered_read = try cFunctionBody(output.items, "read_after_call(");
+    try expectNeedlesInOrder(ordered_read, &.{ "next_value();", "mc_mmio_read_u32", "mc_barrier_acquire_after();", "mc_checked_add_u32" });
+    const write = try cFunctionBody(output.items, "write_release(");
+    try expectNeedlesInOrder(write, &.{ "next_value();", "mc_barrier_release_before();", "mc_mmio_write_u32" });
+    try expectContains(write, "+ UINT64_C(16)");
+}
+
 test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     const source =
         \\fn grouped_i128_minimum() -> i128 {
@@ -13194,12 +13220,16 @@ test "lower-c emits simple MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t volatile thr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t volatile lsr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void putc(Uart16550 volatile * uart, uint8_t ch)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = ch;\n    mc_barrier_release_before();\n    mc_mmio_write_u8(&uart->thr, mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
+    const putc_body = try cFunctionBody(output.items, "putc(");
+    try expectContains(putc_body, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(putc_body, &.{ "= ch;", "mc_barrier_release_before();", "mc_mmio_write_u8" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, putc_body, "mc_mmio_write_u8"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_lsr(Uart16550 volatile * uart)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp1 = (uint8_t)mc_mmio_read_u8(&uart->lsr);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp1;") != null);
+    const read_body = try cFunctionBody(output.items, "read_lsr(");
+    try expectContains(read_body, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(read_body, &.{ "mc_mmio_read_u8", "mc_barrier_acquire_after();", "return mc_exec_tmp_" });
+    try expectContains(read_body, "+ UINT64_C(1)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, read_body, "mc_mmio_read_u8"));
 }
 
 test "lower-c emits wider MMIO register access" {
@@ -13245,11 +13275,20 @@ test "lower-c emits wider MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t volatile lo;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t volatile hi;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t volatile wide;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (uint16_t)mc_mmio_read_u16(&dev->lo);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = value;\n    mc_barrier_release_before();\n    mc_mmio_write_u32(&dev->hi, mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp1 = (uint64_t)mc_mmio_read_u64(&dev->wide);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp2 = value;\n    mc_mmio_write_u64(&dev->wide, mc_tmp2);") != null);
+    const read_lo = try cFunctionBody(output.items, "read_lo(");
+    try expectContains(read_lo, "/* canonical executable MIR */");
+    try expectContains(read_lo, "mc_mmio_read_u16");
+    try expectNotContains(read_lo, "mc_barrier_acquire_after");
+    const write_hi = try cFunctionBody(output.items, "write_hi(");
+    try expectNeedlesInOrder(write_hi, &.{ "= value;", "mc_barrier_release_before();", "mc_mmio_write_u32" });
+    try expectContains(write_hi, "+ UINT64_C(4)");
+    const read_wide = try cFunctionBody(output.items, "read_wide(");
+    try expectNeedlesInOrder(read_wide, &.{ "mc_mmio_read_u64", "mc_barrier_acquire_after();", "return mc_exec_tmp_" });
+    try expectContains(read_wide, "+ UINT64_C(8)");
+    const write_wide = try cFunctionBody(output.items, "write_wide(");
+    try expectNeedlesInOrder(write_wide, &.{ "= value;", "mc_mmio_write_u64" });
+    try expectContains(write_wide, "+ UINT64_C(8)");
+    try expectNotContains(write_wide, "mc_barrier_release_before");
 }
 
 test "lower-c sequences MMIO write value before release barrier" {
@@ -13281,8 +13320,12 @@ test "lower-c sequences MMIO write value before release barrier" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = next_byte();\n    uint8_t mc_tmp1 = box_byte(mc_tmp0);\n    mc_barrier_release_before();\n    mc_mmio_write_u8(&uart->thr, mc_tmp1);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();\n    mc_mmio_write_u8(&uart->thr, box_byte(next_byte()))") == null);
+    const body = try cFunctionBody(output.items, "putc_computed(");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(body, &.{ "next_byte();", "box_byte(", "mc_barrier_release_before();", "mc_mmio_write_u8" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "next_byte()"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "box_byte("));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "mc_mmio_write_u8"));
 }
 
 test "lower-c sequences raw store address and value operands" {
@@ -13369,8 +13412,10 @@ test "lower-c emits MMIO read local initializers" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t value = (uint16_t)mc_mmio_read_u16(&dev->stat);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    const read_local = try cFunctionBody(output.items, "read_local(");
+    try expectContains(read_local, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(read_local, &.{ "mc_mmio_read_u16", "mc_barrier_acquire_after();", "uint16_t value =", "return mc_exec_tmp_" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, read_local, "mc_mmio_read_u16"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Status status = (Status)mc_mmio_read_u8(&dev->flags);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Status status = (Status)mc_mmio_read_u8(&dev->flags);\n    mc_barrier_acquire_after();\n    return ((status & UINT8_C(1)) != 0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp0 = (Status)mc_mmio_read_u8(&dev->flags);\n    mc_barrier_acquire_after();\n    status = mc_tmp0;\n    return status;") != null);
@@ -19181,10 +19226,13 @@ test "lower-c hoists MMIO reads in while conditions" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(!(((mc_tmp0 & UINT8_C(1)) != 0)))) break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "pause();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t mc_tmp1 = value;\n    mc_barrier_release_before();\n    mc_mmio_write_u16(&dev->ctrl, mc_tmp1);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t mc_tmp2 = (uint16_t)mc_mmio_read_u16(&dev->raw);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!((mc_tmp2 == 0))) break;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp3 = (Status)mc_mmio_read_u8(&dev->stat);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((mc_tmp3 & UINT8_C(1)) != 0))) mc_trap_Assert();") != null);
+    const wait_raw = try cFunctionBody(output.items, "wait_raw(");
+    try expectContains(wait_raw, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(wait_raw, &.{ "mc_mmio_read_u16", "==", "pause();", "goto mc_bb_0;" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, wait_raw, "mc_mmio_read_u16"));
+    const require_ready = try cFunctionBody(output.items, "require_ready(");
+    try expectNeedlesInOrder(require_ready, &.{ "mc_mmio_read_u8", "mc_barrier_acquire_after();", "mc_trap_Assert();" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, require_ready, "mc_mmio_read_u8"));
 }
 
 test "lower-c hoists MMIO reads in return and expression statements" {
@@ -19219,10 +19267,13 @@ test "lower-c hoists MMIO reads in return and expression statements" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8(&dev->stat);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "observe(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();\n    (void)mc_tmp") != null);
+    const read_plus = try cFunctionBody(output.items, "read_plus(");
+    try expectContains(read_plus, "/* canonical executable MIR */");
+    try expectNeedlesInOrder(read_plus, &.{ "mc_mmio_read_u32", "mc_checked_add_u32(", "return mc_exec_tmp_" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, read_plus, "mc_mmio_read_u32"));
+    const side_effect = try cFunctionBody(output.items, "read_side_effect(");
+    try expectNeedlesInOrder(side_effect, &.{ "mc_mmio_read_u32", "mc_barrier_acquire_after();", "return;" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, side_effect, "mc_mmio_read_u32"));
 }
 
 test "lower-c hoists MMIO reads in local initializer and assignment expressions" {
@@ -19252,11 +19303,14 @@ test "lower-c hoists MMIO reads in local initializer and assignment expressions"
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_mmio_read_nested_init_assignment.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    const local_nested = try cFunctionBody(output.items, "local_nested(");
+    try expectNeedlesInOrder(local_nested, &.{ "mc_mmio_read_u32", "mc_checked_add_u32(", "uint32_t x =", "return mc_exec_tmp_" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, local_nested, "mc_mmio_read_u32"));
+    const assign_nested = try cFunctionBody(output.items, "assign_nested(");
+    try expectNeedlesInOrder(assign_nested, &.{ "mc_mmio_read_u32", "mc_barrier_acquire_after();", "mc_checked_add_u32(", "x =", "return mc_exec_tmp_" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, assign_nested, "mc_mmio_read_u32"));
+    const local_untyped = try cFunctionBody(output.items, "local_untyped_nested(");
+    try expectNeedlesInOrder(local_untyped, &.{ "mc_mmio_read_u32", "mc_checked_add_u32(", "uint32_t x =", "return mc_exec_tmp_" });
 }
 
 test "lower-c hoists MMIO reads in switch subjects" {
@@ -19284,8 +19338,13 @@ test "lower-c hoists MMIO reads in switch subjects" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_mmio_read_switch_subject.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    switch (mc_tmp0) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    mc_barrier_acquire_after();\n    switch (mc_tmp1) {") != null);
+    const relaxed = try cFunctionBody(output.items, "switch_relaxed(");
+    try expectNeedlesInOrder(relaxed, &.{ "mc_mmio_read_u32", "switch (mc_exec_tmp_" });
+    try expectNotContains(relaxed, "mc_barrier_acquire_after");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, relaxed, "mc_mmio_read_u32"));
+    const acquire = try cFunctionBody(output.items, "switch_acquire(");
+    try expectNeedlesInOrder(acquire, &.{ "mc_mmio_read_u32", "mc_barrier_acquire_after();", "switch (mc_exec_tmp_" });
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, acquire, "mc_mmio_read_u32"));
 }
 
 test "lower-c hoists MMIO reads in switch arm expressions" {
@@ -19306,8 +19365,10 @@ test "lower-c hoists MMIO reads in switch arm expressions" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_mmio_read_switch_arm_expr.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n            mc_barrier_acquire_after();\n            (void)mc_tmp0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n            (void)mc_tmp1;") != null);
+    const body = try cFunctionBody(output.items, "switch_arm_expr(");
+    try expectNeedlesInOrder(body, &.{ "case 0:", "default:", "mc_bb_2:", "mc_mmio_read_u32", "mc_barrier_acquire_after();", "mc_bb_3:", "mc_mmio_read_u32" });
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "mc_mmio_read_u32"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "mc_barrier_acquire_after();"));
 }
 
 test "lower-c emits array and slice for loops" {
