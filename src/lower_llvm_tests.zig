@@ -27,6 +27,33 @@ test "LLVM canonical executable MIR preserves function render attributes" {
     try expectContains(noinline_body, "; canonical executable MIR");
 }
 
+test "LLVM lexical unsafe and contract call bodies use canonical executable MIR" {
+    const source =
+        \\extern fn consume(value: u32) -> void;
+        \\fn unsafe_call(value: u32) -> void {
+        \\    unsafe { consume(value); }
+        \\}
+        \\fn contract_call(value: u32) -> void {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        consume(value);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_lexical_contract_calls.mc", source, &output);
+
+    const unsafe_body = try llvmFunctionBody(output.items, "define internal void @unsafe_call");
+    try expectContains(unsafe_body, "; canonical executable MIR");
+    try expectContains(unsafe_body, "call void @consume(i32 %mc_arg_0)");
+
+    const contract_body = try llvmFunctionBody(output.items, "define internal void @contract_call");
+    try expectContains(contract_body, "; canonical executable MIR");
+    try expectContains(contract_body, "; MC_CONTRACT_BEGIN no_overflow");
+    try expectContains(contract_body, "call void @consume(i32 %mc_arg_0)");
+    try expectContains(contract_body, "; MC_CONTRACT_END no_overflow");
+}
+
 test "LLVM valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {

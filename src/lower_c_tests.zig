@@ -84,6 +84,33 @@ test "lower-c canonical executable MIR preserves function render attributes" {
     try expectContains(noinline_body, "/* canonical executable MIR */");
 }
 
+test "lower-c lexical unsafe and contract call bodies use canonical executable MIR" {
+    const source =
+        \\extern fn consume(value: u32) -> void;
+        \\fn unsafe_call(value: u32) -> void {
+        \\    unsafe { consume(value); }
+        \\}
+        \\fn contract_call(value: u32) -> void {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        consume(value);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_lexical_contract_calls.mc", source, &output);
+
+    const unsafe_body = try cFunctionBody(output.items, "static void unsafe_call");
+    try expectContains(unsafe_body, "/* canonical executable MIR */");
+    try expectContains(unsafe_body, "consume(mc_exec_tmp_0);");
+
+    const contract_body = try cFunctionBody(output.items, "static void contract_call");
+    try expectContains(contract_body, "/* canonical executable MIR */");
+    try expectContains(contract_body, "/* MC_CONTRACT_BEGIN no_overflow */");
+    try expectContains(contract_body, "consume(mc_exec_tmp_0);");
+    try expectContains(contract_body, "/* MC_CONTRACT_END no_overflow */");
+}
+
 test "lower-c valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {
@@ -21131,10 +21158,10 @@ test "lower-c emits unsafe blocks as scoped blocks" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_unsafe_block.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unsafe_block(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
+    const body = try cFunctionBody(output.items, "MC_UNUSED static uint32_t accept_unsafe_block(void)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "mc_checked_add_u32(");
+    try expectContains(body, "return mc_exec_tmp_");
 }
 
 test "lower-c emits opaque volatile asm" {
@@ -21641,8 +21668,11 @@ test "lower-c emits unsafe contract blocks as scoped blocks" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("emit_c_contract_block.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_plain_contract_scope(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    /* MC_CONTRACT_BEGIN no_overflow */\n    {") != null);
+    const plain_scope = try cFunctionBody(output.items, "MC_UNUSED static uint32_t accept_plain_contract_scope(void)");
+    try expectContains(plain_scope, "/* canonical executable MIR */");
+    const contract_begin = std.mem.indexOf(u8, plain_scope, "/* MC_CONTRACT_BEGIN no_overflow */") orelse return error.TestUnexpectedResult;
+    const contract_end = std.mem.indexOf(u8, plain_scope, "/* MC_CONTRACT_END no_overflow */") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(contract_begin < contract_end);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);

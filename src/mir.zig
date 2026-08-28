@@ -8998,23 +8998,13 @@ const FunctionBuilder = struct {
     }
 
     fn buildUnsafeBlock(self: *FunctionBuilder, block: ast.Block) anyerror!bool {
-        const expression_start = self.executable_expressions.items.len;
         const old_unsafe = self.active_unsafe;
         self.active_unsafe = true;
         defer self.active_unsafe = old_unsafe;
-        const terminated = try self.buildBlock(block);
-        var owns_typed_authority = false;
-        for (self.executable_expressions.items[expression_start..]) |expression| switch (expression.operation) {
-            .builtin_call => |call| if (call.unsafe_authorized) {
-                owns_typed_authority = true;
-                break;
-            },
-            else => {},
-        };
-        // Preserve an ordinary lexical unsafe block until ExecutableBody owns
-        // the scope marker as well as the operations authorized by it.
-        if (!owns_typed_authority) self.executable_supported = false;
-        return terminated;
+        // Unsafe authority is carried by each operation that requires it.
+        // A block containing only ordinary operations is therefore a lexical
+        // wrapper, not a second executable semantics path.
+        return self.buildBlock(block);
     }
 
     fn buildStmt(self: *FunctionBuilder, stmt: ast.Stmt) anyerror!bool {
@@ -9345,13 +9335,10 @@ const FunctionBuilder = struct {
     }
 
     fn buildContractBlock(self: *FunctionBuilder, contract: ast.ContractBlock, stmt_span: ast.Span) !bool {
-        // Contract begin/end are observable audit markers in generated C.
-        // Keep this body on the legacy renderer until ExecutableBody carries
-        // those markers explicitly rather than silently dropping them.
-        self.executable_supported = false;
         const id = self.next_contract_region_id;
         self.next_contract_region_id += 1;
         const name = contractName(contract.attr);
+        try self.appendExecutableStatement(self.sourcePoint(contract.attr.span), .{ .contract_marker = .{ .kind = .begin, .name = name } });
         try self.contract_regions.append(self.allocator, .{
             .id = id,
             .kind = name,
@@ -9368,7 +9355,15 @@ const FunctionBuilder = struct {
         self.active_contract = old_contract;
         self.active_contract_region_id = old_region_id;
 
-        if (!terminated) try self.addInstr(.contract_end, name, .contract, stmt_span);
+        if (!terminated) {
+            try self.appendExecutableStatement(self.sourcePoint(stmt_span), .{ .contract_marker = .{ .kind = .end, .name = name } });
+            try self.addInstr(.contract_end, name, .contract, stmt_span);
+        } else {
+            // A marker after a terminating statement is not executable. Keep
+            // that shape on the verified legacy path until markers are owned
+            // by CFG edges rather than the statement stream.
+            self.executable_supported = false;
+        }
         return terminated;
     }
 

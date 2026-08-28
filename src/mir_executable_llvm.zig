@@ -210,6 +210,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .return_ => |value| if (value) |result| {
                 if (!expressionValid(body, result)) return false;
             },
+            .contract_marker => |marker| if (marker.name.len == 0) return false,
             .control_transfer => {},
             .defer_cleanup, .unsupported => return false,
         }
@@ -397,6 +398,10 @@ const Renderer = struct {
                         .{ condition.spelling, continuation, edge.trap_block.raw, continuation },
                     );
                 }
+            },
+            .contract_marker => |marker| switch (marker.kind) {
+                .begin => try self.output.print(self.allocator, "  ; MC_CONTRACT_BEGIN {s}\n", .{marker.name}),
+                .end => try self.output.print(self.allocator, "  ; MC_CONTRACT_END {s}\n", .{marker.name}),
             },
             .return_ => |value| {
                 const rendered = if (value) |result| try self.emitExpression(result) else null;

@@ -1120,6 +1120,50 @@ test "conditional arms that both return leave an unreachable continuation" {
     try std.testing.expect(selected.executable_body.terminators[1].operation == .unreachable_);
 }
 
+test "lexical unsafe blocks and contract markers are canonical executable MIR" {
+    const source =
+        \\extern fn consume(value: u32) -> void;
+        \\fn unsafe_call(value: u32) -> void { unsafe { consume(value); } }
+        \\fn contracted_call(value: u32) -> void {
+        \\    #[unsafe_contract(no_overflow)] { consume(value); }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_contract_marker.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const unsafe_call = &module.functions[1];
+    try executable.verify(unsafe_call);
+    try std.testing.expect(executable.isComplete(unsafe_call));
+
+    const contracted_call = &module.functions[2];
+    try executable.verify(contracted_call);
+    try std.testing.expect(executable.isComplete(contracted_call));
+    var marker_count: usize = 0;
+    var end_marker: ?*mir.ExecutableStatement = null;
+    for (contracted_call.executable_body.statements) |*statement| switch (statement.operation) {
+        .contract_marker => |marker| {
+            marker_count += 1;
+            if (marker.kind == .end) end_marker = statement;
+        },
+        else => {},
+    };
+    try std.testing.expectEqual(@as(usize, 2), marker_count);
+    const marker = end_marker orelse return error.TestUnexpectedResult;
+    const saved = marker.operation;
+    marker.operation.contract_marker.name = "wrong_contract";
+    try std.testing.expectError(error.InvalidContractMarker, executable.verify(contracted_call));
+    marker.operation = saved;
+    try executable.verify(contracted_call);
+}
+
 fn assertOperandsPrecede(value: mir.ExecutableExpression) !void {
     switch (value.operation) {
         .unary => |operation| try std.testing.expect(operation.operand.index() < value.id.index()),
