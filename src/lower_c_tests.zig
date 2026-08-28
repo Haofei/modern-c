@@ -21977,6 +21977,26 @@ test "C canonical executable MIR owns serial compare Result" {
     try expectContains(body, ".payload.ok = (int8_t)");
 }
 
+test "C canonical executable MIR owns bounded counter Result" {
+    const source =
+        \\type Ticks = counter<u64>;
+        \\fn bounded(now: Ticks, start: Ticks, max: Duration<u64>) -> Result<Duration<u64>, AmbiguousCounterInterval> {
+        \\    return Ticks.elapsed_bounded(now, start, max);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_counter_elapsed_bounded.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "MC_UNUSED static mc_result_mc_type_generic_8_Duration_1_3_u64_AmbiguousCounterInterval bounded(uint64_t now, uint64_t start, uint64_t max)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "((uint64_t)(mc_exec_tmp_0 - mc_exec_tmp_1)) <= mc_exec_tmp_2");
+    try expectContains(body, ".is_ok = true");
+    try expectContains(body, ".payload.ok = (uint64_t)");
+    try expectContains(body, ".is_ok = false");
+    try expectContains(body, ".payload.err = (uint8_t)0");
+}
+
 test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
     const source =
         \\struct Counter {

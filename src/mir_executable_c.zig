@@ -768,7 +768,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -781,6 +781,7 @@ fn builtinCallSupported(
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
+    if (call.kind == .counter_elapsed_bounded and !counterElapsedResultSupported(body, expression)) return false;
     return if (call.kind == .raw_ptr)
         call.representation_source != null and call.representation_span_id.isValid() and
             representationOperationHasExactTrapEdge(body, expression)
@@ -807,6 +808,17 @@ fn serialCompareResultSupported(body: *const mir.ExecutableBody, expression: mir
     return sameValueType(shape.ty, expression.result_ty) and
         std.mem.eql(u8, identity.ok, "Order") and std.mem.eql(u8, identity.err, "AmbiguousSerialOrder") and
         sameValueType(shape.ok_ty, .{ .integer = "i8" }) and sameValueType(shape.err_ty, .{ .integer = "u8" });
+}
+
+fn counterElapsedResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    const identity = switch (expression.result_ty) {
+        .result => |value| value,
+        else => return false,
+    };
+    const duration = domainInteger(shape.ok_ty, .duration) orelse return false;
+    return sameValueType(shape.ty, expression.result_ty) and durationTypeSpellingMatches(identity.ok, duration.child) and
+        std.mem.eql(u8, identity.err, "AmbiguousCounterInterval") and sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn enumRawSupported(
@@ -895,6 +907,29 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, " < 0 ? -1 : (");
             try emitSerialSignedDiff(allocator, out, body, call.arguments[0], call.arguments[1], unsigned_c, signed_c, depth + 1);
             try out.appendSlice(allocator, " > 0 ? 1 : 0)) })");
+        },
+        .counter_elapsed_bounded => {
+            const counter = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const counter_shape = domainInteger(counter.result_ty, .counter) orelse return error.UnsupportedType;
+            const shape = resultTypeForValueType(body, result_ty) orelse return error.UnsupportedType;
+            const duration = domainInteger(shape.ok_ty, .duration) orelse return error.UnsupportedType;
+            if (!std.mem.eql(u8, counter_shape.child, duration.child)) return error.UnsupportedType;
+            const unsigned_c = primitiveType(counter_shape.child) orelse return error.UnsupportedType;
+            try out.append(allocator, '(');
+            try emitSerialUnsignedDiff(allocator, out, body, call.arguments[0], call.arguments[1], unsigned_c, depth + 1);
+            try out.appendSlice(allocator, " <= ");
+            try emitExpression(allocator, out, body, call.arguments[2], depth + 1);
+            try out.appendSlice(allocator, " ? (");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = true, .payload.ok = (");
+            try appendCType(allocator, out, body, shape.ok_ty);
+            try out.appendSlice(allocator, ")");
+            try emitSerialUnsignedDiff(allocator, out, body, call.arguments[0], call.arguments[1], unsigned_c, depth + 1);
+            try out.appendSlice(allocator, " } : (");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = (");
+            try appendCType(allocator, out, body, shape.err_ty);
+            try out.appendSlice(allocator, ")0 })");
         },
         .conversion_sat_from => {
             const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
@@ -1501,7 +1536,7 @@ fn binarySupported(
                 .add, .sub, .mul => true,
                 else => false,
             },
-            .serial, .counter => false,
+            .serial, .counter, .duration => false,
         };
     }
     return switch (binary.arithmetic) {
@@ -2133,8 +2168,30 @@ fn appendResultCTypeSuffix(
     identity: []const u8,
     storage_ty: mir.ValueType,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    switch (storage_ty) {
+        .domain_integer => |domain| if (domain.kind == .duration)
+            return out.print(allocator, "mc_type_generic_8_Duration_1_{d}_{s}", .{ domain.child.len, domain.child }),
+        else => {},
+    }
     if (isSafeIdentifier(identity)) return out.appendSlice(allocator, identity);
+    if (try appendUnaryGenericCTypeSuffix(allocator, out, identity)) return;
     return appendCTypeSuffix(allocator, out, storage_ty);
+}
+
+fn appendUnaryGenericCTypeSuffix(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    identity: []const u8,
+) std.mem.Allocator.Error!bool {
+    const open = std.mem.indexOfScalar(u8, identity, '<') orelse return false;
+    if (open == 0 or identity.len <= open + 2 or identity[identity.len - 1] != '>' or
+        std.mem.indexOfScalarPos(u8, identity, open + 1, '<') != null)
+        return false;
+    const base = identity[0..open];
+    const argument = identity[open + 1 .. identity.len - 1];
+    if (!isSafeIdentifier(base) or !isSafeIdentifier(argument)) return false;
+    try out.print(allocator, "mc_type_generic_{d}_{s}_1_{d}_{s}", .{ base.len, base, argument.len, argument });
+    return true;
 }
 
 fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
@@ -2329,6 +2386,14 @@ fn isSafeIdentifier(name: []const u8) bool {
     if (name.len == 0 or !(std.ascii.isAlphabetic(name[0]) or name[0] == '_')) return false;
     for (name[1..]) |byte| if (!(std.ascii.isAlphanumeric(byte) or byte == '_')) return false;
     return true;
+}
+
+fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
+    if (std.mem.eql(u8, spelling, "Duration")) return true;
+    const prefix = "Duration<";
+    return spelling.len == prefix.len + child.len + 1 and
+        std.mem.startsWith(u8, spelling, prefix) and spelling[spelling.len - 1] == '>' and
+        std.mem.eql(u8, spelling[prefix.len .. spelling.len - 1], child);
 }
 
 test "executable C renderer emits typed CFG labels and branches" {

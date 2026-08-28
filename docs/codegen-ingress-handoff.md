@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **620/1787 C** and **678/1858 LLVM** distinct functions using the AST
-  body (C admits 65.3%, LLVM 63.5%). Report mode intentionally preserves
+  finds **619/1787 C** and **677/1858 LLVM** distinct functions using the AST
+  body (C admits 65.4%, LLVM 63.6%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -87,6 +87,16 @@ unblocked several existing Result constructors without adding a recognizer.
 The broad snapshot is now C **1167/1787** with 1035 canonical / 132
 specialized and LLVM **1180/1858** with 1025 canonical / 155 specialized;
 fallback is 620 and 678 respectively.
+
+`counter.elapsed_bounded` now crosses the same syntax-free boundary. MIR owns
+the `counter<T>` and `Duration<T>` domain identities plus the canonical
+`Result<Duration<T>, AmbiguousCounterInterval>` storage shape. C reconstructs
+the nominal Duration helper spelling only from that structural type, and LLVM
+uses the same verified `{ i1, T, i8 }` layout. `tests/c_emit/library_results.mc`
+is now 4/4 canonical in both backends. The broad census advances to C
+**1168/1787** with 1036 canonical / 132 specialized and LLVM **1181/1858**
+with 1026 canonical / 155 specialized; fallback falls to 619 and 677. The
+focused no-fallback ratchet is now 147 tests per backend.
 
 Fixed-array identity is now structural over element spelling and known length;
 `[4]T` and `[8]T` no longer collide in the `ValueType`/`TypeId` map. Nested

@@ -1133,6 +1133,7 @@ const Renderer = struct {
                 return .{ .ty = result_ty, .spelling = result };
             },
             .serial_compare => return self.emitSerialCompareCall(expression, call, operands[0], operands[1]),
+            .counter_elapsed_bounded => return self.emitCounterElapsedBoundedCall(expression, call, operands[0], operands[1], operands[2]),
             .conversion_from, .conversion_wrap_from, .conversion_from_mod => return self.emitIntegerConversion(expression, call, operands[0]),
             .conversion_try_from => return self.emitTryConversionCall(expression, call, operands[0]),
             .conversion_sat_from => return self.emitSaturatingConversionCall(expression, call, operands[0]),
@@ -1378,6 +1379,34 @@ const Renderer = struct {
         try self.output.print(self.allocator, "  {s} = select i1 {s}, i8 0, i8 {s}\n", .{ selected_order, ambiguous, order });
         try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, not_ambiguous });
         try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, i8 {s}, 1\n", .{ result, result_ty, tagged, selected_order });
+        return .{ .ty = result_ty, .spelling = result };
+    }
+
+    fn emitCounterElapsedBoundedCall(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+        now: Value,
+        start: Value,
+        maximum: Value,
+    ) RenderError!Value {
+        const counter = domainInteger(self.body.expressions[call.arguments[0].index()].result_ty, .counter) orelse return error.InvalidBody;
+        const shape = resultType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const duration = domainInteger(shape.ok_ty, .duration) orelse return error.InvalidBody;
+        if (!std.mem.eql(u8, counter.child, duration.child) or !std.mem.eql(u8, now.ty, start.ty) or
+            !std.mem.eql(u8, now.ty, maximum.ty))
+            return error.InvalidBody;
+        const result_ty = try self.typeText(expression.result_ty);
+        const difference = try self.temp();
+        const in_range = try self.temp();
+        const selected = try self.temp();
+        const tagged = try self.temp();
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = sub {s} {s}, {s}\n", .{ difference, now.ty, now.spelling, start.spelling });
+        try self.output.print(self.allocator, "  {s} = icmp ule {s} {s}, {s}\n", .{ in_range, now.ty, difference, maximum.spelling });
+        try self.output.print(self.allocator, "  {s} = select i1 {s}, {s} {s}, {s} 0\n", .{ selected, in_range, now.ty, difference, now.ty });
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, in_range });
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ result, result_ty, tagged, now.ty, selected });
         return .{ .ty = result_ty, .spelling = result };
     }
 
@@ -2027,7 +2056,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -2040,6 +2069,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
+    if (call.kind == .counter_elapsed_bounded and !counterElapsedResultSupported(body, expression)) return false;
     if (call.kind == .raw_ptr) {
         if (call.representation_source == null or !call.representation_span_id.isValid() or
             !representationTrapEdgeIsExact(body, expression)) return false;
@@ -2067,6 +2097,17 @@ fn serialCompareResultSupported(body: *const mir.ExecutableBody, expression: mir
     return sameValueType(shape.ty, expression.result_ty) and
         std.mem.eql(u8, identity.ok, "Order") and std.mem.eql(u8, identity.err, "AmbiguousSerialOrder") and
         sameValueType(shape.ok_ty, .{ .integer = "i8" }) and sameValueType(shape.err_ty, .{ .integer = "u8" });
+}
+
+fn counterElapsedResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    const identity = switch (expression.result_ty) {
+        .result => |value| value,
+        else => return false,
+    };
+    const duration = domainInteger(shape.ok_ty, .duration) orelse return false;
+    return sameValueType(shape.ty, expression.result_ty) and durationTypeSpellingMatches(identity.ok, duration.child) and
+        std.mem.eql(u8, identity.err, "AmbiguousCounterInterval") and sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn enumRawSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
@@ -2212,7 +2253,7 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
                 .add, .sub, .mul => integerInfo(shape.child) != null,
                 else => false,
             },
-            .serial, .counter => false,
+            .serial, .counter, .duration => false,
         };
     }
     return switch (binary.op) {
@@ -2362,6 +2403,14 @@ fn domainInteger(ty: mir.ValueType, expected: mir.IntegerDomainKind) ?mir.Domain
         else => return null,
     };
     return if (shape.kind == expected) shape else null;
+}
+
+fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
+    if (std.mem.eql(u8, spelling, "Duration")) return true;
+    const prefix = "Duration<";
+    return spelling.len == prefix.len + child.len + 1 and
+        std.mem.startsWith(u8, spelling, prefix) and spelling[spelling.len - 1] == '>' and
+        std.mem.eql(u8, spelling[prefix.len .. spelling.len - 1], child);
 }
 
 fn integerInfo(name: []const u8) ?struct { signed: bool, bits: u7, max: u128 } {

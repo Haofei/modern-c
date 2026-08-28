@@ -105,6 +105,7 @@ pub const IntegerDomainKind = enum {
     sat,
     serial,
     counter,
+    duration,
 };
 
 pub const DomainIntegerShape = struct {
@@ -543,6 +544,26 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             .domain_integer => |shape| shape.kind == .counter and ValueType.eql(result, .{ .domain_integer = .{ .kind = .wrap, .child = shape.child } }),
             else => false,
         },
+        .counter_elapsed_bounded => counter_bounded: {
+            if (operands.len != 3 or !ValueType.eql(operands[0], operands[1])) break :counter_bounded false;
+            const counter = switch (operands[0]) {
+                .domain_integer => |shape| shape,
+                else => break :counter_bounded false,
+            };
+            const duration = switch (operands[2]) {
+                .domain_integer => |shape| shape,
+                else => break :counter_bounded false,
+            };
+            const storage = ExecutableCastKind.integerInfo(.{ .integer = counter.child }) orelse break :counter_bounded false;
+            if (counter.kind != .counter or duration.kind != .duration or
+                !std.mem.eql(u8, counter.child, duration.child) or storage.signed or storage.bits > 64)
+                break :counter_bounded false;
+            break :counter_bounded switch (result) {
+                .result => |shape| durationTypeSpellingMatches(shape.ok, duration.child) and
+                    std.mem.eql(u8, shape.err, "AmbiguousCounterInterval"),
+                else => false,
+            };
+        },
         // The exact nominal enum/repr TypeId relationship is checked by the
         // executable-body verifier and each renderer against `enum_types`.
         .enum_raw => operands.len == 1 and switch (operands[0]) {
@@ -601,6 +622,18 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         .fence_full, .fence_release, .fence_acquire => operands.len == 0 and result == .void,
         else => false,
     };
+}
+
+fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
+    // `ValueType.result` retains the nominal outer payload identity while the
+    // executable Result table owns its complete structural payload type.
+    // Accept that canonical split here; renderers additionally verify that
+    // the Result payload is exactly Duration<child>.
+    if (std.mem.eql(u8, spelling, "Duration")) return true;
+    const prefix = "Duration<";
+    return spelling.len == prefix.len + child.len + 1 and
+        std.mem.startsWith(u8, spelling, prefix) and spelling[spelling.len - 1] == '>' and
+        std.mem.eql(u8, spelling[prefix.len .. spelling.len - 1], child);
 }
 
 pub fn executableBuiltinRequiresUnsafe(kind: CallTargetKind) bool {

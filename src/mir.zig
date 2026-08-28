@@ -8259,7 +8259,7 @@ const FunctionBuilder = struct {
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
                     } else if (domain_target) |target| {
                         result_ty = target.result_ty;
-                        if (target.kind == .serial_compare and
+                        if ((target.kind == .serial_compare or target.kind == .counter_elapsed_bounded) and
                             !try self.internExecutableResultType(result_ty, target.result_type_expr))
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
                     } else if (conversion_target) |target| {

@@ -14870,6 +14870,25 @@ test "LLVM canonical executable MIR owns serial compare Result" {
     try expectContains(body, "insertvalue { i1, i8, i8 }");
 }
 
+test "LLVM canonical executable MIR owns bounded counter Result" {
+    const source =
+        \\type Ticks = counter<u64>;
+        \\fn bounded(now: Ticks, start: Ticks, max: Duration<u64>) -> Result<Duration<u64>, AmbiguousCounterInterval> {
+        \\    return Ticks.elapsed_bounded(now, start, max);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_counter_elapsed_bounded.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { i1, i64, i8 } @bounded");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "sub i64 %mc_arg_0, %mc_arg_1");
+    try expectContains(body, "icmp ule i64");
+    try expectContains(body, "select i1");
+    try expectContains(body, "insertvalue { i1, i64, i8 }");
+}
+
 test "LLVM canonical executable MIR precedes legacy specialized plans" {
     const source =
         \\fn identity(value: u32) -> u32 {

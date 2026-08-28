@@ -717,6 +717,7 @@ fn integerDomainKind(name: []const u8) ?mir_model.IntegerDomainKind {
     if (std.mem.eql(u8, name, "sat")) return .sat;
     if (std.mem.eql(u8, name, "serial")) return .serial;
     if (std.mem.eql(u8, name, "counter")) return .counter;
+    if (std.mem.eql(u8, name, "Duration")) return .duration;
     return null;
 }
 
