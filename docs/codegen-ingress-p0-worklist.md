@@ -35,15 +35,24 @@ slice attempted physical retirement of `simple_return`, but the full lowering
 shards proved that 50 no-fallback tests still rely on its fault-injection and
 edge-case semantics. That deletion was therefore reverted rather than masking
 the gap by changing tests. The plan remains as a bounded safety net, and its
-broad use is **32 C / 37 LLVM** functions (from 43/58 before the recent
+broad use is **32 C / 36 LLVM** functions (from 43/58 before the recent
 slice). The canonical producer now owns Result construction, domain/serial/counter
 builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
 specialized plan definitions from 15 to **14**. The current broad split is 1034
-canonical / 134 specialized for C and 1042 canonical / 148 specialized for
+canonical / 134 specialized for C and 1043 canonical / 147 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+
+Wrapping-domain unary negation is now a fully mechanical LLVM operation. MIR
+already distinguished `wrap<T>` from checked integers; LLVM admission now
+accepts that exact domain with no trap edge and emits modular `sub T 0, value`.
+This moves `allow_wrapping_neg` from transitional `simple_return` to canonical
+MIR, reduces broad LLVM `simple_return` use from 37 to 36, and raises the
+focused no-fallback ratchet to 149 tests per backend. C already emitted the
+same verified operation and its corresponding regression now also forbids
+body fallback.
 
 Target-typed negative integer literals now lower as canonical signed values.
 Suffixed literals keep their declared integer type; unsuffixed literals adopt

@@ -11426,13 +11426,15 @@ test "LLVM admits plain unary returns from MIR (bitwise not, wrapping negate)" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_plain_unary.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_plain_unary.mc", source, &output);
     const bnot = try llvmFunctionBody(output.items, "define internal i32 @bnot");
+    try expectContains(bnot, "; canonical executable MIR");
     try expectContains(bnot, "xor i32 %");
     try expectContains(bnot, ", -1");
     try std.testing.expect(std.mem.indexOf(u8, bnot, "llvm.dbg.value") == null);
     const wneg = try llvmFunctionBody(output.items, "define internal i32 @wneg");
-    try expectContains(wneg, "sub i32 0, %a");
+    try expectContains(wneg, "; canonical executable MIR");
+    try expectContains(wneg, "sub i32 0, %mc_arg_0");
 }
 
 test "LLVM admits scalar pointer-field-load returns from MIR" {

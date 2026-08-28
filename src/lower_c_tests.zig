@@ -12809,23 +12809,16 @@ test "lower-c admits plain unary returns from MIR (bitwise not, wrapping negate)
         \\fn bnot(a: u32) -> u32 { return ~a; }
         \\fn wneg(a: wrap<u32>) -> wrap<u32> { return -a; }
     ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "unary.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_plain_unary.mc", source, &output);
 
     const bnot = try cFunctionBody(output.items, "static uint32_t bnot(uint32_t a)");
-    try expectLegacyOrCanonicalReturn(bnot, "return ~(a);", "(~");
+    try expectContains(bnot, "/* canonical executable MIR */");
+    try expectContains(bnot, "(~");
     const wneg = try cFunctionBody(output.items, "static uint32_t wneg(uint32_t a)");
-    try expectLegacyOrCanonicalReturn(wneg, "return -(a);", "(-");
+    try expectContains(wneg, "/* canonical executable MIR */");
+    try expectContains(wneg, "(-");
 }
 
 test "lower-c admits scalar pointer-field-load returns from MIR; optional field stays on fallback" {

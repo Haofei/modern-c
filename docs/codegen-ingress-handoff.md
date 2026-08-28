@@ -108,6 +108,13 @@ admission total remains **1168/1787** (1034 canonical / 134 specialized), while
 LLVM advances to **1190/1858** (1042 canonical / 148 specialized), reducing its
 fallback count by nine to 668. The focused ratchet is now 148 tests per backend.
 
+Wrapping-domain unary negation now stays on canonical executable MIR in LLVM
+as well as C. LLVM consumes the verified `wrap<T>` type and absence of a trap
+edge, then mechanically emits modular subtraction from zero. Broad LLVM
+admission remains **1190/1858**, but one function moves from `simple_return` to
+canonical (1043 canonical / 147 specialized), so broad `simple_return` use is
+now 36. The focused no-fallback ratchet is 149 tests per backend.
+
 Fixed-array identity is now structural over element spelling and known length;
 `[4]T` and `[8]T` no longer collide in the `ValueType`/`TypeId` map. Nested
 array layouts are producer-owned, large homogeneous arrays use one bounded

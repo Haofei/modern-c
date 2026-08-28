@@ -698,6 +698,11 @@ const Renderer = struct {
                 return error.InvalidBody,
             .neg => if (isFloatType(self.body.expressions[unary.operand.index()].result_ty))
                 try self.output.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ value, ty, operand.spelling })
+            else if (wrappingNegType(expression.result_ty))
+                // LLVM integer subtraction is modular unless an overflow flag
+                // says otherwise. The verified wrap<T> domain therefore needs
+                // no backend-local check or source-shaped fallback.
+                try self.output.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ value, ty, operand.spelling })
             else
                 return error.Unsupported,
         }
@@ -2180,7 +2185,8 @@ fn unarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExp
     return switch (unary.op) {
         .bit_not => integerLike(result_ty),
         .logical_not => result_ty == .bool,
-        .neg => isFloatType(result_ty),
+        .neg => isFloatType(result_ty) or
+            (wrappingNegType(result_ty) and ownedExpressionTrapCount(body, expression.id) == 0),
     };
 }
 
@@ -2403,6 +2409,11 @@ fn domainInteger(ty: mir.ValueType, expected: mir.IntegerDomainKind) ?mir.Domain
         else => return null,
     };
     return if (shape.kind == expected) shape else null;
+}
+
+fn wrappingNegType(ty: mir.ValueType) bool {
+    const shape = domainInteger(ty, .wrap) orelse return false;
+    return integerInfo(shape.child) != null;
 }
 
 fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
