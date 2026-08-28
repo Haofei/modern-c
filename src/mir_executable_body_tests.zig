@@ -39,6 +39,35 @@ test "owned executable body is complete for scalar locals calls and returns" {
     }
 }
 
+test "negated integer literals retain their semantic storage type" {
+    const source =
+        \\fn inferred_suffix() -> i8 { let value = -1_i8; return value; }
+        \\fn min_neg() -> i32 { let value: i32 = -2147483648; return -value; }
+        \\fn min_div() -> i32 { let value: i32 = -2147483648; return value / -1; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_negated_literals.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions) |*function| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        try std.testing.expectEqual(function.trap_edges.len, function.executable_body.trap_edges.len);
+        for (function.executable_body.expressions) |value| switch (value.operation) {
+            .unary => try std.testing.expect(value.result_ty == .integer and
+                !std.mem.eql(u8, value.result_ty.integer, "comptime_int")),
+            else => {},
+        };
+    }
+}
+
 test "callable parameter signatures are verified executable facts" {
     const source =
         \\extern fn target(sink: fn(u8) -> void, value: u64) -> void;

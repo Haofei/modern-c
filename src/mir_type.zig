@@ -368,7 +368,10 @@ pub fn valueTypeFromExpr(expr: ast.Expr) ValueType {
         .bool_literal => .bool,
         .void_literal => .void,
         .unreachable_expr => .never,
-        .int_literal => .{ .integer = "comptime_int" },
+        .int_literal => |literal| if (numeric.parseIntegerLiteralParts(literal)) |parts|
+            if (parts.suffix) |suffix| .{ .integer = suffix.typeName() } else .{ .integer = "comptime_int" }
+        else
+            .{ .integer = "comptime_int" },
         .float_literal => .{ .float = "comptime_float" },
         .null_literal => .{ .nullable_pointer = nullPointerShape() },
         else => .value,

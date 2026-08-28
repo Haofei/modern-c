@@ -7853,12 +7853,21 @@ const FunctionBuilder = struct {
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
             result_ty = expected;
         };
-        // Unary negation does not change its operand type. A literal nested
-        // below the unary node still receives the surrounding return/local
-        // context; otherwise `-4.0` remains `comptime_float` and cannot cross
-        // the syntax-free executable boundary.
+        if (expr.kind == .int_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
+            const parts = numeric.parseIntegerLiteralParts(expr.kind.int_literal);
+            if (parts == null or parts.?.suffix == null) result_ty = expected;
+        };
+        // Unary negation does not change its operand type. A targetless literal
+        // nested below the unary node still receives the surrounding
+        // return/local context; otherwise `-4.0`/`-4` remain comptime values
+        // and their checked trap edge cannot be represented at a storage type.
         if (expr.kind == .unary) if (expected_ty) |expected| switch (expected) {
             .float => result_ty = expected,
+            .integer => if (result_ty == .integer and
+                std.mem.eql(u8, result_ty.integer, "comptime_int"))
+            {
+                result_ty = expected;
+            },
             else => {},
         };
         if (expr.kind == .char_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
@@ -7930,10 +7939,14 @@ const FunctionBuilder = struct {
                     break :enum_literal .{ .literal = .{ .enum_value = literal.text } };
                 break :enum_literal .{ .literal = canonical };
             },
-            .unary => |node| .{ .unary = .{
-                .op = executableUnaryOp(node.op),
-                .operand = try self.ensureExecutableExprAs(node.expr.*, result_ty),
-            } },
+            .unary => |node| unary: {
+                if (node.op == .neg) if (canonicalNegatedIntegerLiteral(node.expr.*, result_ty)) |value|
+                    break :unary .{ .literal = .{ .signed_integer = value } };
+                break :unary .{ .unary = .{
+                    .op = executableUnaryOp(node.op),
+                    .operand = try self.ensureExecutableExprAs(node.expr.*, result_ty),
+                } };
+            },
             .binary => |node| binary: {
                 result_ty = self.executableBinaryResultType(node);
                 if (expected_ty) |expected| {
@@ -11066,7 +11079,13 @@ const FunctionBuilder = struct {
                 if (node.op == .bit_not and self.exprHasForbiddenBitwiseDomain(node.expr.*)) {
                     try self.addInstr(.arithmetic_domain_check, "bitwise_arith_domain_operand", .unknown, expr.span);
                 }
-                if (node.op == .neg and !self.exprIsWrap(node.expr.*) and !self.exprIsFloat(node.expr.*)) {
+                const unary_result_ty = if (self.assignment_target_ty == .integer)
+                    self.assignment_target_ty
+                else
+                    self.exprType(expr);
+                if (node.op == .neg and canonicalNegatedIntegerLiteral(node.expr.*, unary_result_ty) == null and
+                    !self.exprIsWrap(node.expr.*) and !self.exprIsFloat(node.expr.*))
+                {
                     try self.addInstr(.add_overflow, "checked_neg", .bool, expr.span);
                     try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, expr.span);
                     try self.attachExecutableTrapEdge(expr.span, .IntegerOverflow, .checked_arithmetic);
@@ -16742,6 +16761,22 @@ fn exprContainsTargetTypedLiteral(expr: ast.Expr) bool {
         .unary => |node| exprContainsTargetTypedLiteral(node.expr.*),
         else => false,
     };
+}
+
+fn canonicalNegatedIntegerLiteral(input: ast.Expr, ty: ValueType) ?i128 {
+    const info = mir_model.ExecutableCastKind.integerInfo(ty) orelse return null;
+    if (!info.signed) return null;
+    var expr = input;
+    while (expr.kind == .grouped) expr = expr.kind.grouped.*;
+    const literal = switch (expr.kind) {
+        .int_literal => |value| value,
+        else => return null,
+    };
+    const parts = numeric.parseIntegerLiteralParts(literal) orelse return null;
+    const limit = @as(u128, 1) << @intCast(info.bits - 1);
+    if (parts.magnitude > limit) return null;
+    if (info.bits == 128 and parts.magnitude == limit) return std.math.minInt(i128);
+    return -@as(i128, @intCast(parts.magnitude));
 }
 
 fn switchArmBodiesHandleResultLocal(self: *FunctionBuilder, name: []const u8, node: ast.Switch) bool {

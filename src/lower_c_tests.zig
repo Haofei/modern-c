@@ -3180,6 +3180,35 @@ test "lower-c emits checked unary returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "lower-c target-types negated integer literals in canonical MIR" {
+    const source =
+        \\fn inferred_suffix() -> i8 { let value = -1_i8; return value; }
+        \\fn min_neg() -> i32 { let value: i32 = -2147483648; return -value; }
+        \\fn min_div() -> i32 { let value: i32 = -2147483648; return value / -1; }
+        \\fn min_rem() -> i32 { let value: i32 = -2147483648; return value % -1; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_target_typed_negated_literals.mc", source, &output);
+
+    const suffix_body = try cFunctionBody(output.items, "static int8_t inferred_suffix(void)");
+    try expectContains(suffix_body, "/* canonical executable MIR */");
+    try expectContains(suffix_body, "= -1;");
+    try expectNotContains(suffix_body, "mc_checked_neg_i8(");
+
+    const neg_body = try cFunctionBody(output.items, "static int32_t min_neg(void)");
+    try expectContains(neg_body, "/* canonical executable MIR */");
+    try expectContains(neg_body, "mc_checked_neg_i32(");
+
+    const div_body = try cFunctionBody(output.items, "static int32_t min_div(void)");
+    try expectContains(div_body, "/* canonical executable MIR */");
+    try expectContains(div_body, "mc_checked_div_i32(");
+
+    const rem_body = try cFunctionBody(output.items, "static int32_t min_rem(void)");
+    try expectContains(rem_body, "/* canonical executable MIR */");
+    try expectContains(rem_body, "mc_checked_mod_i32(");
+}
+
 test "lower-c emits negative integer literal return from MIR without body fallback" {
     const source =
         \\fn negative_one() -> i32 {
@@ -3191,7 +3220,9 @@ test "lower-c emits negative integer literal return from MIR without body fallba
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_negative_integer_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t negative_one(void)");
-    try expectContains(body, "return -1;");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "= -1;");
+    try expectContains(body, "return mc_exec_tmp_");
     try expectNotContains(body, "mc_checked_neg_i32");
     try expectNotContains(body, "mc_tmp");
 }
@@ -12178,7 +12209,7 @@ test "lower-c context-types minimum signed integer unary literals" {
     try appendCheckedCTest("c_min_signed_unary_literal.mc", source, &output);
 
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "2147483648"));
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "((int32_t)-2147483648)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= -2147483648;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_neg_i32(") != null);
 }
 
@@ -13676,7 +13707,10 @@ test "lower-c emits Result ok and err constructors" {
     const err_body = try cFunctionBody(output.items, "static mc_result_u32_Error make_err(void)");
     try expectContains(err_body, "((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_exec_tmp_0 })");
     try expectContains(err_body, "return mc_exec_tmp_1;");
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = ((mc_result_u32_Error){ .is_ok = true, .payload.ok = 7 });\n    consume_result(mc_tmp0);") != null);
+    const send_body = try cFunctionBody(output.items, "static void send_ok(void)");
+    try expectContains(send_body, ".is_ok = true");
+    try expectContains(send_body, ".payload.ok = ");
+    try expectContains(send_body, "consume_result(");
 }
 
 test "lower-c emits Result try in local initializers" {

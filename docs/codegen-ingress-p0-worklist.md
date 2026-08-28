@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1785 C and 1858 LLVM
-functions. It found 647 C and 702 LLVM AST-body fallbacks. Report
+functions. It found 632 C and 687 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,23 +27,30 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1138/1785 admitted (63.8%)**, 647 fallback, and
-LLVM **1156/1858 admitted (62.2%)**, 702 fallback. There were no unsupported
+The 522-root sweep found C **1153/1785 admitted (64.6%)**, 632 fallback, and
+LLVM **1171/1858 admitted (63.0%)**, 687 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
 shards proved that 50 no-fallback tests still rely on its fault-injection and
 edge-case semantics. That deletion was therefore reverted rather than masking
 the gap by changing tests. The plan remains as a bounded safety net, and its
-broad use has fallen to **35 C / 48 LLVM** functions (from 43/58 before this
+broad use is **34 C / 47 LLVM** functions (from 43/58 before the recent
 slice). The canonical producer now owns Result construction, domain/serial/counter
 builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. The current broad split is 1000
-canonical / 138 specialized for C and 995 canonical / 161 specialized for
+specialized plan definitions from 15 to **14**. The current broad split is 1016
+canonical / 137 specialized for C and 1011 canonical / 160 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+
+Target-typed negative integer literals now lower as canonical signed values.
+Suffixed literals keep their declared integer type; unsuffixed literals adopt
+the expected signed type; and the signed minimum is represented directly rather
+than as an overflowing runtime negation. Dynamic negation continues to require
+its exact trap edge. This removed 15 broad fallbacks per backend and raised the
+focused no-fallback ratchet to 144 tests per backend.
 
 Fixed-array `ValueType` identity now includes the immediate element spelling
 and known length instead of collapsing every array to the same `"array"` key.
@@ -183,15 +190,14 @@ comptime assertions stay fail-closed. In the broad census this moved two
 module-visibility functions per backend to the renderer boundary without yet
 changing the admitted totals.
 
-The census also ranks the canonical stopping layer. For C the remaining 647
-fallbacks are 632 `producer_incomplete` and 15 `renderer_unsupported`; LLVM is
-669/30 plus 9 canonical-ready ingress mismatches. The ready-but-fallback bucket
-is zero for C and remains explicit for LLVM. Producer-incomplete
+The census also ranks the canonical stopping layer. For C the remaining 632
+fallbacks are 617 `producer_incomplete` and 15 `renderer_unsupported`; LLVM is
+657/30. The ready-but-fallback bucket is zero in both backends. Producer-incomplete
 records also carry a backend-neutral reason emitted beside the canonical body.
-The leading C reasons are `trap_projection` (139),
+The leading C reasons are `trap_projection` (127),
 `producer_invariant` (92), `unsupported_member` (85), and
-`unlowered_index` (46). LLVM has `trap_projection` 155,
-`producer_invariant` 92, `unsupported_member` 85 and `unlowered_index` 61.
+`unlowered_index` (48). LLVM has `trap_projection` 143,
+`producer_invariant` 92, `unsupported_member` 85 and `unlowered_index` 63.
 By-value struct member
 projection, direct pointer-member scalar access, and integer-domain identity are
 canonical; the remaining `unlowered_member` bucket is 15 in each backend.

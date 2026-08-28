@@ -3681,6 +3681,35 @@ test "LLVM emits checked unary returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "LLVM target-types negated integer literals in canonical MIR" {
+    const source =
+        \\fn inferred_suffix() -> i8 { let value = -1_i8; return value; }
+        \\fn min_neg() -> i32 { let value: i32 = -2147483648; return -value; }
+        \\fn min_div() -> i32 { let value: i32 = -2147483648; return value / -1; }
+        \\fn min_rem() -> i32 { let value: i32 = -2147483648; return value % -1; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_target_typed_negated_literals.mc", source, &output);
+
+    const suffix_body = try llvmFunctionBody(output.items, "define internal i8 @inferred_suffix");
+    try expectContains(suffix_body, "; canonical executable MIR");
+    try expectContains(suffix_body, "store i8 -1");
+    try expectNotContains(suffix_body, "@llvm.ssub.with.overflow.i8");
+
+    const neg_body = try llvmFunctionBody(output.items, "define internal i32 @min_neg");
+    try expectContains(neg_body, "; canonical executable MIR");
+    try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");
+
+    const div_body = try llvmFunctionBody(output.items, "define internal i32 @min_div");
+    try expectContains(div_body, "; canonical executable MIR");
+    try expectContains(div_body, "sdiv i32");
+
+    const rem_body = try llvmFunctionBody(output.items, "define internal i32 @min_rem");
+    try expectContains(rem_body, "; canonical executable MIR");
+    try expectContains(rem_body, "srem i32");
+}
+
 test "LLVM emits logical-not returns from MIR without body fallback" {
     const source =
         \\fn not_param(flag: bool) -> bool {
