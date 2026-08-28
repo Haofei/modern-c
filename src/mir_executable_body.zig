@@ -414,6 +414,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
+                } else if (call.kind == .conversion_trap_from) {
+                    if (call.representation_source != null or call.representation_span_id.isValid() or
+                        !builtinTrapConversionHasExactEdge(body, value))
+                        return error.InvalidBuiltinCall;
                 } else if (call.representation_source != null or call.representation_span_id.isValid() or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                 {
@@ -544,9 +548,15 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     .builtin_call => |call| {
-                        if (call.kind != .raw_ptr or call.representation_source == null or
-                            !call.representation_span_id.isValid() or edge.kind != .InvalidRepresentation or
-                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                        if (call.kind == .raw_ptr) {
+                            if (call.representation_source == null or !call.representation_span_id.isValid() or
+                                edge.kind != .InvalidRepresentation or edge.source != .representation_check)
+                                return error.InvalidTrapEdge;
+                        } else if (call.kind == .conversion_trap_from) {
+                            if (call.representation_source != null or call.representation_span_id.isValid() or
+                                edge.kind != .IntegerOverflow or edge.source != .checked_arithmetic)
+                                return error.InvalidTrapEdge;
+                        } else return error.InvalidTrapEdge;
                     },
                     .representation_check => |check| {
                         const operand = expression(body, check.operand) orelse return error.InvalidTrapEdge;
@@ -561,7 +571,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .atomic_load => |load| load.representation_span_id,
                     .atomic_update => |update| update.representation_span_id,
                     .address_of => |address| address.representation_span_id,
-                    .builtin_call => |call| call.representation_span_id,
+                    .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
                     else => owner.span_id,
                 };
                 break :expression_owner .{ .block_id = owner.block_id, .span_id = span_id };
@@ -706,6 +716,27 @@ fn assertGuardHasExactTrapEdge(
         const trap = executableTerminator(body, edge.trap_block) orelse return false;
         return switch (trap.operation) {
             .trap_ => |kind| kind == .Assert,
+            else => false,
+        };
+    }
+    return false;
+}
+
+fn builtinTrapConversionHasExactEdge(body: *const mir.ExecutableBody, value: mir.ExecutableExpression) bool {
+    const call = switch (value.operation) {
+        .builtin_call => |operation| operation,
+        else => return false,
+    };
+    if (call.kind != .conversion_trap_from or
+        ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+        ownedTrapCount(body, .{ .expression = value.id }, .IntegerOverflow, .checked_arithmetic) != 1)
+        return false;
+    for (body.trap_edges) |edge| {
+        if (!edge.owner.eql(.{ .expression = value.id })) continue;
+        if (!edge.from_block.eql(value.block_id)) return false;
+        const trap = executableTerminator(body, edge.trap_block) orelse return false;
+        return switch (trap.operation) {
+            .trap_ => |kind| kind == .IntegerOverflow,
             else => false,
         };
     }

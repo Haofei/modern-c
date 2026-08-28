@@ -10221,7 +10221,8 @@ test "LLVM inferred local conversion calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_conversion_local_type.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%narrowed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "alloca i8") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -14788,6 +14789,31 @@ test "LLVM canonical executable MIR models explicit uninit as storage without a 
         try expectContains(body, "store i32 %mc_arg_0");
         try expectContains(body, "ret i32");
     }
+}
+
+test "LLVM canonical executable MIR owns trapping integer conversions" {
+    const source =
+        \\fn narrow_unsigned(value: u32) -> u8 { return u8.trap_from(value); }
+        \\fn signed_to_unsigned(value: i32) -> u8 { return u8.trap_from(value); }
+        \\fn unsigned_to_signed(value: u32) -> i8 { return i8.trap_from(value); }
+        \\fn widen(value: u8) -> u64 { return u64.trap_from(value); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_trap_conversion.mc", source, &output);
+
+    const narrow = try llvmFunctionBody(output.items, "define internal i8 @narrow_unsigned");
+    try expectContains(narrow, "; canonical executable MIR");
+    try expectContains(narrow, "icmp ugt i32 %mc_arg_0, 255");
+    try expectContains(narrow, "trunc i32 %mc_arg_0 to i8");
+    const crossed = try llvmFunctionBody(output.items, "define internal i8 @signed_to_unsigned");
+    try expectContains(crossed, "icmp slt i32 %mc_arg_0, 0");
+    try expectContains(crossed, "icmp sgt i32 %mc_arg_0, 255");
+    const signed = try llvmFunctionBody(output.items, "define internal i8 @unsigned_to_signed");
+    try expectContains(signed, "icmp ugt i32 %mc_arg_0, 127");
+    const widen = try llvmFunctionBody(output.items, "define internal i64 @widen");
+    try expectContains(widen, "zext i8 %mc_arg_0 to i64");
+    try expectNotContains(widen, "br i1");
 }
 
 test "LLVM canonical executable MIR precedes legacy specialized plans" {

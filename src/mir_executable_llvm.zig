@@ -160,7 +160,10 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
-                    .load, .atomic_load, .atomic_update, .address_of, .builtin_call, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .load, .atomic_load, .atomic_update, .address_of, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .builtin_call => |call| if (call.kind == .conversion_trap_from) {
+                        if (!builtinTrapConversionEdgeIsExact(body, owner)) return false;
+                    } else if (!representationTrapEdgeIsExact(body, owner)) return false,
                     else => return false,
                 }
             },
@@ -747,6 +750,75 @@ const Renderer = struct {
         return .{ .ty = target_ty, .spelling = result };
     }
 
+    fn emitTrapConversion(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+        operand: Value,
+    ) RenderError!Value {
+        const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
+        const conversion = mir.executableTrapConversion(source_ty, expression.result_ty) orelse return error.InvalidBody;
+        const target_ty = try self.typeText(expression.result_ty);
+        const edge = builtinTrapConversionEdge(self.body, expression) orelse return error.InvalidBody;
+        var out_of_range: ?[]const u8 = null;
+        if (conversion.need_lower) {
+            const below = try self.temp();
+            try self.output.print(self.allocator, "  {s} = icmp slt {s} {s}, {d}\n", .{
+                below,
+                operand.ty,
+                operand.spelling,
+                if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0),
+            });
+            out_of_range = below;
+        }
+        if (conversion.need_upper) {
+            const above = try self.temp();
+            if (conversion.target.signed)
+                try self.output.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{
+                    above,
+                    if (conversion.source.signed) "sgt" else "ugt",
+                    operand.ty,
+                    operand.spelling,
+                    signedMaximum(conversion.target.bits),
+                })
+            else
+                try self.output.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{
+                    above,
+                    if (conversion.source.signed) "sgt" else "ugt",
+                    operand.ty,
+                    operand.spelling,
+                    unsignedMaximum(conversion.target.bits),
+                });
+            if (out_of_range) |below| {
+                const combined = try self.temp();
+                try self.output.print(self.allocator, "  {s} = or i1 {s}, {s}\n", .{ combined, below, above });
+                out_of_range = combined;
+            } else out_of_range = above;
+        }
+        if (out_of_range) |condition| {
+            const continuation = try std.fmt.allocPrint(self.allocator, "mc_conversion_ready_{d}", .{expression.id.raw});
+            try self.output.print(
+                self.allocator,
+                "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                    "{s}:\n",
+                .{ condition, edge.trap_block.raw, continuation, continuation },
+            );
+        }
+        if (conversion.source.bits == conversion.target.bits) {
+            if (!std.mem.eql(u8, operand.ty, target_ty)) return error.InvalidBody;
+            return .{ .ty = target_ty, .spelling = operand.spelling };
+        }
+        const result = try self.temp();
+        const operation: []const u8 = if (conversion.target.bits < conversion.source.bits)
+            "trunc"
+        else if (conversion.source.signed)
+            "sext"
+        else
+            "zext";
+        try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, operation, operand.ty, operand.spelling, target_ty });
+        return .{ .ty = target_ty, .spelling = result };
+    }
+
     fn emitBinary(self: *Renderer, expression: mir.ExecutableExpression, result_ty: []const u8, binary: anytype) RenderError!Value {
         const left = try self.emitExpression(binary.left);
         const right = try self.emitExpression(binary.right);
@@ -1071,6 +1143,7 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, if (source.signed) "sext" else "zext", operand.ty, operand.spelling, result_ty });
                 return .{ .ty = result_ty, .spelling = result };
             },
+            .conversion_trap_from => return self.emitTrapConversion(expression, call, operands[0]),
             .bitcast => {
                 const operand = operands[0];
                 const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
@@ -1792,7 +1865,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -1806,6 +1879,9 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     if (call.kind == .raw_ptr) {
         if (call.representation_source == null or !call.representation_span_id.isValid() or
             !representationTrapEdgeIsExact(body, expression)) return false;
+    } else if (call.kind == .conversion_trap_from) {
+        if (call.representation_source != null or call.representation_span_id.isValid() or
+            !builtinTrapConversionEdgeIsExact(body, expression)) return false;
     } else if (call.representation_source != null or call.representation_span_id.isValid() or
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
@@ -2506,6 +2582,44 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
 
 fn representationTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return representationTrapEdge(body, expression) != null;
+}
+
+fn builtinTrapConversionEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    return builtinTrapConversionEdge(body, expression) != null;
+}
+
+fn builtinTrapConversionEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    const call = switch (expression.operation) {
+        .builtin_call => |value| value,
+        else => return null,
+    };
+    if (call.kind != .conversion_trap_from) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
+        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .IntegerOverflow or
+            edge.source != .checked_arithmetic) return null;
+        const trap = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .IntegerOverflow) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
+}
+
+fn signedMinimum(bits: u16) i128 {
+    return -(@as(i128, 1) << @intCast(bits - 1));
+}
+
+fn signedMaximum(bits: u16) i128 {
+    return (@as(i128, 1) << @intCast(bits - 1)) - 1;
+}
+
+fn unsignedMaximum(bits: u16) u128 {
+    return (@as(u128, 1) << @intCast(bits)) - 1;
 }
 
 fn ownedExpressionTrapCount(body: *const mir.ExecutableBody, expression_id: mir.ExprId) usize {

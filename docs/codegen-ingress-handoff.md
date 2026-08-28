@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **632/1785 C** and **687/1858 LLVM** distinct functions using the AST
-  body (C admits 64.6%, LLVM 63.0%). Report mode intentionally preserves
+  finds **629/1785 C** and **684/1858 LLVM** distinct functions using the AST
+  body (C admits 64.8%, LLVM 63.2%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -39,7 +39,7 @@ remaining six belonging to those deliberately excluded shapes. The slice also
 fixed the canonical loop back-edge to re-enter the condition header; previously
 an effectful `while` condition could be evaluated once and then skipped on later
 iterations. Verifier mutation tests cover illegal MMIO orderings and forged
-bases, and the no-fallback ratchet now has 144 C / 144 LLVM focused tests.
+bases, and the no-fallback ratchet now has 145 C / 145 LLVM focused tests.
 
 Target-typed negative integer literals are now canonical values rather than a
 `comptime_int` unary operation plus a spurious checked-negation trap. Suffixed
@@ -50,14 +50,22 @@ checked trap. This moved 15 additional broad-corpus functions off fallback in
 each backend and added C/LLVM/MIR regressions for suffix, minimum, division and
 remainder cases.
 
+Scalar `T.trap_from(value)` conversions now bind their checked integer range
+relation and exact `IntegerOverflow` edge to one canonical builtin ExprId.
+Unsigned narrowing, signed/unsigned crossings and value-preserving widening
+share one verifier model; both renderers evaluate the operand once and consume
+that model mechanically. The 64-bit-and-smaller subset is admitted while
+128-bit extrema remain fail-closed. This moved three more broad functions off
+fallback per backend, including one formerly specialized `simple_return` body.
+
 Fixed-array identity is now structural over element spelling and known length;
 `[4]T` and `[8]T` no longer collide in the `ValueType`/`TypeId` map. Nested
 array layouts are producer-owned, large homogeneous arrays use one bounded
 element metadata slot plus their logical length, and LLVM rejects an incomplete
 nested layout during admission rather than failing during rendering. The broad
-census has no remaining canonical-ready ingress mismatch: C is 1153/1785 with
-1016 canonical bodies, while LLVM is 1171/1858 with 1011 canonical bodies and
-687 AST fallbacks.
+census has no remaining canonical-ready ingress mismatch: C is 1156/1785 with
+1020 canonical bodies, while LLVM is 1174/1858 with 1015 canonical bodies and
+684 AST fallbacks.
 
 The latest batch migrated another 10 C and 13 LLVM broad functions away from
 `simple_return`. A trial physical deletion exposed 50 no-fallback shard tests
@@ -104,12 +112,12 @@ and canonical accesses consistent for prelude names such as `offsetof` and
 
 The census now records the exact canonical stopping layer independently from
 the final admitted/fallback status. Of the remaining fallbacks, C attributes
-617 to an incomplete MIR producer and 15 to renderer support; LLVM attributes
-657/30 respectively. No body marked canonical-ready falls through to AST
+614 to an incomplete MIR producer and 15 to renderer support; LLVM attributes
+654/30 respectively. No body marked canonical-ready falls through to AST
 codegen. The producer bucket is now
 classified by its first stable canonical-model gap. The largest C reasons are
-trap projection (127), producer invariants (92), unsupported members (85), and
-unresolved indexing (48); LLVM records 143/92/85/63 respectively. Direct pointer-member scalar access is
+trap projection (125), producer invariants (91), unsupported members (85), and
+unresolved indexing (48); LLVM records 141/91/85/63 respectively. Direct pointer-member scalar access is
 canonical in the targeted census; the remaining `unlowered_member` reason count
 is 15 in each backend. This turns
 the remaining migration into a ranked producer/renderer/ingress worklist and

@@ -475,7 +475,7 @@ pub const ExecutableCastKind = enum {
             (source.mutability == .mut and target.mutability == .@"const");
     }
 
-    pub fn integerInfo(ty: ValueType) ?struct { signed: bool, bits: u16 } {
+    pub fn integerInfo(ty: ValueType) ?ExecutableIntegerInfo {
         const name = switch (ty) {
             .integer => |name| name,
             else => return null,
@@ -493,6 +493,8 @@ pub const ExecutableCastKind = enum {
         return null;
     }
 };
+
+pub const ExecutableIntegerInfo = struct { signed: bool, bits: u16 };
 
 pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, operands: []const ValueType) bool {
     return switch (kind) {
@@ -534,6 +536,7 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             else => false,
         },
         .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
+        .conversion_trap_from => operands.len == 1 and executableTrapConversion(operands[0], result) != null,
         // `bitcast` preserves the complete scalar bit pattern; it is neither a
         // numeric conversion nor a backend-selected coercion.  Keep this
         // first executable slice deliberately bounded to scalar integer/float
@@ -612,6 +615,36 @@ fn valuePreservingIntegerConversion(source: ValueType, target: ValueType) bool {
     const source_info = ExecutableCastKind.integerInfo(source) orelse return false;
     const target_info = ExecutableCastKind.integerInfo(target) orelse return false;
     return source_info.signed == target_info.signed and target_info.bits >= source_info.bits;
+}
+
+pub const ExecutableTrapConversion = struct {
+    source: ExecutableIntegerInfo,
+    target: ExecutableIntegerInfo,
+    need_lower: bool,
+    need_upper: bool,
+};
+
+/// Closed scalar subset for `T.trap_from(value)`.  The range relationship is
+/// semantic data shared by verification and both mechanical renderers.  Keep
+/// 128-bit conversions on the legacy path until C has a portable boundary
+/// spelling for their extrema.
+pub fn executableTrapConversion(source_ty: ValueType, target_ty: ValueType) ?ExecutableTrapConversion {
+    const source = ExecutableCastKind.integerInfo(source_ty) orelse return null;
+    const target = ExecutableCastKind.integerInfo(target_ty) orelse return null;
+    if (source.bits > 64 or target.bits > 64) return null;
+    const need_lower = source.signed and (!target.signed or target.bits < source.bits);
+    const need_upper = if (source.signed == target.signed)
+        target.bits < source.bits
+    else if (!source.signed and target.signed)
+        target.bits <= source.bits
+    else
+        target.bits + 1 < source.bits;
+    return .{
+        .source = source,
+        .target = target,
+        .need_lower = need_lower,
+        .need_upper = need_upper,
+    };
 }
 
 pub const ExecutableMemoryAccessKind = enum {

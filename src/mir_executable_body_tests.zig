@@ -1316,6 +1316,44 @@ test "lexical unsafe blocks and contract markers are canonical executable MIR" {
     try executable.verify(contracted_call);
 }
 
+test "trapping integer conversion owns its exact executable trap edge" {
+    const source =
+        \\fn narrow(value: u32) -> u8 { return u8.trap_from(value); }
+        \\fn widen(value: u8) -> u64 { return u64.trap_from(value); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_trap_conversion.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions) |*function| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+        const edge = &function.executable_body.trap_edges[0];
+        const owner_id = switch (edge.owner) {
+            .expression => |id| id,
+            .statement => return error.TestUnexpectedResult,
+        };
+        const owner = function.executable_body.expressions[owner_id.index()];
+        try std.testing.expect(owner.operation == .builtin_call);
+        try std.testing.expect(owner.operation.builtin_call.kind == .conversion_trap_from);
+        try std.testing.expect(edge.kind == .IntegerOverflow and edge.source == .checked_arithmetic);
+
+        const saved = edge.kind;
+        edge.kind = .DivideByZero;
+        try std.testing.expectError(error.InvalidBuiltinCall, executable.verify(function));
+        edge.kind = saved;
+        try executable.verify(function);
+    }
+}
+
 fn assertOperandsPrecede(value: mir.ExecutableExpression) !void {
     switch (value.operation) {
         .unary => |operation| try std.testing.expect(operation.operand.index() < value.id.index()),

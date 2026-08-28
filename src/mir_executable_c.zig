@@ -768,7 +768,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -782,6 +782,9 @@ fn builtinCallSupported(
     return if (call.kind == .raw_ptr)
         call.representation_source != null and call.representation_span_id.isValid() and
             representationOperationHasExactTrapEdge(body, expression)
+    else if (call.kind == .conversion_trap_from)
+        call.representation_source == null and !call.representation_span_id.isValid() and
+            builtinTrapConversionHasExactEdge(body, expression)
     else
         call.representation_source == null and !call.representation_span_id.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0;
@@ -822,6 +825,36 @@ fn emitBuiltinCall(
             try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .conversion_trap_from => {
+            const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const conversion = mir.executableTrapConversion(operand.result_ty, result_ty) orelse return error.UnsupportedType;
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, ")(");
+            if (conversion.need_lower or conversion.need_upper) {
+                try out.append(allocator, '(');
+                if (conversion.need_lower) {
+                    try out.appendSlice(allocator, "((__int128)(");
+                    try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+                    try out.print(allocator, ") < (__int128){d})", .{if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0)});
+                }
+                if (conversion.need_lower and conversion.need_upper) try out.appendSlice(allocator, " || ");
+                if (conversion.need_upper) {
+                    try out.appendSlice(allocator, if (conversion.source.signed) "((__int128)(" else "((unsigned __int128)(");
+                    try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+                    if (conversion.target.signed)
+                        try out.print(allocator, ") > (__int128){d})", .{signedMaximum(conversion.target.bits)})
+                    else
+                        try out.print(allocator, ") > (unsigned __int128){d})", .{unsignedMaximum(conversion.target.bits)});
+                }
+                try out.appendSlice(allocator, ") ? (mc_trap_IntegerOverflow(), 0) : (");
+                try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+                try out.appendSlice(allocator, ")");
+            } else {
+                try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            }
             try out.appendSlice(allocator, "))");
         },
         .wrapping_add => {
@@ -1402,9 +1435,31 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
     return switch (expression.operation) {
         .unary => checkedIntegerUnaryHasExactTrapEdges(body, expression),
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
-        .load, .atomic_load, .atomic_update, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
+        .load, .atomic_load, .atomic_update, .address_of, .representation_check => representationOperationHasExactTrapEdge(body, expression),
+        .builtin_call => |call| if (call.kind == .conversion_trap_from)
+            builtinTrapConversionHasExactEdge(body, expression)
+        else
+            representationOperationHasExactTrapEdge(body, expression),
         else => false,
     };
+}
+
+fn builtinTrapConversionHasExactEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const call = switch (expression.operation) {
+        .builtin_call => |value| value,
+        else => return false,
+    };
+    if (call.kind != .conversion_trap_from or ownedTrapEdgeCount(body, expression.id) != 1) return false;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .IntegerOverflow or edge.source != .checked_arithmetic) return false;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return false;
+        return switch (trap.operation) {
+            .trap_ => |kind| kind == .IntegerOverflow,
+            else => false,
+        };
+    }
+    return false;
 }
 
 const RepresentationMetadata = struct {
@@ -1546,6 +1601,18 @@ fn allExpressionsExist(body: *const mir.ExecutableBody, expressions: []const mir
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
     return mir.ValueType.eql(left, right);
+}
+
+fn signedMinimum(bits: u16) i128 {
+    return -(@as(i128, 1) << @intCast(bits - 1));
+}
+
+fn signedMaximum(bits: u16) i128 {
+    return (@as(i128, 1) << @intCast(bits - 1)) - 1;
+}
+
+fn unsignedMaximum(bits: u16) u128 {
+    return (@as(u128, 1) << @intCast(bits)) - 1;
 }
 
 fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {

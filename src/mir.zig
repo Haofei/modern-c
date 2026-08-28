@@ -7469,7 +7469,7 @@ const FunctionBuilder = struct {
                         .atomic_load => |load| load.representation_span_id,
                         .atomic_update => |update| update.representation_span_id,
                         .address_of => |address| address.representation_span_id,
-                        .builtin_call => |call| call.representation_span_id,
+                        .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
                         else => owner.span_id,
                     };
                     break :expression .{ .block_id = owner.block_id, .span_id = owner_span_id };
@@ -8239,6 +8239,7 @@ const FunctionBuilder = struct {
                     const wrapping_target = self.wrappingCallTarget(node);
                     const enum_raw_target = self.enumRawCallTarget(node);
                     const domain_target = try self.domainCallTarget(node);
+                    const conversion_target = self.conversionCallFactInfo(node);
                     const result_target_type = if (kind == .result_ok or kind == .result_err)
                         (expected_type_expr orelse self.assignment_target_type_expr)
                     else
@@ -8257,6 +8258,8 @@ const FunctionBuilder = struct {
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
                     } else if (domain_target) |target| {
                         result_ty = target.result_ty;
+                    } else if (conversion_target) |target| {
+                        result_ty = self.conversionCallResultValueType(target);
                     } else if (kind == .forget_unchecked or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
@@ -8313,6 +8316,12 @@ const FunctionBuilder = struct {
                                 try self.ensureExecutableExprAs(argument, if (source_index == 0) target.address_ty else target.payload_ty)
                             else
                                 try self.ensureExecutableExpr(argument)
+                        else if (conversion_target) |target|
+                            try self.ensureExecutableExprAsType(
+                                argument,
+                                valueTypeFromTypeAlias(target.source_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                                target.source_ty,
+                            )
                         else
                             try self.ensureExecutableExpr(argument);
                         if (kind == .wrapping_add) try self.contextualizeExecutableLiteral(call_value.arguments[argument_index], result_ty);
@@ -11605,7 +11614,10 @@ const FunctionBuilder = struct {
                     }
                 }
                 const conversion_trap = conversionDomainCallTrap(node.callee.*);
-                if (conversion_trap == .traps) try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, expr.span);
+                if (conversion_trap == .traps) {
+                    try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, expr.span);
+                    try self.attachExecutableBuiltinTrapEdge(expr.span, .conversion_trap_from, .IntegerOverflow, .checked_arithmetic);
+                }
                 if (self.no_lang_trap and conversion_trap == .not_builtin) {
                     if (direct_call) {
                         if (self.summaries.get(callee_name)) |summary| {
@@ -12414,6 +12426,52 @@ const FunctionBuilder = struct {
             .trap_block = BlockId.fromIndex(legacy.trap_block),
             .kind = .Assert,
             .source = .assert_stmt,
+        });
+    }
+
+    fn attachExecutableBuiltinTrapEdge(
+        self: *FunctionBuilder,
+        span: ast.Span,
+        call_kind: CallTargetKind,
+        kind: TrapKind,
+        source: TrapSource,
+    ) !void {
+        if (self.trap_edges.items.len == 0) {
+            self.executable_supported = false;
+            return;
+        }
+        const span_id = try self.internSpanId(self.sourcePoint(span));
+        var owner: ?ExprId = null;
+        var index = self.executable_expressions.items.len;
+        while (index > 0) {
+            index -= 1;
+            const expression = self.executable_expressions.items[index];
+            if (!expression.block_id.eql(BlockId.fromIndex(self.current)) or !expression.span_id.eql(span_id)) continue;
+            switch (expression.operation) {
+                .builtin_call => |call| if (call.kind == call_kind) {
+                    owner = expression.id;
+                    break;
+                },
+                else => {},
+            }
+        }
+        const owner_id = owner orelse {
+            self.executable_supported = false;
+            return;
+        };
+        const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
+        if (legacy.kind != kind or legacy.source != source or legacy.from_block != self.current or
+            !legacy.typed_span_id.eql(span_id))
+        {
+            self.executable_supported = false;
+            return;
+        }
+        try self.executable_trap_edges.append(self.allocator, .{
+            .owner = .{ .expression = owner_id },
+            .from_block = BlockId.fromIndex(legacy.from_block),
+            .trap_block = BlockId.fromIndex(legacy.trap_block),
+            .kind = kind,
+            .source = source,
         });
     }
 

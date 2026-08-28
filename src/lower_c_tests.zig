@@ -20005,7 +20005,8 @@ test "lower-c checked conversion evaluates a side-effecting operand once" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_conv_once.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "= (src());") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= src();") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "src()"));
 }
 
@@ -21894,6 +21895,30 @@ test "C race-tolerant aggregate slice loads parenthesize generated pointer expre
     try appendCheckedCTest("emit_c_aggregate_slice_race_parentheses.mc", source, &output);
     try expectContains(output.items, "mc_race_load_u32(&((&mc_tmp0.ptr[mc_check_index_usize(");
     try expectContains(output.items, ")])->x)))");
+}
+
+test "C canonical executable MIR owns trapping integer conversions" {
+    const source =
+        \\fn narrow_unsigned(value: u32) -> u8 { return u8.trap_from(value); }
+        \\fn signed_to_unsigned(value: i32) -> u8 { return u8.trap_from(value); }
+        \\fn unsigned_to_signed(value: u32) -> i8 { return i8.trap_from(value); }
+        \\fn widen(value: u8) -> u64 { return u64.trap_from(value); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_trap_conversion.mc", source, &output);
+
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
+    const narrow = try cFunctionBody(output.items, "MC_UNUSED static uint8_t narrow_unsigned(uint32_t value)");
+    try expectContains(narrow, "(unsigned __int128)255");
+    try expectContains(narrow, "mc_trap_IntegerOverflow()");
+    const crossed = try cFunctionBody(output.items, "MC_UNUSED static uint8_t signed_to_unsigned(int32_t value)");
+    try expectContains(crossed, "(__int128)0");
+    try expectContains(crossed, "(unsigned __int128)255");
+    const signed = try cFunctionBody(output.items, "MC_UNUSED static int8_t unsigned_to_signed(uint32_t value)");
+    try expectContains(signed, "(__int128)127");
+    const widen = try cFunctionBody(output.items, "MC_UNUSED static uint64_t widen(uint8_t value)");
+    try expectNotContains(widen, "? (mc_trap_IntegerOverflow()");
 }
 
 test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
