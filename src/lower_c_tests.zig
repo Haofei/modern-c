@@ -3964,6 +3964,25 @@ test "lower-c emits nested fixed-array aggregates from MIR without body fallback
     try expectContains(body, "return mc_exec_tmp_");
 }
 
+test "lower-c compares value optionals with null from MIR without body fallback" {
+    const source =
+        \\fn present(value: u32) -> ?u32 { return value; }
+        \\fn is_present(value: u32) -> bool { return present(value) != null; }
+        \\fn is_absent(value: u32) -> bool { return present(value) == null; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_optional_null_compare.mc", source, &output);
+
+    const present_body = try cFunctionBody(output.items, "static bool is_present(uint32_t value)");
+    try expectContains(present_body, "/* canonical executable MIR */");
+    try expectContains(present_body, ".present)");
+    const absent_body = try cFunctionBody(output.items, "static bool is_absent(uint32_t value)");
+    try expectContains(absent_body, "/* canonical executable MIR */");
+    try expectContains(absent_body, "(!");
+    try expectContains(absent_body, ".present)");
+}
+
 test "lower-c emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {

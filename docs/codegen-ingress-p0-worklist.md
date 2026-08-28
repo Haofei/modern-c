@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1778 C and 1849 LLVM
-functions. It found 608 C and 657 LLVM AST-body fallbacks. Report
+functions. It found 608 C and 653 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -28,22 +28,29 @@ strict-corpus recognizers are no longer an honest completion strategy.
 ### Last completed broad census snapshot (2026-08-28)
 
 The 522-root sweep found C **1170/1778 admitted (65.8%)**, 608 fallback, and
-LLVM **1192/1849 admitted (64.5%)**, 657 fallback. There were no unsupported
+LLVM **1196/1849 admitted (64.7%)**, 653 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
 shards proved that 50 no-fallback tests still rely on its fault-injection and
 edge-case semantics. That deletion was therefore reverted rather than masking
 the gap by changing tests. The plan remains as a bounded safety net, and its
-broad use is **32 C / 36 LLVM** functions (from 43/58 before the recent
+broad use is **31 C / 35 LLVM** functions (from 43/58 before the recent
 slice). The canonical producer now owns Result construction, domain/serial/counter
 builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
 specialized plan definitions from 15 to **14**. The current broad split is 1037
-canonical / 133 specialized for C and 1046 canonical / 146 specialized for
+canonical / 133 specialized for C and 1050 canonical / 146 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+
+Optional-value equality against `null` is now an explicit representation-tag
+operation in both mechanical renderers. This replaces the invalid C aggregate
+comparison that had already been admitted and moves four de-duplicated LLVM
+functions from fallback to canonical executable MIR. Equality between two
+non-null optional aggregates stays closed until MIR defines payload equality.
+The focused no-fallback ratchet is now 153 tests per backend.
 
 Nested fixed-array aggregate construction now carries a recursive layout-
 complete proof. The producer sets that bit only after the child array metadata

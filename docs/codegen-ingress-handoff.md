@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **608/1778 C** and **657/1849 LLVM** distinct functions using the AST
-  body (C admits 65.8%, LLVM 64.5%). Report mode intentionally preserves
+  finds **608/1778 C** and **653/1849 LLVM** distinct functions using the AST
+  body (C admits 65.8%, LLVM 64.7%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -29,6 +29,15 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+Value-optional comparisons against `null` now lower as an explicit test of the
+verified optional representation's `present` field. This repairs an existing C
+miscompile where canonical admission produced an illegal aggregate comparison;
+LLVM now consumes the same representation fact rather than falling back. Other
+optional-to-optional equality remains fail-closed. The broad census is now C
+**1170/1778** (1037 canonical / 133 specialized) and LLVM **1196/1849** (1050
+canonical / 146 specialized), with 608 and 653 fallbacks respectively. The
+focused ratchet is 153 tests per backend.
 
 Nested fixed-array construction now completes its recursive layout fact only
 after the child array metadata exists. C reconstructs the already-declared

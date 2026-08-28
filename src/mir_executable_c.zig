@@ -315,7 +315,13 @@ fn emitExpressionOperation(
             }
         },
         .binary => |binary| {
-            if (binary.arithmetic == .checked) {
+            if (optionalNullComparison(body, expression.*, binary)) {
+                const left = expressionById(body, binary.left) orelse return error.InvalidExpression;
+                const value = if (left.operation == .optional_none) binary.right else binary.left;
+                if (binary.op == .eq) try out.appendSlice(allocator, "(!") else try out.append(allocator, '(');
+                try emitExpression(allocator, out, body, value, depth + 1);
+                try out.appendSlice(allocator, ".present)");
+            } else if (binary.arithmetic == .checked) {
                 const helper = checkedBinaryParts(binary.op, expression.result_ty) orelse return error.InvalidExpression;
                 try out.print(allocator, "mc_checked_{s}_{s}(", .{ helper.operation, helper.suffix });
                 try emitExpression(allocator, out, body, binary.left, depth + 1);
@@ -1522,6 +1528,10 @@ fn binarySupported(
     }
     if (binary.eager_safe) return false;
     if (!sameValueType(left.result_ty, right.result_ty)) return false;
+    if (optionalNullComparison(body, expression, binary)) return ownedTrapEdgeCount(body, expression.id) == 0;
+    // The nullable-value representation is an aggregate. C cannot compare it
+    // directly, so keep payload equality closed until MIR models it explicitly.
+    if (left.result_ty == .nullable_value) return false;
     if (left.result_ty == .domain_integer) {
         const shape = left.result_ty.domain_integer;
         if (binary.op == .eq or binary.op == .ne or binary.op == .lt or binary.op == .le or binary.op == .gt or binary.op == .ge) {
@@ -1545,6 +1555,21 @@ fn binarySupported(
         .checked => checkedIntegerBinaryHasExactTrapEdges(body, expression),
         .wrapping, .saturating => false,
     };
+}
+
+fn optionalNullComparison(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    binary: @FieldType(mir.ExecutableExpression.Operation, "binary"),
+) bool {
+    if (binary.arithmetic != .ordinary or expression.result_ty != .bool or
+        (binary.op != .eq and binary.op != .ne)) return false;
+    const left = expressionById(body, binary.left) orelse return false;
+    const right = expressionById(body, binary.right) orelse return false;
+    if (left.result_ty != .nullable_value or !sameValueType(left.result_ty, right.result_ty)) return false;
+    const left_none = left.operation == .optional_none;
+    const right_none = right.operation == .optional_none;
+    return left_none != right_none;
 }
 
 fn checkedIntegerBinaryHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {

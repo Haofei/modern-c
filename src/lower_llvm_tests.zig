@@ -4198,6 +4198,25 @@ test "LLVM emits nested fixed-array aggregates from MIR without body fallback" {
     try expectContains(body, "ret { [2 x [2 x i32]] }");
 }
 
+test "LLVM compares value optionals with null from MIR without body fallback" {
+    const source =
+        \\fn present(value: u32) -> ?u32 { return value; }
+        \\fn is_present(value: u32) -> bool { return present(value) != null; }
+        \\fn is_absent(value: u32) -> bool { return present(value) == null; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_optional_null_compare.mc", source, &output);
+
+    const present_body = try llvmFunctionBody(output.items, "define internal i1 @is_present");
+    try expectContains(present_body, "; canonical executable MIR");
+    try expectContains(present_body, "extractvalue { i1, i32 }");
+    const absent_body = try llvmFunctionBody(output.items, "define internal i1 @is_absent");
+    try expectContains(absent_body, "; canonical executable MIR");
+    try expectContains(absent_body, "extractvalue { i1, i32 }");
+    try expectContains(absent_body, "xor i1");
+}
+
 test "LLVM emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {

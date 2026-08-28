@@ -829,6 +829,16 @@ const Renderer = struct {
         const left = try self.emitExpression(binary.left);
         const right = try self.emitExpression(binary.right);
         if (!std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
+        if (optionalNullComparison(self.body, expression, binary)) {
+            const left_expression = self.body.expressions[binary.left.index()];
+            const optional_value = if (left_expression.operation == .optional_none) right else left;
+            const present = try self.temp();
+            try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ present, optional_value.ty, optional_value.spelling });
+            if (binary.op == .ne) return .{ .ty = "i1", .spelling = present };
+            const absent = try self.temp();
+            try self.output.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ absent, present });
+            return .{ .ty = "i1", .spelling = absent };
+        }
         const operand_ty = self.body.expressions[binary.left.index()].result_ty;
         if (isFloatType(operand_ty)) {
             if (binary.arithmetic != .ordinary) return error.InvalidBody;
@@ -2250,6 +2260,7 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
             ownedExpressionTrapCount(body, expression.id) == 0;
     }
     if (binary.eager_safe) return false;
+    if (optionalNullComparison(body, expression, binary)) return ownedExpressionTrapCount(body, expression.id) == 0;
     if (isFloatType(left_ty)) {
         if (binary.arithmetic != .ordinary or ownedExpressionTrapCount(body, expression.id) != 0) return false;
         return switch (binary.op) {
@@ -2286,6 +2297,18 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         .lt, .le, .gt, .ge => binary.arithmetic == .ordinary and expression.result_ty == .bool and orderedIntegerType(left_ty),
         else => false,
     };
+}
+
+fn optionalNullComparison(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, binary: anytype) bool {
+    if (binary.arithmetic != .ordinary or expression.result_ty != .bool or
+        (binary.op != .eq and binary.op != .ne)) return false;
+    if (!expressionValid(body, binary.left) or !expressionValid(body, binary.right)) return false;
+    const left = body.expressions[binary.left.index()];
+    const right = body.expressions[binary.right.index()];
+    if (left.result_ty != .nullable_value or !sameValueType(left.result_ty, right.result_ty)) return false;
+    const left_none = left.operation == .optional_none;
+    const right_none = right.operation == .optional_none;
+    return left_none != right_none;
 }
 
 fn isFloatType(ty: mir.ValueType) bool {
