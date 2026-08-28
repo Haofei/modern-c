@@ -14852,6 +14852,24 @@ test "LLVM canonical executable MIR owns scalar integer conversions" {
     try expectContains(modulo, "trunc i32 300 to i8");
 }
 
+test "LLVM canonical executable MIR owns serial compare Result" {
+    const source =
+        \\type Seq = serial<u32>;
+        \\fn compare(a: Seq, b: Seq) -> Result<Order, AmbiguousSerialOrder> { return Seq.compare(a, b); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_serial_compare.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { i1, i8, i8 } @compare");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "sub i32 %mc_arg_0, %mc_arg_1");
+    try expectContains(body, "icmp eq i32");
+    try expectContains(body, "2147483648");
+    try expectContains(body, "select i1");
+    try expectContains(body, "insertvalue { i1, i8, i8 }");
+}
+
 test "LLVM canonical executable MIR precedes legacy specialized plans" {
     const source =
         \\fn identity(value: u32) -> u32 {

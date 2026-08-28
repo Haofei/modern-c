@@ -16,8 +16,8 @@ zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
-broad sweep over 522 repository MC roots de-duplicated to 1785 C and 1858 LLVM
-functions. It found 625 C and 680 LLVM AST-body fallbacks. Report
+broad sweep over 522 repository MC roots de-duplicated to 1787 C and 1858 LLVM
+functions. It found 620 C and 678 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1160/1785 admitted (65.0%)**, 625 fallback, and
-LLVM **1178/1858 admitted (63.4%)**, 680 fallback. There were no unsupported
+The 522-root sweep found C **1167/1787 admitted (65.3%)**, 620 fallback, and
+LLVM **1180/1858 admitted (63.5%)**, 678 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
@@ -41,8 +41,8 @@ builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. The current broad split is 1027
-canonical / 133 specialized for C and 1022 canonical / 156 specialized for
+specialized plan definitions from 15 to **14**. The current broad split is 1035
+canonical / 132 specialized for C and 1025 canonical / 155 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
 
 Target-typed negative integer literals now lower as canonical signed values.
@@ -50,14 +50,14 @@ Suffixed literals keep their declared integer type; unsuffixed literals adopt
 the expected signed type; and the signed minimum is represented directly rather
 than as an overflowing runtime negation. Dynamic negation continues to require
 its exact trap edge. This removed 15 broad fallbacks per backend and raised the
-focused no-fallback ratchet to 145 tests per backend.
+focused no-fallback ratchet to 146 tests per backend.
 
 Scalar trapping integer conversions now carry one canonical range relation and
 one exact `IntegerOverflow` owner. The producer covers unsigned narrowing,
 signed/unsigned crossings and value-preserving widening up to 64 bits; 128-bit
 extrema remain closed. C and LLVM evaluate the operand once and mechanically
 render the same fact. This removed three broad fallbacks per backend and raised
-the focused no-fallback ratchet to 145 tests per backend.
+the focused no-fallback ratchet to 146 tests per backend.
 
 The same relation now owns the remaining non-Result scalar conversions:
 `wrap_from`, `from_mod`, `sat_from`, and storage-preserving domain `from`.
@@ -73,6 +73,14 @@ once and selects a typed success/error aggregate; LLVM emits the equivalent
 tagged aggregate. This removes the `narrow_try` and `widen_try` fallbacks in
 both backends. The scalar conversion family is therefore no longer a source of
 AST fallback in `tests/c_emit/conversions.mc` or for those two result helpers.
+
+`serial.compare` now owns its half-window ambiguity rule and
+`Result<Order, AmbiguousSerialOrder>` storage in executable MIR. The producer
+maps the library scalar identities to canonical `i8`/`u8` payload storage, while
+C retains the nominal helper name and LLVM consumes only the storage layout.
+This directly removes `seq_compare` and also lets several existing Result
+constructors become canonical. Broad `simple_return` use falls to 29 C / 42
+LLVM, with no new specialized plan.
 
 Fixed-array `ValueType` identity now includes the immediate element spelling
 and known length instead of collapsing every array to the same `"array"` key.

@@ -768,7 +768,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -780,6 +780,7 @@ fn builtinCallSupported(
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
+    if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
     return if (call.kind == .raw_ptr)
         call.representation_source != null and call.representation_span_id.isValid() and
             representationOperationHasExactTrapEdge(body, expression)
@@ -795,6 +796,17 @@ fn conversionTryResultSupported(body: *const mir.ExecutableBody, expression: mir
     const shape = resultType(body, expression.type_id) orelse return false;
     return sameValueType(shape.ty, expression.result_ty) and shape.ok_ty == .integer and
         sameValueType(shape.err_ty, .{ .integer = "u8" });
+}
+
+fn serialCompareResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    const identity = switch (expression.result_ty) {
+        .result => |value| value,
+        else => return false,
+    };
+    return sameValueType(shape.ty, expression.result_ty) and
+        std.mem.eql(u8, identity.ok, "Order") and std.mem.eql(u8, identity.err, "AmbiguousSerialOrder") and
+        sameValueType(shape.ok_ty, .{ .integer = "i8" }) and sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn enumRawSupported(
@@ -857,6 +869,32 @@ fn emitBuiltinCall(
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, ") }");
             try out.append(allocator, ')');
+        },
+        .serial_compare => {
+            const left = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const domain = domainInteger(left.result_ty, .serial) orelse return error.UnsupportedType;
+            const storage = mir.ExecutableCastKind.integerInfo(.{ .integer = domain.child }) orelse return error.UnsupportedType;
+            if (storage.signed or storage.bits > 64) return error.UnsupportedType;
+            const unsigned_c = primitiveType(domain.child) orelse return error.UnsupportedType;
+            const signed_c = signedPrimitiveType(domain.child) orelse return error.UnsupportedType;
+            const shape = resultTypeForValueType(body, result_ty) orelse return error.UnsupportedType;
+            const half_window = @as(u128, 1) << @intCast(storage.bits - 1);
+
+            try out.append(allocator, '(');
+            try emitSerialUnsignedDiff(allocator, out, body, call.arguments[0], call.arguments[1], unsigned_c, depth + 1);
+            try out.print(allocator, " == ({s}){d} ? (", .{ unsigned_c, half_window });
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = (");
+            try appendCType(allocator, out, body, shape.err_ty);
+            try out.appendSlice(allocator, ")0 } : (");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = true, .payload.ok = (");
+            try appendCType(allocator, out, body, shape.ok_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitSerialSignedDiff(allocator, out, body, call.arguments[0], call.arguments[1], unsigned_c, signed_c, depth + 1);
+            try out.appendSlice(allocator, " < 0 ? -1 : (");
+            try emitSerialSignedDiff(allocator, out, body, call.arguments[0], call.arguments[1], unsigned_c, signed_c, depth + 1);
+            try out.appendSlice(allocator, " > 0 ? 1 : 0)) })");
         },
         .conversion_sat_from => {
             const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
@@ -1032,6 +1070,37 @@ fn emitConversionOutOfRange(
         else
             try out.print(allocator, ") > (unsigned __int128){d})", .{unsignedMaximum(conversion.target.bits)});
     }
+}
+
+fn emitSerialUnsignedDiff(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    left: mir.ExprId,
+    right: mir.ExprId,
+    unsigned_c: []const u8,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.print(allocator, "(({s})(", .{unsigned_c});
+    try emitExpression(allocator, out, body, left, depth + 1);
+    try out.appendSlice(allocator, " - ");
+    try emitExpression(allocator, out, body, right, depth + 1);
+    try out.appendSlice(allocator, "))");
+}
+
+fn emitSerialSignedDiff(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    left: mir.ExprId,
+    right: mir.ExprId,
+    unsigned_c: []const u8,
+    signed_c: []const u8,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.print(allocator, "(({s})", .{signed_c});
+    try emitSerialUnsignedDiff(allocator, out, body, left, right, unsigned_c, depth + 1);
+    try out.append(allocator, ')');
 }
 
 fn castSupported(
@@ -2050,15 +2119,22 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
         .result => |identity| {
             const shape = resultTypeForValueType(body, ty) orelse return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_result_");
-            try appendCTypeSuffix(allocator, out, shape.ok_ty);
+            try appendResultCTypeSuffix(allocator, out, identity.ok, shape.ok_ty);
             try out.append(allocator, '_');
-            if (std.mem.eql(u8, identity.err, "ConversionError"))
-                try out.appendSlice(allocator, "ConversionError")
-            else
-                try appendCTypeSuffix(allocator, out, shape.err_ty);
+            try appendResultCTypeSuffix(allocator, out, identity.err, shape.err_ty);
         },
         else => return error.UnsupportedType,
     }
+}
+
+fn appendResultCTypeSuffix(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    identity: []const u8,
+    storage_ty: mir.ValueType,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (isSafeIdentifier(identity)) return out.appendSlice(allocator, identity);
+    return appendCTypeSuffix(allocator, out, storage_ty);
 }
 
 fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {

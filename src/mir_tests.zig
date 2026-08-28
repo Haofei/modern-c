@@ -5352,6 +5352,11 @@ test "MIR owns arithmetic domain call identities and complete types" {
         try std.testing.expectEqual(case.has_interval, interval_fact != null);
         if (interval_fact) |fact| try std.testing.expectEqualStrings("Duration", typeExprHeadName(fact.target_ty).?);
     }
+    const compare = functionByName(typed_mir, "compare").?;
+    try std.testing.expect(compare.executable_body.isComplete());
+    try std.testing.expectEqual(@as(usize, 1), compare.executable_body.result_types.len);
+    try std.testing.expect(mir.ValueType.eql(compare.executable_body.result_types[0].ok_ty, .{ .integer = "i8" }));
+    try std.testing.expect(mir.ValueType.eql(compare.executable_body.result_types[0].err_ty, .{ .integer = "u8" }));
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
     try mir.validateLoweringAdmission(typed_mir);

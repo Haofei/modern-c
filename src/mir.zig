@@ -13,6 +13,7 @@ const ownership_facts = @import("ownership_facts.zig");
 const parser = @import("parser.zig");
 const sema_builtin = @import("sema_builtin.zig");
 const sema_type = @import("sema_type.zig");
+const scalar_repr = @import("scalar_repr.zig");
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
@@ -8258,6 +8259,9 @@ const FunctionBuilder = struct {
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
                     } else if (domain_target) |target| {
                         result_ty = target.result_ty;
+                        if (target.kind == .serial_compare and
+                            !try self.internExecutableResultType(result_ty, target.result_type_expr))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
                     } else if (conversion_target) |target| {
                         result_ty = self.conversionCallResultValueType(target);
                         if (target.kind == .conversion_try_from) {
@@ -8767,15 +8771,8 @@ const FunctionBuilder = struct {
             else => return false,
         };
         if (!std.mem.eql(u8, generic.base.text, "Result") or generic.args.len != 2 or ty != .result) return false;
-        const ok_ty = valueTypeFromTypeAlias(generic.args[0], self.enums, self.structs, self.packed_bits, self.aliases);
-        const err_name: ?[]const u8 = switch (aggregateTargetTypeAlias(generic.args[1], self.aliases).kind) {
-            .name => |name| name.text,
-            else => null,
-        };
-        const err_ty: ValueType = if (err_name) |name|
-            if (std.mem.eql(u8, name, "ConversionError")) .{ .integer = "u8" } else valueTypeFromTypeAlias(generic.args[1], self.enums, self.structs, self.packed_bits, self.aliases)
-        else
-            valueTypeFromTypeAlias(generic.args[1], self.enums, self.structs, self.packed_bits, self.aliases);
+        const ok_ty = self.executableResultPayloadType(generic.args[0]);
+        const err_ty = self.executableResultPayloadType(generic.args[1]);
         if (ok_ty == .unknown or ok_ty == .value or err_ty == .unknown or err_ty == .value) return false;
         const type_id = try self.internTypeId(ty);
         const ok_type_id = try self.internTypeId(ok_ty);
@@ -8797,6 +8794,26 @@ const FunctionBuilder = struct {
         if (!try self.internExecutableTypeExpr(ok_ty, generic.args[0])) return false;
         if (!try self.internExecutableTypeExpr(err_ty, generic.args[1])) return false;
         return true;
+    }
+
+    fn executableResultPayloadType(self: *FunctionBuilder, type_expr: ast.TypeExpr) ValueType {
+        const ty = valueTypeFromTypeAlias(type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (ty != .unknown and ty != .value) return ty;
+        const name = switch (aggregateTargetTypeAlias(type_expr, self.aliases).kind) {
+            .name => |value| value.text,
+            else => return ty,
+        };
+        if (!scalar_repr.isLibraryInteger(name)) return ty;
+        const repr = scalar_repr.integer(name) orelse return ty;
+        const storage_name: []const u8 = switch (repr.bits) {
+            8 => if (repr.signed) "i8" else "u8",
+            16 => if (repr.signed) "i16" else "u16",
+            32 => if (repr.signed) "i32" else "u32",
+            64 => if (repr.signed) "i64" else "u64",
+            128 => if (repr.signed) "i128" else "u128",
+            else => return ty,
+        };
+        return .{ .integer = storage_name };
     }
 
     fn internExecutableEnumType(self: *FunctionBuilder, ty: ValueType) !bool {

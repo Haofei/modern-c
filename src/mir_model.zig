@@ -525,6 +525,20 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             .domain_integer => |shape| shape.kind == .serial and ValueType.eql(result, .{ .domain_integer = .{ .kind = .wrap, .child = shape.child } }),
             else => false,
         },
+        .serial_compare => serial_compare: {
+            if (operands.len != 2 or !ValueType.eql(operands[0], operands[1])) break :serial_compare false;
+            const domain = switch (operands[0]) {
+                .domain_integer => |shape| shape,
+                else => break :serial_compare false,
+            };
+            const storage = ExecutableCastKind.integerInfo(.{ .integer = domain.child }) orelse break :serial_compare false;
+            if (domain.kind != .serial or storage.signed or storage.bits > 64) break :serial_compare false;
+            break :serial_compare switch (result) {
+                .result => |shape| std.mem.eql(u8, shape.ok, "Order") and
+                    std.mem.eql(u8, shape.err, "AmbiguousSerialOrder"),
+                else => false,
+            };
+        },
         .counter_delta_mod => operands.len == 2 and ValueType.eql(operands[0], operands[1]) and switch (operands[0]) {
             .domain_integer => |shape| shape.kind == .counter and ValueType.eql(result, .{ .domain_integer = .{ .kind = .wrap, .child = shape.child } }),
             else => false,

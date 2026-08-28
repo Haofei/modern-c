@@ -21960,6 +21960,23 @@ test "C canonical executable MIR owns scalar integer conversions" {
     try expectContains(modulo, "((uint8_t)(mc_exec_tmp_");
 }
 
+test "C canonical executable MIR owns serial compare Result" {
+    const source =
+        \\type Seq = serial<u32>;
+        \\fn compare(a: Seq, b: Seq) -> Result<Order, AmbiguousSerialOrder> { return Seq.compare(a, b); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_serial_compare.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "MC_UNUSED static mc_result_Order_AmbiguousSerialOrder compare(uint32_t a, uint32_t b)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "== (uint32_t)2147483648");
+    try expectContains(body, ".is_ok = false");
+    try expectContains(body, ".payload.err = (uint8_t)0");
+    try expectContains(body, ".payload.ok = (int8_t)");
+}
+
 test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
     const source =
         \\struct Counter {
