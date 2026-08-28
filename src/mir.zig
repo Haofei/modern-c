@@ -6732,6 +6732,10 @@ const FunctionBuilder = struct {
                     load.representation_span_id = self.span_ids.get(source) orelse .invalid;
                     if (!load.representation_span_id.isValid()) complete = false;
                 },
+                .atomic_update => |*update| if (update.representation_source) |source| {
+                    update.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                    if (!update.representation_span_id.isValid()) complete = false;
+                },
                 .address_of => |*address| if (address.representation_source) |source| {
                     address.representation_span_id = self.span_ids.get(source) orelse .invalid;
                     if (!address.representation_span_id.isValid()) complete = false;
@@ -6978,6 +6982,11 @@ const FunctionBuilder = struct {
                     load.representation_source == null and !load.representation_span_id.isValid();
             },
             .atomic_load => |load| self.executableAtomicLoadComplete(expression, load),
+            .atomic_init => |operand| operand.isValid() and operand.index() < expression.id.index() and
+                operand.index() < self.executable_expressions.items.len and
+                sameValueType(self.executable_expressions.items[operand.index()].result_ty, expression.result_ty) and
+                self.executable_expressions.items[operand.index()].type_id.eql(expression.type_id),
+            .atomic_update => |update| self.executableAtomicUpdateComplete(expression, update),
             .literal => |literal| switch (literal) {
                 .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
                 .string, .uninit, .enum_value => false,
@@ -7174,7 +7183,15 @@ const FunctionBuilder = struct {
             else => return false,
         }
         if (place.projection_count == 0) return switch (place.root) {
-            .local => false,
+            .local => |id| local: {
+                for (self.executable_statements.items) |statement| switch (statement.operation) {
+                    .local_init => |local_init| if (local_init.local.eql(id)) {
+                        break :local sameValueType(local_init.ty, place.ty) and local_init.type_id.eql(place.type_id);
+                    },
+                    else => {},
+                };
+                break :local false;
+            },
             .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
                 self.executable_symbols.items[id.index()].kind == .global and
                 self.executable_symbols.items[id.index()].atomic_payload_type_id.eql(place.type_id),
@@ -7214,6 +7231,39 @@ const FunctionBuilder = struct {
             !place.type_id.eql(expression.type_id)) return false;
         const guarded = self.executablePlaceNeedsRepresentationGuard(place);
         if (guarded != (load.representation_source != null and load.representation_span_id.isValid())) return false;
+        var owned: usize = 0;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .expression => |id| if (id.eql(expression.id)) {
+                if (!guarded or edge.kind != .InvalidRepresentation or edge.source != .representation_check or
+                    !edge.from_block.eql(expression.block_id)) return false;
+                owned += 1;
+            },
+            .statement => {},
+        };
+        return owned == @as(usize, @intFromBool(guarded));
+    }
+
+    fn executableAtomicUpdateComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        update: @FieldType(ExecutableExpression.Operation, "atomic_update"),
+    ) bool {
+        const ordering_valid = switch (update.kind) {
+            .store => update.ordering.validForStore(),
+            .fetch_add, .fetch_sub => update.ordering.validForRmw(),
+        };
+        if (!ordering_valid or !update.place.isValid() or update.place.index() >= self.executable_places.items.len or
+            !update.value.isValid() or update.value.index() >= expression.id.index() or
+            update.value.index() >= self.executable_expressions.items.len) return false;
+        const place = self.executable_places.items[update.place.index()];
+        const value = self.executable_expressions.items[update.value.index()];
+        if (!self.executableAtomicPlaceComplete(place) or !sameValueType(place.ty, value.result_ty) or
+            !place.type_id.eql(value.type_id)) return false;
+        if (update.kind == .store) {
+            if (expression.result_ty != .void) return false;
+        } else if (!sameValueType(expression.result_ty, place.ty) or !expression.type_id.eql(place.type_id)) return false;
+        const guarded = self.executablePlaceNeedsRepresentationGuard(place);
+        if (guarded != (update.representation_source != null and update.representation_span_id.isValid())) return false;
         var owned: usize = 0;
         for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
             .expression => |id| if (id.eql(expression.id)) {
@@ -7402,6 +7452,7 @@ const FunctionBuilder = struct {
                     const owner_span_id = switch (owner.operation) {
                         .load => |load| load.representation_span_id,
                         .atomic_load => |load| load.representation_span_id,
+                        .atomic_update => |update| update.representation_span_id,
                         .address_of => |address| address.representation_span_id,
                         .builtin_call => |call| call.representation_span_id,
                         else => owner.span_id,
@@ -8028,6 +8079,12 @@ const FunctionBuilder = struct {
                     result_ty = .{ .integer = "usize" };
                     break :call .{ .literal = .{ .integer = value } };
                 }
+                if (self.atomicInitCallTargetForExpected(node, expected_type_expr)) |target| {
+                    if (!executableAtomicPayloadSupported(target.payload_ty))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    result_ty = target.payload_ty;
+                    break :call .{ .atomic_init = try self.ensureExecutableCoercedExpr(node.args[0], target.payload_ty) };
+                }
                 if (self.atomicCallTargetKind(node.callee.*) == .atomic_load) {
                     if (node.args.len != 1)
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
@@ -8058,6 +8115,47 @@ const FunctionBuilder = struct {
                         .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                     } };
                 }
+                if (self.atomicCallTargetKind(node.callee.*)) |atomic_kind| switch (atomic_kind) {
+                    .atomic_store, .atomic_fetch_add, .atomic_fetch_sub => {
+                        if (node.args.len != 2)
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        const ordering = executableAtomicOrdering(node.args[1]) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        const update_kind: mir_model.ExecutableAtomicUpdateKind = switch (atomic_kind) {
+                            .atomic_store => if (ordering.validForStore()) .store else
+                                break :call self.unsupportedExecutableExpression(.unsupported_call),
+                            .atomic_fetch_add => if (ordering.validForRmw()) .fetch_add else unreachable,
+                            .atomic_fetch_sub => if (ordering.validForRmw()) .fetch_sub else unreachable,
+                            else => unreachable,
+                        };
+                        const member = memberExpr(node.callee.*) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        const receiver_type_expr = self.typeExprForExpr(member.base.*) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        const payload_type_expr = directAtomicPayloadTypeExprAlias(receiver_type_expr, self.aliases, true) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        const payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+                        if (!executableAtomicPayloadSupported(payload_ty))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        result_ty = if (update_kind == .store) .void else payload_ty;
+                        const place_id = try self.appendExecutableAtomicPlace(member.base.*, payload_ty);
+                        const place = self.executable_places.items[place_id.index()];
+                        const guard_source: ?SourcePoint = if (self.executablePlaceNeedsRepresentationGuard(place))
+                            self.executableDerefOperandSource(member.base.*) orelse
+                                self.sourcePoint(canonicalOperatorOperand(member.base.*).span)
+                        else
+                            null;
+                        break :call .{ .atomic_update = .{
+                            .kind = update_kind,
+                            .place = place_id,
+                            .value = try self.ensureExecutableCoercedExpr(node.args[0], payload_ty),
+                            .ordering = ordering,
+                            .representation_source = guard_source,
+                            .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
+                        } };
+                    },
+                    else => {},
+                };
                 if (try self.executableBuiltinCallKind(node)) |kind| {
                     const raw_target = self.rawCallTarget(node);
                     const wrapping_target = self.wrappingCallTarget(node);
@@ -8954,6 +9052,12 @@ const FunctionBuilder = struct {
             }
             place.projections[0] = .deref;
             place.projection_count = 1;
+        } else if (place.projection_count == 0) {
+            // Direct local/global atomic storage is represented by its payload
+            // type. Atomicity belongs to the place operation, not to a second
+            // backend-visible wrapper type.
+            place.root_ty = payload_ty;
+            place.root_type_id = payload_type_id;
         }
         return place_id;
     }
@@ -9274,6 +9378,19 @@ const FunctionBuilder = struct {
                     self.exprType(init_expr)
                 else
                     .unknown;
+                // `atomic<T>` is a source-level access discipline whose
+                // runtime storage is exactly `T`. Canonical executable MIR
+                // records that storage type and carries atomicity on each
+                // place operation, so neither backend has to rediscover the
+                // generic wrapper from syntax.
+                const executable_ty_expr = if (ty_expr) |declared|
+                    atomicPayloadTypeExprAlias(declared, self.aliases) orelse declared
+                else
+                    null;
+                const executable_ty = if (executable_ty_expr) |storage_type|
+                    valueTypeFromTypeAlias(storage_type, self.enums, self.structs, self.packed_bits, self.aliases)
+                else
+                    ty;
                 const mutable = std.meta.activeTag(stmt.kind) == .var_decl;
                 if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(self, local.init)) {
                     if (local.init) |init_expr| {
@@ -9290,14 +9407,14 @@ const FunctionBuilder = struct {
                     }
                 }
                 for (local.names) |name| {
-                    if (!try self.internExecutableEnumType(ty)) self.executable_supported = false;
-                    if (ty == .nullable_value and !try self.internExecutableValueOptionalType(ty))
+                    if (!try self.internExecutableEnumType(executable_ty)) self.executable_supported = false;
+                    if (executable_ty == .nullable_value and !try self.internExecutableValueOptionalType(executable_ty))
                         self.executable_supported = false;
-                    if (ty_expr) |declared_ty| {
-                        if (!try self.internExecutableTypeExpr(ty, declared_ty))
+                    if (executable_ty_expr) |declared_ty| {
+                        if (!try self.internExecutableTypeExpr(executable_ty, declared_ty))
                             self.executable_supported = false;
                     }
-                    switch (ty) {
+                    switch (executable_ty) {
                         .struct_ => |struct_name| {
                             if (self.structs.get(struct_name)) |summary| {
                                 if (!try self.internExecutableAggregateType(ty, executableAggregateConstruction(summary), summary.fields))
@@ -9317,14 +9434,14 @@ const FunctionBuilder = struct {
                     else
                         null else null;
                     const executable_initializer = if (initializer_expr) |initializer|
-                        try self.ensureExecutablePointerCoercedExprAsType(initializer, ty, ty_expr)
+                        try self.ensureExecutablePointerCoercedExprAsType(initializer, executable_ty, ty_expr)
                     else
                         null;
-                    if (executable_initializer) |initializer| try self.contextualizeExecutableLiteral(initializer, ty);
+                    if (executable_initializer) |initializer| try self.contextualizeExecutableLiteral(initializer, executable_ty);
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
-                        .ty = ty,
-                        .type_id = try self.internTypeId(ty),
+                        .ty = executable_ty,
+                        .type_id = try self.internTypeId(executable_ty),
                         .value = executable_initializer,
                         .mutable = mutable,
                     } });
@@ -11580,11 +11697,19 @@ const FunctionBuilder = struct {
     };
 
     fn atomicInitCallTarget(self: *FunctionBuilder, call: anytype) ?AtomicInitCallTarget {
+        return self.atomicInitCallTargetForExpected(call, null);
+    }
+
+    fn atomicInitCallTargetForExpected(
+        self: *FunctionBuilder,
+        call: anytype,
+        expected_type_expr: ?ast.TypeExpr,
+    ) ?AtomicInitCallTarget {
         if (call.type_args.len != 0 or call.args.len != 1) return null;
         const member = memberExpr(call.callee.*) orelse return null;
         const base_name = calleeIdentName(member.base.*) orelse return null;
         if (!std.mem.eql(u8, base_name, "atomic") or !std.mem.eql(u8, member.name.text, "init")) return null;
-        const result_type_expr = self.assignment_target_type_expr orelse return null;
+        const result_type_expr = expected_type_expr orelse self.assignment_target_type_expr orelse return null;
         const payload_type_expr = atomicPayloadTypeExprAlias(result_type_expr, self.aliases) orelse return null;
         return .{
             .payload_type_expr = payload_type_expr,
@@ -13258,6 +13383,7 @@ const FunctionBuilder = struct {
             const representation: Representation = switch (expression.operation) {
                 .load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 .atomic_load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
+                .atomic_update => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 .address_of => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 else => continue,
             };

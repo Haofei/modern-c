@@ -160,7 +160,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
-                    .load, .atomic_load, .address_of, .builtin_call, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .load, .atomic_load, .atomic_update, .address_of, .builtin_call, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     else => return false,
                 }
             },
@@ -487,6 +487,8 @@ const Renderer = struct {
             },
             .load => |load| try self.emitMemoryLoad(expression, load),
             .atomic_load => |load| try self.emitAtomicLoad(expression, load),
+            .atomic_init => |operand| try self.emitExpression(operand),
+            .atomic_update => |update| try self.emitAtomicUpdate(expression, update),
             .literal => |literal| try self.literalValue(ty, literal),
             .unary => |unary| try self.emitUnary(expression, ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
@@ -1188,26 +1190,8 @@ const Renderer = struct {
 
     fn emitAtomicLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
         if (!atomicLoadSupported(self.body, expression, load)) return error.InvalidBody;
-        const place = self.body.places[load.place.index()];
         const value_ty = try self.typeText(expression.result_ty);
-        const pointer: []const u8 = if (place.projection_count == 0) blk: {
-            const symbol_id = switch (place.root) {
-                .symbol => |id| id,
-                .local, .value => return error.InvalidBody,
-            };
-            break :blk try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody});
-        } else blk: {
-            const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
-            const local_id = switch (place.root) {
-                .local => |id| id,
-                .symbol, .value => return error.InvalidBody,
-            };
-            const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
-            if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
-            const continuation = try std.fmt.allocPrint(self.allocator, "mc_atomic_load_ready_{d}", .{expression.id.raw});
-            try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
-            break :blk local.storage;
-        };
+        const pointer = try self.emitAtomicPlacePointer(expression, load.place);
         const storage_ty: []const u8 = if (expression.result_ty == .bool) "i8" else value_ty;
         const loaded = try self.temp();
         try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}\n", .{
@@ -1221,6 +1205,69 @@ const Renderer = struct {
         const converted = try self.temp();
         try self.output.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ converted, loaded });
         return .{ .ty = "i1", .spelling = converted };
+    }
+
+    fn emitAtomicUpdate(self: *Renderer, expression: mir.ExecutableExpression, update: anytype) RenderError!Value {
+        if (!atomicUpdateSupported(self.body, expression, update)) return error.InvalidBody;
+        const place = self.body.places[update.place.index()];
+        const payload_ty = try self.typeText(place.ty);
+        const operand = try self.emitExpression(update.value);
+        const pointer = try self.emitAtomicPlacePointer(expression, update.place);
+        var stored = operand.spelling;
+        const storage_ty: []const u8 = if (place.ty == .bool) "i8" else payload_ty;
+        if (place.ty == .bool) {
+            if (!std.mem.eql(u8, operand.ty, "i1")) return error.InvalidBody;
+            stored = try self.temp();
+            try self.output.print(self.allocator, "  {s} = zext i1 {s} to i8\n", .{ stored, operand.spelling });
+        } else if (!std.mem.eql(u8, operand.ty, storage_ty)) return error.InvalidBody;
+        if (update.kind == .store) {
+            try self.output.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}\n", .{
+                storage_ty,
+                stored,
+                pointer,
+                llvmAtomicOrdering(update.ordering),
+                mir.ExecutableMemoryAccess.scalarAlignment(place.ty) orelse return error.InvalidBody,
+            });
+            return .{ .ty = "void", .spelling = "" };
+        }
+        const old = try self.temp();
+        try self.output.print(self.allocator, "  {s} = atomicrmw {s} ptr {s}, {s} {s} {s}\n", .{
+            old,
+            if (update.kind == .fetch_add) "add" else "sub",
+            pointer,
+            storage_ty,
+            stored,
+            llvmAtomicOrdering(update.ordering),
+        });
+        if (place.ty != .bool) return .{ .ty = payload_ty, .spelling = old };
+        const converted = try self.temp();
+        try self.output.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ converted, old });
+        return .{ .ty = "i1", .spelling = converted };
+    }
+
+    fn emitAtomicPlacePointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!atomicPlaceSupported(self.body, place)) return error.InvalidBody;
+        if (place.projection_count == 0) return switch (place.root) {
+            .local => |id| blk: {
+                const local = self.locals.get(id.raw) orelse return error.InvalidBody;
+                if (!local.addressable) return error.InvalidBody;
+                break :blk local.storage;
+            },
+            .symbol => |id| try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, id) orelse return error.InvalidBody}),
+            .value => error.InvalidBody,
+        };
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_atomic_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
+        return local.storage;
     }
 
     fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
@@ -1546,6 +1593,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .symbol => functionSymbolExpressionSupported(body, expression),
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
+        .atomic_init => |operand| atomicInitSupported(body, expression, operand),
+        .atomic_update => |update| atomicUpdateSupported(body, expression, update),
         .literal => |literal| switch (literal) {
             .integer, .signed_integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
@@ -2186,6 +2235,40 @@ fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn atomicInitSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    if (!expressionValid(body, operand_id)) return false;
+    const operand = body.expressions[operand_id.index()];
+    return atomicPayloadTypeSupported(expression.result_ty) and sameValueType(operand.result_ty, expression.result_ty) and
+        operand.type_id.eql(expression.type_id) and ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) bool {
+    if (!placeValid(body, update.place) or !expressionValid(body, update.value)) return false;
+    const place = body.places[update.place.index()];
+    const operand = body.expressions[update.value.index()];
+    const ordering_valid = switch (update.kind) {
+        .store => update.ordering.validForStore(),
+        .fetch_add, .fetch_sub => update.ordering.validForRmw(),
+    };
+    if (!ordering_valid or !atomicPlaceSupported(body, place) or
+        !sameValueType(place.ty, operand.result_ty) or !place.type_id.eql(operand.type_id)) return false;
+    if (update.kind == .store) {
+        if (expression.result_ty != .void) return false;
+    } else if (!sameValueType(expression.result_ty, place.ty) or !expression.type_id.eql(place.type_id)) return false;
+    if (place.projection_count == 0) return update.representation_source == null and
+        !update.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
+    return update.representation_source != null and update.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+}
+
+fn atomicPayloadTypeSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .bool => true,
+        .integer => mir.ExecutableMemoryAccess.scalarAlignment(ty) != null,
+        else => false,
+    };
+}
+
 fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
     switch (place.ty) {
@@ -2194,11 +2277,20 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
         else => return false,
     }
     if (place.projection_count == 0) return switch (place.root) {
+        .local => |id| local_storage: {
+            for (body.statements) |statement| switch (statement.operation) {
+                .local_init => |init| if (init.local.eql(id)) {
+                    break :local_storage sameValueType(init.ty, place.ty) and init.type_id.eql(place.type_id);
+                },
+                else => {},
+            };
+            break :local_storage false;
+        },
         .symbol => |id| if (symbolIdentity(body, id)) |identity|
             identity.kind == .global and identity.atomic_payload_type_id.eql(place.type_id)
         else
             false,
-        .local, .value => false,
+        .value => false,
     };
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local_id = switch (place.root) {
@@ -2219,8 +2311,9 @@ fn llvmAtomicOrdering(ordering: mir.ExecutableAtomicOrdering) []const u8 {
     return switch (ordering) {
         .relaxed => "monotonic",
         .acquire => "acquire",
+        .release => "release",
+        .acq_rel => "acq_rel",
         .seq_cst => "seq_cst",
-        .release, .acq_rel => unreachable,
     };
 }
 

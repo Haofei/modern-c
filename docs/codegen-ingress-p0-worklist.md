@@ -16,8 +16,8 @@ zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
-broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1735 C and 1808
-LLVM functions. It found 633 C and 693 LLVM AST-body fallbacks. Report
+broad sweep over 564 repository MC roots de-duplicated to 1773 C and 1846 LLVM
+functions. It found 629 C and 689 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1102/1735 admitted (63.5%)**, 633 fallback, and
-LLVM **1115/1808 admitted (61.7%)**, 693 fallback. There were no unsupported
+The 564-root sweep found C **1144/1773 admitted (64.5%)**, 629 fallback, and
+LLVM **1157/1846 admitted (62.7%)**, 689 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready C body fell through to that ingress; LLVM reports eight ready
 bodies still blocked at ingress and keeps them visible as debt. The latest
@@ -143,17 +143,17 @@ admits 4 more functions per backend and reduces `trap_projection` by 13 in each;
 9 of those functions now stop at a later producer invariant instead of a missing
 trap edge.
 
-Scalar `atomic.load` now has a dedicated executable-MIR operation for direct
-global storage and exactly one pointer indirection. The operation owns its
-atomic place, scalar payload identity, typed memory ordering and exact
-`InvalidRepresentation` edge. Ordinary load/store/address operations reject
-atomic places, and both renderers accept only bool or 8/16/32/64/size integer
-payloads. C emits `__atomic_load_n`; LLVM emits `load atomic`, maps relaxed to
-`monotonic`, and loads bool storage as `i8`. Local `atomic.init`, aggregate
-atomic fields, fetch/store and nested pointers remain on the fallback. The
-nested-pointer semantic helper was tightened at the same time so
-`**atomic<T>` cannot be mistaken for a direct receiver. This admits 3 additional
-functions in each backend.
+The bounded scalar atomic family now has typed executable-MIR operations for
+init, load, store, fetch-add and fetch-sub. Operations own the atomic place,
+payload identity, ordering and any exact `InvalidRepresentation` edge. Local
+`atomic<T>` storage is normalized to `T`; globals and direct pointer receivers
+share the same operation model. C emits `__atomic_*`; LLVM emits
+`load/store atomic` and `atomicrmw`, mapping bool storage through `i8`.
+Ordering enum spelling is consumed by MIR construction instead of becoming a
+backend operand. Aggregate atomic fields, nested pointers and non-scalar
+payloads remain closed. In the expanded 564-root sweep, the enum-literal
+blocker fell from 43 to 25 per backend and admitted paths rose by 42 while the
+corpus itself grew by 38 functions.
 
 Runtime assertions now carry a statement-owned, exact `Assert/assert_stmt`
 edge into executable MIR. Producer completion and the verifier require one bool

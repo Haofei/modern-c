@@ -182,6 +182,26 @@ test "LLVM atomic loads use canonical executable MIR" {
     try expectNotContains(boolean, "load atomic i1");
 }
 
+test "LLVM atomic updates use canonical executable MIR" {
+    const source =
+        \\fn update(delta: u32) -> u32 {
+        \\    var value: atomic<u32> = atomic.init(4);
+        \\    value.store(delta, .release);
+        \\    return value.fetch_add(1, .acq_rel);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_atomic_update.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "@update");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "store atomic i32 %mc_arg_0, ptr %mc_local_");
+    try expectContains(body, "release, align 4");
+    try expectContains(body, "atomicrmw add ptr %mc_local_");
+    try expectContains(body, "i32 1 acq_rel");
+}
+
 test "LLVM shared structural body plans cover nested, aggregate, workflow, and hoisted-loop families" {
     const Case = struct { name: []const u8, path: []const u8, function_header: []const u8, needle: []const u8 };
     const cases = [_]Case{
@@ -9951,8 +9971,9 @@ test "LLVM inferred local atomic and MaybeUninit calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_builtin_inferred_local_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%previous") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%loaded") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "atomicrmw add") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "load atomic") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%value") != null);
 
     for ([_][]const u8{ "atomic_inferred_locals", "maybe_uninit_inferred_local" }) |name| {

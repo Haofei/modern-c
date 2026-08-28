@@ -234,6 +234,27 @@ test "lower-c atomic loads use canonical executable MIR" {
     try expectContains(boolean, "__atomic_load_n(value, __ATOMIC_ACQUIRE)");
 }
 
+test "lower-c atomic updates use canonical executable MIR" {
+    const source =
+        \\fn update(delta: u32) -> u32 {
+        \\    var value: atomic<u32> = atomic.init(4);
+        \\    value.store(delta, .release);
+        \\    return value.fetch_add(1, .acq_rel);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_atomic_update.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "update(");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "uint32_t value = mc_exec_tmp_");
+    try expectContains(body, "__atomic_store_n(&value, ((uint32_t)mc_exec_tmp_");
+    try expectContains(body, "__ATOMIC_RELEASE)");
+    try expectContains(body, "__atomic_fetch_add(&value, ((uint32_t)mc_exec_tmp_");
+    try expectContains(body, "__ATOMIC_ACQ_REL)");
+}
+
 test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     const source =
         \\fn grouped_i128_minimum() -> i128 {
@@ -6654,7 +6675,8 @@ test "lower-c atomic init requires MIR identity and complete types" {
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "boot_counter = 9") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "counter = 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t counter = mc_exec_tmp_") != null);
 
     for ([_][]const u8{ "boot_counter", "local_init" }) |name| {
         var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());

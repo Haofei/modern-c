@@ -28,7 +28,9 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
         .member => return "unlowered_member",
         .array => return "unlowered_array",
         .literal => |literal| switch (literal) {
-            .string, .uninit, .enum_value => return "noncanonical_literal",
+            .string => return "noncanonical_string_literal",
+            .uninit => return "noncanonical_uninit_literal",
+            .enum_value => return "noncanonical_enum_literal",
             else => {},
         },
         else => {},
@@ -197,6 +199,42 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) {
                 if (!operation.ordering.validForLoad() or !atomicPlaceSupported(body, target.*) or
                     !sameValueType(target.ty, value.result_ty) or !target.type_id.eql(value.type_id))
+                    return error.InvalidAtomicLoad;
+                const guarded = placeNeedsRepresentationGuard(target.*);
+                if (guarded) {
+                    const source = operation.representation_source orelse return error.InvalidAtomicLoad;
+                    try verifySpan(function, operation.representation_span_id, source);
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                        ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
+                        return error.InvalidAtomicLoad;
+                } else if (operation.representation_source != null or operation.representation_span_id.isValid() or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                {
+                    return error.InvalidAtomicLoad;
+                }
+            }
+        },
+        .atomic_init => |operand_id| {
+            try verifyOperand(body, value, operand_id);
+            const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+            if (body.complete and (!atomicPayloadSupported(value.result_ty) or
+                !sameValueType(operand.result_ty, value.result_ty) or !operand.type_id.eql(value.type_id) or
+                ownedTrapCountAll(body, .{ .expression = value.id }) != 0)) return error.InvalidAtomicLoad;
+        },
+        .atomic_update => |operation| {
+            const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
+            if (target.root == .value) try verifyOperand(body, value, target.root.value);
+            try verifyOperand(body, value, operation.value);
+            if (body.complete) {
+                const operand = expression(body, operation.value) orelse return error.InvalidExpressionReference;
+                const ordering_valid = switch (operation.kind) {
+                    .store => operation.ordering.validForStore(),
+                    .fetch_add, .fetch_sub => operation.ordering.validForRmw(),
+                };
+                if (!ordering_valid or !atomicPlaceSupported(body, target.*) or
+                    !sameValueType(target.ty, operand.result_ty) or !target.type_id.eql(operand.type_id) or
+                    (operation.kind == .store and value.result_ty != .void) or
+                    (operation.kind != .store and (!sameValueType(target.ty, value.result_ty) or !target.type_id.eql(value.type_id))))
                     return error.InvalidAtomicLoad;
                 const guarded = placeNeedsRepresentationGuard(target.*);
                 if (guarded) {
@@ -468,6 +506,12 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                     },
+                    .atomic_update => |update| {
+                        const target = place(body, update.place) orelse return error.InvalidTrapEdge;
+                        if (!atomicPlaceSupported(body, target.*) or !placeNeedsRepresentationGuard(target.*) or
+                            edge.kind != .InvalidRepresentation or edge.source != .representation_check)
+                            return error.InvalidTrapEdge;
+                    },
                     .address_of => |address| {
                         const target = place(body, address.place) orelse return error.InvalidTrapEdge;
                         if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
@@ -490,6 +534,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                 const span_id = switch (owner.operation) {
                     .load => |load| load.representation_span_id,
                     .atomic_load => |load| load.representation_span_id,
+                    .atomic_update => |update| update.representation_span_id,
                     .address_of => |address| address.representation_span_id,
                     .builtin_call => |call| call.representation_span_id,
                     else => owner.span_id,
@@ -1245,11 +1290,20 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, target: mir.ExecutableP
     if (target.storage != .atomic or !target.root_type_id.isValid() or !target.type_id.isValid() or
         !atomicPayloadSupported(target.ty)) return false;
     if (target.projection_count == 0) return switch (target.root) {
+        .local => |id| local_storage: {
+            for (body.statements) |statement_value| switch (statement_value.operation) {
+                .local_init => |init| if (init.local.eql(id)) {
+                    break :local_storage sameValueType(init.ty, target.ty) and init.type_id.eql(target.type_id);
+                },
+                else => {},
+            };
+            break :local_storage false;
+        },
         .symbol => |id| if (symbol(body, id)) |identity|
             identity.kind == .global and identity.atomic_payload_type_id.eql(target.type_id)
         else
             false,
-        .local, .value => false,
+        .value => false,
     };
     if (target.projection_count != 1 or target.projections[0] != .deref)
         return false;

@@ -625,6 +625,23 @@ pub const ExecutableAtomicOrdering = enum {
             .release, .acq_rel => false,
         };
     }
+
+    pub fn validForStore(ordering: ExecutableAtomicOrdering) bool {
+        return switch (ordering) {
+            .relaxed, .release, .seq_cst => true,
+            .acquire, .acq_rel => false,
+        };
+    }
+
+    pub fn validForRmw(_: ExecutableAtomicOrdering) bool {
+        return true;
+    }
+};
+
+pub const ExecutableAtomicUpdateKind = enum {
+    store,
+    fetch_add,
+    fetch_sub,
 };
 
 pub const ExecutablePlaceStorage = enum {
@@ -733,6 +750,19 @@ pub const ExecutableExpression = struct {
         },
         atomic_load: struct {
             place: PlaceId,
+            ordering: ExecutableAtomicOrdering,
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
+        },
+        /// Storage-normalized `atomic.init(value)`. `atomic<T>` has the same
+        /// runtime representation as `T`; retaining this operation makes the
+        /// checked initialization boundary explicit without exposing generic
+        /// source syntax to codegen.
+        atomic_init: ExprId,
+        atomic_update: struct {
+            kind: ExecutableAtomicUpdateKind,
+            place: PlaceId,
+            value: ExprId,
             ordering: ExecutableAtomicOrdering,
             representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,

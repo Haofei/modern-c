@@ -269,6 +269,20 @@ fn emitExpressionOperation(
             try emitAtomicPlaceAddress(allocator, out, body, load.place);
             try out.print(allocator, ", {s}))", .{cAtomicOrdering(load.ordering)});
         },
+        .atomic_init => |operand| try emitExpression(allocator, out, body, operand, depth + 1),
+        .atomic_update => |update| {
+            const scalar = scalarMemoryInfo((placeById(body, update.place) orelse return error.InvalidPlace).ty) orelse
+                return error.UnsupportedType;
+            try out.appendSlice(allocator, switch (update.kind) {
+                .store => "__atomic_store_n(",
+                .fetch_add => "__atomic_fetch_add(",
+                .fetch_sub => "__atomic_fetch_sub(",
+            });
+            try emitAtomicPlaceAddress(allocator, out, body, update.place);
+            try out.print(allocator, ", (({s})", .{scalar.c_type});
+            try emitExpression(allocator, out, body, update.value, depth + 1);
+            try out.print(allocator, "), {s})", .{cAtomicOrdering(update.ordering)});
+        },
         .literal => |literal| try emitLiteral(allocator, out, literal),
         .unary => |unary| {
             if (unary.op == .neg and integerSuffix(expression.result_ty) != null) {
@@ -528,6 +542,8 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .symbol => false,
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
+        .atomic_init => |operand| atomicInitSupported(body, expression, operand),
+        .atomic_update => |update| atomicUpdateSupported(body, expression, update),
         .literal => |literal| switch (literal) {
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             // Raw source string spelling is not a canonical byte payload and
@@ -941,6 +957,29 @@ fn atomicLoadSupported(
         ownedTrapEdgeCount(body, expression.id) == 0;
 }
 
+fn atomicInitSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    const operand = expressionById(body, operand_id) orelse return false;
+    return scalarMemoryInfo(expression.result_ty) != null and sameValueType(operand.result_ty, expression.result_ty) and
+        operand.type_id.eql(expression.type_id) and ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) bool {
+    const target = placeById(body, update.place) orelse return false;
+    const operand = expressionById(body, update.value) orelse return false;
+    const ordering_valid = switch (update.kind) {
+        .store => update.ordering.validForStore(),
+        .fetch_add, .fetch_sub => update.ordering.validForRmw(),
+    };
+    if (!ordering_valid or !atomicPlaceSupported(body, target.*) or
+        !sameValueType(target.ty, operand.result_ty) or !target.type_id.eql(operand.type_id)) return false;
+    if (update.kind == .store) {
+        if (expression.result_ty != .void) return false;
+    } else if (!sameValueType(expression.result_ty, target.ty) or !expression.type_id.eql(target.type_id)) return false;
+    if (placeNeedsRepresentationGuard(target.*)) return representationOperationHasExactTrapEdge(body, expression);
+    return update.representation_source == null and !update.representation_span_id.isValid() and
+        ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
 fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid() or
         scalarMemoryInfo(place.ty) == null) return false;
@@ -949,11 +988,20 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
         else => return false,
     }
     if (place.projection_count == 0) return switch (place.root) {
+        .local => |id| local_storage: {
+            for (body.statements) |statement| switch (statement.operation) {
+                .local_init => |init| if (init.local.eql(id)) {
+                    break :local_storage sameValueType(init.ty, place.ty) and init.type_id.eql(place.type_id);
+                },
+                else => {},
+            };
+            break :local_storage false;
+        },
         .symbol => |id| if (symbolById(body, id)) |identity|
             identity.kind == .global and identity.atomic_payload_type_id.eql(place.type_id)
         else
             false,
-        .local, .value => false,
+        .value => false,
     };
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local = switch (place.root) {
@@ -989,7 +1037,8 @@ fn cAtomicOrdering(ordering: mir.ExecutableAtomicOrdering) []const u8 {
         .relaxed => "__ATOMIC_RELAXED",
         .acquire => "__ATOMIC_ACQUIRE",
         .seq_cst => "__ATOMIC_SEQ_CST",
-        .release, .acq_rel => unreachable,
+        .release => "__ATOMIC_RELEASE",
+        .acq_rel => "__ATOMIC_ACQ_REL",
     };
 }
 
@@ -1284,7 +1333,7 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
     return switch (expression.operation) {
         .unary => checkedIntegerUnaryHasExactTrapEdges(body, expression),
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
-        .load, .atomic_load, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
+        .load, .atomic_load, .atomic_update, .address_of, .builtin_call, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         else => false,
     };
 }
@@ -1306,6 +1355,11 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
             const place = placeById(body, load.place) orelse return false;
             if (!atomicPlaceSupported(body, place.*) or !placeNeedsRepresentationGuard(place.*)) return false;
             break :blk .{ .source = load.representation_source, .span_id = load.representation_span_id };
+        },
+        .atomic_update => |update| blk: {
+            const place = placeById(body, update.place) orelse return false;
+            if (!atomicPlaceSupported(body, place.*) or !placeNeedsRepresentationGuard(place.*)) return false;
+            break :blk .{ .source = update.representation_source, .span_id = update.representation_span_id };
         },
         .address_of => |address| blk: {
             const place = placeById(body, address.place) orelse return false;
@@ -1503,6 +1557,7 @@ fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuar
     return switch (expression.operation) {
         .load => |load| if (load.representation_source) |source| .{ .place = load.place, .source = source } else null,
         .atomic_load => |load| if (load.representation_source) |source| .{ .place = load.place, .source = source } else null,
+        .atomic_update => |update| if (update.representation_source) |source| .{ .place = update.place, .source = source } else null,
         .address_of => |address| if (address.representation_source) |source| .{ .place = address.place, .source = source } else null,
         else => null,
     };

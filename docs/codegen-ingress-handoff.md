@@ -9,9 +9,9 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
-  checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **633/1735 C** and **693/1808 LLVM** distinct functions using the AST
-  body (C admits 63.5%, LLVM 61.7%). Report mode intentionally preserves
+  checkpoint, not the deletion boundary: the current 564-root broad census
+  finds **629/1773 C** and **689/1846 LLVM** distinct functions using the AST
+  body (C admits 64.5%, LLVM 62.7%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -384,16 +384,17 @@ enums remain fail-closed. The broad census admitted 4 more functions per
 backend and projected 13 previously missing representation edges per backend;
 the remaining 9 in that group now expose independent producer invariants.
 
-Bounded scalar `atomic.load` is now a dedicated executable-MIR operation for
-global atomic storage and direct `*atomic<T>` parameters. MIR owns the storage
-`PlaceId`, payload `TypeId`, compile-time ordering and exact pointer
-representation edge; ordinary memory operations cannot consume an atomic
-place. C maps the three legal load orders to `__ATOMIC_*`, while LLVM maps
-relaxed to `monotonic` and loads bool storage as `i8` before truncating to `i1`.
-Nested pointers, local `atomic.init`, atomic aggregate fields and non-scalar
-payloads remain fail-closed. The pointer-depth rule was also corrected in sema
-and the legacy C shape helper, preventing `**atomic<T>` from being read as the
-payload at the wrong address.
+The complete bounded scalar atomic family now uses executable MIR:
+`atomic.init`, load, store, fetch-add and fetch-sub. MIR owns the storage
+`PlaceId`, payload `TypeId`, typed ordering and exact pointer representation
+edge. Local `atomic<T>` storage is normalized to its payload representation;
+global and direct `*atomic<T>` receivers use the same operations. C emits
+`__atomic_*` builtins and LLVM emits `load/store atomic` or `atomicrmw`, with
+bool stored as `i8`. Ordering source enum expressions no longer cross the
+canonical boundary. Aggregate atomic fields, nested pointers and non-scalar
+payloads remain fail-closed. The 564-root sweep moved 42 additional C and LLVM
+functions into admitted paths while the corpus itself grew by 38 functions;
+the noncanonical-enum blocker fell from 43 to 25 per backend.
 
 Non-naked function mechanics no longer block canonical bodies. `weak`,
 `section`, `align`, and `noinline` are emitted by one shared wrapper per

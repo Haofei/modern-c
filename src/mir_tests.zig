@@ -199,6 +199,52 @@ test "executable MIR owns bounded atomic loads and rejects semantic drift" {
     try mir_executable_body.verify(pointer);
 }
 
+test "executable MIR owns atomic initialization and updates" {
+    const source =
+        \\fn update(delta: u32) -> u32 {
+        \\    var value: atomic<u32> = atomic.init(4);
+        \\    value.store(delta, .release);
+        \\    return value.fetch_add(1, .acq_rel);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_atomic_update.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "update") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try mir_executable_body.verify(function);
+
+    var saw_init = false;
+    var store_index: ?usize = null;
+    var fetch_index: ?usize = null;
+    for (function.executable_body.expressions, 0..) |expression, index| switch (expression.operation) {
+        .atomic_init => saw_init = true,
+        .atomic_update => |update| switch (update.kind) {
+            .store => {
+                try std.testing.expectEqual(mir.ExecutableAtomicOrdering.release, update.ordering);
+                store_index = index;
+            },
+            .fetch_add => {
+                try std.testing.expectEqual(mir.ExecutableAtomicOrdering.acq_rel, update.ordering);
+                fetch_index = index;
+            },
+            .fetch_sub => {},
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_init);
+    const store = store_index orelse return error.TestUnexpectedResult;
+    _ = fetch_index orelse return error.TestUnexpectedResult;
+
+    function.executable_body.expressions[store].operation.atomic_update.ordering = .acquire;
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(function));
+    function.executable_body.expressions[store].operation.atomic_update.ordering = .release;
+    function.executable_body.expressions[store].operation.atomic_update.kind = .fetch_add;
+    try std.testing.expectError(error.InvalidAtomicLoad, mir_executable_body.verify(function));
+}
+
 test "executable MIR owns assertion trap edges and rejects semantic drift" {
     const source =
         \\fn require_flag(flag: bool) -> void {
