@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1778 C and 1849 LLVM
-functions. It found 610 C and 659 LLVM AST-body fallbacks. Report
+functions. It found 609 C and 658 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1168/1778 admitted (65.7%)**, 610 fallback, and
-LLVM **1190/1849 admitted (64.4%)**, 659 fallback. There were no unsupported
+The 522-root sweep found C **1169/1778 admitted (65.7%)**, 609 fallback, and
+LLVM **1191/1849 admitted (64.4%)**, 658 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
@@ -41,9 +41,18 @@ builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. The current broad split is 1034
-canonical / 134 specialized for C and 1043 canonical / 147 specialized for
+specialized plan definitions from 15 to **14**. The current broad split is 1036
+canonical / 133 specialized for C and 1045 canonical / 146 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+
+The built-in `IrqOff` witness now retains its nominal MIR spelling while using
+the one-byte ABI already owned by `scalar_repr.zig`. It no longer collapses to
+opaque `.value`, so ordinary acquire/use/restore functions are syntax-free in
+both renderers. This moves `critical_read` off AST fallback and `read_device`
+off `simple_return` in each backend; broad fallback falls by one and
+`simple_return` use is now 31 C / 35 LLVM. The normalization is deliberately
+limited to `IrqOff`: user-declared enums such as `Error` keep their enum
+identity. The focused no-fallback ratchet is now 151 tests per backend.
 
 Qualified enum variants now become canonical executable-MIR literals before a
 `.raw()` projection is rendered. `Enum.case` no longer masquerades as a runtime

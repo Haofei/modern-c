@@ -6,6 +6,7 @@ const mir_summary = @import("mir_summary.zig");
 const mir_syntax = @import("mir_syntax.zig");
 const mir_verify_util = @import("mir_verify_util.zig");
 const numeric = @import("numeric.zig");
+const scalar_repr = @import("scalar_repr.zig");
 
 const AddressClass = mir_model.AddressClass;
 const ArithmeticDomain = mir_verify_util.ArithmeticDomain;
@@ -649,6 +650,13 @@ fn namedValueType(name: []const u8, enums: *const std.StringHashMap(EnumSummary)
     if (std.mem.eql(u8, name, "DmaAddr")) return .{ .address = .dma_addr };
     if (enums.get(name)) |info| return if (info.is_open) .{ .open_enum = name } else .{ .closed_enum = name };
     if (structs.contains(name)) return .{ .struct_ = name };
+    // The built-in IRQ witness is a nominal resource with one-byte scalar
+    // storage. Treating it as opaque `.value` forced an AST signature/body
+    // fallback even though `scalar_repr` already owns its ABI. Other library
+    // result-error names remain normalized only at their existing Result
+    // boundary; changing their general ValueType would conflate enum identity.
+    if (std.mem.eql(u8, name, "IrqOff") and scalar_repr.integer(name) != null)
+        return .{ .integer = name };
     if (std.mem.startsWith(u8, name, "u") or std.mem.startsWith(u8, name, "i") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return .{ .integer = name };
     if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) return .{ .float = name };
     return .value;

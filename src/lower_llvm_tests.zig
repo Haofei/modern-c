@@ -4158,6 +4158,29 @@ test "LLVM emits enum variant raw values from MIR without body fallback" {
     try expectContains(open, "ret i8 2");
 }
 
+test "LLVM emits nominal scalar resource flow from MIR without body fallback" {
+    const source =
+        \\extern fn disable_interrupts() -> IrqOff;
+        \\extern fn restore_interrupts(cs: IrqOff) -> void;
+        \\fn read_device(reg: u32, cs: IrqOff) -> u32 { return reg; }
+        \\fn critical_read(reg: u32) -> u32 {
+        \\    let cs: IrqOff = disable_interrupts();
+        \\    let value: u32 = read_device(reg, cs);
+        \\    restore_interrupts(cs);
+        \\    return value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nominal_scalar_resource.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @critical_read");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "call i8 @disable_interrupts()");
+    try expectContains(body, "call i32 @read_device(i32 %mc_arg_0, i8");
+    try expectContains(body, "call void @restore_interrupts(i8");
+}
+
 test "LLVM emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {

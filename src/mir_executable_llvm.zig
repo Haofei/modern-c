@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const mir = @import("mir_model.zig");
+const scalar_repr = @import("scalar_repr.zig");
 
 pub const RenderError = error{ Unsupported, InvalidBody, OutOfMemory };
 
@@ -1790,7 +1791,20 @@ fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
     return switch (ty) {
         .void, .never => "void",
         .bool => "i1",
-        .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) "i8" else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) "i16" else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) "i32" else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) "i64" else if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128")) "i128" else null,
+        .integer => |name| if (std.mem.eql(u8, name, "IrqOff"))
+            (scalar_repr.integer(name) orelse return null).llvm_type
+        else if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8"))
+            "i8"
+        else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16"))
+            "i16"
+        else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32"))
+            "i32"
+        else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize"))
+            "i64"
+        else if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128"))
+            "i128"
+        else
+            null,
         .domain_integer => |shape| scalarLlvmType(.{ .integer = shape.child }),
         .float => |name| if (std.mem.eql(u8, name, "f32")) "float" else if (std.mem.eql(u8, name, "f64")) "double" else null,
         .pointer => |shape| if (shape.kind == .slice) "{ ptr, i64 }" else "ptr",

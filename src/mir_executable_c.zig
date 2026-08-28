@@ -9,6 +9,7 @@
 const std = @import("std");
 const c_identifier = @import("c_identifier.zig");
 const mir = @import("mir_model.zig");
+const scalar_repr = @import("scalar_repr.zig");
 
 pub const RenderError = error{
     IncompleteBody,
@@ -2341,6 +2342,7 @@ fn binaryToken(op: mir.ExecutableBinaryOp) []const u8 {
 }
 
 fn primitiveType(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "IrqOff")) return (scalar_repr.integer(name) orelse return null).c_type;
     const Entry = struct { mc: []const u8, c: []const u8 };
     const entries = [_]Entry{
         .{ .mc = "u8", .c = "uint8_t" },      .{ .mc = "u16", .c = "uint16_t" },   .{ .mc = "u32", .c = "uint32_t" }, .{ .mc = "u64", .c = "uint64_t" }, .{ .mc = "u128", .c = "unsigned __int128" },

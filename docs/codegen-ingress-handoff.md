@@ -10,7 +10,7 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **610/1778 C** and **659/1849 LLVM** distinct functions using the AST
+  finds **609/1778 C** and **658/1849 LLVM** distinct functions using the AST
   body (C admits 65.7%, LLVM 64.4%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
@@ -29,6 +29,16 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+The built-in `IrqOff` witness is now a nominal executable-MIR integer whose
+one-byte storage comes from the shared scalar representation table. This moves
+`critical_read` off AST fallback and `read_device` off `simple_return` in both
+backends without adding a recognizer. Broad admission is now C **1169/1778**
+(1036 canonical / 133 specialized) and LLVM **1191/1849** (1045 canonical / 146
+specialized); broad `simple_return` use is 31/35. The mapping is intentionally
+limited to the actual built-in witness so a user enum named `Error` cannot be
+conflated with a library result-error spelling. The focused ratchet is 151
+tests per backend.
 
 Qualified enum variant paths now lower directly to canonical numeric literals.
 This removes the false runtime member load and representation trap formerly

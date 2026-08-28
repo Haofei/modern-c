@@ -3924,6 +3924,29 @@ test "lower-c emits enum variant raw values from MIR without body fallback" {
     try expectContains(open, "2");
 }
 
+test "lower-c emits nominal scalar resource flow from MIR without body fallback" {
+    const source =
+        \\extern fn disable_interrupts() -> IrqOff;
+        \\extern fn restore_interrupts(cs: IrqOff) -> void;
+        \\fn read_device(reg: u32, cs: IrqOff) -> u32 { return reg; }
+        \\fn critical_read(reg: u32) -> u32 {
+        \\    let cs: IrqOff = disable_interrupts();
+        \\    let value: u32 = read_device(reg, cs);
+        \\    restore_interrupts(cs);
+        \\    return value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nominal_scalar_resource.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t critical_read(uint32_t reg)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "uint8_t cs =");
+    try expectContains(body, "read_device(");
+    try expectContains(body, "restore_interrupts(");
+}
+
 test "lower-c emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {
