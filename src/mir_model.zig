@@ -431,6 +431,7 @@ pub const ExecutableCastKind = enum {
     pointer_to_integer,
     pointer_to_nullable,
     pointer_const_narrow,
+    integer_to_open_enum,
 
     pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
         if (ValueType.eql(source, target)) return .identity;
@@ -450,6 +451,7 @@ pub const ExecutableCastKind = enum {
             pointerQualificationCompatible(source.pointer, target.pointer) and
             source.pointer.mutability != target.pointer.mutability)
             return .pointer_const_narrow;
+        if (integerInfo(source) != null and target == .open_enum) return .integer_to_open_enum;
         const source_integer = integerInfo(source) orelse return null;
         const target_integer = integerInfo(target) orelse return null;
         if (!source_integer.signed and !target_integer.signed) return .unsigned_resize;
@@ -472,10 +474,12 @@ pub const ExecutableCastKind = enum {
         if (std.mem.eql(u8, name, "u16")) return .{ .signed = false, .bits = 16 };
         if (std.mem.eql(u8, name, "u32")) return .{ .signed = false, .bits = 32 };
         if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "usize")) return .{ .signed = false, .bits = 64 };
+        if (std.mem.eql(u8, name, "u128")) return .{ .signed = false, .bits = 128 };
         if (std.mem.eql(u8, name, "i8")) return .{ .signed = true, .bits = 8 };
         if (std.mem.eql(u8, name, "i16")) return .{ .signed = true, .bits = 16 };
         if (std.mem.eql(u8, name, "i32")) return .{ .signed = true, .bits = 32 };
         if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return .{ .signed = true, .bits = 64 };
+        if (std.mem.eql(u8, name, "i128")) return .{ .signed = true, .bits = 128 };
         return null;
     }
 };
@@ -488,10 +492,36 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         },
         .wrapping_add => wrapping: {
             if (operands.len != 2) break :wrapping false;
-            const info = ExecutableCastKind.integerInfo(result) orelse break :wrapping false;
-            break :wrapping !info.signed and
-                ValueType.eql(result, operands[0]) and
-                ValueType.eql(result, operands[1]);
+            if (!ValueType.eql(result, operands[0]) or !ValueType.eql(result, operands[1])) break :wrapping false;
+            break :wrapping switch (result) {
+                .integer => (ExecutableCastKind.integerInfo(result) orelse break :wrapping false).signed == false,
+                .domain_integer => |shape| shape.kind == .wrap and
+                    (ExecutableCastKind.integerInfo(.{ .integer = shape.child }) orelse break :wrapping false).signed == false,
+                else => false,
+            };
+        },
+        .wrap_residue => operands.len == 1 and switch (operands[0]) {
+            .domain_integer => |shape| shape.kind == .wrap and ValueType.eql(result, .{ .integer = shape.child }),
+            else => false,
+        },
+        .serial_before, .serial_after => operands.len == 2 and result == .bool and
+            ValueType.eql(operands[0], operands[1]) and switch (operands[0]) {
+            .domain_integer => |shape| shape.kind == .serial and ExecutableCastKind.integerInfo(.{ .integer = shape.child }) != null,
+            else => false,
+        },
+        .serial_distance => operands.len == 2 and ValueType.eql(operands[0], operands[1]) and switch (operands[0]) {
+            .domain_integer => |shape| shape.kind == .serial and ValueType.eql(result, .{ .domain_integer = .{ .kind = .wrap, .child = shape.child } }),
+            else => false,
+        },
+        .counter_delta_mod => operands.len == 2 and ValueType.eql(operands[0], operands[1]) and switch (operands[0]) {
+            .domain_integer => |shape| shape.kind == .counter and ValueType.eql(result, .{ .domain_integer = .{ .kind = .wrap, .child = shape.child } }),
+            else => false,
+        },
+        // The exact nominal enum/repr TypeId relationship is checked by the
+        // executable-body verifier and each renderer against `enum_types`.
+        .enum_raw => operands.len == 1 and switch (operands[0]) {
+            .closed_enum, .open_enum => ExecutableCastKind.integerInfo(result) != null,
+            else => false,
         },
         .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
         // `bitcast` preserves the complete scalar bit pattern; it is neither a
@@ -767,6 +797,10 @@ pub const ExecutableExpression = struct {
         /// this coercion from source syntax or the surrounding return type.
         optional_some: ExprId,
         optional_none,
+        result: struct {
+            is_ok: bool,
+            payload: ExprId,
+        },
         array: struct {
             operands: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             operand_count: usize = 0,
@@ -1061,6 +1095,17 @@ pub const ExecutableEnumType = struct {
     repr_ty: ValueType,
 };
 
+/// Canonical payload layout for `Result<Ok, Err>`. The source spelling is
+/// presentation-only; both renderers consume these typed payload identities.
+pub const ExecutableResultType = struct {
+    type_id: TypeId,
+    ty: ValueType,
+    ok_type_id: TypeId,
+    ok_ty: ValueType,
+    err_type_id: TypeId,
+    err_ty: ValueType,
+};
+
 pub const max_executable_switch_cases: usize = 8;
 
 pub const ExecutableSwitchValue = union(enum) {
@@ -1139,6 +1184,7 @@ pub const ExecutableBody = struct {
     symbols: []SymbolIdentity = &.{},
     aggregate_types: []ExecutableAggregateType = &.{},
     enum_types: []ExecutableEnumType = &.{},
+    result_types: []ExecutableResultType = &.{},
     expressions: []ExecutableExpression = &.{},
     trap_edges: []ExecutableTrapEdge = &.{},
     places: []ExecutablePlace = &.{},
@@ -1155,6 +1201,7 @@ pub const ExecutableBody = struct {
         if (self.symbols.len != 0) allocator.free(self.symbols);
         if (self.aggregate_types.len != 0) allocator.free(self.aggregate_types);
         if (self.enum_types.len != 0) allocator.free(self.enum_types);
+        if (self.result_types.len != 0) allocator.free(self.result_types);
         if (self.expressions.len != 0) allocator.free(self.expressions);
         if (self.trap_edges.len != 0) allocator.free(self.trap_edges);
         if (self.places.len != 0) allocator.free(self.places);

@@ -351,6 +351,15 @@ test "executable MIR classifies address representation casts" {
     try std.testing.expect(mir.ExecutableCastKind.classify(paddr, .{ .integer = "u32" }) == null);
 }
 
+test "executable MIR classifies wide integers and open enum casts" {
+    const u8_ty: ValueType = .{ .integer = "u8" };
+    const u128_ty: ValueType = .{ .integer = "u128" };
+    const open_enum: ValueType = .{ .open_enum = "DeviceState" };
+    try std.testing.expectEqual(@as(u16, 128), mir.ExecutableCastKind.integerInfo(u128_ty).?.bits);
+    try std.testing.expectEqual(mir.ExecutableCastKind.unsigned_resize, mir.ExecutableCastKind.classify(u8_ty, u128_ty).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.integer_to_open_enum, mir.ExecutableCastKind.classify(u8_ty, open_enum).?);
+}
+
 test "executable MIR classifies representation-preserving pointer casts" {
     const mutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const const_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };

@@ -302,6 +302,11 @@ const Renderer = struct {
         if (ty == .value) return "ptr";
         if (depth >= mir.max_executable_operands) return error.Unsupported;
         if (enumTypeForValueType(self.body, ty)) |enum_ty| return self.typeTextDepth(enum_ty.repr_ty, depth + 1);
+        if (resultTypeForValueType(self.body, ty)) |shape| {
+            const ok_ty = try self.typeTextDepth(shape.ok_ty, depth + 1);
+            const err_ty = try self.typeTextDepth(shape.err_ty, depth + 1);
+            return std.fmt.allocPrint(self.allocator, "{{ i1, {s}, {s} }}", .{ ok_ty, err_ty });
+        }
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
         if (aggregate.ty == .array) {
             if (aggregate.field_count == 0) return error.Unsupported;
@@ -505,6 +510,7 @@ const Renderer = struct {
             },
             .optional_some => |operand_id| try self.emitOptional(expression, operand_id),
             .optional_none => .{ .ty = ty, .spelling = "zeroinitializer" },
+            .result => |result| try self.emitResult(expression, result),
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
             .array => |aggregate| try self.emitArray(expression, aggregate),
@@ -552,6 +558,27 @@ const Renderer = struct {
             operand.spelling,
         });
         return .{ .ty = optional_ty, .spelling = with_payload };
+    }
+
+    fn emitResult(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
+        if (!resultConstructionSupported(self.body, expression, operation)) return error.InvalidBody;
+        const shape = resultType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const result_ty = try self.typeText(expression.result_ty);
+        const payload = try self.emitExpression(operation.payload);
+        const payload_ty = try self.typeText(if (operation.is_ok) shape.ok_ty else shape.err_ty);
+        if (!std.mem.eql(u8, payload.ty, payload_ty)) return error.InvalidBody;
+        const tagged = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, if (operation.is_ok) "true" else "false" });
+        const value = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
+            value,
+            result_ty,
+            tagged,
+            payload_ty,
+            payload.spelling,
+            @as(usize, if (operation.is_ok) 1 else 2),
+        });
+        return .{ .ty = result_ty, .spelling = value };
     }
 
     fn emitStruct(self: *Renderer, expression: mir.ExecutableExpression, operation: anytype) RenderError!Value {
@@ -678,13 +705,23 @@ const Renderer = struct {
         const expected = mir.ExecutableCastKind.classify(operand_expression.result_ty, expression.result_ty) orelse return error.InvalidBody;
         if (expected != cast.kind) return error.InvalidBody;
 
-        const source_info = mir.ExecutableCastKind.integerInfo(operand_expression.result_ty);
-        const target_info = mir.ExecutableCastKind.integerInfo(expression.result_ty);
+        const source_info = mir.ExecutableCastKind.integerInfo(castStorageType(self.body, operand_expression.result_ty) orelse operand_expression.result_ty);
+        const target_info = mir.ExecutableCastKind.integerInfo(castStorageType(self.body, expression.result_ty) orelse expression.result_ty);
         const operation: ?[]const u8 = switch (expected) {
             .identity => null,
             .address_to_integer, .integer_to_address => null,
             .pointer_to_integer => "ptrtoint",
             .pointer_to_nullable, .pointer_const_narrow => null,
+            .integer_to_open_enum => resize: {
+                const source = source_info orelse return error.InvalidBody;
+                const target = target_info orelse return error.InvalidBody;
+                break :resize if (target.bits > source.bits)
+                    (if (source.signed) "sext" else "zext")
+                else if (target.bits < source.bits)
+                    "trunc"
+                else
+                    null;
+            },
             .unsigned_resize => resize: {
                 const source = source_info orelse return error.InvalidBody;
                 const target = target_info orelse return error.InvalidBody;
@@ -994,6 +1031,29 @@ const Renderer = struct {
                 if (!std.mem.eql(u8, left.ty, result_ty) or !std.mem.eql(u8, right.ty, result_ty)) return error.InvalidBody;
                 const result = try self.temp();
                 try self.output.print(self.allocator, "  {s} = add {s} {s}, {s}\n", .{ result, result_ty, left.spelling, right.spelling });
+                return .{ .ty = result_ty, .spelling = result };
+            },
+            .wrap_residue, .enum_raw => {
+                const operand = operands[0];
+                if (!std.mem.eql(u8, operand.ty, result_ty)) return error.InvalidBody;
+                return .{ .ty = result_ty, .spelling = operand.spelling };
+            },
+            .serial_before, .serial_after => {
+                const left = operands[0];
+                const right = operands[1];
+                if (!std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
+                const difference = try self.temp();
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = sub {s} {s}, {s}\n", .{ difference, left.ty, left.spelling, right.spelling });
+                try self.output.print(self.allocator, "  {s} = icmp {s} {s} {s}, 0\n", .{ result, if (call.kind == .serial_before) "slt" else "sgt", left.ty, difference });
+                return .{ .ty = "i1", .spelling = result };
+            },
+            .serial_distance, .counter_delta_mod => {
+                const left = operands[0];
+                const right = operands[1];
+                if (!std.mem.eql(u8, left.ty, result_ty) or !std.mem.eql(u8, right.ty, result_ty)) return error.InvalidBody;
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = sub {s} {s}, {s}\n", .{ result, result_ty, left.spelling, right.spelling });
                 return .{ .ty = result_ty, .spelling = result };
             },
             .conversion_from => {
@@ -1381,7 +1441,7 @@ fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
     return switch (ty) {
         .void, .never => "void",
         .bool => "i1",
-        .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) "i8" else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) "i16" else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) "i32" else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) "i64" else null,
+        .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) "i8" else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) "i16" else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) "i32" else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) "i64" else if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128")) "i128" else null,
         .domain_integer => |shape| scalarLlvmType(.{ .integer = shape.child }),
         .float => |name| if (std.mem.eql(u8, name, "f32")) "float" else if (std.mem.eql(u8, name, "f64")) "double" else null,
         .pointer => |shape| if (shape.kind == .slice) "{ ptr, i64 }" else "ptr",
@@ -1401,6 +1461,9 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
     if (scalarLlvmType(ty) != null) return true;
     if (depth >= mir.max_executable_operands) return false;
     if (enumTypeForValueType(body, ty)) |enum_ty| return llvmTypeSupportedDepth(body, enum_ty.repr_ty, depth + 1);
+    if (resultTypeForValueType(body, ty)) |shape|
+        return llvmTypeSupportedDepth(body, shape.ok_ty, depth + 1) and
+            llvmTypeSupportedDepth(body, shape.err_ty, depth + 1);
     const aggregate = aggregateTypeForValueType(body, ty) orelse return false;
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
     for (aggregate.field_types[0..aggregate.field_count]) |field_ty| {
@@ -1423,6 +1486,27 @@ fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType)
 fn enumTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableEnumType {
     for (body.enum_types) |*enum_ty| if (sameValueType(enum_ty.ty, ty)) return enum_ty;
     return null;
+}
+
+fn resultType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableResultType {
+    if (!type_id.isValid()) return null;
+    for (body.result_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
+    return null;
+}
+
+fn resultTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableResultType {
+    for (body.result_types) |*shape| if (sameValueType(shape.ty, ty)) return shape;
+    return null;
+}
+
+fn resultConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    if (!expressionValid(body, operation.payload) or !sameValueType(shape.ty, expression.result_ty)) return false;
+    const payload = body.expressions[operation.payload.index()];
+    return if (operation.is_ok)
+        sameValueType(payload.result_ty, shape.ok_ty) and payload.type_id.eql(shape.ok_type_id)
+    else
+        sameValueType(payload.result_ty, shape.err_ty) and payload.type_id.eql(shape.err_type_id);
 }
 
 fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
@@ -1492,6 +1576,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
+        .result => |result| resultConstructionSupported(body, expression, result),
         .index, .range_slice, .unsupported => false,
     };
 }
@@ -1618,7 +1703,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -1628,6 +1713,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         operand_types[index] = body.expressions[id.index()].result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .raw_ptr) {
         if (call.representation_source == null or !call.representation_span_id.isValid() or
             !representationTrapEdgeIsExact(body, expression)) return false;
@@ -1635,6 +1721,14 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
         (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
+}
+
+fn enumRawSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
+    if (call.argument_count != 1 or !expressionValid(body, call.arguments[0])) return false;
+    const operand = body.expressions[call.arguments[0].index()];
+    const enum_ty = enumTypeForValueType(body, operand.result_ty) orelse return false;
+    return enum_ty.type_id.eql(operand.type_id) and enum_ty.repr_type_id.eql(expression.type_id) and
+        sameValueType(enum_ty.repr_ty, expression.result_ty);
 }
 
 fn rawManyElementValueType(body: *const mir.ExecutableBody, name: []const u8) ?mir.ValueType {
@@ -1664,9 +1758,11 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     if (!expressionValid(body, cast.operand)) return false;
     const operand = body.expressions[cast.operand.index()];
     const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse return false;
-    if (expected != cast.kind or scalarLlvmType(operand.result_ty) == null or scalarLlvmType(expression.result_ty) == null) return false;
-    const source = mir.ExecutableCastKind.integerInfo(operand.result_ty);
-    const target = mir.ExecutableCastKind.integerInfo(expression.result_ty);
+    const source_storage = castStorageType(body, operand.result_ty) orelse return false;
+    const target_storage = castStorageType(body, expression.result_ty) orelse return false;
+    if (expected != cast.kind or scalarLlvmType(source_storage) == null or scalarLlvmType(target_storage) == null) return false;
+    const source = mir.ExecutableCastKind.integerInfo(source_storage);
+    const target = mir.ExecutableCastKind.integerInfo(target_storage);
     return switch (expected) {
         .identity => true,
         .address_to_integer => operand.result_ty == .address and target != null and !target.?.signed and target.?.bits == 64,
@@ -1674,9 +1770,16 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
         .pointer_to_integer => operand.result_ty == .pointer and target != null,
         .pointer_to_nullable, .pointer_const_narrow => std.mem.eql(u8, scalarLlvmType(operand.result_ty) orelse return false, "ptr") and
             std.mem.eql(u8, scalarLlvmType(expression.result_ty) orelse return false, "ptr"),
+        .integer_to_open_enum => source != null and target != null and enumTypeForValueType(body, expression.result_ty) != null,
         .unsigned_resize => source != null and target != null and !source.?.signed and !target.?.signed,
         .signed_widen => source != null and target != null and source.?.signed and target.?.signed and target.?.bits >= source.?.bits,
     };
+}
+
+fn castStorageType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?mir.ValueType {
+    if (scalarLlvmType(ty) != null) return ty;
+    if (enumTypeForValueType(body, ty)) |enum_ty| return enum_ty.repr_ty;
+    return null;
 }
 
 fn unarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, unary: anytype) bool {

@@ -94,7 +94,7 @@ pub fn verify(function: *const mir.Function) !void {
     }
     if (body.complete and body.incomplete_reason != .none) return error.InvalidIncompleteReason;
     if (!body.complete and body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
-        body.aggregate_types.len == 0 and body.enum_types.len == 0 and
+        body.aggregate_types.len == 0 and body.enum_types.len == 0 and body.result_types.len == 0 and
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
     try verifyType(function, body.return_type_id, function.return_ty, body.complete);
@@ -103,6 +103,9 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.enum_types, 0..) |enum_ty, index| {
         try verifyEnumType(function, enum_ty, index);
+    }
+    for (body.result_types, 0..) |result_ty, index| {
+        try verifyResultType(function, result_ty, index);
     }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
@@ -303,6 +306,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
             const expected = mir.ExecutableCastKind.classify(operand.result_ty, value.result_ty) orelse return error.InvalidCast;
             if (operation.kind != expected) return error.InvalidCast;
+            if (operation.kind == .integer_to_open_enum) {
+                var exact = false;
+                for (body.enum_types) |enum_ty| {
+                    if (!sameValueType(enum_ty.ty, value.result_ty)) continue;
+                    exact = enum_ty.type_id.eql(value.type_id) and
+                        mir.ExecutableCastKind.integerInfo(enum_ty.repr_ty) != null;
+                    break;
+                }
+                if (!exact) return error.InvalidCast;
+            }
         },
         .representation_check => |operation| {
             try verifyOperand(body, value, operation.operand);
@@ -405,6 +418,20 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (value.result_ty != .nullable_value or aggregate.construction != .declared_struct or
                 aggregate.field_count != 2 or !sameValueType(aggregate.ty, value.result_ty) or
                 !sameValueType(aggregate.field_types[0], .bool)) return error.InvalidAggregateConstruction;
+        },
+        .result => |operation| {
+            try verifyOperand(body, value, operation.payload);
+            if (body.complete) {
+                const shape = resultType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
+                const payload = expression(body, operation.payload) orelse return error.InvalidExpressionReference;
+                if (!sameValueType(shape.ty, value.result_ty)) return error.InvalidAggregateConstruction;
+                if (operation.is_ok) {
+                    if (!sameValueType(payload.result_ty, shape.ok_ty) or !payload.type_id.eql(shape.ok_type_id))
+                        return error.InvalidAggregateConstruction;
+                } else if (!sameValueType(payload.result_ty, shape.err_ty) or !payload.type_id.eql(shape.err_type_id)) {
+                    return error.InvalidAggregateConstruction;
+                }
+            }
         },
         .array => |operation| {
             try verifyArguments(body, value, operation.operands, operation.operand_count);
@@ -707,7 +734,17 @@ fn verifyContractMarkers(body: *const mir.ExecutableBody) !void {
         },
         else => {},
     };
-    if (depth != 0) return error.InvalidContractMarker;
+    // A lexical contract whose body terminates has no reachable point at
+    // which to emit an end marker. Its CFG terminator closes the remaining
+    // marker stack for that block.
+    while (depth != 0) {
+        depth -= 1;
+        const terminator = executableTerminator(body, blocks[depth]) orelse return error.InvalidContractMarker;
+        switch (terminator.operation) {
+            .return_, .trap_, .unreachable_ => {},
+            else => return error.InvalidContractMarker,
+        }
+    }
 }
 
 fn verifyTerminator(function: *const mir.Function, terminator: mir.ExecutableTerminator) !void {
@@ -945,6 +982,18 @@ fn verifyEnumType(function: *const mir.Function, enum_ty: mir.ExecutableEnumType
     }
 }
 
+fn verifyResultType(function: *const mir.Function, result_ty: mir.ExecutableResultType, index: usize) !void {
+    const body = &function.executable_body;
+    if (!result_ty.type_id.isValid() or !result_ty.ok_type_id.isValid() or !result_ty.err_type_id.isValid() or
+        result_ty.ty != .result or result_ty.ok_ty == .unknown or result_ty.ok_ty == .value or
+        result_ty.err_ty == .unknown or result_ty.err_ty == .value) return error.InvalidAggregateType;
+    try verifyType(function, result_ty.type_id, result_ty.ty, body.complete);
+    try verifyType(function, result_ty.ok_type_id, result_ty.ok_ty, body.complete);
+    try verifyType(function, result_ty.err_type_id, result_ty.err_ty, body.complete);
+    for (body.result_types[0..index]) |previous| if (previous.type_id.eql(result_ty.type_id) or
+        sameValueType(previous.ty, result_ty.ty)) return error.InvalidAggregateType;
+}
+
 fn verifyMemberProjection(
     function: *const mir.Function,
     value: mir.ExecutableExpression,
@@ -1002,6 +1051,12 @@ fn verifyArrayConstruction(
 pub fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableAggregateType {
     if (!type_id.isValid()) return null;
     for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
+    return null;
+}
+
+fn resultType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableResultType {
+    if (!type_id.isValid()) return null;
+    for (body.result_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
     return null;
 }
 

@@ -3197,7 +3197,9 @@ test "lower-c emits typed unary call-target returns from MIR without body fallba
     try expectNotContains(bits_float, "((float)(mc_exec_tmp_0))");
 
     const state_raw = try cFunctionBody(output.items, "static uint8_t state_raw(State state)");
-    try expectContains(state_raw, "return state;");
+    try expectContains(state_raw, "mc_exec_tmp_0 = state;");
+    try expectContains(state_raw, "mc_exec_tmp_1 = ((uint8_t)(mc_exec_tmp_0));");
+    try expectContains(state_raw, "return mc_exec_tmp_1;");
     try expectNotContains(state_raw, "raw(");
 }
 
@@ -3250,11 +3252,11 @@ test "lower-c emits typed binary domain calls from MIR without body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_binary_domain_calls.mc", source, &output);
 
-    try expectContains(try cFunctionBody(output.items, "static uint32_t wrap_add(uint32_t a, uint32_t b)"), "return (a + b);");
-    try expectContains(try cFunctionBody(output.items, "static bool seq_before(uint32_t a, uint32_t b)"), "((int32_t)((uint32_t)(a - b)) < 0)");
-    try expectContains(try cFunctionBody(output.items, "static bool seq_after(uint32_t a, uint32_t b)"), "((int32_t)((uint32_t)(a - b)) > 0)");
-    try expectContains(try cFunctionBody(output.items, "static uint32_t seq_distance(uint32_t a, uint32_t b)"), "return ((uint32_t)(a - b));");
-    try expectContains(try cFunctionBody(output.items, "static uint64_t tick_delta(uint64_t now, uint64_t start)"), "return ((uint64_t)(now - start));");
+    try expectContains(try cFunctionBody(output.items, "static uint32_t wrap_add(uint32_t a, uint32_t b)"), "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))");
+    try expectContains(try cFunctionBody(output.items, "static bool seq_before(uint32_t a, uint32_t b)"), "(((int32_t)((mc_exec_tmp_0) - (mc_exec_tmp_1))) < 0)");
+    try expectContains(try cFunctionBody(output.items, "static bool seq_after(uint32_t a, uint32_t b)"), "(((int32_t)((mc_exec_tmp_0) - (mc_exec_tmp_1))) > 0)");
+    try expectContains(try cFunctionBody(output.items, "static uint32_t seq_distance(uint32_t a, uint32_t b)"), "((uint32_t)((mc_exec_tmp_0) - (mc_exec_tmp_1)))");
+    try expectContains(try cFunctionBody(output.items, "static uint64_t tick_delta(uint64_t now, uint64_t start)"), "((uint64_t)((mc_exec_tmp_0) - (mc_exec_tmp_1)))");
 }
 
 test "lower-c typed binary domain fast path rejects call operands" {
@@ -3268,7 +3270,7 @@ test "lower-c typed binary domain fast path rejects call operands" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("c_mir_typed_binary_domain_nested.mc", source, &output);
-    try expectContains(try cFunctionBody(output.items, "static bool nested(uint32_t a, uint32_t b)"), "identity(a)");
+    try expectContains(try cFunctionBody(output.items, "static bool nested(uint32_t a, uint32_t b)"), "identity(mc_exec_tmp_0)");
 }
 
 test "lower-c emits char literal return from MIR without body fallback" {
@@ -4160,7 +4162,8 @@ test "lower-c emits enum literal explicit casts from MIR without body fallback" 
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_explicit_cast.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Mode cast_mode(void)");
-    try expectContains(body, "return ((Mode)(Mode_write));");
+    try expectContains(body, "mc_exec_tmp_1 = ((Mode)(mc_exec_tmp_0));");
+    try expectContains(body, "return mc_exec_tmp_1;");
     try expectNotContains(body, "mc_tmp");
 }
 
@@ -6442,7 +6445,7 @@ test "lower-c wrapping arithmetic requires MIR identity and operand/result type 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_wrapping_call_facts.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "(a + 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))") != null);
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_identity.deinit();
@@ -6470,7 +6473,7 @@ test "lower-c emits wrapping arithmetic call from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_wrapping_call.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "(a + 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))") != null);
 }
 
 test "lower-c emits local wrapping arithmetic from MIR without body fallback" {
@@ -6488,7 +6491,8 @@ test "lower-c emits local wrapping arithmetic from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_wrapping_call.mc", source, &output);
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "return (a + 1);"));
+    try expectContains(try cFunctionBody(output.items, "static uint32_t local_wrap(uint32_t a)"), "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))");
+    try expectContains(try cFunctionBody(output.items, "static uint32_t assigned_wrap(uint32_t a)"), "((uint32_t)(mc_exec_tmp_1) + (uint32_t)(mc_exec_tmp_2))");
 }
 
 test "lower-c unchecked arithmetic requires MIR identity and operand/result type facts" {
@@ -9268,7 +9272,7 @@ test "lower-c inferred local direct calls require MIR types" {
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null);
     const caller_body = try cFunctionBody(complete_output.items, "static uint64_t caller(void)");
     try expectLegacyOrCanonicalReturn(caller_body, "return make_count();", "= make_count(");
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "= maybe_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_trap_InvalidRepresentation()") != null);
@@ -13427,8 +13431,12 @@ test "lower-c emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error make_result(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void consume_result(mc_result_u32_Error result);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(mc_tmp") != null);
+    const pass_body = try cFunctionBody(output.items, "static mc_result_u32_Error pass_result(mc_result_u32_Error result)");
+    try expectContains(pass_body, "/* canonical executable MIR */");
+    try expectContains(pass_body, "mc_result_u32_Error mc_exec_tmp_0;");
+    try expectContains(pass_body, "mc_exec_tmp_0 = result;");
+    try expectContains(pass_body, "return mc_exec_tmp_0;");
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(mc_exec_tmp_") != null);
 }
 
 test "lower-c emits C ABI for tagged unions" {
@@ -13595,8 +13603,12 @@ test "lower-c emits Result ok and err constructors" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_result_constructors.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = value });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = Error_denied });") != null);
+    const ok_body = try cFunctionBody(output.items, "static mc_result_u32_Error make_ok(uint32_t value)");
+    try expectContains(ok_body, "((mc_result_u32_Error){ .is_ok = true, .payload.ok = mc_exec_tmp_0 })");
+    try expectContains(ok_body, "return mc_exec_tmp_1;");
+    const err_body = try cFunctionBody(output.items, "static mc_result_u32_Error make_err(void)");
+    try expectContains(err_body, "((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_exec_tmp_0 })");
+    try expectContains(err_body, "return mc_exec_tmp_1;");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = ((mc_result_u32_Error){ .is_ok = true, .payload.ok = 7 });\n    consume_result(mc_tmp0);") != null);
 }
 
@@ -19651,7 +19663,7 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_write;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "= sink(mc_exec_tmp_0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mode == Mode_read") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Mode)(Mode_write));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "((Mode)(mc_exec_tmp_0))") != null);
 }
 
 test "lower-c emits optional pointer if-let" {

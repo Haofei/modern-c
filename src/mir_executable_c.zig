@@ -368,6 +368,16 @@ fn emitExpressionOperation(
             try appendCType(allocator, out, body, expression.result_ty);
             try out.appendSlice(allocator, "){ .present = false }");
         },
+        .result => |result| {
+            const shape = resultType(body, expression.type_id) orelse return error.InvalidExpression;
+            if (!resultConstructionSupported(body, expression.*, result)) return error.InvalidExpression;
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, shape.ty);
+            try out.appendSlice(allocator, "){ .is_ok = ");
+            try out.appendSlice(allocator, if (result.is_ok) "true, .payload.ok = " else "false, .payload.err = ");
+            try emitExpression(allocator, out, body, result.payload, depth + 1);
+            try out.appendSlice(allocator, " })");
+        },
         .array => |aggregate| {
             const shape = aggregateType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!arrayConstructionSupported(body, expression.*, aggregate)) return error.InvalidExpression;
@@ -544,6 +554,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
+        .result => |result| resultConstructionSupported(body, expression, result),
         .deref, .index, .range_slice, .unsupported => false,
     };
 }
@@ -685,6 +696,27 @@ fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType)
     return null;
 }
 
+fn resultType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableResultType {
+    if (!type_id.isValid()) return null;
+    for (body.result_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
+    return null;
+}
+
+fn resultTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableResultType {
+    for (body.result_types) |*shape| if (sameValueType(shape.ty, ty)) return shape;
+    return null;
+}
+
+fn resultConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
+    const shape = resultType(body, expression.type_id) orelse return false;
+    const payload = expressionById(body, operation.payload) orelse return false;
+    if (!sameValueType(shape.ty, expression.result_ty)) return false;
+    return if (operation.is_ok)
+        sameValueType(payload.result_ty, shape.ok_ty) and payload.type_id.eql(shape.ok_type_id)
+    else
+        sameValueType(payload.result_ty, shape.err_ty) and payload.type_id.eql(shape.err_type_id);
+}
+
 fn optionalConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: ?mir.ExprId) bool {
     if (expression.result_ty != .nullable_value) return false;
     const shape = aggregateType(body, expression.type_id) orelse return false;
@@ -703,7 +735,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -713,12 +745,29 @@ fn builtinCallSupported(
         operand_types[index] = operand.result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     return if (call.kind == .raw_ptr)
         call.representation_source != null and call.representation_span_id.isValid() and
             representationOperationHasExactTrapEdge(body, expression)
     else
         call.representation_source == null and !call.representation_span_id.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn enumRawSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+) bool {
+    if (call.argument_count != 1) return false;
+    const operand = expressionById(body, call.arguments[0]) orelse return false;
+    for (body.enum_types) |enum_ty| {
+        if (!enum_ty.type_id.eql(operand.type_id)) continue;
+        return enum_ty.repr_type_id.eql(expression.type_id) and
+            sameValueType(enum_ty.ty, operand.result_ty) and
+            sameValueType(enum_ty.repr_ty, expression.result_ty);
+    }
+    return false;
 }
 
 fn emitBuiltinCall(
@@ -752,6 +801,32 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, ") + (");
             try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
+            try out.appendSlice(allocator, ")))");
+        },
+        .wrap_residue, .enum_raw => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .serial_before, .serial_after => {
+            const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const shape = domainInteger(operand.result_ty, .serial) orelse return error.UnsupportedType;
+            const signed_ty = signedPrimitiveType(shape.child) orelse return error.UnsupportedType;
+            try out.print(allocator, "((({s})((", .{signed_ty});
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ") - (");
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
+            try out.print(allocator, "))) {s} 0)", .{if (call.kind == .serial_before) "<" else ">"});
+        },
+        .serial_distance, .counter_delta_mod => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, ")((");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ") - (");
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.appendSlice(allocator, ")))");
         },
@@ -1363,6 +1438,7 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         else
             false,
         .nullable_value => aggregateTypeForValueType(body, ty) != null,
+        .result => resultTypeForValueType(body, ty) != null,
         else => false,
     };
 }
@@ -1684,6 +1760,13 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             try out.appendSlice(allocator, "mc_opt_");
             try appendCTypeSuffix(allocator, out, shape.field_types[1]);
         },
+        .result => {
+            const shape = resultTypeForValueType(body, ty) orelse return error.UnsupportedType;
+            try out.appendSlice(allocator, "mc_result_");
+            try appendCTypeSuffix(allocator, out, shape.ok_ty);
+            try out.append(allocator, '_');
+            try appendCTypeSuffix(allocator, out, shape.err_ty);
+        },
         else => return error.UnsupportedType,
     }
 }
@@ -1694,7 +1777,11 @@ fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: 
         .integer, .float => |name| try out.appendSlice(allocator, name),
         .address => try out.appendSlice(allocator, ty.name()),
         .struct_ => |name| try out.print(allocator, "mc_type_struct_{d}_{s}", .{ name.len, name }),
-        .closed_enum, .open_enum => |name| try out.print(allocator, "mc_type_name_{d}_{s}", .{ name.len, name }),
+        // Enum declarations are emitted as nominal C typedefs, so Result
+        // helper names use the same public suffix as the declaration path.
+        // Encoding them as a generic source type name here produces a helper
+        // that was never declared (for example mc_result_u32_mc_type_name_5_Error).
+        .closed_enum, .open_enum => |name| try appendIdent(allocator, out, name),
         else => return error.UnsupportedType,
     }
 }
@@ -1838,6 +1925,16 @@ fn primitiveType(name: []const u8) ?[]const u8 {
         .{ .mc = "usize", .c = "uintptr_t" }, .{ .mc = "isize", .c = "intptr_t" }, .{ .mc = "f32", .c = "float" },    .{ .mc = "f64", .c = "double" },   .{ .mc = "bool", .c = "bool" },
     };
     for (entries) |entry| if (std.mem.eql(u8, name, entry.mc)) return entry.c;
+    return null;
+}
+
+fn signedPrimitiveType(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return "int8_t";
+    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return "int16_t";
+    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return "int32_t";
+    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return "int64_t";
+    if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128")) return "__int128";
+    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return "intptr_t";
     return null;
 }
 

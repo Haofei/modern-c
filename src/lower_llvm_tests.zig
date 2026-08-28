@@ -2440,8 +2440,8 @@ test "LLVM emits simple global stores after specialized plan retirement" {
     try expectNotContains(add_body, "alloca");
 
     const wrap_body = try llvmFunctionBody(output.items, "define internal void @store_wrap");
-    try expectContains(wrap_body, " = add i32 %a, 1");
-    try expectContains(wrap_body, "store atomic i32 %t");
+    try expectContains(wrap_body, " = add i32 %mc_arg_0, 1");
+    try expectContains(wrap_body, "store atomic i32 %mc_expr_tmp_");
     try expectContains(wrap_body, "ptr @g unordered, align 4");
     try expectNotContains(wrap_body, "alloca");
 
@@ -3346,7 +3346,7 @@ test "LLVM emits typed unary call-target returns from MIR without body fallback"
     try expectContains(bits_float, "ret float %mc_expr_tmp_");
 
     const state_raw = try llvmFunctionBody(output.items, "define internal i8 @state_raw");
-    try expectContains(state_raw, "ret i8 %state");
+    try expectContains(state_raw, "ret i8 %mc_arg_0");
     try expectNotContains(state_raw, "call");
 }
 
@@ -3396,15 +3396,15 @@ test "LLVM emits typed binary domain calls from MIR without body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_binary_domain_calls.mc", source, &output);
 
-    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @wrap_add(i32 %a, i32 %b)"), "add i32 %a, %b");
-    const before = try llvmFunctionBody(output.items, "define internal i1 @seq_before(i32 %a, i32 %b)");
-    try expectContains(before, "sub i32 %a, %b");
-    try expectContains(before, "icmp slt i32 %t");
-    const after = try llvmFunctionBody(output.items, "define internal i1 @seq_after(i32 %a, i32 %b)");
-    try expectContains(after, "sub i32 %a, %b");
-    try expectContains(after, "icmp sgt i32 %t");
-    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @seq_distance(i32 %a, i32 %b)"), "sub i32 %a, %b");
-    try expectContains(try llvmFunctionBody(output.items, "define internal i64 @tick_delta(i64 %now, i64 %start)"), "sub i64 %now, %start");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @wrap_add(i32 %mc_arg_0, i32 %mc_arg_1)"), "add i32 %mc_arg_0, %mc_arg_1");
+    const before = try llvmFunctionBody(output.items, "define internal i1 @seq_before(i32 %mc_arg_0, i32 %mc_arg_1)");
+    try expectContains(before, "sub i32 %mc_arg_0, %mc_arg_1");
+    try expectContains(before, "icmp slt i32 %mc_expr_tmp_");
+    const after = try llvmFunctionBody(output.items, "define internal i1 @seq_after(i32 %mc_arg_0, i32 %mc_arg_1)");
+    try expectContains(after, "sub i32 %mc_arg_0, %mc_arg_1");
+    try expectContains(after, "icmp sgt i32 %mc_expr_tmp_");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @seq_distance(i32 %mc_arg_0, i32 %mc_arg_1)"), "sub i32 %mc_arg_0, %mc_arg_1");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i64 @tick_delta(i64 %mc_arg_0, i64 %mc_arg_1)"), "sub i64 %mc_arg_0, %mc_arg_1");
 }
 
 test "LLVM typed binary domain fast path rejects call operands" {
@@ -3418,7 +3418,7 @@ test "LLVM typed binary domain fast path rejects call operands" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_mir_typed_binary_domain_nested.mc", source, &output);
-    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @nested(i32 %a, i32 %b)"), "call i32 @identity(i32 %a)");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @nested(i32 %mc_arg_0, i32 %mc_arg_1)"), "call i32 @identity(i32 %mc_arg_0)");
 }
 
 test "LLVM emits checked arithmetic returns from MIR without body fallback" {
@@ -7294,7 +7294,7 @@ test "LLVM wrapping arithmetic requires MIR identity and operand/result type fac
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_wrapping_call_facts.mc", .{}, false, .riscv64, false, null);
-    try expectContains(complete_output.items, " = add i32 %a, 1");
+    try expectContains(complete_output.items, " = add i32 %mc_arg_0, 1");
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_identity.deinit();
@@ -7322,7 +7322,7 @@ test "LLVM emits wrapping arithmetic call from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_wrapping_call.mc", source, &output);
-    try expectContains(output.items, " = add i32 %a, 1");
+    try expectContains(output.items, " = add i32 %mc_arg_0, 1");
 }
 
 test "LLVM emits local wrapping arithmetic from MIR without body fallback" {
@@ -7340,7 +7340,7 @@ test "LLVM emits local wrapping arithmetic from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_wrapping_call.mc", source, &output);
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = add i32 %a, 1"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = add i32 %mc_arg_0, 1"));
 }
 
 test "LLVM unchecked arithmetic requires MIR identity and operand/result type facts" {

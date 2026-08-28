@@ -1,7 +1,8 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-26 after retiring the pointer-to-integer specialized plan.
+2026-08-28 after expanding canonical executable MIR and reducing the
+`simple_return` specialized path.
 
 ## TL;DR
 
@@ -9,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **757/1696 C** and **820/1762 LLVM** distinct functions using the AST
-  body (C admits 55.4%, LLVM 53.5%). Report mode intentionally preserves
+  finds **633/1735 C** and **693/1808 LLVM** distinct functions using the AST
+  body (C admits 63.5%, LLVM 61.7%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -28,6 +29,18 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+The latest batch migrated another 10 C and 13 LLVM broad functions away from
+`simple_return`. A trial physical deletion exposed 50 no-fallback shard tests
+whose edge-case and mutation behavior has not yet reached canonical MIR, so the
+deletion was reverted. This preserves fail-closed behavior and makes the true
+retirement boundary explicit instead of declaring success from the smaller
+strict corpus. The strict corpus now has 96 canonical and 64 specialized
+functions per backend, with 14 specialized plan definitions; broad
+`simple_return` use is down to 33 C / 45 LLVM. Canonical executable MIR now
+covers Result construction, wrapping/serial/counter operations, enum raw and
+open-enum conversions, wide-integer register casts, negative floating literals
+and pointer qualification comparisons.
 
 The current batch replaces another set of backend-local syntax recognizers with
 bounded, backend-neutral MIR plans for assertions, nullable control, scalar

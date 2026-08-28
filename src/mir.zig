@@ -6143,6 +6143,7 @@ const FunctionBuilder = struct {
     executable_symbols: std.ArrayList(SymbolIdentity),
     executable_aggregate_types: std.ArrayList(mir_model.ExecutableAggregateType),
     executable_enum_types: std.ArrayList(mir_model.ExecutableEnumType),
+    executable_result_types: std.ArrayList(mir_model.ExecutableResultType),
     executable_expressions: std.ArrayList(ExecutableExpression),
     executable_trap_edges: std.ArrayList(mir_model.ExecutableTrapEdge),
     executable_places: std.ArrayList(ExecutablePlace),
@@ -6275,6 +6276,7 @@ const FunctionBuilder = struct {
             .executable_symbols = .empty,
             .executable_aggregate_types = .empty,
             .executable_enum_types = .empty,
+            .executable_result_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6309,7 +6311,7 @@ const FunctionBuilder = struct {
         if (builder.return_ty == .nullable_value and !try builder.internExecutableValueOptionalType(builder.return_ty))
             builder.executable_supported = false;
         if (fn_decl.return_type) |return_type| {
-            if (!try builder.internExecutableArrayTypeExpr(builder.return_ty, return_type))
+            if (!try builder.internExecutableTypeExpr(builder.return_ty, return_type))
                 builder.executable_supported = false;
         }
         for (fn_decl.params) |param| {
@@ -6317,7 +6319,7 @@ const FunctionBuilder = struct {
             if (!try builder.internExecutableEnumType(param_ty)) builder.executable_supported = false;
             if (param_ty == .nullable_value and !try builder.internExecutableValueOptionalType(param_ty))
                 builder.executable_supported = false;
-            if (!try builder.internExecutableArrayTypeExpr(param_ty, param.ty))
+            if (!try builder.internExecutableTypeExpr(param_ty, param.ty))
                 builder.executable_supported = false;
             const atomic_payload_ty: ?ValueType = if (directAtomicPayloadTypeExprAlias(param.ty, aliases, true)) |payload|
                 valueTypeFromTypeAlias(payload, enums, structs, packed_bits, aliases)
@@ -6415,6 +6417,7 @@ const FunctionBuilder = struct {
             .executable_symbols = .empty,
             .executable_aggregate_types = .empty,
             .executable_enum_types = .empty,
+            .executable_result_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6491,6 +6494,7 @@ const FunctionBuilder = struct {
         self.executable_symbols.deinit(self.allocator);
         self.executable_aggregate_types.deinit(self.allocator);
         self.executable_enum_types.deinit(self.allocator);
+        self.executable_result_types.deinit(self.allocator);
         self.executable_expressions.deinit(self.allocator);
         self.executable_trap_edges.deinit(self.allocator);
         self.executable_places.deinit(self.allocator);
@@ -6878,6 +6882,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(aggregate_types);
         const enum_types = try self.executable_enum_types.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(enum_types);
+        const result_types = try self.executable_result_types.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(result_types);
         const expressions = try self.executable_expressions.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(expressions);
         const executable_trap_edges = try self.executable_trap_edges.toOwnedSlice(self.allocator);
@@ -6901,6 +6907,7 @@ const FunctionBuilder = struct {
             .symbols = symbols,
             .aggregate_types = aggregate_types,
             .enum_types = enum_types,
+            .result_types = result_types,
             .expressions = expressions,
             .trap_edges = executable_trap_edges,
             .places = places,
@@ -6935,6 +6942,20 @@ const FunctionBuilder = struct {
                     break :optional candidate.construction == .declared_struct and candidate.ty == .nullable_value and candidate.field_count == 2;
                 }
                 break :optional false;
+            },
+            .result => |operation| result: {
+                if (!operation.payload.isValid() or operation.payload.index() >= expression.id.index() or
+                    operation.payload.index() >= self.executable_expressions.items.len) break :result false;
+                const payload = self.executable_expressions.items[operation.payload.index()];
+                for (self.executable_result_types.items) |shape| {
+                    if (!shape.type_id.eql(expression.type_id)) continue;
+                    if (!sameValueType(shape.ty, expression.result_ty)) break :result false;
+                    break :result if (operation.is_ok)
+                        sameValueType(payload.result_ty, shape.ok_ty) and payload.type_id.eql(shape.ok_type_id)
+                    else
+                        sameValueType(payload.result_ty, shape.err_ty) and payload.type_id.eql(shape.err_type_id);
+                }
+                break :result false;
             },
             .member => |operation| self.executableMemberComplete(expression, operation),
             .struct_ => |operation| self.executableStructConstructionComplete(expression, operation),
@@ -7325,12 +7346,31 @@ const FunctionBuilder = struct {
             operand_types[index] = self.executable_expressions.items[argument.index()].result_ty;
         }
         if (!mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+        if (call.kind == .enum_raw and !self.executableEnumRawComplete(expression, call)) return false;
         return if (call.kind == .raw_ptr)
             call.representation_source != null and
                 sourcePointEquivalent(call.representation_source.?, expression.source) and
                 call.representation_span_id.eql(expression.span_id)
         else
             call.representation_source == null and !call.representation_span_id.isValid();
+    }
+
+    fn executableEnumRawComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        call: @FieldType(ExecutableExpression.Operation, "builtin_call"),
+    ) bool {
+        if (call.argument_count != 1) return false;
+        const operand_id = call.arguments[0];
+        if (!operand_id.isValid() or operand_id.index() >= self.executable_expressions.items.len) return false;
+        const operand = self.executable_expressions.items[operand_id.index()];
+        for (self.executable_enum_types.items) |enum_ty| {
+            if (!enum_ty.type_id.eql(operand.type_id)) continue;
+            return enum_ty.repr_type_id.eql(expression.type_id) and
+                sameValueType(enum_ty.ty, operand.result_ty) and
+                sameValueType(enum_ty.repr_ty, expression.result_ty);
+        }
+        return false;
     }
 
     fn executableTrapProjectionComplete(
@@ -7747,6 +7787,14 @@ const FunctionBuilder = struct {
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
             result_ty = expected;
         };
+        // Unary negation does not change its operand type. A literal nested
+        // below the unary node still receives the surrounding return/local
+        // context; otherwise `-4.0` remains `comptime_float` and cannot cross
+        // the syntax-free executable boundary.
+        if (expr.kind == .unary) if (expected_ty) |expected| switch (expected) {
+            .float => result_ty = expected,
+            else => {},
+        };
         if (expr.kind == .char_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
             result_ty = expected;
         };
@@ -7828,12 +7876,19 @@ const FunctionBuilder = struct {
                 const operand_ty = if (mirIsComparisonBinary(node.op)) comparison_operand: {
                     const left_ty = self.exprType(node.left.*);
                     const right_ty = self.exprType(node.right.*);
+                    if (executableComparisonPointerType(left_ty, right_ty)) |pointer_ty|
+                        break :comparison_operand pointer_ty;
                     if (left_ty != .unknown and std.meta.activeTag(left_ty) != .value) break :comparison_operand left_ty;
                     break :comparison_operand right_ty;
                 } else result_ty;
-                const left = try self.ensureExecutableExprAs(node.left.*, operand_ty);
+                const left = if (mirIsComparisonBinary(node.op))
+                    try self.ensureExecutablePointerCoercedExpr(node.left.*, operand_ty)
+                else
+                    try self.ensureExecutableExprAs(node.left.*, operand_ty);
                 const right = if (node.op == .shl or node.op == .shr)
                     try self.ensureExecutableCoercedExpr(node.right.*, operand_ty)
+                else if (mirIsComparisonBinary(node.op))
+                    try self.ensureExecutablePointerCoercedExpr(node.right.*, operand_ty)
                 else
                     try self.ensureExecutableExprAs(node.right.*, operand_ty);
                 const optimized_safe_div_mod = (node.op == .div or node.op == .mod) and self.optimize and self.divModProvablySafe(node);
@@ -7862,6 +7917,14 @@ const FunctionBuilder = struct {
             },
             .cast => |node| cast: {
                 const operand = try self.ensureExecutableExpr(node.value.*);
+                // Unsuffixed integer/float literals have no runtime source
+                // width. Their explicit cast target supplies that width, so
+                // represent them directly at the checked target type instead
+                // of inventing a backend cast from `comptime_*`.
+                switch (self.executable_expressions.items[operand.index()].operation) {
+                    .literal => try self.contextualizeExecutableLiteral(operand, result_ty),
+                    else => {},
+                }
                 const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
                 const kind = mir_model.ExecutableCastKind.classify(operand_ty, result_ty) orelse {
                     break :cast self.unsupportedExecutableExpression(.unsupported_cast);
@@ -7997,19 +8060,51 @@ const FunctionBuilder = struct {
                 }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
                     const raw_target = self.rawCallTarget(node);
-                    if (kind == .phys) {
+                    const wrapping_target = self.wrappingCallTarget(node);
+                    const enum_raw_target = self.enumRawCallTarget(node);
+                    const domain_target = try self.domainCallTarget(node);
+                    const result_target_type = if (kind == .result_ok or kind == .result_err)
+                        (expected_type_expr orelse self.assignment_target_type_expr)
+                    else
+                        null;
+                    if (result_target_type) |target_type| {
+                        result_ty = valueTypeFromTypeAlias(target_type, self.enums, self.structs, self.packed_bits, self.aliases);
+                        if (!try self.internExecutableResultType(result_ty, target_type))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    } else if (kind == .phys) {
                         result_ty = .{ .address = .paddr };
+                    } else if (wrapping_target) |target| {
+                        result_ty = target.result_ty;
+                    } else if (enum_raw_target) |target| {
+                        result_ty = target.result_ty;
+                        if (!try self.internExecutableEnumType(target.source_ty))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    } else if (domain_target) |target| {
+                        result_ty = target.result_ty;
                     } else if (kind == .forget_unchecked or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
                         if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store) result_ty = target.result_ty;
                     }
                     const callee_source = self.sourcePoint(node.callee.*.span);
-                    const receiver = if (kind == .raw_many_offset)
-                        (memberExpr(node.callee.*) orelse
-                            break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*
-                    else
-                        null;
+                    const receiver, const receiver_ty = switch (kind) {
+                        .raw_many_offset => .{
+                            (memberExpr(node.callee.*) orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*,
+                            result_ty,
+                        },
+                        .wrap_residue => .{
+                            (memberExpr(node.callee.*) orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*,
+                            (domain_target orelse break :call self.unsupportedExecutableExpression(.unsupported_call)).domain_ty,
+                        },
+                        .enum_raw => .{
+                            (memberExpr(node.callee.*) orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*,
+                            (enum_raw_target orelse break :call self.unsupportedExecutableExpression(.unsupported_call)).source_ty,
+                        },
+                        else => .{ null, null },
+                    };
                     const argument_count = node.args.len + @as(usize, if (receiver != null) 1 else 0);
                     if (argument_count > mir_model.max_executable_operands)
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
@@ -8024,11 +8119,18 @@ const FunctionBuilder = struct {
                     };
                     var argument_index: usize = 0;
                     if (receiver) |base| {
-                        call_value.arguments[0] = try self.ensureExecutableExprAs(base, result_ty);
+                        call_value.arguments[0] = try self.ensureExecutableExprAs(base, receiver_ty.?);
                         argument_index = 1;
                     }
                     for (node.args, 0..) |argument, source_index| {
-                        call_value.arguments[argument_index] = if (kind == .raw_many_offset)
+                        call_value.arguments[argument_index] = if (kind == .result_ok or kind == .result_err) result_arg: {
+                            const target_type = result_target_type orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                            const payload_type = resultPayloadTypeExprAlias(target_type, if (kind == .result_ok) "ok" else "err", self.aliases) orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                            const payload_ty = valueTypeFromTypeAlias(payload_type, self.enums, self.structs, self.packed_bits, self.aliases);
+                            break :result_arg try self.ensureExecutableExprAsType(argument, payload_ty, payload_type);
+                        } else if (kind == .raw_many_offset)
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
                         else if (raw_target) |target|
                             if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store)
@@ -8039,6 +8141,13 @@ const FunctionBuilder = struct {
                             try self.ensureExecutableExpr(argument);
                         if (kind == .wrapping_add) try self.contextualizeExecutableLiteral(call_value.arguments[argument_index], result_ty);
                         argument_index += 1;
+                    }
+                    if (kind == .result_ok or kind == .result_err) {
+                        if (argument_count != 1) break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        break :call .{ .result = .{
+                            .is_ok = kind == .result_ok,
+                            .payload = call_value.arguments[0],
+                        } };
                     }
                     break :call .{ .builtin_call = call_value };
                 }
@@ -8059,7 +8168,7 @@ const FunctionBuilder = struct {
                     if (summary) |callee_summary| {
                         result_ty = callee_summary.return_ty;
                         if (callee_summary.return_type_expr) |return_type| {
-                            if (!try self.internExecutableArrayTypeExpr(result_ty, return_type))
+                            if (!try self.internExecutableTypeExpr(result_ty, return_type))
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
                         }
                     }
@@ -8072,7 +8181,7 @@ const FunctionBuilder = struct {
                         else
                             null;
                         if (summary) |callee_summary| if (index < callee_summary.params.len) {
-                            if (!try self.internExecutableArrayTypeExpr(parameter_ty orelse .unknown, callee_summary.params[index].ty))
+                            if (!try self.internExecutableTypeExpr(parameter_ty orelse .unknown, callee_summary.params[index].ty))
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
                         };
                         call_value.arguments[index] = try self.ensureExecutableExprAsType(
@@ -8199,6 +8308,10 @@ const FunctionBuilder = struct {
                         .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
                         else => null,
                     },
+                    .direct_call, .indirect_call => switch (expr.kind) {
+                        .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .nonnull_pointer else null,
+                        else => null,
+                    },
                     else => null,
                 },
                 .slice => switch (operation) {
@@ -8287,14 +8400,26 @@ const FunctionBuilder = struct {
         return true;
     }
 
-    fn internExecutableArrayTypeExpr(self: *FunctionBuilder, ty: ValueType, type_expr: ast.TypeExpr) !bool {
-        const array = switch (aggregateTargetTypeAlias(type_expr, self.aliases).kind) {
-            .array => |value| value,
+    fn internExecutableTypeExpr(self: *FunctionBuilder, ty: ValueType, type_expr: ast.TypeExpr) anyerror!bool {
+        const resolved = aggregateTargetTypeAlias(type_expr, self.aliases);
+        switch (resolved.kind) {
+            .array => |array| {
+                const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
+                const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
+                return self.internExecutableArrayType(ty, element_ty, length);
+            },
+            .generic => |generic| if (std.mem.eql(u8, generic.base.text, "Result"))
+                return self.internExecutableResultType(ty, resolved),
+            else => {},
+        }
+        switch (ty) {
+            .struct_ => |name| {
+                const summary = self.structs.get(name) orelse return false;
+                return self.internExecutableAggregateTypeDepth(ty, executableAggregateConstruction(summary), summary.fields, 0);
+            },
+            .closed_enum, .open_enum => return self.internExecutableEnumType(ty),
             else => return true,
-        };
-        const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
-        const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
-        return self.internExecutableArrayType(ty, element_ty, length);
+        }
     }
 
     fn executableCallableSignature(self: *FunctionBuilder, type_expr: ast.TypeExpr) !?mir_model.ExecutableCallSignature {
@@ -8315,7 +8440,7 @@ const FunctionBuilder = struct {
             return null;
         }
         signature.return_type_id = try self.internTypeId(signature.return_ty);
-        if (!try self.internExecutableArrayTypeExpr(signature.return_ty, function.ret.*)) {
+        if (!try self.internExecutableTypeExpr(signature.return_ty, function.ret.*)) {
             self.executable_supported = false;
             return null;
         }
@@ -8327,7 +8452,7 @@ const FunctionBuilder = struct {
             }
             signature.parameter_types[index] = parameter_ty;
             signature.parameter_type_ids[index] = try self.internTypeId(parameter_ty);
-            if (!try self.internExecutableArrayTypeExpr(parameter_ty, parameter)) {
+            if (!try self.internExecutableTypeExpr(parameter_ty, parameter)) {
                 self.executable_supported = false;
                 return null;
             }
@@ -8428,6 +8553,37 @@ const FunctionBuilder = struct {
         return true;
     }
 
+    fn internExecutableResultType(self: *FunctionBuilder, ty: ValueType, type_expr: ast.TypeExpr) !bool {
+        const generic = switch (aggregateTargetTypeAlias(type_expr, self.aliases).kind) {
+            .generic => |value| value,
+            else => return false,
+        };
+        if (!std.mem.eql(u8, generic.base.text, "Result") or generic.args.len != 2 or ty != .result) return false;
+        const ok_ty = valueTypeFromTypeAlias(generic.args[0], self.enums, self.structs, self.packed_bits, self.aliases);
+        const err_ty = valueTypeFromTypeAlias(generic.args[1], self.enums, self.structs, self.packed_bits, self.aliases);
+        if (ok_ty == .unknown or ok_ty == .value or err_ty == .unknown or err_ty == .value) return false;
+        const type_id = try self.internTypeId(ty);
+        const ok_type_id = try self.internTypeId(ok_ty);
+        const err_type_id = try self.internTypeId(err_ty);
+        for (self.executable_result_types.items) |shape| {
+            if (!shape.type_id.eql(type_id)) continue;
+            return sameValueType(shape.ty, ty) and sameValueType(shape.ok_ty, ok_ty) and
+                sameValueType(shape.err_ty, err_ty) and shape.ok_type_id.eql(ok_type_id) and
+                shape.err_type_id.eql(err_type_id);
+        }
+        try self.executable_result_types.append(self.allocator, .{
+            .type_id = type_id,
+            .ty = ty,
+            .ok_type_id = ok_type_id,
+            .ok_ty = ok_ty,
+            .err_type_id = err_type_id,
+            .err_ty = err_ty,
+        });
+        if (!try self.internExecutableTypeExpr(ok_ty, generic.args[0])) return false;
+        if (!try self.internExecutableTypeExpr(err_ty, generic.args[1])) return false;
+        return true;
+    }
+
     fn internExecutableEnumType(self: *FunctionBuilder, ty: ValueType) !bool {
         const name = switch (ty) {
             .closed_enum, .open_enum => |name| name,
@@ -8484,6 +8640,36 @@ const FunctionBuilder = struct {
         if (left_literal and !right_literal and right != .unknown) return right;
         if (right_literal and !left_literal and left != .unknown) return left;
         return left;
+    }
+
+    /// Select the common representation used by pointer equality. Mutability
+    /// is a qualification, so comparing `*mut T` with `*const T` uses the
+    /// const-qualified shape. A nullable operand makes the common shape
+    /// nullable. The operands are then materialized through explicit MIR casts
+    /// instead of leaving either backend to reconcile source types.
+    fn executableComparisonPointerType(left: ValueType, right: ValueType) ?ValueType {
+        const left_shape = switch (left) {
+            .pointer => |shape| shape,
+            .nullable_pointer => |shape| shape,
+            else => return null,
+        };
+        const right_shape = switch (right) {
+            .pointer => |shape| shape,
+            .nullable_pointer => |shape| shape,
+            // `null` is contextual and has no useful standalone shape.
+            .unknown, .value => return left,
+            else => return null,
+        };
+        if (left_shape.kind != right_shape.kind or !std.mem.eql(u8, left_shape.child, right_shape.child)) return null;
+        const common_shape: mir_model.PointerShape = .{
+            .kind = left_shape.kind,
+            .mutability = if (left_shape.mutability == .@"const" or right_shape.mutability == .@"const") .@"const" else left_shape.mutability,
+            .child = left_shape.child,
+        };
+        return if (left == .nullable_pointer or right == .nullable_pointer)
+            .{ .nullable_pointer = common_shape }
+        else
+            .{ .pointer = common_shape };
     }
 
     fn executableExprIsIntegerLiteral(input: ast.Expr) bool {
@@ -8597,6 +8783,8 @@ const FunctionBuilder = struct {
     }
 
     fn executableBuiltinCallKind(self: *FunctionBuilder, call: anytype) !?CallTargetKind {
+        if (resultConstructorCallTag(call)) |tag|
+            return if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err;
         if (self.constGetCallTarget(call) != null) return .const_get;
         if (reduceCallKind(call.callee.*)) |kind| return switch (kind) {
             .sum_checked => .reduce_sum_checked,
@@ -9106,7 +9294,7 @@ const FunctionBuilder = struct {
                     if (ty == .nullable_value and !try self.internExecutableValueOptionalType(ty))
                         self.executable_supported = false;
                     if (ty_expr) |declared_ty| {
-                        if (!try self.internExecutableArrayTypeExpr(ty, declared_ty))
+                        if (!try self.internExecutableTypeExpr(ty, declared_ty))
                             self.executable_supported = false;
                     }
                     switch (ty) {
@@ -9441,10 +9629,9 @@ const FunctionBuilder = struct {
             try self.appendExecutableStatement(self.sourcePoint(stmt_span), .{ .contract_marker = .{ .kind = .end, .name = name } });
             try self.addInstr(.contract_end, name, .contract, stmt_span);
         } else {
-            // A marker after a terminating statement is not executable. Keep
-            // that shape on the verified legacy path until markers are owned
-            // by CFG edges rather than the statement stream.
-            self.executable_supported = false;
+            // A terminating edge leaves the region; there is no reachable
+            // statement on which to place an end marker. Cleanup/control flow
+            // is already explicit in the enclosing CFG.
         }
         return terminated;
     }

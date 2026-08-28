@@ -15,9 +15,9 @@ which function shapes still fall back. The strict ratchet corpus now admits
 zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
-The strict corpus is not the P0 completion definition. The current 2026-08-26
-broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1696 C and 1762
-LLVM functions. It still found 757 C and 820 LLVM AST-body fallbacks. Report
+The strict corpus is not the P0 completion definition. The current 2026-08-28
+broad sweep over all 522 `tests/**/*.mc` roots de-duplicated to 1735 C and 1808
+LLVM functions. It found 633 C and 693 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -25,12 +25,28 @@ figures establish that final deletion now requires a
 general syntax-free executable MIR body and mechanical backend renderers; more
 strict-corpus recognizers are no longer an honest completion strategy.
 
-### Last completed broad census snapshot (2026-08-26)
+### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **939/1696 admitted (55.4%)**, 757 fallback, and
-LLVM **942/1762 admitted (53.5%)**, 820 fallback. There were no unsupported
+The 522-root sweep found C **1102/1735 admitted (63.5%)**, 633 fallback, and
+LLVM **1115/1808 admitted (61.7%)**, 693 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
-canonical-ready body still fell through to that ingress. The latest slice
+canonical-ready C body fell through to that ingress; LLVM reports eight ready
+bodies still blocked at ingress and keeps them visible as debt. The latest
+slice attempted physical retirement of `simple_return`, but the full lowering
+shards proved that 50 no-fallback tests still rely on its fault-injection and
+edge-case semantics. That deletion was therefore reverted rather than masking
+the gap by changing tests. The plan remains as a bounded safety net, and its
+broad use has fallen to **33 C / 45 LLVM** functions (from 43/58 before this
+slice). The canonical producer now owns Result construction, domain/serial/counter
+builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
+negative float literals and qualified/nullable pointer comparisons. The strict
+ratchet consequently moves from 84/83 to **96 canonical functions on both
+backends**, while specialized admission falls from 76/77 to **64/64** and
+specialized plan definitions from 15 to **14**. Compared with the prior broad
+snapshot, admitted functions increased by 163 C and 173 LLVM while the legacy
+path did not grow.
+
+The preceding slice
 adds transitive by-value aggregate/enum metadata with bounded failure rollback,
 so LLVM can mechanically render nested aggregate GEP types. It moves eight
 broad functions from `simple_return` to canonical MIR and one function off AST
