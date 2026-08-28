@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **629/1785 C** and **684/1858 LLVM** distinct functions using the AST
-  body (C admits 64.8%, LLVM 63.2%). Report mode intentionally preserves
+  finds **627/1785 C** and **682/1858 LLVM** distinct functions using the AST
+  body (C admits 64.9%, LLVM 63.3%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -58,14 +58,24 @@ that model mechanically. The 64-bit-and-smaller subset is admitted while
 128-bit extrema remain fail-closed. This moved three more broad functions off
 fallback per backend, including one formerly specialized `simple_return` body.
 
+The remaining scalar conversion family now uses that same canonical integer
+relation. `wrap_from` and `from_mod` perform an explicit modular resize,
+`sat_from` clamps signed/unsigned crossings without a trap edge, and domain
+`from` preserves its verified storage representation. Both renderers consume
+the same source/target width and signedness facts. `tests/c_emit/conversions.mc`
+is now 8/8 canonical in both backends. The broad census moves two more functions
+off AST fallback and three off `simple_return` per backend: C is now
+1158/1785 admitted with 1025 canonical / 133 specialized, while LLVM is
+1176/1858 with 1020 canonical / 156 specialized.
+
 Fixed-array identity is now structural over element spelling and known length;
 `[4]T` and `[8]T` no longer collide in the `ValueType`/`TypeId` map. Nested
 array layouts are producer-owned, large homogeneous arrays use one bounded
 element metadata slot plus their logical length, and LLVM rejects an incomplete
 nested layout during admission rather than failing during rendering. The broad
-census has no remaining canonical-ready ingress mismatch: C is 1156/1785 with
-1020 canonical bodies, while LLVM is 1174/1858 with 1015 canonical bodies and
-684 AST fallbacks.
+census has no remaining canonical-ready ingress mismatch: C is 1158/1785 with
+1025 canonical bodies, while LLVM is 1176/1858 with 1020 canonical bodies and
+682 AST fallbacks.
 
 The latest batch migrated another 10 C and 13 LLVM broad functions away from
 `simple_return`. A trial physical deletion exposed 50 no-fallback shard tests
@@ -74,7 +84,7 @@ deletion was reverted. This preserves fail-closed behavior and makes the true
 retirement boundary explicit instead of declaring success from the smaller
 strict corpus. The strict corpus now has 96 canonical and 64 specialized
 functions per backend, with 14 specialized plan definitions; broad
-`simple_return` use is down to 33 C / 45 LLVM. Canonical executable MIR now
+`simple_return` use is down to 30 C / 43 LLVM. Canonical executable MIR now
 covers Result construction, wrapping/serial/counter operations, enum raw and
 open-enum conversions, wide-integer register casts, negative floating literals
 and pointer qualification comparisons.

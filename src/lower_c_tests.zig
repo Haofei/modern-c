@@ -2144,7 +2144,8 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     try expectNotContains(cast_body, "mc_tmp");
 
     const conversion_body = try cFunctionBody(output.items, "static void store_conversion(uint64_t value)");
-    try expectContains(conversion_body, "((uint8_t)(value))");
+    try expectContains(conversion_body, "/* canonical executable MIR */");
+    try expectContains(conversion_body, "((uint8_t)(mc_exec_tmp_");
     try expectContains(conversion_body, "mc_race_store_u8(&byte, (uint8_t)");
 
     const enum_body = try cFunctionBody(output.items, "static void store_enum(void)");
@@ -3239,7 +3240,9 @@ test "lower-c emits conversion literal return from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_conversion_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint8_t convert(void)");
-    try expectContains(body, "return ((uint8_t)(300));");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "((uint8_t)(mc_exec_tmp_");
+    try expectContains(body, "return mc_exec_tmp_");
     try expectNotContains(body, "mc_tmp");
 }
 
@@ -5931,14 +5934,15 @@ test "lower-c local and assigned conversion calls lower from MIR without body fa
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_conversion_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint8_t local_conversion(uint64_t value)");
-    try expectContains(local_body, "return ((uint8_t)(value));");
-    try expectNotContains(local_body, "uint8_t narrowed");
+    try expectContains(local_body, "/* canonical executable MIR */");
+    try expectContains(local_body, "((uint8_t)(mc_exec_tmp_");
+    try expectContains(local_body, "return mc_exec_tmp_");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static uint8_t assigned_conversion(uint64_t value)");
-    try expectContains(assigned_body, "return ((uint8_t)(value));");
-    try expectNotContains(assigned_body, "uint8_t narrowed");
-    try expectNotContains(assigned_body, "narrowed =");
+    try expectContains(assigned_body, "/* canonical executable MIR */");
+    try expectContains(assigned_body, "((uint8_t)(mc_exec_tmp_");
+    try expectContains(assigned_body, "return mc_exec_tmp_");
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
@@ -21897,18 +21901,25 @@ test "C race-tolerant aggregate slice loads parenthesize generated pointer expre
     try expectContains(output.items, ")])->x)))");
 }
 
-test "C canonical executable MIR owns trapping integer conversions" {
+test "C canonical executable MIR owns scalar integer conversions" {
     const source =
+        \\type W = wrap<u8>;
         \\fn narrow_unsigned(value: u32) -> u8 { return u8.trap_from(value); }
         \\fn signed_to_unsigned(value: i32) -> u8 { return u8.trap_from(value); }
         \\fn unsigned_to_signed(value: u32) -> i8 { return i8.trap_from(value); }
         \\fn widen(value: u8) -> u64 { return u64.trap_from(value); }
+        \\fn narrow_wrap(value: u32) -> u8 { return u8.wrap_from(value); }
+        \\fn narrow_sat(value: u32) -> u8 { return u8.sat_from(value); }
+        \\fn signed_sat(value: i32) -> u8 { return u8.sat_from(value); }
+        \\fn unsigned_signed_sat(value: u32) -> i8 { return i8.sat_from(value); }
+        \\fn make_wrap(value: u8) -> W { return W.from(value); }
+        \\fn make_wrap_mod() -> W { return W.from_mod(300); }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_trap_conversion.mc", source, &output);
 
-    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
+    try std.testing.expectEqual(@as(usize, 10), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
     const narrow = try cFunctionBody(output.items, "MC_UNUSED static uint8_t narrow_unsigned(uint32_t value)");
     try expectContains(narrow, "(unsigned __int128)255");
     try expectContains(narrow, "mc_trap_IntegerOverflow()");
@@ -21919,6 +21930,20 @@ test "C canonical executable MIR owns trapping integer conversions" {
     try expectContains(signed, "(__int128)127");
     const widen = try cFunctionBody(output.items, "MC_UNUSED static uint64_t widen(uint8_t value)");
     try expectNotContains(widen, "? (mc_trap_IntegerOverflow()");
+    const wrapped = try cFunctionBody(output.items, "MC_UNUSED static uint8_t narrow_wrap(uint32_t value)");
+    try expectContains(wrapped, "((uint8_t)(mc_exec_tmp_");
+    const saturated = try cFunctionBody(output.items, "MC_UNUSED static uint8_t narrow_sat(uint32_t value)");
+    try expectContains(saturated, "(unsigned __int128)255");
+    try expectNotContains(saturated, "mc_trap_IntegerOverflow()");
+    const sat_crossed = try cFunctionBody(output.items, "MC_UNUSED static uint8_t signed_sat(int32_t value)");
+    try expectContains(sat_crossed, "(__int128)0");
+    try expectContains(sat_crossed, "(unsigned __int128)255");
+    const sat_signed = try cFunctionBody(output.items, "MC_UNUSED static int8_t unsigned_signed_sat(uint32_t value)");
+    try expectContains(sat_signed, "(__int128)127");
+    const domain = try cFunctionBody(output.items, "MC_UNUSED static uint8_t make_wrap(uint8_t value)");
+    try expectContains(domain, "/* canonical executable MIR */");
+    const modulo = try cFunctionBody(output.items, "MC_UNUSED static uint8_t make_wrap_mod(void)");
+    try expectContains(modulo, "((uint8_t)(mc_exec_tmp_");
 }
 
 test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {

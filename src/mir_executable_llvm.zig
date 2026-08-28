@@ -1132,17 +1132,8 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = sub {s} {s}, {s}\n", .{ result, result_ty, left.spelling, right.spelling });
                 return .{ .ty = result_ty, .spelling = result };
             },
-            .conversion_from => {
-                const operand = operands[0];
-                const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
-                if (std.mem.eql(u8, operand.ty, result_ty)) return .{ .ty = result_ty, .spelling = operand.spelling };
-                const source = mir.ExecutableCastKind.integerInfo(source_ty) orelse return error.InvalidBody;
-                const target = mir.ExecutableCastKind.integerInfo(expression.result_ty) orelse return error.InvalidBody;
-                if (source.signed != target.signed or target.bits <= source.bits) return error.InvalidBody;
-                const result = try self.temp();
-                try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, if (source.signed) "sext" else "zext", operand.ty, operand.spelling, result_ty });
-                return .{ .ty = result_ty, .spelling = result };
-            },
+            .conversion_from, .conversion_wrap_from, .conversion_from_mod => return self.emitIntegerConversion(expression, call, operands[0]),
+            .conversion_sat_from => return self.emitSaturatingConversionCall(expression, call, operands[0]),
             .conversion_trap_from => return self.emitTrapConversion(expression, call, operands[0]),
             .bitcast => {
                 const operand = operands[0];
@@ -1217,6 +1208,67 @@ const Renderer = struct {
             },
             else => return error.Unsupported,
         };
+    }
+
+    fn emitIntegerConversion(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+        operand: Value,
+    ) RenderError!Value {
+        const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
+        const conversion = mir.executableIntegerConversion(source_ty, expression.result_ty) orelse return error.InvalidBody;
+        const target_ty = try self.typeText(expression.result_ty);
+        if (conversion.source.bits == conversion.target.bits) {
+            if (!std.mem.eql(u8, operand.ty, target_ty)) return error.InvalidBody;
+            return .{ .ty = target_ty, .spelling = operand.spelling };
+        }
+        const result = try self.temp();
+        const operation: []const u8 = if (conversion.target.bits < conversion.source.bits)
+            "trunc"
+        else if (conversion.source.signed)
+            "sext"
+        else
+            "zext";
+        try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, operation, operand.ty, operand.spelling, target_ty });
+        return .{ .ty = target_ty, .spelling = result };
+    }
+
+    fn emitSaturatingConversionCall(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+        operand: Value,
+    ) RenderError!Value {
+        const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
+        const conversion = mir.executableTrapConversion(source_ty, expression.result_ty) orelse return error.InvalidBody;
+        var clamped = operand;
+        if (conversion.need_lower) {
+            const below = try self.temp();
+            const selected = try self.temp();
+            const minimum = if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0);
+            try self.output.print(self.allocator, "  {s} = icmp slt {s} {s}, {d}\n", .{ below, operand.ty, operand.spelling, minimum });
+            try self.output.print(self.allocator, "  {s} = select i1 {s}, {s} {d}, {s} {s}\n", .{ selected, below, operand.ty, minimum, operand.ty, clamped.spelling });
+            clamped = .{ .ty = operand.ty, .spelling = selected };
+        }
+        if (conversion.need_upper) {
+            const above = try self.temp();
+            const selected = try self.temp();
+            const maximum: u128 = if (conversion.target.signed)
+                @intCast(signedMaximum(conversion.target.bits))
+            else
+                unsignedMaximum(conversion.target.bits);
+            try self.output.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{
+                above,
+                if (conversion.source.signed) "sgt" else "ugt",
+                operand.ty,
+                operand.spelling,
+                maximum,
+            });
+            try self.output.print(self.allocator, "  {s} = select i1 {s}, {s} {d}, {s} {s}\n", .{ selected, above, operand.ty, maximum, operand.ty, clamped.spelling });
+            clamped = .{ .ty = operand.ty, .spelling = selected };
+        }
+        return self.emitIntegerConversion(expression, call, clamped);
     }
 
     fn emitCall(self: *Renderer, ty: []const u8, callee: []const u8, arguments: []const mir.ExprId, abi: ?DirectCallAbi) RenderError!Value {
@@ -1865,7 +1917,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;

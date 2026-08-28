@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1785 C and 1858 LLVM
-functions. It found 629 C and 684 LLVM AST-body fallbacks. Report
+functions. It found 627 C and 682 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,22 +27,22 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1156/1785 admitted (64.8%)**, 629 fallback, and
-LLVM **1174/1858 admitted (63.2%)**, 684 fallback. There were no unsupported
+The 522-root sweep found C **1158/1785 admitted (64.9%)**, 627 fallback, and
+LLVM **1176/1858 admitted (63.3%)**, 682 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
 shards proved that 50 no-fallback tests still rely on its fault-injection and
 edge-case semantics. That deletion was therefore reverted rather than masking
 the gap by changing tests. The plan remains as a bounded safety net, and its
-broad use is **33 C / 46 LLVM** functions (from 43/58 before the recent
+broad use is **30 C / 43 LLVM** functions (from 43/58 before the recent
 slice). The canonical producer now owns Result construction, domain/serial/counter
 builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
 ratchet consequently moves from 84/83 to **96 canonical functions on both
 backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. The current broad split is 1020
-canonical / 136 specialized for C and 1015 canonical / 159 specialized for
+specialized plan definitions from 15 to **14**. The current broad split is 1025
+canonical / 133 specialized for C and 1020 canonical / 156 specialized for
 LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
 
 Target-typed negative integer literals now lower as canonical signed values.
@@ -58,6 +58,14 @@ signed/unsigned crossings and value-preserving widening up to 64 bits; 128-bit
 extrema remain closed. C and LLVM evaluate the operand once and mechanically
 render the same fact. This removed three broad fallbacks per backend and raised
 the focused no-fallback ratchet to 145 tests per backend.
+
+The same relation now owns the remaining non-Result scalar conversions:
+`wrap_from`, `from_mod`, `sat_from`, and storage-preserving domain `from`.
+The renderers no longer reconstruct their width/sign behavior from source
+syntax. Saturation has no trap edge and clamps both signed/unsigned boundaries;
+modular forms use the verified integer resize. The conversion fixture is 8/8
+canonical in both backends. This removes two more broad fallbacks and three
+`simple_return` admissions per backend.
 
 Fixed-array `ValueType` identity now includes the immediate element spelling
 and known length instead of collapsing every array to the same `"array"` key.

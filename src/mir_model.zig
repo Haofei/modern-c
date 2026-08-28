@@ -537,6 +537,8 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         },
         .conversion_from => operands.len == 1 and valuePreservingIntegerConversion(operands[0], result),
         .conversion_trap_from => operands.len == 1 and executableTrapConversion(operands[0], result) != null,
+        .conversion_wrap_from, .conversion_from_mod => operands.len == 1 and executableIntegerConversion(operands[0], result) != null,
+        .conversion_sat_from => operands.len == 1 and executableIntegerConversion(operands[0], result) != null,
         // `bitcast` preserves the complete scalar bit pattern; it is neither a
         // numeric conversion nor a backend-selected coercion.  Keep this
         // first executable slice deliberately bounded to scalar integer/float
@@ -612,6 +614,7 @@ fn unsignedIntegerAtLeast(ty: ValueType, minimum_bits: u16) bool {
 
 fn valuePreservingIntegerConversion(source: ValueType, target: ValueType) bool {
     if (ValueType.eql(source, target)) return true;
+    if (target == .domain_integer and source == .integer and std.mem.eql(u8, target.domain_integer.child, source.integer)) return true;
     const source_info = ExecutableCastKind.integerInfo(source) orelse return false;
     const target_info = ExecutableCastKind.integerInfo(target) orelse return false;
     return source_info.signed == target_info.signed and target_info.bits >= source_info.bits;
@@ -629,9 +632,9 @@ pub const ExecutableTrapConversion = struct {
 /// 128-bit conversions on the legacy path until C has a portable boundary
 /// spelling for their extrema.
 pub fn executableTrapConversion(source_ty: ValueType, target_ty: ValueType) ?ExecutableTrapConversion {
-    const source = ExecutableCastKind.integerInfo(source_ty) orelse return null;
-    const target = ExecutableCastKind.integerInfo(target_ty) orelse return null;
-    if (source.bits > 64 or target.bits > 64) return null;
+    const conversion = executableIntegerConversion(source_ty, target_ty) orelse return null;
+    const source = conversion.source;
+    const target = conversion.target;
     const need_lower = source.signed and (!target.signed or target.bits < source.bits);
     const need_upper = if (source.signed == target.signed)
         target.bits < source.bits
@@ -639,11 +642,24 @@ pub fn executableTrapConversion(source_ty: ValueType, target_ty: ValueType) ?Exe
         target.bits <= source.bits
     else
         target.bits + 1 < source.bits;
-    return .{
-        .source = source,
-        .target = target,
-        .need_lower = need_lower,
-        .need_upper = need_upper,
+    return .{ .source = source, .target = target, .need_lower = need_lower, .need_upper = need_upper };
+}
+
+pub fn executableIntegerConversion(source_ty: ValueType, target_ty: ValueType) ?struct {
+    source: ExecutableIntegerInfo,
+    target: ExecutableIntegerInfo,
+} {
+    const source = executableIntegerStorageInfo(source_ty) orelse return null;
+    const target = executableIntegerStorageInfo(target_ty) orelse return null;
+    if (source.bits > 64 or target.bits > 64) return null;
+    return .{ .source = source, .target = target };
+}
+
+pub fn executableIntegerStorageInfo(ty: ValueType) ?ExecutableIntegerInfo {
+    return switch (ty) {
+        .integer => ExecutableCastKind.integerInfo(ty),
+        .domain_integer => |shape| ExecutableCastKind.integerInfo(.{ .integer = shape.child }),
+        else => null,
     };
 }
 

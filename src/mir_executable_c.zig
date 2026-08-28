@@ -768,7 +768,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .counter_delta_mod, .enum_raw, .conversion_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -820,10 +820,35 @@ fn emitBuiltinCall(
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
         },
-        .conversion_from => {
+        .conversion_from, .conversion_wrap_from, .conversion_from_mod => {
             try out.appendSlice(allocator, "((");
             try appendCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, ")(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
+        .conversion_sat_from => {
+            const operand = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const conversion = mir.executableTrapConversion(operand.result_ty, result_ty) orelse return error.UnsupportedType;
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, ")(");
+            if (conversion.need_lower) {
+                try out.appendSlice(allocator, "((__int128)(");
+                try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+                try out.print(allocator, ") < (__int128){d}) ? {d} : ", .{
+                    if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0),
+                    if (conversion.target.signed) signedMinimum(conversion.target.bits) else @as(i128, 0),
+                });
+            }
+            if (conversion.need_upper) {
+                try out.appendSlice(allocator, if (conversion.source.signed) "((__int128)(" else "((unsigned __int128)(");
+                try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+                if (conversion.target.signed)
+                    try out.print(allocator, ") > (__int128){d}) ? {d} : ", .{ signedMaximum(conversion.target.bits), signedMaximum(conversion.target.bits) })
+                else
+                    try out.print(allocator, ") > (unsigned __int128){d}) ? {d} : ", .{ unsignedMaximum(conversion.target.bits), unsignedMaximum(conversion.target.bits) });
+            }
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
         },
