@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **608/1778 C** and **653/1849 LLVM** distinct functions using the AST
-  body (C admits 65.8%, LLVM 64.7%). Report mode intentionally preserves
+  finds **602/1778 C** and **643/1849 LLVM** distinct functions using the AST
+  body (C admits 66.1%, LLVM 65.2%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -29,6 +29,16 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+Optional and `Result` if-let discrimination and payload extraction now have
+explicit executable-MIR operations. The subject is evaluated once into a typed
+synthetic local; both renderers consume the same discriminant/payload facts,
+and the verifier rejects a variant kind forged for the wrong operand. This
+moves six C and ten LLVM broad-corpus bodies off AST fallback and also replaces
+six/seven specialized admissions: the broad split is now C **1049 canonical /
+127 specialized / 602 fallback** and LLVM **1067 canonical / 139 specialized /
+643 fallback**. The strict corpus remains zero-fallback while its canonical
+minimum rises to 99 C and 100 LLVM functions.
 
 Value-optional comparisons against `null` now lower as an explicit test of the
 verified optional representation's `present` field. This repairs an existing C

@@ -979,6 +979,13 @@ pub const ExecutableExpression = struct {
         /// this coercion from source syntax or the surrounding return type.
         optional_some: ExprId,
         optional_none,
+        /// Test the representation discriminant of an optional or Result.
+        /// The operand is first stored in a synthetic local by the producer,
+        /// so a call-valued `if let` subject is evaluated exactly once.
+        variant_test: struct { operand: ExprId, kind: ExecutableVariantKind },
+        /// Extract the payload selected by a preceding variant test. Control
+        /// flow, not this operation, proves that the requested variant is live.
+        variant_payload: struct { operand: ExprId, kind: ExecutableVariantKind },
         result: struct {
             is_ok: bool,
             payload: ExprId,
@@ -995,6 +1002,12 @@ pub const ExecutableExpression = struct {
         },
         unsupported,
     };
+};
+
+pub const ExecutableVariantKind = enum {
+    optional_present,
+    result_ok,
+    result_err,
 };
 
 /// Canonical callable contract carried by an indirect call. Function values

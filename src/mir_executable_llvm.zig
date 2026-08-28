@@ -518,6 +518,8 @@ const Renderer = struct {
             },
             .optional_some => |operand_id| try self.emitOptional(expression, operand_id),
             .optional_none => .{ .ty = ty, .spelling = "zeroinitializer" },
+            .variant_test => |operation| try self.emitVariant(expression, operation.operand, operation.kind, false),
+            .variant_payload => |operation| try self.emitVariant(expression, operation.operand, operation.kind, true),
             .result => |result| try self.emitResult(expression, result),
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
@@ -528,6 +530,40 @@ const Renderer = struct {
         };
         self.values[id.index()] = result;
         return result;
+    }
+
+    fn emitVariant(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operand_id: mir.ExprId,
+        kind: mir.ExecutableVariantKind,
+        payload: bool,
+    ) RenderError!Value {
+        if (!variantOperationSupported(self.body, expression, operand_id, kind, payload)) return error.InvalidBody;
+        const operand = try self.emitExpression(operand_id);
+        if (!payload) {
+            if (kind == .optional_present and self.body.expressions[operand_id.index()].result_ty == .nullable_pointer) {
+                const present = try self.temp();
+                try self.output.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ present, operand.spelling });
+                return .{ .ty = "i1", .spelling = present };
+            }
+            const tag = try self.temp();
+            try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ tag, operand.ty, operand.spelling });
+            if (kind != .result_err) return .{ .ty = "i1", .spelling = tag };
+            const inverted = try self.temp();
+            try self.output.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ inverted, tag });
+            return .{ .ty = "i1", .spelling = inverted };
+        }
+        if (kind == .optional_present and self.body.expressions[operand_id.index()].result_ty == .nullable_pointer)
+            return operand;
+        const index: usize = switch (kind) {
+            .optional_present, .result_ok => 1,
+            .result_err => 2,
+        };
+        const value = try self.temp();
+        const ty = try self.typeText(expression.result_ty);
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ value, operand.ty, operand.spelling, index });
+        return .{ .ty = ty, .spelling = value };
     }
 
     fn emitRepresentationCheck(self: *Renderer, expression: mir.ExecutableExpression, check: anytype) RenderError!Value {
@@ -1958,8 +1994,44 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
+        .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
+        .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .result => |result| resultConstructionSupported(body, expression, result),
         .index, .range_slice, .unsupported => false,
+    };
+}
+
+fn variantOperationSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operand_id: mir.ExprId,
+    kind: mir.ExecutableVariantKind,
+    payload: bool,
+) bool {
+    if (!expressionValid(body, operand_id)) return false;
+    const operand = body.expressions[operand_id.index()];
+    if (!payload) return expression.result_ty == .bool and switch (kind) {
+        .optional_present => operand.result_ty == .nullable_pointer or operand.result_ty == .nullable_value,
+        .result_ok, .result_err => operand.result_ty == .result,
+    };
+    return switch (kind) {
+        .optional_present => switch (operand.result_ty) {
+            .nullable_pointer => |shape| sameValueType(expression.result_ty, .{ .pointer = shape }),
+            .nullable_value => optional: {
+                const aggregate = aggregateType(body, operand.type_id) orelse break :optional false;
+                break :optional aggregate.field_count == 2 and
+                    sameValueType(expression.result_ty, aggregate.field_types[1]) and
+                    expression.type_id.eql(aggregate.field_type_ids[1]);
+            },
+            else => false,
+        },
+        .result_ok, .result_err => result: {
+            const shape = resultType(body, operand.type_id) orelse break :result false;
+            break :result if (kind == .result_ok)
+                sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id)
+            else
+                sameValueType(expression.result_ty, shape.err_ty) and expression.type_id.eql(shape.err_type_id);
+        },
     };
 }
 

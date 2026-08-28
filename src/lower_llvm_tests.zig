@@ -3997,8 +3997,8 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
     try expectContains(global_body, "call i32 @ptr_value(ptr");
 
     const field_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_field_or_zero");
-    try expectContains(field_body, "extractvalue");
-    try expectContains(field_body, "%box, 0");
+    try expectContains(field_body, "extractvalue { ptr }");
+    try expectContains(field_body, ", 0");
     try expectContains(field_body, "call i32 @ptr_value(ptr");
 
     const switch_body = try llvmFunctionBody(output.items, "define internal i32 @nullable_switch");
@@ -4012,9 +4012,9 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
     try expectContains(seeded_body, "call i32 @ptr_value(ptr");
 
     const unwrap_or_body = try llvmFunctionBody(output.items, "define internal ptr @unwrap_or");
-    try expectContains(unwrap_or_body, "icmp ne ptr %maybe, null");
-    try expectContains(unwrap_or_body, "ret ptr %maybe");
-    try expectContains(unwrap_or_body, "ret ptr %fallback");
+    try expectContains(unwrap_or_body, "; canonical executable MIR");
+    try expectContains(unwrap_or_body, "icmp ne ptr %mc_expr_tmp_");
+    try expectContains(unwrap_or_body, "ret ptr %mc_expr_tmp_");
 }
 
 test "LLVM emits nullable none returns from MIR without body fallback" {

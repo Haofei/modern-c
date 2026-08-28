@@ -54,14 +54,17 @@ pub fn emitBodyWithSourcePath(
         // materialization point instead of reconstructing syntax here.
         if (isSliceType(expression.result_ty) or expression.result_ty == .value) continue;
         try writeIndent(allocator, out, indent);
+        if (expression.operation == .optional_none) try out.appendSlice(allocator, "MC_UNUSED ");
         try appendCType(allocator, out, body, expression.result_ty);
         try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
     }
 
     for (body.terminators) |terminator| {
-        try writeIndent(allocator, out, indent);
-        // A C11 label must precede a statement, not a declaration.
-        try out.print(allocator, "mc_bb_{d}: ;\n", .{terminator.block_id.raw});
+        if (blockNeedsLabel(body, terminator.block_id)) {
+            try writeIndent(allocator, out, indent);
+            // A C11 label must precede a statement, not a declaration.
+            try out.print(allocator, "mc_bb_{d}: ;\n", .{terminator.block_id.raw});
+        }
 
         for (body.statements) |statement| {
             if (!statement.block_id.eql(terminator.block_id)) continue;
@@ -69,6 +72,29 @@ pub fn emitBodyWithSourcePath(
         }
         try emitTerminator(allocator, out, body, terminator, indent + 1, source_path);
     }
+}
+
+fn blockNeedsLabel(body: *const mir.ExecutableBody, block_id: mir.BlockId) bool {
+    // Most MIR trap edges are rendered inline by checked helper calls. Only
+    // assert guards emit a C `goto` to their trap block, so those are the only
+    // trap edges that make a label live in the generated C control flow.
+    for (body.statements) |statement| switch (statement.operation) {
+        .guard => |guard| if (guard.kind == .assert_) {
+            const edge = assertGuardTrapEdge(body, statement, guard) orelse continue;
+            if (edge.trap_block.eql(block_id)) return true;
+        },
+        else => {},
+    };
+    for (body.terminators) |terminator| switch (terminator.operation) {
+        .jump => |target| if (target.eql(block_id)) return true,
+        .branch => |branch| if (branch.true_block.eql(block_id) or branch.false_block.eql(block_id)) return true,
+        .switch_ => |switch_| {
+            if (switch_.default_block.eql(block_id)) return true;
+            for (switch_.cases[0..switch_.case_count]) |case| if (case.target.eql(block_id)) return true;
+        },
+        else => {},
+    };
+    return false;
 }
 
 fn emitStatement(
@@ -403,6 +429,33 @@ fn emitExpressionOperation(
             try appendCType(allocator, out, body, expression.result_ty);
             try out.appendSlice(allocator, "){ .present = false }");
         },
+        .variant_test => |operation| {
+            try out.append(allocator, '(');
+            if (operation.kind == .result_err) try out.append(allocator, '!');
+            try emitExpression(allocator, out, body, operation.operand, depth + 1);
+            try out.appendSlice(allocator, switch (operation.kind) {
+                .optional_present => switch ((expressionById(body, operation.operand) orelse return error.InvalidExpression).result_ty) {
+                    .nullable_pointer => " != NULL)",
+                    .nullable_value => ".present)",
+                    else => return error.InvalidExpression,
+                },
+                .result_ok, .result_err => ".is_ok)",
+            });
+        },
+        .variant_payload => |operation| {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, operation.operand, depth + 1);
+            switch (operation.kind) {
+                .optional_present => switch ((expressionById(body, operation.operand) orelse return error.InvalidExpression).result_ty) {
+                    .nullable_pointer => {},
+                    .nullable_value => try out.appendSlice(allocator, ".value"),
+                    else => return error.InvalidExpression,
+                },
+                .result_ok => try out.appendSlice(allocator, ".payload.ok"),
+                .result_err => try out.appendSlice(allocator, ".payload.err"),
+            }
+            try out.append(allocator, ')');
+        },
         .result => |result| {
             const shape = resultType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!resultConstructionSupported(body, expression.*, result)) return error.InvalidExpression;
@@ -593,8 +646,43 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .member => |member| memberSupported(body, expression, member),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
+        .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
+        .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .result => |result| resultConstructionSupported(body, expression, result),
         .deref, .index, .range_slice, .unsupported => false,
+    };
+}
+
+fn variantOperationSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operand_id: mir.ExprId,
+    kind: mir.ExecutableVariantKind,
+    payload: bool,
+) bool {
+    const operand = expressionById(body, operand_id) orelse return false;
+    if (!payload) return expression.result_ty == .bool and switch (kind) {
+        .optional_present => operand.result_ty == .nullable_pointer or operand.result_ty == .nullable_value,
+        .result_ok, .result_err => operand.result_ty == .result,
+    };
+    return switch (kind) {
+        .optional_present => switch (operand.result_ty) {
+            .nullable_pointer => |shape| sameValueType(expression.result_ty, .{ .pointer = shape }),
+            .nullable_value => optional: {
+                const aggregate = aggregateType(body, operand.type_id) orelse break :optional false;
+                break :optional aggregate.field_count == 2 and
+                    sameValueType(expression.result_ty, aggregate.field_types[1]) and
+                    expression.type_id.eql(aggregate.field_type_ids[1]);
+            },
+            else => false,
+        },
+        .result_ok, .result_err => result: {
+            const shape = resultType(body, operand.type_id) orelse break :result false;
+            break :result if (kind == .result_ok)
+                sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id)
+            else
+                sameValueType(expression.result_ty, shape.err_ty) and expression.type_id.eql(shape.err_type_id);
+        },
     };
 }
 
@@ -2271,6 +2359,8 @@ fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType,
 
 fn appendLocal(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, id: mir.LocalId) (RenderError || std.mem.Allocator.Error)!void {
     const local = localById(body, id) orelse return error.InvalidLocal;
+    if (std.mem.eql(u8, local.spelling, "__mc_iflet_subject"))
+        return out.print(allocator, "__mc_iflet_subject_{d}", .{id.raw});
     return appendIdent(allocator, out, local.spelling);
 }
 
@@ -2495,7 +2585,6 @@ test "executable C renderer emits typed CFG labels and branches" {
         \\uint32_t mc_exec_tmp_1;
         \\uint32_t mc_exec_tmp_2;
         \\uint32_t mc_exec_tmp_3;
-        \\mc_bb_0: ;
         \\    mc_exec_tmp_0 = flag;
         \\    if (mc_exec_tmp_0) goto mc_bb_1; else goto mc_bb_2;
         \\mc_bb_1: ;
@@ -2744,7 +2833,8 @@ test "executable C renderer admits checked arithmetic with exact overflow edges"
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(mc_exec_tmp_0, mc_exec_tmp_1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32(mc_exec_tmp_2, mc_exec_tmp_0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mul_u32(mc_exec_tmp_3, mc_exec_tmp_1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_bb_1: ;\n    mc_trap_IntegerOverflow();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_IntegerOverflow();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_bb_1: ;") == null);
 }
 
 test "executable C renderer rejects checked arithmetic edge drift" {

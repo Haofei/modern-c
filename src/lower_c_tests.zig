@@ -490,18 +490,19 @@ test "lower-c emits strict nullable control plans from MIR without body fallback
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_control.mc", source, &output);
 
     const call = try cFunctionBody(output.items, "static uint32_t unwrap_call_or_zero(void)");
-    try expectContains(call, "mc_tmp0 = maybe_ptr();");
-    try expectContains(call, "if (mc_tmp0 != NULL)");
-    try expectContains(call, "return ptr_value(p);");
-    try expectContains(call, "return 0;");
+    try expectContains(call, "/* canonical executable MIR */");
+    try expectContains(call, "= maybe_ptr();");
+    try expectContains(call, "!= NULL");
+    try expectContains(call, "= ptr_value(");
+    try expectContains(call, "return mc_exec_tmp_");
 
     const global = try cFunctionBody(output.items, "static uint32_t unwrap_global_or_zero(void)");
     try expectContains(global, "__atomic_load_n(&saved_nullable, __ATOMIC_RELAXED)");
     try expectContains(global, "return ptr_value(p);");
 
     const field = try cFunctionBody(output.items, "unwrap_field_or_zero(");
-    try expectContains(field, "= box.maybe;");
-    try expectContains(field, "return ptr_value(p);");
+    try expectContains(field, ".maybe;");
+    try expectContains(field, "ptr_value(");
 
     const switched = try cFunctionBody(output.items, "static uint32_t nullable_switch(uint8_t * maybe)");
     try expectContains(switched, "= maybe;");
@@ -588,12 +589,13 @@ test "lower-c emits nullable binding and checked fallback return from MIR withou
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_binding_fallback.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint8_t * unwrap_or(uint8_t * maybe, uint8_t * fallback)");
+    try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "= maybe;");
-    try expectContains(body, "if (mc_tmp");
-    try expectContains(body, "uint8_t * p = mc_tmp");
-    try expectContains(body, "return p;");
-    try expectContains(body, "if (fallback == NULL) mc_trap_InvalidRepresentation();");
-    try expectContains(body, "return fallback;");
+    try expectContains(body, "!= NULL");
+    try expectContains(body, "uint8_t * p = mc_exec_tmp_");
+    try expectContains(body, "if (mc_exec_tmp_");
+    try expectContains(body, "== NULL) mc_trap_InvalidRepresentation();");
+    try expectContains(body, "return mc_exec_tmp_");
 }
 
 test "lower-c canonical executable MIR preserves high-word typing and flag-set order" {
@@ -12061,7 +12063,7 @@ fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
 }
 
 fn isCanonicalExecutableCBody(body: []const u8) bool {
-    return std.mem.indexOf(u8, body, "mc_bb_0: ;") != null;
+    return std.mem.indexOf(u8, body, "/* canonical executable MIR */") != null;
 }
 
 fn expectLegacyOrCanonicalReturn(body: []const u8, legacy_return: []const u8, canonical_operation: []const u8) !void {
@@ -12083,7 +12085,7 @@ fn expectLegacyOrCanonicalLoop(body: []const u8, legacy_condition: []const u8) !
 }
 
 fn expectCanonicalConditional(body: []const u8) !void {
-    try expectContains(body, "mc_bb_0: ;");
+    try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "if (mc_exec_tmp_");
     try expectContains(body, "goto mc_bb_");
 }
@@ -19914,18 +19916,36 @@ test "lower-c emits optional pointer if-let" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_if_let.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t * unwrap_or(uint8_t * maybe, uint8_t * fallback)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (maybe != NULL) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_const(uint8_t const * maybe)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * p = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return *p;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return fallback;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = maybe_ptr();\n    if (mc_tmp0 != NULL) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t unwrap_local_or_zero(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * maybe = maybe_ptr();\n    if (maybe != NULL) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
+    const unwrap = try cFunctionBody(output.items, "static uint8_t * unwrap_or(uint8_t * maybe, uint8_t * fallback)");
+    try expectContains(unwrap, "/* canonical executable MIR */");
+    try expectContains(unwrap, "= maybe;");
+    try expectContains(unwrap, "!= NULL");
+    try expectContains(unwrap, "uint8_t * p = mc_exec_tmp_");
+    try expectContains(unwrap, "= fallback;");
+
+    const read_const = try cFunctionBody(output.items, "static uint8_t read_const(uint8_t const * maybe)");
+    if (isCanonicalExecutableCBody(read_const)) {
+        try expectContains(read_const, "!= NULL");
+        try expectContains(read_const, "uint8_t const * p = mc_exec_tmp_");
+        try expectContains(read_const, "= *p;");
+    } else {
+        // Const-pointer dereference canonicalization is independent of if-let
+        // variant lowering and remains covered by its dedicated MIR slice.
+        try expectContains(read_const, "if (maybe != NULL) {");
+        try expectContains(read_const, "uint8_t const * p = maybe;");
+    }
+
+    const call = try cFunctionBody(output.items, "static uint32_t unwrap_call_or_zero(void)");
+    try expectContains(call, "/* canonical executable MIR */");
+    try expectContains(call, "= maybe_ptr();");
+    try expectContains(call, "!= NULL");
+    try expectContains(call, "uint8_t * p = mc_exec_tmp_");
+
+    const local = try cFunctionBody(output.items, "static uint32_t unwrap_local_or_zero(void)");
+    try expectContains(local, "/* canonical executable MIR */");
+    try expectContains(local, "uint8_t * maybe = mc_exec_tmp_");
+    try expectContains(local, "!= NULL");
+    try expectContains(local, "uint8_t * p = mc_exec_tmp_");
 }
 
 test "lower-c emits nullable switch binding" {
@@ -20001,17 +20021,30 @@ test "lower-c emits Result if-let narrowing" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_result_if_let.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t unwrap_or_zero(mc_result_u32_Error result)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (result.is_ok) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = result.payload.ok;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return v;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "} else {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool has_err(mc_result_u32_Error result)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!result.is_ok) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = result.payload.err;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (e != 0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();\n    if (mc_tmp0.is_ok) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = mc_tmp0.payload.ok;") != null);
+    const unwrap = try cFunctionBody(output.items, "static uint32_t unwrap_or_zero(mc_result_u32_Error result)");
+    try expectContains(unwrap, "/* canonical executable MIR */");
+    try expectContains(unwrap, ".is_ok");
+    try expectContains(unwrap, ".payload.ok");
+    try expectContains(unwrap, "uint32_t v = mc_exec_tmp_");
+
+    const has_err = try cFunctionBody(output.items, "static bool has_err(mc_result_u32_Error result)");
+    if (isCanonicalExecutableCBody(has_err)) {
+        try expectContains(has_err, "!.is_ok");
+        try expectContains(has_err, ".payload.err");
+        try expectContains(has_err, "Error e = mc_exec_tmp_");
+    } else {
+        // Enum/integer comparison canonicalization is a separate slice; the
+        // Result discriminant and payload remain covered by `unwrap` above.
+        try expectContains(has_err, "if (!result.is_ok) {");
+        try expectContains(has_err, "Error e = result.payload.err;");
+        try expectContains(has_err, "return (e != 0);");
+    }
+
+    const call = try cFunctionBody(output.items, "static uint32_t unwrap_call_or_zero(void)");
+    try expectContains(call, "/* canonical executable MIR */");
+    try expectContains(call, "= make_result();");
+    try expectContains(call, ".is_ok");
+    try expectContains(call, ".payload.ok");
 }
 
 test "lower-c emits Result switch narrowing" {

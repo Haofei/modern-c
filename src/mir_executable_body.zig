@@ -486,6 +486,14 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 aggregate.field_count != 2 or !sameValueType(aggregate.ty, value.result_ty) or
                 !sameValueType(aggregate.field_types[0], .bool)) return error.InvalidAggregateConstruction;
         },
+        .variant_test => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            if (body.complete) try verifyVariantOperation(body, value, operation.operand, operation.kind, false);
+        },
+        .variant_payload => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            if (body.complete) try verifyVariantOperation(body, value, operation.operand, operation.kind, true);
+        },
         .result => |operation| {
             try verifyOperand(body, value, operation.payload);
             if (body.complete) {
@@ -507,6 +515,49 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .struct_ => |operation| {
             try verifyArguments(body, value, operation.operands, operation.operand_count);
             if (body.complete) try verifyStructConstruction(function, value, operation);
+        },
+    }
+}
+
+fn verifyVariantOperation(
+    body: *const mir.ExecutableBody,
+    value: mir.ExecutableExpression,
+    operand_id: mir.ExprId,
+    kind: mir.ExecutableVariantKind,
+    payload: bool,
+) !void {
+    const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+    if (ownedTrapCountAll(body, .{ .expression = value.id }) != 0) return error.InvalidAggregateConstruction;
+    if (!payload) {
+        if (value.result_ty != .bool) return error.InvalidAggregateConstruction;
+        switch (kind) {
+            .optional_present => switch (operand.result_ty) {
+                .nullable_pointer, .nullable_value => {},
+                else => return error.InvalidAggregateConstruction,
+            },
+            .result_ok, .result_err => if (operand.result_ty != .result) return error.InvalidAggregateConstruction,
+        }
+        return;
+    }
+    switch (kind) {
+        .optional_present => switch (operand.result_ty) {
+            .nullable_pointer => |shape| if (!sameValueType(value.result_ty, .{ .pointer = shape }))
+                return error.InvalidAggregateConstruction,
+            .nullable_value => {
+                const aggregate = aggregateType(body, operand.type_id) orelse return error.InvalidAggregateConstruction;
+                if (aggregate.field_count != 2 or !sameValueType(value.result_ty, aggregate.field_types[1]) or
+                    !value.type_id.eql(aggregate.field_type_ids[1])) return error.InvalidAggregateConstruction;
+            },
+            else => return error.InvalidAggregateConstruction,
+        },
+        .result_ok, .result_err => {
+            const shape = resultType(body, operand.type_id) orelse return error.InvalidAggregateConstruction;
+            if (kind == .result_ok) {
+                if (!sameValueType(value.result_ty, shape.ok_ty) or !value.type_id.eql(shape.ok_type_id))
+                    return error.InvalidAggregateConstruction;
+            } else if (!sameValueType(value.result_ty, shape.err_ty) or !value.type_id.eql(shape.err_type_id)) {
+                return error.InvalidAggregateConstruction;
+            }
         },
     }
 }

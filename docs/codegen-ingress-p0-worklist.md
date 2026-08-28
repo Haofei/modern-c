@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-28
 broad sweep over 522 repository MC roots de-duplicated to 1778 C and 1849 LLVM
-functions. It found 608 C and 653 LLVM AST-body fallbacks. Report
+functions. It found 602 C and 643 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-28)
 
-The 522-root sweep found C **1170/1778 admitted (65.8%)**, 608 fallback, and
-LLVM **1196/1849 admitted (64.7%)**, 653 fallback. There were no unsupported
+The 522-root sweep found C **1176/1778 admitted (66.1%)**, 602 fallback, and
+LLVM **1206/1849 admitted (65.2%)**, 643 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice attempted physical retirement of `simple_return`, but the full lowering
@@ -39,11 +39,18 @@ broad use is **31 C / 35 LLVM** functions (from 43/58 before the recent
 slice). The canonical producer now owns Result construction, domain/serial/counter
 builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
 negative float literals and qualified/nullable pointer comparisons. The strict
-ratchet consequently moves from 84/83 to **96 canonical functions on both
-backends**, while specialized admission falls from 76/77 to **64/64** and
-specialized plan definitions from 15 to **14**. The current broad split is 1037
-canonical / 133 specialized for C and 1050 canonical / 146 specialized for
-LLVM. Compared with the prior broad snapshot, the legacy path did not grow.
+ratchet consequently moves from 84/83 to **99 C / 100 LLVM canonical
+functions**, while specialized admission falls from 76/77 to **61/60** and
+specialized plan definitions from 15 to **14**. The current broad split is 1049
+canonical / 127 specialized for C and 1067 canonical / 139 specialized for
+LLVM. Compared with the prior broad snapshot, both legacy admission categories
+shrunk.
+
+Optional and `Result` if-let discrimination and payload extraction now use
+explicit executable-MIR variant operations. A typed synthetic local guarantees
+single subject evaluation; the verifier binds each discriminant/payload kind to
+the matching optional or Result shape. This removes six C and ten LLVM broad
+fallbacks and replaces six/seven specialized admissions.
 
 Optional-value equality against `null` is now an explicit representation-tag
 operation in both mechanical renderers. This replaces the invalid C aggregate

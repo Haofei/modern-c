@@ -179,6 +179,60 @@ test "value optional construction is explicit verified executable MIR" {
     try executable.verify(scalar);
 }
 
+test "if-let variant tests and payloads are explicit verified executable MIR" {
+    const source =
+        \\enum Error: u8 { denied = 1 }
+        \\fn unwrap_optional(value: ?u32) -> u32 {
+        \\    if let payload = value { return payload; }
+        \\    return 0;
+        \\}
+        \\fn unwrap_result(value: Result<u32, Error>) -> u32 {
+        \\    if let ok(payload) = value { return payload; }
+        \\    return 0;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_if_let_variants.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    for (module.functions) |*function| {
+        try executable.verify(function);
+        try std.testing.expect(executable.isComplete(function));
+        var test_count: usize = 0;
+        var payload_count: usize = 0;
+        for (function.executable_body.expressions) |expression| switch (expression.operation) {
+            .variant_test => test_count += 1,
+            .variant_payload => payload_count += 1,
+            else => {},
+        };
+        try std.testing.expectEqual(@as(usize, 1), test_count);
+        try std.testing.expectEqual(@as(usize, 1), payload_count);
+    }
+
+    const optional = &module.functions[0];
+    var mutated = false;
+    for (optional.executable_body.expressions) |*expression| switch (expression.operation) {
+        .variant_test => {
+            const saved = expression.operation;
+            expression.operation.variant_test.kind = .result_ok;
+            try std.testing.expectError(error.InvalidAggregateConstruction, executable.verify(optional));
+            expression.operation = saved;
+            mutated = true;
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(mutated);
+    try executable.verify(optional);
+}
+
 test "executable type identities distinguish structural pointer shapes" {
     const source =
         \\fn pointer_shapes(left: *mut u8, right: *mut u32, maybe: ?*mut u8) -> void {}

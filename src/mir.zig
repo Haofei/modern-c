@@ -6962,6 +6962,8 @@ const FunctionBuilder = struct {
                 }
                 break :optional false;
             },
+            .variant_test => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, false),
+            .variant_payload => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, true),
             .result => |operation| result: {
                 if (!operation.payload.isValid() or operation.payload.index() >= expression.id.index() or
                     operation.payload.index() >= self.executable_expressions.items.len) break :result false;
@@ -7020,6 +7022,50 @@ const FunctionBuilder = struct {
             .builtin_call => |call| self.executableBuiltinComplete(expression, call),
             .representation_check => |check| self.executableRepresentationCheckComplete(expression, check),
             else => true,
+        };
+    }
+
+    fn executableVariantOperationComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operand_id: ExprId,
+        kind: mir_model.ExecutableVariantKind,
+        payload: bool,
+    ) bool {
+        if (!operand_id.isValid() or operand_id.index() >= expression.id.index() or
+            operand_id.index() >= self.executable_expressions.items.len) return false;
+        const operand = self.executable_expressions.items[operand_id.index()];
+        if (!payload) return expression.result_ty == .bool and switch (kind) {
+            .optional_present => operand.result_ty == .nullable_pointer or operand.result_ty == .nullable_value,
+            .result_ok, .result_err => operand.result_ty == .result,
+        };
+        return switch (kind) {
+            .optional_present => switch (operand.result_ty) {
+                .nullable_pointer => |shape| switch (expression.result_ty) {
+                    .pointer => |result_shape| sameValueType(.{ .pointer = shape }, .{ .pointer = result_shape }),
+                    else => false,
+                },
+                .nullable_value => optional: {
+                    for (self.executable_aggregate_types.items) |shape| {
+                        if (!shape.type_id.eql(operand.type_id) or shape.ty != .nullable_value or shape.field_count != 2) continue;
+                        break :optional sameValueType(expression.result_ty, shape.field_types[1]) and
+                            expression.type_id.eql(shape.field_type_ids[1]);
+                    }
+                    break :optional false;
+                },
+                else => false,
+            },
+            .result_ok, .result_err => result: {
+                if (operand.result_ty != .result) break :result false;
+                for (self.executable_result_types.items) |shape| {
+                    if (!shape.type_id.eql(operand.type_id)) continue;
+                    break :result if (kind == .result_ok)
+                        sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id)
+                    else
+                        sameValueType(expression.result_ty, shape.err_ty) and expression.type_id.eql(shape.err_type_id);
+                }
+                break :result false;
+            },
         };
     }
 
@@ -7813,6 +7859,59 @@ const FunctionBuilder = struct {
             .result_ty = target_ty,
             .type_id = try self.internTypeId(target_ty),
             .operation = if (operand) |payload| .{ .optional_some = payload } else .optional_none,
+        });
+        return id;
+    }
+
+    fn appendSyntheticIfLetSubjectLocal(self: *FunctionBuilder) !LocalId {
+        const id = LocalId.fromIndex(self.executable_locals.items.len);
+        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = "__mc_iflet_subject" });
+        return id;
+    }
+
+    fn appendExecutableLocalValue(
+        self: *FunctionBuilder,
+        local: LocalId,
+        ty: ValueType,
+        type_id: TypeId,
+        source: SourcePoint,
+    ) !ExprId {
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = ty,
+            .type_id = type_id,
+            .operation = .{ .local = local },
+        });
+        return id;
+    }
+
+    fn appendExecutableVariantOperation(
+        self: *FunctionBuilder,
+        source: SourcePoint,
+        operand: ExprId,
+        result_ty: ValueType,
+        result_type_id: TypeId,
+        kind: mir_model.ExecutableVariantKind,
+        payload: bool,
+    ) !ExprId {
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = result_ty,
+            .type_id = result_type_id,
+            .operation = if (payload)
+                .{ .variant_payload = .{ .operand = operand, .kind = kind } }
+            else
+                .{ .variant_test = .{ .operand = operand, .kind = kind } },
         });
         return id;
     }
@@ -9959,7 +10058,37 @@ const FunctionBuilder = struct {
         if (self.ifLetSubjectTypeExpr(node.value)) |subject_type_expr| {
             try self.appendTargetTypeFact(.if_let_subject, subject_type_expr, valueTypeFromTypeAlias(subject_type_expr, self.enums, self.structs, self.packed_bits, self.aliases), node.value.span);
         }
-        try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .if_, .condition = try self.ensureExecutableExpr(node.value) } });
+        const subject_source = self.sourcePoint(node.value.span);
+        const subject_ty = self.exprType(node.value);
+        const subject_type_id = try self.internTypeId(subject_ty);
+        const variant_kind = executableIfLetVariantKind(node.pattern, subject_ty);
+        var synthetic_subject: ?LocalId = null;
+        var condition: ExprId = undefined;
+        if (variant_kind) |kind| {
+            const subject_value = try self.ensureExecutableExpr(node.value);
+            const subject_local = try self.appendSyntheticIfLetSubjectLocal();
+            synthetic_subject = subject_local;
+            try self.appendExecutableStatement(subject_source, .{ .local_init = .{
+                .local = subject_local,
+                .ty = subject_ty,
+                .type_id = subject_type_id,
+                .value = subject_value,
+                .mutable = false,
+            } });
+            const stored_subject = try self.appendExecutableLocalValue(subject_local, subject_ty, subject_type_id, subject_source);
+            condition = try self.appendExecutableVariantOperation(
+                subject_source,
+                stored_subject,
+                .bool,
+                try self.internTypeId(.bool),
+                kind,
+                false,
+            );
+        } else {
+            self.executable_supported = false;
+            condition = try self.ensureExecutableExpr(node.value);
+        }
+        try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .if_, .condition = condition } });
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
 
@@ -10000,6 +10129,36 @@ const FunctionBuilder = struct {
             had_previous_nonnull = self.proven_nonnull_bindings.contains(binding.name);
             _ = self.proven_nonnull_bindings.remove(binding.name);
             if (binding.ty == .pointer) try self.proven_nonnull_bindings.put(binding.name, {});
+            if (variant_kind) |kind| if (synthetic_subject) |subject_local| {
+                const binding_type_complete = if (binding.ty_expr) |ty_expr|
+                    try self.internExecutableTypeExpr(binding.ty, ty_expr)
+                else
+                    try self.internExecutableEnumType(binding.ty);
+                if (!binding_type_complete) self.executable_supported = false;
+                const binding_local = try self.internExecutableLocal(binding.name);
+                const binding_type_id = try self.internTypeId(binding.ty);
+                const stored_subject = try self.appendExecutableLocalValue(
+                    subject_local,
+                    subject_ty,
+                    subject_type_id,
+                    subject_source,
+                );
+                const payload = try self.appendExecutableVariantOperation(
+                    self.sourcePoint(node.pattern.span),
+                    stored_subject,
+                    binding.ty,
+                    binding_type_id,
+                    kind,
+                    true,
+                );
+                try self.appendExecutableStatement(self.sourcePoint(node.pattern.span), .{ .local_init = .{
+                    .local = binding_local,
+                    .ty = binding.ty,
+                    .type_id = binding_type_id,
+                    .value = payload,
+                    .mutable = false,
+                } });
+            };
         }
         const then_term = try self.buildBlock(node.then_block);
         if (narrowed_binding) |binding| {
@@ -10037,6 +10196,24 @@ const FunctionBuilder = struct {
 
         self.current = after_id;
         return false;
+    }
+
+    fn executableIfLetVariantKind(pattern: ast.Pattern, subject_ty: ValueType) ?mir_model.ExecutableVariantKind {
+        return switch (pattern.kind) {
+            .bind => switch (subject_ty) {
+                .nullable_pointer, .nullable_value => .optional_present,
+                else => null,
+            },
+            .tag => |tag| switch (subject_ty) {
+                .result => if (std.mem.eql(u8, tag.text, "ok")) .result_ok else if (std.mem.eql(u8, tag.text, "err")) .result_err else null,
+                else => null,
+            },
+            .tag_bind => |tag_bind| switch (subject_ty) {
+                .result => if (std.mem.eql(u8, tag_bind.tag.text, "ok")) .result_ok else if (std.mem.eql(u8, tag_bind.tag.text, "err")) .result_err else null,
+                else => null,
+            },
+            .wildcard, .literal => null,
+        };
     }
 
     const NarrowedBinding = struct {
