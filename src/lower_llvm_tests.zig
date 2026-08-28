@@ -3172,6 +3172,20 @@ test "LLVM canonical executable MIR emits nested by-value struct member reads" {
     try expectContains(body, "extractvalue { i32 }");
 }
 
+test "LLVM canonical executable MIR keeps ordinary len fields distinct from slice length" {
+    const source =
+        \\struct WithLen { items: [8]u32, len: u32 }
+        \\fn read_len(value: WithLen) -> u32 { return value.len; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_len_field.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @read_len");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "extractvalue { [8 x i32], i32 } %mc_arg_0, 1");
+}
+
 test "LLVM emits simple array literal returns from MIR" {
     const source =
         \\fn array_direct(a: u32, b: u32) -> [2]u32 {

@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **619/1787 C** and **677/1858 LLVM** distinct functions using the AST
-  body (C admits 65.4%, LLVM 63.6%). Report mode intentionally preserves
+  finds **619/1787 C** and **668/1858 LLVM** distinct functions using the AST
+  body (C admits 65.4%, LLVM 64.0%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -97,6 +97,16 @@ is now 4/4 canonical in both backends. The broad census advances to C
 **1168/1787** with 1036 canonical / 132 specialized and LLVM **1181/1858**
 with 1026 canonical / 155 specialized; fallback falls to 619 and 677. The
 focused no-fallback ratchet is now 147 tests per backend.
+
+Member lowering now distinguishes an actual slice `.len` from an ordinary
+aggregate field whose spelling happens to be `len`. Previously the canonical
+producer assigned every such member the slice `usize` type; this could reject a
+valid struct projection or admit it under the wrong type. The fix uses the
+base's structural pointer-kind before choosing the slice operation, while
+ordinary members continue through their declared field index/type. The broad C
+admission total remains **1168/1787** (1034 canonical / 134 specialized), while
+LLVM advances to **1190/1858** (1042 canonical / 148 specialized), reducing its
+fallback count by nine to 668. The focused ratchet is now 148 tests per backend.
 
 Fixed-array identity is now structural over element spelling and known length;
 `[4]T` and `[8]T` no longer collide in the `ValueType`/`TypeId` map. Nested

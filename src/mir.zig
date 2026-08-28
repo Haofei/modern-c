@@ -8047,7 +8047,13 @@ const FunctionBuilder = struct {
                 .start = try self.ensureExecutableExpr(node.start.*),
                 .end = try self.ensureExecutableExpr(node.end.*),
             } },
-            .member => |node| if (std.mem.eql(u8, node.name.text, "len")) slice_length: {
+            .member => |node| if (std.mem.eql(u8, node.name.text, "len") and
+                switch (self.exprType(node.base.*)) {
+                    .slice => true,
+                    .pointer => |shape| shape.kind == .slice,
+                    else => false,
+                })
+            slice_length: {
                 result_ty = .{ .integer = "usize" };
                 break :slice_length .{ .slice_length = try self.ensureExecutableExpr(node.base.*) };
             } else member: {
