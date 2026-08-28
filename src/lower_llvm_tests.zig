@@ -4181,6 +4181,23 @@ test "LLVM emits nominal scalar resource flow from MIR without body fallback" {
     try expectContains(body, "call void @restore_interrupts(i8");
 }
 
+test "LLVM emits nested fixed-array aggregates from MIR without body fallback" {
+    const source =
+        \\struct Bag { values: [2][2]u32 }
+        \\fn make_bag() -> Bag {
+        \\    return .{ .values = .{ .{ 1, 2 }, .{ 3, 4 } } };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_array_aggregate.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { [2 x [2 x i32]] } @make_bag");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "insertvalue [2 x [2 x i32]]");
+    try expectContains(body, "ret { [2 x [2 x i32]] }");
+}
+
 test "LLVM emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {

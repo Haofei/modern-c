@@ -710,7 +710,7 @@ fn arrayConstructionSupported(
     if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
         shape.array_length == null or shape.array_length.? != operation.operand_count or
         shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
-    if (!arrayElementTypeSupported(shape.field_types[0])) return false;
+    if (!arrayElementTypeSupported(body, shape.field_types[0], 0)) return false;
     for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
         const operand = expressionById(body, operand_id) orelse return false;
         if (!sameValueType(operand.result_ty, shape.field_types[index]) or
@@ -1810,7 +1810,7 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
             shape.array_length != null and shape.array_length.? != 0 and
-                shape.field_count != 0 and arrayElementTypeSupported(shape.field_types[0])
+                shape.field_count != 0 and arrayElementTypeSupported(body, shape.field_types[0], 0)
         else
             false,
         .nullable_value => aggregateTypeForValueType(body, ty) != null,
@@ -2142,7 +2142,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
             if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or shape.array_length == null) return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_array_");
-            try appendCTypeSuffix(allocator, out, shape.field_types[0]);
+            try appendArrayElementTypeSuffix(allocator, out, body, shape.field_types[0], 0);
             try out.print(allocator, "_{d}", .{shape.array_length.?});
         },
         .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
@@ -2210,11 +2210,36 @@ fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: 
     }
 }
 
-fn arrayElementTypeSupported(ty: mir.ValueType) bool {
+fn appendArrayElementTypeSuffix(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    ty: mir.ValueType,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (depth >= mir.max_executable_operands) return error.UnsupportedType;
+    if (ty != .array) return appendCTypeSuffix(allocator, out, ty);
+    const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
+    if (shape.array_length == null or shape.array_length.? == 0 or shape.field_count == 0) return error.UnsupportedType;
+    var child: std.ArrayList(u8) = .empty;
+    defer child.deinit(allocator);
+    try appendArrayElementTypeSuffix(allocator, &child, body, shape.field_types[0], depth + 1);
+    const length = try std.fmt.allocPrint(allocator, "{d}", .{shape.array_length.?});
+    defer allocator.free(length);
+    try out.print(allocator, "mc_type_array_{d}_{s}_{d}_{s}", .{ child.items.len, child.items, length.len, length });
+}
+
+fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
+    if (depth >= mir.max_executable_operands) return false;
     return switch (ty) {
         .bool, .address => true,
         .integer, .float => |name| primitiveType(name) != null,
         .struct_, .closed_enum, .open_enum => |name| isSafeIdentifier(name),
+        .array => if (aggregateTypeForValueType(body, ty)) |shape|
+            shape.array_length != null and shape.array_length.? != 0 and shape.field_count != 0 and
+                arrayElementTypeSupported(body, shape.field_types[0], depth + 1)
+        else
+            false,
         else => false,
     };
 }

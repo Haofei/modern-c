@@ -8452,6 +8452,7 @@ const FunctionBuilder = struct {
                     aggregate.operands[index] = try self.ensureExecutableExprAsType(item, element_ty, target.child.*);
                     try self.contextualizeExecutableLiteral(aggregate.operands[index], element_ty);
                 }
+                self.markExecutableArrayElementLayoutComplete(result_ty, element_ty);
                 break :array .{ .array = aggregate };
             },
             .struct_literal => |fields| aggregate: {
@@ -8610,6 +8611,24 @@ const FunctionBuilder = struct {
             else => {},
         }
         return true;
+    }
+
+    fn markExecutableArrayElementLayoutComplete(self: *FunctionBuilder, ty: ValueType, element_ty: ValueType) void {
+        if (element_ty != .array) return;
+        var nested_complete = false;
+        for (self.executable_aggregate_types.items) |candidate| {
+            if (sameValueType(candidate.ty, element_ty) and candidate.array_length != null and candidate.field_count != 0) {
+                nested_complete = true;
+                break;
+            }
+        }
+        if (!nested_complete) return;
+        for (self.executable_aggregate_types.items) |*candidate| {
+            if (!sameValueType(candidate.ty, ty) or candidate.array_length == null) continue;
+            for (candidate.field_types[0..candidate.field_count], candidate.field_layout_complete[0..candidate.field_count]) |field_ty, *complete| {
+                if (sameValueType(field_ty, element_ty)) complete.* = true;
+            }
+        }
     }
 
     fn internExecutableTypeExpr(self: *FunctionBuilder, ty: ValueType, type_expr: ast.TypeExpr) anyerror!bool {

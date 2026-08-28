@@ -10,8 +10,8 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **609/1778 C** and **658/1849 LLVM** distinct functions using the AST
-  body (C admits 65.7%, LLVM 64.4%). Report mode intentionally preserves
+  finds **608/1778 C** and **657/1849 LLVM** distinct functions using the AST
+  body (C admits 65.8%, LLVM 64.5%). Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -29,6 +29,14 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Updated
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+Nested fixed-array construction now completes its recursive layout fact only
+after the child array metadata exists. C reconstructs the already-declared
+framed typedef name from that structural shape and LLVM renders the same nested
+array layout. `make_for_bag` therefore moves off fallback in both backends;
+broad admission is C **1170/1778** (1037 canonical / 133 specialized) and LLVM
+**1192/1849** (1046 canonical / 146 specialized). The focused ratchet is 152
+tests per backend.
 
 The built-in `IrqOff` witness is now a nominal executable-MIR integer whose
 one-byte storage comes from the shared scalar representation table. This moves

@@ -3947,6 +3947,23 @@ test "lower-c emits nominal scalar resource flow from MIR without body fallback"
     try expectContains(body, "restore_interrupts(");
 }
 
+test "lower-c emits nested fixed-array aggregates from MIR without body fallback" {
+    const source =
+        \\struct Bag { values: [2][2]u32 }
+        \\fn make_bag() -> Bag {
+        \\    return .{ .values = .{ .{ 1, 2 }, .{ 3, 4 } } };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_array_aggregate.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Bag make_bag(void)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "mc_array_mc_type_array_3_u32_1_2_2");
+    try expectContains(body, "return mc_exec_tmp_");
+}
+
 test "lower-c emits local and loop enum returns from MIR without body fallback" {
     const source =
         \\enum Color {
