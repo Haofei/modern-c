@@ -4202,7 +4202,7 @@ const LlvmEmitter = struct {
     }
 
     fn executableMirTypeMatches(self: *LlvmEmitter, left: mir.ValueType, right: mir.ValueType) bool {
-        if (mir.ValueType.eql(left, right) and left == .value) return true;
+        if (mir.ValueType.eql(left, right)) return true;
         const left_type = self.mirStructuralType(left) orelse return false;
         const right_type = self.mirStructuralType(right) orelse return false;
         return std.mem.eql(u8, left_type, right_type);

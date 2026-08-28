@@ -6308,10 +6308,16 @@ const FunctionBuilder = struct {
         if (!try builder.internExecutableEnumType(builder.return_ty)) builder.executable_supported = false;
         if (builder.return_ty == .nullable_value and !try builder.internExecutableValueOptionalType(builder.return_ty))
             builder.executable_supported = false;
+        if (fn_decl.return_type) |return_type| {
+            if (!try builder.internExecutableArrayTypeExpr(builder.return_ty, return_type))
+                builder.executable_supported = false;
+        }
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
             if (!try builder.internExecutableEnumType(param_ty)) builder.executable_supported = false;
             if (param_ty == .nullable_value and !try builder.internExecutableValueOptionalType(param_ty))
+                builder.executable_supported = false;
+            if (!try builder.internExecutableArrayTypeExpr(param_ty, param.ty))
                 builder.executable_supported = false;
             const atomic_payload_ty: ?ValueType = if (directAtomicPayloadTypeExprAlias(param.ty, aliases, true)) |payload|
                 valueTypeFromTypeAlias(payload, enums, structs, packed_bits, aliases)
@@ -8047,7 +8053,13 @@ const FunctionBuilder = struct {
                     // otherwise a void call is recorded as `.unknown` and
                     // prevents an otherwise complete executable body from
                     // reaching either canonical renderer.
-                    if (summary) |callee_summary| result_ty = callee_summary.return_ty;
+                    if (summary) |callee_summary| {
+                        result_ty = callee_summary.return_ty;
+                        if (callee_summary.return_type_expr) |return_type| {
+                            if (!try self.internExecutableArrayTypeExpr(result_ty, return_type))
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        }
+                    }
                     for (node.args, 0..) |argument, index| {
                         const parameter_ty: ?ValueType = if (summary) |callee_summary|
                             if (index < callee_summary.params.len)
@@ -8056,6 +8068,10 @@ const FunctionBuilder = struct {
                                 null
                         else
                             null;
+                        if (summary) |callee_summary| if (index < callee_summary.params.len) {
+                            if (!try self.internExecutableArrayTypeExpr(parameter_ty orelse .unknown, callee_summary.params[index].ty))
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        };
                         call_value.arguments[index] = try self.ensureExecutableExprAsType(
                             argument,
                             parameter_ty,
@@ -8266,6 +8282,16 @@ const FunctionBuilder = struct {
             else => {},
         }
         return true;
+    }
+
+    fn internExecutableArrayTypeExpr(self: *FunctionBuilder, ty: ValueType, type_expr: ast.TypeExpr) !bool {
+        const array = switch (aggregateTargetTypeAlias(type_expr, self.aliases).kind) {
+            .array => |value| value,
+            else => return true,
+        };
+        const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
+        const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
+        return self.internExecutableArrayType(ty, element_ty, length);
     }
 
     fn internExecutableAggregateTypeDepth(

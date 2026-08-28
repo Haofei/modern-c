@@ -111,6 +111,34 @@ test "lower-c lexical unsafe and contract call bodies use canonical executable M
     try expectContains(contract_body, "/* MC_CONTRACT_END no_overflow */");
 }
 
+test "lower-c fixed-array signatures and direct calls use canonical executable MIR" {
+    const source =
+        \\extern fn make_array() -> [2]u32;
+        \\extern fn consume_array(values: [2]u32) -> void;
+        \\fn return_array() -> [2]u32 { return make_array(); }
+        \\fn copy_array(values: [2]u32) -> [2]u32 {
+        \\    let copy: [2]u32 = values;
+        \\    return copy;
+        \\}
+        \\fn pass_array() -> void {
+        \\    let values = make_array();
+        \\    consume_array(values);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fixed_array_calls.mc", source, &output);
+
+    const returned = try cFunctionBody(output.items, "static mc_array_u32_2 return_array");
+    try expectContains(returned, "/* canonical executable MIR */");
+    try expectContains(returned, "= make_array();");
+    const copied = try cFunctionBody(output.items, "static mc_array_u32_2 copy_array");
+    try expectContains(copied, "/* canonical executable MIR */");
+    const passed = try cFunctionBody(output.items, "static void pass_array");
+    try expectContains(passed, "/* canonical executable MIR */");
+    try expectContains(passed, "consume_array(mc_exec_tmp_");
+}
+
 test "lower-c valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {
@@ -609,11 +637,13 @@ test "lower-c emits aggregate sequence plans without body fallback" {
     const add = std.mem.indexOf(u8, sequence, "mc_checked_add_u32") orelse return error.TestUnexpectedResult;
     try std.testing.expect(row_call < pair_call and pair_call < add);
     const bag = try cFunctionBody(output.items, "static Bag make_bag(uint32_t seed)");
-    const values = std.mem.indexOf(u8, bag, "= make_values(seed);") orelse return error.TestUnexpectedResult;
-    const tail = std.mem.indexOf(u8, bag, "= make_tail(seed);") orelse return error.TestUnexpectedResult;
+    try expectContains(bag, "/* canonical executable MIR */");
+    const values = std.mem.indexOf(u8, bag, "= make_values(") orelse return error.TestUnexpectedResult;
+    const tail = std.mem.indexOf(u8, bag, "= make_tail(") orelse return error.TestUnexpectedResult;
     try std.testing.expect(values < tail);
     try expectContains(bag, "mc_trap_InvalidRepresentation();");
-    try expectContains(bag, "return (Bag){ .values = mc_tmp");
+    try expectContains(bag, "(Bag){ mc_exec_tmp_");
+    try expectContains(bag, "return mc_exec_tmp_");
 }
 
 test "lower-c emits local workflow plans without body fallback" {
