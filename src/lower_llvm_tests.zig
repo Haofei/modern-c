@@ -3984,7 +3984,7 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_control_plan.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_variant_control.mc", source, &output);
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_call_or_zero");
     try expectContains(call_body, "call ptr @maybe_ptr()");
@@ -4002,8 +4002,9 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
     try expectContains(field_body, "call i32 @ptr_value(ptr");
 
     const switch_body = try llvmFunctionBody(output.items, "define internal i32 @nullable_switch");
-    try expectContains(switch_body, "icmp ne ptr %maybe, null");
-    try expectContains(switch_body, "call i32 @ptr_value(ptr %maybe)");
+    try expectContains(switch_body, "; canonical executable MIR");
+    try expectContains(switch_body, "icmp ne ptr %");
+    try expectContains(switch_body, "call i32 @ptr_value(ptr %");
 
     const seeded_body = try llvmFunctionBody(output.items, "define internal i32 @nullable_switch_call_seed");
     const seed_offset = std.mem.indexOf(u8, seeded_body, "call i32 @next_seed()") orelse return error.TestUnexpectedResult;

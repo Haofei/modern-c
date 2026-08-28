@@ -10,7 +10,6 @@ const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
-const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
@@ -1471,25 +1470,18 @@ pub const CEmitter = struct {
         // the legacy definition emitter, which still renders every attribute.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
-        const nullable_control_plan = if (mir_nullable_control_plan.build(&fn_mir)) |plan|
-            if (self.mirNullableControlPlanSupported(function, plan)) plan else null
+        const aggregate_sequence_plan = if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
+            if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
         else
             null;
-        const aggregate_sequence_plan = if (nullable_control_plan == null)
-            if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
-                if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const workflow_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null)
+        const workflow_plan = if (aggregate_sequence_plan == null)
             if (mir_workflow_plan.build(&fn_mir)) |plan|
                 if (self.mirWorkflowPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const alloca_hoist_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null)
+        const alloca_hoist_plan = if (aggregate_sequence_plan == null and workflow_plan == null)
             if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
                 if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
             else
@@ -1498,7 +1490,7 @@ pub const CEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const access_slice_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
+        const access_slice_plan = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const plan = access_body_plan orelse break :blk null;
             break :blk if (self.mirAccessSlicePlanSupported(function, plan)) plan else null;
@@ -1568,7 +1560,6 @@ pub const CEmitter = struct {
         else
             null;
         const specialized_plans = [_]bool{
-            nullable_control_plan != null,
             aggregate_sequence_plan != null,
             workflow_plan != null,
             alloca_hoist_plan != null,
@@ -1595,10 +1586,7 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
 
-        if (nullable_control_plan) |plan| {
-            selected_path.* = .nullable_control;
-            try self.emitMirNullableControlPlan(plan);
-        } else if (aggregate_sequence_plan) |plan| {
+        if (aggregate_sequence_plan) |plan| {
             selected_path.* = .aggregate_sequence;
             try self.emitMirAggregateSequencePlan(plan);
         } else if (workflow_plan) |plan| {
@@ -1844,235 +1832,6 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn mirNullableControlPlanSupported(self: *CEmitter, function: anytype, plan: mir_nullable_control_plan.Plan) bool {
-        if (!plan.binding.value_id.isValid()) return false;
-        const declared_return = function.signature.transitionalReturnType() orelse return false;
-        const binding_ty = switch (plan.then_return.operand) {
-            .direct_call => |call| blk: {
-                const signature = self.functions.get(call.call.callee_name) orelse return false;
-                const arm_return = signature.return_type orelse return false;
-                if (!call.call.callee_value_id.isValid() or signature.is_variadic or signature.params.len != 1 or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(arm_return)) or
-                    !self.mirNullableControlValueTypeMatches(call.call.result.value_ty, arm_return) or
-                    !self.mirNullableControlValueTypeMatches(plan.binding.pointer_ty, signature.params[0].ty)) return false;
-                break :blk signature.params[0].ty;
-            },
-            .binding => |binding| blk: {
-                if (!binding.value_id.isValid() or !self.mirNullableControlValueTypeMatches(binding.pointer_ty, declared_return)) return false;
-                break :blk declared_return;
-            },
-            else => return false,
-        };
-
-        switch (plan.else_return.operand) {
-            .integer_zero => if (!self.mirNullableControlIntegerReturn(declared_return)) return false,
-            .parameter => |parameter| {
-                const fallback_ty = self.mirNullableControlParameterType(function, parameter.name) orelse return false;
-                if (!parameter.value_id.isValid() or !self.mirNullableControlValueTypeMatches(parameter.pointer_ty, fallback_ty) or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(fallback_ty), self.resolveAliasType(declared_return))) return false;
-            },
-            else => return false,
-        }
-
-        const subject_ty = self.mirNullableControlSubjectType(function, plan.subject) orelse return false;
-        if (!self.mirNullableControlValueTypeMatches(plan.subject_type.value_ty, subject_ty)) return false;
-        const subject_c = self.cTypeFor(subject_ty, .typedef_name) catch return false;
-        const binding_c = self.cTypeFor(binding_ty, .typedef_name) catch return false;
-        if (!std.mem.eql(u8, subject_c, binding_c)) return false;
-
-        return switch (plan.subject) {
-            .parameter, .global, .field => true,
-            .direct_call => |subject| blk: {
-                const outer = self.functions.get(subject.call.callee_name) orelse break :blk false;
-                const outer_return = outer.return_type orelse break :blk false;
-                if (outer.is_variadic or !self.mirNullableControlValueTypeMatches(subject.call.result.value_ty, outer_return) or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(subject_ty), self.resolveAliasType(outer_return))) break :blk false;
-                if (subject.seed) |seed| {
-                    const seed_signature = self.functions.get(seed.callee_name) orelse break :blk false;
-                    const seed_return = seed_signature.return_type orelse break :blk false;
-                    break :blk !seed_signature.is_variadic and seed_signature.params.len == 0 and outer.params.len == 1 and
-                        self.mirNullableControlValueTypeMatches(seed.result.value_ty, seed_return) and
-                        type_bridge.sameTypeSyntax(self.resolveAliasType(seed_return), self.resolveAliasType(outer.params[0].ty));
-                }
-                break :blk outer.params.len == 0;
-            },
-        };
-    }
-
-    fn mirNullableControlParameterType(self: *CEmitter, function: anytype, name: []const u8) ?TransitionalTypeExpr {
-        _ = self;
-        for (function.signature.params) |param| if (std.mem.eql(u8, param.name.text, name)) return param.ty;
-        return null;
-    }
-
-    fn mirNullableControlIntegerReturn(self: *CEmitter, ty: TransitionalTypeExpr) bool {
-        const name = typeName(self.resolveAliasType(ty)) orelse return false;
-        return std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "usize") or
-            std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "i16") or std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize");
-    }
-
-    fn mirNullableControlSubjectType(self: *CEmitter, function: anytype, subject: mir_nullable_control_plan.Subject) ?TransitionalTypeExpr {
-        return switch (subject) {
-            .parameter => |parameter| blk: {
-                if (!parameter.value_id.isValid()) break :blk null;
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, param.name.text, parameter.name)) break :blk param.ty;
-                }
-                break :blk null;
-            },
-            .global => |global| blk: {
-                if (!global.value_id.isValid()) break :blk null;
-                break :blk (self.globals.get(global.name) orelse break :blk null).source_ty;
-            },
-            .field => |field| blk: {
-                if (!field.base_value_id.isValid()) break :blk null;
-                for (function.signature.params) |param| {
-                    if (!std.mem.eql(u8, param.name.text, field.base_name)) continue;
-                    const struct_name = self.structTypeNameFromType(param.ty) orelse break :blk null;
-                    const struct_decl = self.structs.get(struct_name) orelse break :blk null;
-                    if (field.field_index >= struct_decl.fields.len) break :blk null;
-                    const declared_field = struct_decl.fields[field.field_index];
-                    if (!std.mem.eql(u8, declared_field.name.text, field.field_name)) break :blk null;
-                    break :blk declared_field.ty;
-                }
-                break :blk null;
-            },
-            .direct_call => |call| (self.functions.get(call.call.callee_name) orelse return null).return_type,
-        };
-    }
-
-    fn mirNullableControlValueTypeMatches(self: *CEmitter, value_ty: mir.ValueType, source_ty: TransitionalTypeExpr) bool {
-        const resolved = self.resolveAliasType(source_ty);
-        return switch (value_ty) {
-            .integer => |name| typeName(resolved) != null and std.mem.eql(u8, typeName(resolved).?, name),
-            .pointer => |shape| self.mirNullableControlPointerShapeMatches(shape, resolved, false),
-            .nullable_pointer => |shape| self.mirNullableControlPointerShapeMatches(shape, resolved, true),
-            else => false,
-        };
-    }
-
-    fn mirNullableControlPointerShapeMatches(self: *CEmitter, shape: mir.PointerShape, source_ty: TransitionalTypeExpr, nullable: bool) bool {
-        const pointer_ty = if (nullable) switch (source_ty.kind) {
-            .nullable => |child| self.resolveAliasType(child.*),
-            else => return false,
-        } else source_ty;
-        const pointer = switch (pointer_ty.kind) {
-            .pointer => |pointer| pointer,
-            else => return false,
-        };
-        const child_name = typeName(self.resolveAliasType(pointer.child.*)) orelse return false;
-        return pointer.mutability == shape.mutability and std.mem.eql(u8, child_name, shape.child);
-    }
-
-    fn emitMirNullableControlPlan(self: *CEmitter, plan: mir_nullable_control_plan.Plan) !void {
-        const subject = try self.emitMirNullableControlSubject(plan);
-        const binding_ty = try self.mirNullableControlBindingType(plan);
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.subject_type.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s} != NULL) {{\n", .{subject});
-        self.indent += 1;
-
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.binding.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{
-            try self.cTypeFor(binding_ty, .typedef_name),
-            try self.cIdent(plan.binding.name),
-            subject,
-        });
-        try self.emitMirNullableControlArmReturn(plan.then_return, plan.binding.name);
-
-        self.indent -= 1;
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "} else {\n");
-        self.indent += 1;
-        try self.emitMirNullableControlArmReturn(plan.else_return, plan.binding.name);
-        self.indent -= 1;
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "}\n");
-    }
-
-    fn emitMirNullableControlSubject(self: *CEmitter, plan: mir_nullable_control_plan.Plan) ![]const u8 {
-        const binding_ty = try self.mirNullableControlBindingType(plan);
-        // A parameter subject needs no cross-function temporary allocation.
-        // Its function-local spelling is stable and cannot collide because a
-        // nullable-control plan owns the complete function body.
-        const subject_name: []const u8 = if (std.meta.activeTag(plan.subject) == .parameter) "mc_tmp0" else try self.nextTempName();
-        if (std.meta.activeTag(plan.subject) == .direct_call) {
-            const call_subject = plan.subject.direct_call;
-            if (call_subject.seed) |seed| {
-                const seed_signature = self.functions.get(seed.callee_name) orelse return error.UnsupportedCEmission;
-                const seed_name = try self.nextTempName();
-                try self.writeLineDirective(spanFromMirSourcePoint(seed.call_location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = {s}();\n", .{
-                    try self.cTypeFor(seed_signature.return_type orelse return error.UnsupportedCEmission, .typedef_name),
-                    seed_name,
-                    try self.cIdent(seed.callee_name),
-                });
-                try self.writeLineDirective(spanFromMirSourcePoint(call_subject.call.call_location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = {s}({s});\n", .{
-                    try self.cTypeFor(binding_ty, .typedef_name),
-                    subject_name,
-                    try self.cIdent(call_subject.call.callee_name),
-                    seed_name,
-                });
-                return subject_name;
-            }
-        }
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.subject_type.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(binding_ty, .typedef_name), subject_name });
-        switch (plan.subject) {
-            .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
-            .global => |global| try appendGlobalLoadExpr(self.allocator, self.out, global.name, self.globals.get(global.name) orelse return error.UnsupportedCEmission),
-            .field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.base_name), try self.cIdent(field.field_name) }),
-            .direct_call => |call_subject| try self.out.print(self.allocator, "{s}()", .{try self.cIdent(call_subject.call.callee_name)}),
-        }
-        try self.out.appendSlice(self.allocator, ";\n");
-        return subject_name;
-    }
-
-    fn mirNullableControlBindingType(self: *CEmitter, plan: mir_nullable_control_plan.Plan) !TransitionalTypeExpr {
-        return switch (plan.then_return.operand) {
-            .direct_call => |call| (self.functions.get(call.call.callee_name) orelse return error.UnsupportedCEmission).params[0].ty,
-            .binding => self.currentFunctionReturnType() orelse return error.UnsupportedCEmission,
-            else => error.UnsupportedCEmission,
-        };
-    }
-
-    fn currentFunctionReturnType(self: *CEmitter) ?TransitionalTypeExpr {
-        const current = self.current_function orelse return null;
-        return (self.functions.get(current) orelse return null).return_type;
-    }
-
-    fn emitMirNullableControlArmReturn(self: *CEmitter, arm: mir_nullable_control_plan.ArmReturn, binding_name: []const u8) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(arm.return_location.source));
-        switch (arm.operand) {
-            .direct_call => |call| {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "return {s}({s});\n", .{ try self.cIdent(call.call.callee_name), try self.cIdent(binding_name) });
-            },
-            .binding => {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(binding_name)});
-            },
-            .integer_zero => {
-                try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "return 0;\n");
-            },
-            .parameter => |parameter| {
-                if (parameter.requires_nonnull_check) {
-                    try self.writeLineDirective(spanFromMirSourcePoint(parameter.location.source));
-                    try self.writeIndent();
-                    try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_InvalidRepresentation();\n", .{try self.cIdent(parameter.name)});
-                }
-                try self.writeIndent();
-                try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(parameter.name)});
-            },
-        }
-    }
-
     fn mirAggregateSequencePlanSupported(self: *CEmitter, function: anytype, plan: mir_aggregate_sequence_plan.Plan) bool {
         return switch (plan) {
             .aggregate_call_after_assignment => |sequence| self.mirAggregateCallAfterAssignmentPlanSupported(function, sequence),
@@ -2269,9 +2028,22 @@ pub const CEmitter = struct {
                     std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_slice.child.*)) orelse return false),
                 else => false,
             },
-            .nullable_pointer => |pointer| self.mirNullableControlPointerShapeMatches(pointer, resolved, true),
+            .nullable_pointer => |pointer| self.mirNullablePointerShapeMatchesSource(pointer, resolved),
             else => false,
         };
+    }
+
+    fn mirNullablePointerShapeMatchesSource(self: *CEmitter, shape: mir.PointerShape, source_ty: TransitionalTypeExpr) bool {
+        const pointer_ty = switch (source_ty.kind) {
+            .nullable => |child| self.resolveAliasType(child.*),
+            else => return false,
+        };
+        const pointer = switch (pointer_ty.kind) {
+            .pointer => |value| value,
+            else => return false,
+        };
+        const child_name = typeName(self.resolveAliasType(pointer.child.*)) orelse return false;
+        return shape.kind == .single and pointer.mutability == shape.mutability and std.mem.eql(u8, child_name, shape.child);
     }
 
     fn mirWorkflowFunctionMatches(self: *CEmitter, name: []const u8, result: mir_workflow_plan.TypeRef, args: []const mir_workflow_plan.CallArgument) bool {

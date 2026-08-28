@@ -1820,7 +1820,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         # Aggregate-place MIR lowering added two existing bridge consumers in
         # b20a31f5/e0763447. Capture that master state; future changes may only
         # reduce it.
-        "self.structTypeNameFromType(": 8,
+        "self.structTypeNameFromType(": 7,
         "const enum_ty = self.enumReturnTypeForExpr(initializer) orelse return false;": 0,
         "const enum_ty = self.directCallResultTypeForInferredLocal(initializer, isEnumDirectCallResultType) orelse return false;": 0,
         "const enum_ty = self.directCallResultTypeForExpr(initializer, isEnumDirectCallResultType) orelse return false;": 0,

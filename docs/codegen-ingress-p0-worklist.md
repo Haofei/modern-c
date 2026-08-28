@@ -36,15 +36,11 @@ shards proved that 50 no-fallback tests still rely on its fault-injection and
 edge-case semantics. That deletion was therefore reverted rather than masking
 the gap by changing tests. The plan remains as a bounded safety net, and its
 broad use is **31 C / 35 LLVM** functions (from 43/58 before the recent
-slice). The canonical producer now owns Result construction, domain/serial/counter
-builtins, enum raw conversion, exact enum/Result metadata, wide integer casts,
-negative float literals and qualified/nullable pointer comparisons. The strict
-ratchet consequently moves from 84/83 to **99 C / 100 LLVM canonical
-functions**, while specialized admission falls from 76/77 to **61/60** and
-specialized plan definitions from 15 to **14**. The current broad split is 1049
-canonical / 127 specialized for C and 1067 canonical / 139 specialized for
-LLVM. Compared with the prior broad snapshot, both legacy admission categories
-shrunk.
+slice). The canonical producer now also owns two-arm nullable/Result variant
+control. The strict ratchet is **102 C / 102 LLVM canonical functions**, while
+specialized admission has fallen to **58/58** and specialized plan definitions
+to **13**. The standalone nullable-control plan and both backend implementations
+have been deleted.
 
 Optional and `Result` if-let discrimination and payload extraction now use
 explicit executable-MIR variant operations. A typed synthetic local guarantees

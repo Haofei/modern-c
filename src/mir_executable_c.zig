@@ -284,6 +284,12 @@ fn emitExpressionOperation(
         .load => |load| switch (load.access.kind) {
             .plain => try emitPlace(allocator, out, body, load.place),
             .race_unordered => {
+                if (expression.result_ty == .nullable_pointer) {
+                    try out.appendSlice(allocator, "__atomic_load_n(");
+                    try emitPlaceAddress(allocator, out, body, load.place);
+                    try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
+                    return;
+                }
                 const scalar = scalarMemoryInfo(expression.result_ty) orelse return error.UnsupportedType;
                 try out.print(allocator, "(({s})mc_race_load_{s}(", .{ scalar.c_type, scalar.helper_suffix });
                 try emitPlaceAddress(allocator, out, body, load.place);
@@ -1248,6 +1254,21 @@ fn memoryLoadSupported(
     expression: mir.ExecutableExpression,
     load: @FieldType(mir.ExecutableExpression.Operation, "load"),
 ) bool {
+    if (expression.result_ty == .nullable_pointer) {
+        if (load.access.kind != .race_unordered or load.representation_source != null or
+            load.representation_span_id.isValid() or ownedTrapEdgeCount(body, expression.id) != 0)
+            return false;
+        const place = placeById(body, load.place) orelse return false;
+        if (place.storage != .ordinary or place.projection_count != 0 or
+            load.access.alignment != mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty)) return false;
+        return switch (place.root) {
+            .symbol => |id| if (symbolById(body, id)) |symbol|
+                symbol.kind == .global and symbol.mutable and sameValueType(place.ty, expression.result_ty)
+            else
+                false,
+            .local, .value => false,
+        };
+    }
     const scalar = scalarMemoryInfo(expression.result_ty) orelse return false;
     if (load.access.alignment != scalar.alignment) return false;
     const place = placeById(body, load.place) orelse return false;

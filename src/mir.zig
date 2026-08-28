@@ -10226,6 +10226,18 @@ const FunctionBuilder = struct {
         return self.typeExprForExpr(value);
     }
 
+    fn executableResultPayloadValueType(self: *const FunctionBuilder, subject_ty: ValueType, tag: []const u8) ?ValueType {
+        if (subject_ty != .result) return null;
+        const type_id = self.type_ids.get(subject_ty) orelse return null;
+        for (self.executable_result_types.items) |shape| {
+            if (!shape.type_id.eql(type_id)) continue;
+            if (std.mem.eql(u8, tag, "ok")) return shape.ok_ty;
+            if (std.mem.eql(u8, tag, "err")) return shape.err_ty;
+            return null;
+        }
+        return null;
+    }
+
     fn ifLetNarrowedBinding(self: *FunctionBuilder, node: ast.IfLet) ?NarrowedBinding {
         return switch (node.pattern.kind) {
             .bind => |ident| switch (self.exprType(node.value)) {
@@ -10236,15 +10248,12 @@ const FunctionBuilder = struct {
             },
             .tag_bind => |tag_bind| blk: {
                 if (!isResultNarrowingTag(tag_bind.tag.text)) break :blk null;
-                const shape = switch (self.exprType(node.value)) {
-                    .result => |shape| shape,
-                    else => break :blk null,
-                };
-                const payload_name = if (std.mem.eql(u8, tag_bind.tag.text, "ok")) shape.ok else shape.err;
+                const binding_ty = self.executableResultPayloadValueType(self.exprType(node.value), tag_bind.tag.text) orelse break :blk null;
+                const payload_ty = self.narrowedBindingTypeExpr(node.value, tag_bind.tag.text) orelse break :blk null;
                 break :blk .{
                     .name = tag_bind.binding.text,
-                    .ty = valueTypeFromTypeNameAlias(payload_name, self.enums, self.structs, self.packed_bits),
-                    .ty_expr = self.narrowedBindingTypeExpr(node.value, tag_bind.tag.text),
+                    .ty = binding_ty,
+                    .ty_expr = payload_ty,
                 };
             },
             .wildcard, .tag, .literal => null,
@@ -10302,19 +10311,92 @@ const FunctionBuilder = struct {
                         .ty_expr = payload_ty,
                     };
                 }
-                const shape = switch (self.exprType(subject)) {
-                    .result => |shape| shape,
-                    else => break :blk null,
-                };
-                const payload_name = if (std.mem.eql(u8, tag_bind.tag.text, "ok")) shape.ok else shape.err;
+                const binding_ty = self.executableResultPayloadValueType(self.exprType(subject), tag_bind.tag.text) orelse break :blk null;
+                const payload_ty = self.narrowedBindingTypeExpr(subject, tag_bind.tag.text) orelse break :blk null;
                 break :blk .{
                     .name = tag_bind.binding.text,
-                    .ty = valueTypeFromTypeNameAlias(payload_name, self.enums, self.structs, self.packed_bits),
-                    .ty_expr = self.narrowedBindingTypeExpr(subject, tag_bind.tag.text),
+                    .ty = binding_ty,
+                    .ty_expr = payload_ty,
                 };
             },
             .wildcard, .tag, .literal => null,
         };
+    }
+
+    const ExecutableVariantSwitch = struct {
+        test_kind: mir_model.ExecutableVariantKind,
+        true_arm: usize,
+        false_arm: usize,
+    };
+
+    fn executableSwitchPatternVariantKind(pattern: ast.Pattern, subject_ty: ValueType) ?mir_model.ExecutableVariantKind {
+        return switch (pattern.kind) {
+            .bind => switch (subject_ty) {
+                .nullable_pointer, .nullable_value => .optional_present,
+                else => null,
+            },
+            .tag => |tag| switch (subject_ty) {
+                .result => if (std.mem.eql(u8, tag.text, "ok")) .result_ok else if (std.mem.eql(u8, tag.text, "err")) .result_err else null,
+                else => null,
+            },
+            .tag_bind => |tag_bind| switch (subject_ty) {
+                .result => if (std.mem.eql(u8, tag_bind.tag.text, "ok")) .result_ok else if (std.mem.eql(u8, tag_bind.tag.text, "err")) .result_err else null,
+                else => null,
+            },
+            .wildcard, .literal => null,
+        };
+    }
+
+    /// Normalize the two-variant source forms into one boolean MIR branch.
+    /// A wildcard is the complement of the explicit variant; Result ok/err
+    /// pairs always test `ok` so both backends consume the same direction.
+    fn executableVariantSwitch(node: ast.Switch, subject_ty: ValueType) ?ExecutableVariantSwitch {
+        if (node.arms.len != 2 or node.arms[0].patterns.len != 1 or node.arms[1].patterns.len != 1) return null;
+        const first = node.arms[0].patterns[0];
+        const second = node.arms[1].patterns[0];
+        const first_kind = executableSwitchPatternVariantKind(first, subject_ty);
+        const second_kind = executableSwitchPatternVariantKind(second, subject_ty);
+        const first_wildcard = first.kind == .wildcard;
+        const second_wildcard = second.kind == .wildcard;
+
+        switch (subject_ty) {
+            .nullable_pointer, .nullable_value => {
+                if (first_kind == .optional_present and second_wildcard) return .{
+                    .test_kind = .optional_present,
+                    .true_arm = 0,
+                    .false_arm = 1,
+                };
+                if (second_kind == .optional_present and first_wildcard) return .{
+                    .test_kind = .optional_present,
+                    .true_arm = 1,
+                    .false_arm = 0,
+                };
+            },
+            .result => {
+                if (first_kind == .result_ok and second_kind == .result_err) return .{
+                    .test_kind = .result_ok,
+                    .true_arm = 0,
+                    .false_arm = 1,
+                };
+                if (first_kind == .result_err and second_kind == .result_ok) return .{
+                    .test_kind = .result_ok,
+                    .true_arm = 1,
+                    .false_arm = 0,
+                };
+                if (first_kind) |kind| if (second_wildcard) return .{
+                    .test_kind = kind,
+                    .true_arm = 0,
+                    .false_arm = 1,
+                };
+                if (second_kind) |kind| if (first_wildcard) return .{
+                    .test_kind = kind,
+                    .true_arm = 1,
+                    .false_arm = 0,
+                };
+            },
+            else => {},
+        }
+        return null;
     }
 
     fn buildSwitch(self: *FunctionBuilder, node: ast.Switch, span: ast.Span) anyerror!bool {
@@ -10326,10 +10408,36 @@ const FunctionBuilder = struct {
         if (subject_type_expr) |ty| {
             try self.appendTargetTypeFact(.switch_subject, ty, valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases), node.subject.span);
         } else return error.InvalidMirTargetTypeFacts;
-        const executable_subject = try self.ensureExecutableExpr(node.subject);
-        const executable_boolean_subject = executable_subject.isValid() and
+        const subject_source = self.sourcePoint(node.subject.span);
+        const subject_ty = self.exprType(node.subject);
+        const subject_type_id = try self.internTypeId(subject_ty);
+        const variant_switch = executableVariantSwitch(node, subject_ty);
+        var synthetic_subject: ?LocalId = null;
+        var executable_subject = try self.ensureExecutableExpr(node.subject);
+        var executable_boolean_subject = executable_subject.isValid() and
             executable_subject.index() < self.executable_expressions.items.len and
             sameValueType(self.executable_expressions.items[executable_subject.index()].result_ty, .bool);
+        if (variant_switch) |variant| {
+            const subject_local = try self.appendSyntheticIfLetSubjectLocal();
+            synthetic_subject = subject_local;
+            try self.appendExecutableStatement(subject_source, .{ .local_init = .{
+                .local = subject_local,
+                .ty = subject_ty,
+                .type_id = subject_type_id,
+                .value = executable_subject,
+                .mutable = false,
+            } });
+            const stored_subject = try self.appendExecutableLocalValue(subject_local, subject_ty, subject_type_id, subject_source);
+            executable_subject = try self.appendExecutableVariantOperation(
+                subject_source,
+                stored_subject,
+                .bool,
+                try self.internTypeId(.bool),
+                variant.test_kind,
+                false,
+            );
+            executable_boolean_subject = true;
+        }
         try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = executable_subject } });
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
@@ -10339,7 +10447,7 @@ const FunctionBuilder = struct {
         const after_id = try self.addBlock("switch_after");
         var executable_true_arm: ?usize = null;
         var executable_false_arm: ?usize = null;
-        for (node.arms) |arm| {
+        for (node.arms, 0..) |arm, arm_index| {
             const arm_id = try self.addBlock("switch_arm");
             try self.addSuccessor(dispatch_id, arm_id);
             if (arm.patterns.len == 1) {
@@ -10394,6 +10502,38 @@ const FunctionBuilder = struct {
                 had_previous_nonnull = self.proven_nonnull_bindings.contains(binding.name);
                 _ = self.proven_nonnull_bindings.remove(binding.name);
                 if (binding.ty == .pointer) try self.proven_nonnull_bindings.put(binding.name, {});
+                if (synthetic_subject) |subject_local| if (arm.patterns.len == 1) {
+                    if (executableSwitchPatternVariantKind(arm.patterns[0], subject_ty)) |kind| {
+                        const binding_type_complete = if (binding.ty_expr) |ty_expr|
+                            try self.internExecutableTypeExpr(binding.ty, ty_expr)
+                        else
+                            try self.internExecutableEnumType(binding.ty);
+                        if (!binding_type_complete) self.executable_supported = false;
+                        const binding_local = try self.internExecutableLocal(binding.name);
+                        const binding_type_id = try self.internTypeId(binding.ty);
+                        const stored_subject = try self.appendExecutableLocalValue(
+                            subject_local,
+                            subject_ty,
+                            subject_type_id,
+                            subject_source,
+                        );
+                        const payload = try self.appendExecutableVariantOperation(
+                            self.sourcePoint(arm.patterns[0].span),
+                            stored_subject,
+                            binding.ty,
+                            binding_type_id,
+                            kind,
+                            true,
+                        );
+                        try self.appendExecutableStatement(self.sourcePoint(arm.patterns[0].span), .{ .local_init = .{
+                            .local = binding_local,
+                            .ty = binding.ty,
+                            .type_id = binding_type_id,
+                            .value = payload,
+                            .mutable = false,
+                        } });
+                    }
+                };
             }
             const terminated = switch (arm.body) {
                 .block => |body| try self.buildBlock(body),
@@ -10438,6 +10578,10 @@ const FunctionBuilder = struct {
             // inside the arm intentionally persist — the arm may have run, so a later use of an
             // outer fact must stay conservative).
             self.proven_facts.items.len = facts_save;
+            if (variant_switch) |variant| {
+                if (arm_index == variant.true_arm) executable_true_arm = arm_id;
+                if (arm_index == variant.false_arm) executable_false_arm = arm_id;
+            }
         }
         self.blocks.items[dispatch_id].terminator = .switch_;
         if (executable_boolean_subject and executable_true_arm != null and executable_false_arm != null) {

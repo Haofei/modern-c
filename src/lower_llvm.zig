@@ -11,7 +11,6 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
-const mir_nullable_control_plan = @import("mir_nullable_control_plan.zig");
 const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
@@ -1571,25 +1570,18 @@ const LlvmEmitter = struct {
         // wrapper or the full legacy emitter, but not a specialized plan that
         // cannot preserve declaration mechanics.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
-        const nullable_control_plan = if (mir_nullable_control_plan.build(&fn_mir)) |plan|
-            if (self.mirNullableControlPlanSupported(function, fn_mir, plan)) plan else null
+        const aggregate_sequence_plan = if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
+            if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
         else
             null;
-        const aggregate_sequence_plan = if (nullable_control_plan == null)
-            if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
-                if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const workflow_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null)
+        const workflow_plan = if (aggregate_sequence_plan == null)
             if (mir_workflow_plan.build(&fn_mir)) |plan|
                 if (self.mirWorkflowPlanSupported(function, plan)) plan else null
             else
                 null
         else
             null;
-        const alloca_hoist_plan = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null)
+        const alloca_hoist_plan = if (aggregate_sequence_plan == null and workflow_plan == null)
             if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
                 if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
             else
@@ -1598,7 +1590,7 @@ const LlvmEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const llvm_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
+        const llvm_access_operation = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const body = access_body_plan orelse break :blk null;
             break :blk mir_access_plan.buildSliceOperation(body);
@@ -1657,12 +1649,11 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const llvm_structural_access_operation = if (nullable_control_plan == null and aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and direct_call_projected_return_plan == null and nullable_try_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
-            nullable_control_plan != null,
             aggregate_sequence_plan != null,
             workflow_plan != null,
             alloca_hoist_plan != null,
@@ -1729,10 +1720,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
         }
 
-        if (nullable_control_plan) |plan| {
-            selected_path.* = .nullable_control;
-            try self.emitMirNullableControlPlan(plan, ret_ty);
-        } else if (aggregate_sequence_plan) |plan| {
+        if (aggregate_sequence_plan) |plan| {
             selected_path.* = .aggregate_sequence;
             try self.emitMirAggregateSequencePlan(plan, ret_ty);
         } else if (workflow_plan) |plan| {
@@ -2666,197 +2654,6 @@ const LlvmEmitter = struct {
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(plan.fallback.type_fact.target_ty), self.resolveAliasType(child_ty))) return false;
         const declared_return = function.signature.transitionalReturnType() orelse return false;
         return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(child_ty));
-    }
-
-    /// Admission for the deliberately small syntax-free nullable-control
-    /// family. Declarations are used only for ABI/type validation; the body
-    /// itself is entirely the MIR-owned plan.
-    fn mirNullableControlPlanSupported(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, plan: mir_nullable_control_plan.Plan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        const return_llvm = self.llvmType(return_ty) catch return false;
-        if (!nullableControlSubjectTypeSupported(plan.subject_type.value_ty, plan.binding.pointer_ty)) return false;
-        switch (plan.then_return.operand) {
-            .direct_call => |call| {
-                if (!sameNullableControlValueType(call.call.result.value_ty, fn_mir.return_ty) or !nullableControlThenCallSupported(self, call.call, return_llvm)) return false;
-            },
-            .binding => |binding| if (!sameNullableControlValueType(binding.pointer_ty, fn_mir.return_ty)) return false,
-            else => return false,
-        }
-        switch (plan.else_return.operand) {
-            .integer_zero => if (!isNullableControlIntegerReturn(fn_mir.return_ty)) return false,
-            .parameter => |parameter| {
-                const param = nullableControlParameter(function, parameter.name) orelse return false;
-                if (!parameter.value_id.isValid() or !sameNullableControlValueType(parameter.pointer_ty, fn_mir.return_ty) or
-                    !std.mem.eql(u8, self.llvmType(param.ty) catch return false, return_llvm)) return false;
-            },
-            else => return false,
-        }
-
-        switch (plan.subject) {
-            .parameter => |subject| {
-                const param = nullableControlParameter(function, subject.name) orelse return false;
-                if (!subject.value_id.isValid() or !std.mem.eql(u8, self.llvmType(param.ty) catch return false, "ptr")) return false;
-            },
-            .global => |subject| {
-                const global_ty = self.global_types.get(subject.name) orelse return false;
-                if (!subject.value_id.isValid() or !std.mem.eql(u8, self.llvmType(global_ty) catch return false, "ptr")) return false;
-            },
-            .field => |subject| {
-                const param = nullableControlParameter(function, subject.base_name) orelse return false;
-                if (!subject.base_value_id.isValid() or subject.field_name.len == 0) return false;
-                // `extractvalue` itself is the structural field projection;
-                // the plan already tied this ordinal to the typed MIR member.
-                if (std.mem.eql(u8, self.llvmType(param.ty) catch return false, "ptr")) return false;
-            },
-            .direct_call => |subject| {
-                if (!nullableControlSubjectCallSupported(self, subject.call, subject.seed)) return false;
-            },
-        }
-        return true;
-    }
-
-    fn emitMirNullableControlPlan(self: *LlvmEmitter, plan: mir_nullable_control_plan.Plan, ret_ty: TransitionalTypeExpr) !void {
-        const subject = try self.emitMirNullableControlSubject(plan.subject);
-        const dispatch_span = spanFromMirSourcePoint(plan.subject_type.location.source);
-        self.current_debug_span = dispatch_span;
-        const some = try self.nextTemp();
-        const nonnull_label = try self.nextLabel("nullable_plan_some");
-        const null_label = try self.nextLabel("nullable_plan_none");
-        try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ some, subject });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{
-            some,
-            nonnull_label,
-            null_label,
-            try self.debugCallSuffix(),
-            nonnull_label,
-        });
-
-        const then_value = switch (plan.then_return.operand) {
-            .direct_call => |call| blk: {
-                self.current_debug_span = spanFromMirSourcePoint(call.call.call_location.source);
-                break :blk try self.emitMirNullableControlDirectCall(call.call, subject);
-            },
-            .binding => subject,
-            else => return error.UnsupportedLlvmEmission,
-        };
-        try self.emitReturnValue(ret_ty, then_value, spanFromMirSourcePoint(plan.then_return.return_location.source));
-
-        try self.out.print(self.allocator, "{s}:\n", .{null_label});
-        const else_value = switch (plan.else_return.operand) {
-            .integer_zero => "0",
-            .parameter => |parameter| blk: {
-                const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name});
-                if (parameter.requires_nonnull_check) {
-                    const invalid = try self.nextTemp();
-                    const trap = try self.nextLabel("nullable_plan_invalid");
-                    const returned = try self.nextLabel("nullable_plan_fallback");
-                    self.current_debug_span = spanFromMirSourcePoint(parameter.location.source);
-                    try self.out.print(self.allocator, "  {s} = icmp eq ptr {s}, null\n", .{ invalid, value });
-                    try self.emitTrapBranch(invalid, trap, returned, trap, returned, "InvalidRepresentation");
-                }
-                break :blk value;
-            },
-            else => return error.UnsupportedLlvmEmission,
-        };
-        try self.emitReturnValue(ret_ty, else_value, spanFromMirSourcePoint(plan.else_return.return_location.source));
-    }
-
-    fn emitMirNullableControlSubject(self: *LlvmEmitter, subject: mir_nullable_control_plan.Subject) ![]const u8 {
-        return switch (subject) {
-            .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
-            .global => |global| blk: {
-                const global_ty = self.global_types.get(global.name) orelse return error.UnsupportedLlvmEmission;
-                self.current_debug_span = spanFromMirSourcePoint(global.location.source);
-                break :blk self.emitOrdinaryLoad(global_ty, try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{global.name}), !(self.global_is_const.get(global.name) orelse false));
-            },
-            .field => |field| blk: {
-                const params = self.current_params orelse return error.UnsupportedLlvmEmission;
-                var base_ty: ?TransitionalTypeExpr = null;
-                for (params) |param| if (std.mem.eql(u8, param.name.text, field.base_name)) {
-                    base_ty = param.ty;
-                    break;
-                };
-                const ty = base_ty orelse return error.UnsupportedLlvmEmission;
-                self.current_debug_span = spanFromMirSourcePoint(field.location.source);
-                const value = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = extractvalue {s} %{s}, {d}{s}\n", .{
-                    value,
-                    try self.llvmType(ty),
-                    field.base_name,
-                    field.field_index,
-                    try self.debugCallSuffix(),
-                });
-                break :blk value;
-            },
-            .direct_call => |direct| blk: {
-                const seed_value = if (direct.seed) |seed| blk_seed: {
-                    self.current_debug_span = spanFromMirSourcePoint(seed.call_location.source);
-                    break :blk_seed try self.emitMirNullableControlDirectCall(seed, null);
-                } else null;
-                self.current_debug_span = spanFromMirSourcePoint(direct.call.call_location.source);
-                break :blk try self.emitMirNullableControlDirectCall(direct.call, seed_value);
-            },
-        };
-    }
-
-    fn emitMirNullableControlDirectCall(self: *LlvmEmitter, call: mir_nullable_control_plan.DirectCall, argument: ?[]const u8) ![]const u8 {
-        const signature = self.fn_sigs.get(call.callee_name) orelse return error.UnsupportedLlvmEmission;
-        const argument_count: usize = if (argument == null) 0 else 1;
-        if (signature.is_variadic or signature.params.len != argument_count) return error.UnsupportedLlvmEmission;
-        const result = try self.nextTemp();
-        const ret_ext = if (signature.c_abi) self.cAbiExtension(signature.ret) else "";
-        try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ result, ret_ext, try self.llvmType(signature.ret), call.callee_name });
-        if (argument) |value| {
-            const param = signature.params[0];
-            const param_ext = if (signature.c_abi) self.cAbiExtension(param.ty) else "";
-            try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(param.ty), param_ext, value });
-        }
-        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
-        return result;
-    }
-
-    fn nullableControlThenCallSupported(self: *LlvmEmitter, call: mir_nullable_control_plan.DirectCall, return_llvm: []const u8) bool {
-        const signature = self.fn_sigs.get(call.callee_name) orelse return false;
-        return !signature.is_variadic and signature.params.len == 1 and
-            std.mem.eql(u8, self.llvmType(signature.params[0].ty) catch return false, "ptr") and
-            std.mem.eql(u8, self.llvmType(signature.ret) catch return false, return_llvm);
-    }
-
-    fn nullableControlSubjectCallSupported(self: *LlvmEmitter, call: mir_nullable_control_plan.DirectCall, seed: ?mir_nullable_control_plan.DirectCall) bool {
-        const signature = self.fn_sigs.get(call.callee_name) orelse return false;
-        if (signature.is_variadic or !std.mem.eql(u8, self.llvmType(signature.ret) catch return false, "ptr")) return false;
-        if (seed) |nested| {
-            const seed_signature = self.fn_sigs.get(nested.callee_name) orelse return false;
-            return !seed_signature.is_variadic and seed_signature.params.len == 0 and signature.params.len == 1 and
-                std.mem.eql(u8, self.llvmType(seed_signature.ret) catch return false, self.llvmType(signature.params[0].ty) catch return false);
-        }
-        return signature.params.len == 0;
-    }
-
-    fn nullableControlSubjectTypeSupported(subject: mir.ValueType, binding: mir.ValueType) bool {
-        return switch (subject) {
-            .nullable_pointer => switch (binding) {
-                .pointer => std.mem.eql(u8, subject.name(), binding.name()),
-                else => false,
-            },
-            else => false,
-        };
-    }
-
-    fn sameNullableControlValueType(left: mir.ValueType, right: mir.ValueType) bool {
-        return std.meta.activeTag(left) == std.meta.activeTag(right) and std.mem.eql(u8, left.name(), right.name());
-    }
-
-    fn isNullableControlIntegerReturn(ty: mir.ValueType) bool {
-        return switch (ty) {
-            .integer => true,
-            else => false,
-        };
-    }
-
-    fn nullableControlParameter(function: anytype, name: []const u8) ?@TypeOf(function.signature.params[0]) {
-        for (function.signature.params) |param| if (std.mem.eql(u8, param.name.text, name)) return param;
-        return null;
     }
 
     fn mirNullableTryPlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.NullableTryPlan) bool {
