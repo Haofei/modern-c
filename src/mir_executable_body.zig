@@ -494,6 +494,20 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyOperand(body, value, operation.operand);
             if (body.complete) try verifyVariantOperation(body, value, operation.operand, operation.kind, true);
         },
+        .try_unwrap => |operand_id| {
+            try verifyOperand(body, value, operand_id);
+            const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+            if (body.complete) {
+                const shape = switch (operand.result_ty) {
+                    .nullable_pointer => |pointer| pointer,
+                    else => return error.InvalidAggregateConstruction,
+                };
+                if (!sameValueType(value.result_ty, .{ .pointer = shape }) or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                    ownedTrapCount(body, .{ .expression = value.id }, .Unwrap, .unwrap) != 1)
+                    return error.InvalidAggregateConstruction;
+            }
+        },
         .result => |operation| {
             try verifyOperand(body, value, operation.payload);
             if (body.complete) {
@@ -614,6 +628,11 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         if (!mir.ExecutableRepresentationCheckKind.typesValid(check.kind, owner.result_ty, operand.result_ty) or
                             !owner.type_id.eql(operand.type_id) or edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
+                    },
+                    .try_unwrap => |operand_id| {
+                        const operand = expression(body, operand_id) orelse return error.InvalidTrapEdge;
+                        if (operand.result_ty != .nullable_pointer or edge.kind != .Unwrap or edge.source != .unwrap)
+                            return error.InvalidTrapEdge;
                     },
                     else => return error.InvalidTrapEdge,
                 }

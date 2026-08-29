@@ -986,6 +986,11 @@ pub const ExecutableExpression = struct {
         /// Extract the payload selected by a preceding variant test. Control
         /// flow, not this operation, proves that the requested variant is live.
         variant_payload: struct { operand: ExprId, kind: ExecutableVariantKind },
+        /// Consume a nullable pointer after an exact `Unwrap` exceptional
+        /// edge. The result is the same machine pointer with its non-null
+        /// obligation made explicit; backends only encode this checked MIR
+        /// operation and never rediscover source `?` syntax.
+        try_unwrap: ExprId,
         result: struct {
             is_ok: bool,
             payload: ExprId,

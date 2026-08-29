@@ -8590,7 +8590,21 @@ const FunctionBuilder = struct {
                     break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                 break :aggregate .{ .struct_ = value };
             },
-            .try_expr => self.unsupportedExecutableExpression(.unsupported_try),
+            .try_expr => |node| unwrap: {
+                // The first canonical slice is deliberately narrow: nullable
+                // pointer `?` has one value-preserving null check. Result
+                // propagation and mapped errors remain on the legacy path
+                // until MIR owns their early-return payload conversion.
+                if (node.mapped != null) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                const operand_ty = self.exprType(node.operand.*);
+                const pointer = switch (operand_ty) {
+                    .nullable_pointer => |shape| shape,
+                    else => break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
+                };
+                if (!ValueType.eql(result_ty, .{ .pointer = pointer }))
+                    break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                break :unwrap .{ .try_unwrap = try self.ensureExecutableExpr(node.operand.*) };
+            },
             .block => self.unsupportedExecutableExpression(.unsupported_block_expression),
             .unreachable_expr => self.unsupportedExecutableExpression(.unsupported_unreachable_expression),
             .await_expr => self.unsupportedExecutableExpression(.unsupported_await),
@@ -11445,10 +11459,23 @@ const FunctionBuilder = struct {
                     try self.addInstr(.result_check, "try_requires_result_or_nullable", inner_ty, expr.span);
                 }
                 const try_ty = self.exprType(expr);
-                if (representationCheckKind(try_ty) != null) {
-                    try self.addRuntimeRepresentationCheck(try_ty, expr.span, exprText(expr));
-                }
+                // For a nullable pointer, the unwrap null test is itself the
+                // complete representation check. Recording a second
+                // InvalidRepresentation edge made the legacy MIR claim two
+                // exceptional outcomes while both backends emitted only the
+                // NullUnwrap path.
+                if (representationCheckKind(try_ty) != null) switch (inner_ty) {
+                    .nullable_pointer => try self.addInstrWithValue(
+                        .representation_check,
+                        representationTypeName(try_ty),
+                        try_ty,
+                        expr.span,
+                        exprText(expr),
+                    ),
+                    else => try self.addRuntimeRepresentationCheck(try_ty, expr.span, exprText(expr)),
+                };
                 try self.addTrapEdge(.Unwrap, .unwrap, expr.span);
+                try self.attachExecutableTrapEdge(expr.span, .Unwrap, .unwrap);
                 try self.buildExpr(inner.operand.*);
                 if (inner.mapped) |mapped| {
                     const mapped_ty = if (self.return_type_expr) |return_ty|
@@ -12767,6 +12794,12 @@ const FunctionBuilder = struct {
                 {
                     owner = expression.id;
                     break;
+                },
+                .try_unwrap => {
+                    if (kind == .Unwrap and source == .unwrap) {
+                        owner = expression.id;
+                        break;
+                    }
                 },
                 else => {},
             }

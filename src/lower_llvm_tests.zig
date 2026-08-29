@@ -3927,9 +3927,9 @@ test "LLVM emits nullable pointer try from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_pointer_try.mc", source, &output);
 
     const unwrap_param_body = try llvmFunctionBody(output.items, "define internal ptr @unwrap_param");
-    try expectContains(unwrap_param_body, "icmp eq ptr %maybe, null");
+    try expectContains(unwrap_param_body, "icmp eq ptr %");
     try expectContains(unwrap_param_body, "call void @mc_trap_NullUnwrap()");
-    try expectContains(unwrap_param_body, "ret ptr %maybe");
+    try expectContains(unwrap_param_body, "ret ptr %");
 
     const unwrap_call_body = try llvmFunctionBody(output.items, "define internal ptr @unwrap_call");
     try expectContains(unwrap_call_body, "call ptr @maybe_ptr()");
@@ -3937,8 +3937,8 @@ test "LLVM emits nullable pointer try from MIR without body fallback" {
     try expectContains(unwrap_call_body, "ret ptr %");
 
     const arg_try_body = try llvmFunctionBody(output.items, "define internal i32 @arg_try");
-    try expectContains(arg_try_body, "icmp eq ptr %maybe, null");
-    try expectContains(arg_try_body, "call i32 @ptr_value(ptr %maybe)");
+    try expectContains(arg_try_body, "icmp eq ptr %");
+    try expectContains(arg_try_body, "call i32 @ptr_value(ptr %");
 
     const direct_arg_body = try llvmFunctionBody(output.items, "define internal i32 @direct_arg_try");
     try expectContains(direct_arg_body, "call ptr @maybe_ptr()");

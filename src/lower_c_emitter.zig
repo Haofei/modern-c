@@ -1536,11 +1536,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const nullable_try_plan = if (mir_statement_plan.buildNullableTry(fn_mir)) |plan|
-            if (self.mirNullableTryPlanSupported(plan)) plan else null
-        else
-            null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null and nullable_try_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and direct_call_projected_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1569,7 +1565,6 @@ pub const CEmitter = struct {
             sequence_foreach_return_plan != null,
             direct_call_projected_return_plan != null,
             local_aggregate_place_update_return_plan != null,
-            nullable_try_plan != null,
             simple_return != null,
             place_return_plan != null,
             indirect_call_return_plan != null,
@@ -1616,9 +1611,6 @@ pub const CEmitter = struct {
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan);
-        } else if (nullable_try_plan) |plan| {
-            selected_path.* = .nullable_try;
-            try self.emitMirNullableTryPlan(plan);
         } else if (indirect_call_return_plan) |plan| {
             selected_path.* = .indirect_call_return;
             try self.emitMirIndirectCallReturnPlan(plan);
@@ -4095,68 +4087,6 @@ pub const CEmitter = struct {
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(plan.fallback.type_fact.target_ty), self.resolveAliasType(child_ty))) return false;
         const declared_return = function.signature.transitionalReturnType() orelse return false;
         return type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(child_ty));
-    }
-
-    fn mirNullableTryPlanSupported(self: *CEmitter, plan: mir_statement_plan.NullableTryPlan) bool {
-        const nullable_c = self.cTypeFor(plan.nullable_fact.target_ty, .typedef_name) catch return false;
-        const unwrapped_c = self.cTypeFor(plan.unwrapped_fact.target_ty, .typedef_name) catch return false;
-        if (!std.mem.eql(u8, nullable_c, unwrapped_c)) return false;
-        switch (plan.source) {
-            .parameter => {},
-            .zero_arg_call => |call| {
-                const signature = self.functions.get(call.callee_name) orelse return false;
-                if (!signature.acceptsArgCount(0) or signature.params.len != 0 or signature.return_type == null or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(signature.return_type.?), self.resolveAliasType(call.result_fact.target_ty))) return false;
-            },
-        }
-        return switch (plan.consumer) {
-            .return_unwrapped => true,
-            .direct_call => |call| blk: {
-                const signature = self.functions.get(call.callee_name) orelse break :blk false;
-                if (!signature.acceptsArgCount(1) or signature.params.len != 1 or signature.return_type == null or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(signature.params[0].ty), self.resolveAliasType(call.argument_fact.target_ty)) or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(signature.return_type.?), self.resolveAliasType(call.result_fact.target_ty))) break :blk false;
-                break :blk true;
-            },
-        };
-    }
-
-    fn emitMirNullableTryPlan(self: *CEmitter, plan: mir_statement_plan.NullableTryPlan) !void {
-        const temp = try self.nextTempName();
-        const source_location = switch (plan.source) {
-            .parameter => |parameter| parameter.location,
-            .zero_arg_call => |call| call.location,
-        };
-        try self.writeLineDirective(spanFromMirSourcePoint(source_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{
-            try self.cTypeFor(plan.unwrapped_fact.target_ty, .typedef_name),
-            temp,
-        });
-        switch (plan.source) {
-            .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
-            .zero_arg_call => |call| try self.out.print(self.allocator, "{s}()", .{try self.cIdent(call.callee_name)}),
-        }
-        try self.out.appendSlice(self.allocator, ";\n");
-
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.try_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_NullUnwrap();\n", .{temp});
-
-        switch (plan.consumer) {
-            .return_unwrapped => {
-                const location = plan.return_location orelse plan.try_location;
-                try self.writeLineDirective(spanFromMirSourcePoint(location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "return {s};\n", .{temp});
-            },
-            .direct_call => |call| {
-                try self.writeLineDirective(spanFromMirSourcePoint(call.location.source));
-                try self.writeIndent();
-                if (call.returns_value) try self.out.appendSlice(self.allocator, "return ");
-                try self.out.print(self.allocator, "{s}({s});\n", .{ try self.cIdent(call.callee_name), temp });
-            },
-        }
     }
 
     fn emitMirScalarLocalCheckedBinaryOperand(

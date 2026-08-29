@@ -462,6 +462,7 @@ fn emitExpressionOperation(
             }
             try out.append(allocator, ')');
         },
+        .try_unwrap => |operand| try emitExpression(allocator, out, body, operand, depth + 1),
         .result => |result| {
             const shape = resultType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!resultConstructionSupported(body, expression.*, result)) return error.InvalidExpression;
@@ -654,6 +655,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .optional_none => optionalConstructionSupported(body, expression, null),
         .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
+        .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .result => |result| resultConstructionSupported(body, expression, result),
         .deref, .index, .range_slice, .unsupported => false,
     };
@@ -690,6 +692,16 @@ fn variantOperationSupported(
                 sameValueType(expression.result_ty, shape.err_ty) and expression.type_id.eql(shape.err_type_id);
         },
     };
+}
+
+fn tryUnwrapSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    const operand = expressionById(body, operand_id) orelse return false;
+    const shape = switch (operand.result_ty) {
+        .nullable_pointer => |pointer| pointer,
+        else => return false,
+    };
+    return sameValueType(expression.result_ty, .{ .pointer = shape }) and
+        tryUnwrapTrapEdge(body, expression) != null;
 }
 
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -1759,8 +1771,23 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
             builtinTrapConversionHasExactEdge(body, expression)
         else
             representationOperationHasExactTrapEdge(body, expression),
+        .try_unwrap => tryUnwrapTrapEdge(body, expression) != null,
         else => false,
     };
+}
+
+fn tryUnwrapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    if (expression.operation != .try_unwrap or ownedTrapEdgeCount(body, expression.id) != 1) return null;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .Unwrap or edge.source != .unwrap) return null;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
+        return switch (trap.operation) {
+            .trap_ => |kind| if (kind == .Unwrap) edge else null,
+            else => null,
+        };
+    }
+    return null;
 }
 
 fn builtinTrapConversionHasExactEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -1981,6 +2008,17 @@ fn prepareStatementExpressions(
         if (representationGuard(expression)) |guard| {
             try writeSourceLineDirective(allocator, out, source_path, guard.source);
             try emitRepresentationGuard(allocator, out, body, guard, indent);
+        }
+        if (tryUnwrapTrapEdge(body, expression) != null) {
+            const operand = switch (expression.operation) {
+                .try_unwrap => |value| value,
+                else => return error.InvalidExpression,
+            };
+            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "if (");
+            try emitExpression(allocator, out, body, operand, 0);
+            try out.appendSlice(allocator, " == NULL) mc_trap_NullUnwrap();\n");
         }
         switch (expression.operation) {
             .mmio_write => |write| if (write.ordering == .release) {

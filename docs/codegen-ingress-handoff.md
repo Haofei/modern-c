@@ -1,8 +1,8 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-28 after moving nullable/Result variant control into canonical
-executable MIR and deleting the standalone nullable-control path.
+2026-08-29 after moving nullable-pointer unwrap into canonical executable MIR
+and deleting the standalone `nullable_try` specialized plan.
 
 ## TL;DR
 
@@ -11,7 +11,9 @@ executable MIR and deleting the standalone nullable-control path.
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
   finds **576/1760 C** and **617/1831 LLVM** distinct functions using the AST
-  body (C admits 67.3%, LLVM 66.3%). Report mode intentionally preserves
+  body (C admits 67.3%, LLVM 66.3%). Of the admitted bodies, C now has **1069
+  canonical / 115 specialized** and LLVM has **1086 canonical / 128
+  specialized**. Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -30,6 +32,16 @@ executable MIR and deleting the standalone nullable-control path.
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
 
+Nullable-pointer `?` is now an explicit executable-MIR `try_unwrap` operation
+with one exact `Unwrap` exceptional edge. The verifier checks the nullable and
+unwrapped pointer shapes and both renderers consume that same operation; they
+no longer reconstruct the source `?`. The old `NullableTryPlan`, its builder,
+both backend implementations and its census path were physically deleted. Six
+broad-corpus functions per backend moved from specialized admission to the
+canonical emitter without increasing fallback. The strict ratchet is now
+**107 canonical / 53 specialized** for each backend, with **12** specialized
+plan definitions remaining.
+
 Optional and `Result` if-let discrimination and payload extraction now have
 explicit executable-MIR operations. The subject is evaluated once into a typed
 synthetic local; both renderers consume the same discriminant/payload facts,
@@ -45,9 +57,9 @@ Subjects are evaluated once, arm bindings come from the verified Result shape,
 and C/LLVM consume one boolean CFG branch. C also mechanically loads nullable
 global pointers with a relaxed atomic load. This made the standalone
 nullable-control plan unreachable, so its model, tests, both backend
-implementations, and census entry were deleted. The strict split is now **102
-canonical / 58 specialized** for both backends, with **13** specialized plan
-definitions remaining.
+implementations, and census entry were deleted. At that checkpoint the strict
+split was **102 canonical / 58 specialized** for both backends, with **13**
+specialized plan definitions remaining.
 
 Value-optional comparisons against `null` now lower as an explicit test of the
 verified optional representation's `present` field. This repairs an existing C

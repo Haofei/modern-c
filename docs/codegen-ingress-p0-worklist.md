@@ -15,9 +15,9 @@ which function shapes still fall back. The strict ratchet corpus now admits
 zero fallback and zero unsupported bodies. The checked-in ratchet is locked at
 that boundary.
 
-The strict corpus is not the P0 completion definition. The current 2026-08-28
-broad sweep over 522 repository MC roots de-duplicated to 1778 C and 1849 LLVM
-functions. It found 602 C and 643 LLVM AST-body fallbacks. Report
+The strict corpus is not the P0 completion definition. The current 2026-08-29
+broad sweep over 522 repository MC roots de-duplicated to 1760 C and 1831 LLVM
+functions. It found 576 C and 617 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -25,22 +25,22 @@ figures establish that final deletion now requires a
 general syntax-free executable MIR body and mechanical backend renderers; more
 strict-corpus recognizers are no longer an honest completion strategy.
 
-### Last completed broad census snapshot (2026-08-28)
+### Last completed broad census snapshot (2026-08-29)
 
-The 522-root sweep found C **1176/1778 admitted (66.1%)**, 602 fallback, and
-LLVM **1206/1849 admitted (65.2%)**, 643 fallback. There were no unsupported
+The 522-root sweep found C **1184/1760 admitted (67.3%)**, 576 fallback, and
+LLVM **1214/1831 admitted (66.3%)**, 617 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
-slice attempted physical retirement of `simple_return`, but the full lowering
-shards proved that 50 no-fallback tests still rely on its fault-injection and
-edge-case semantics. That deletion was therefore reverted rather than masking
-the gap by changing tests. The plan remains as a bounded safety net, and its
-broad use is **31 C / 35 LLVM** functions (from 43/58 before the recent
-slice). The canonical producer now also owns two-arm nullable/Result variant
-control. The strict ratchet is **102 C / 102 LLVM canonical functions**, while
-specialized admission has fallen to **58/58** and specialized plan definitions
-to **13**. The standalone nullable-control plan and both backend implementations
-have been deleted.
+slice moved nullable-pointer unwrap into one typed executable-MIR operation
+with an exact `Unwrap` edge, then deleted `NullableTryPlan` and both backend
+implementations. Six broad-corpus functions per backend moved from specialized
+admission to canonical emission. The broad split is therefore C **1069
+canonical / 115 specialized** and LLVM **1086 canonical / 128 specialized**.
+The strict ratchet is **107 C / 107 LLVM canonical functions**, specialized
+admission has fallen to **53/53**, and specialized plan definitions to **12**.
+`simple_return` remains a bounded safety net at **31 C / 35 LLVM** broad uses;
+its earlier retirement probe was reverted because the lowering shards exposed
+fault-injection and edge-case behavior that canonical MIR does not yet own.
 
 Optional and `Result` if-let discrimination and payload extraction now use
 explicit executable-MIR variant operations. A typed synthetic local guarantees

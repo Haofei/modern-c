@@ -70,7 +70,6 @@ pub const SelectedPath = enum {
     direct_call_projected_return,
     local_aggregate_place_update_return,
     place_return,
-    nullable_try,
     indirect_call_return,
     simple_return,
     ast_fallback,

@@ -3773,7 +3773,7 @@ test "lower-c emits nullable pointer try from MIR without body fallback" {
     const unwrap_param_body = try cFunctionBody(output.items, "static uint8_t * unwrap_param(uint8_t * maybe)");
     try expectContains(unwrap_param_body, "= maybe;");
     try expectContains(unwrap_param_body, "== NULL) mc_trap_NullUnwrap();");
-    try expectContains(unwrap_param_body, "return mc_tmp");
+    try expectContains(unwrap_param_body, "return mc_exec_tmp_");
 
     const unwrap_call_body = try cFunctionBody(output.items, "static uint8_t * unwrap_call(void)");
     try expectContains(unwrap_call_body, "= maybe_ptr();");
@@ -3781,15 +3781,15 @@ test "lower-c emits nullable pointer try from MIR without body fallback" {
 
     const arg_try_body = try cFunctionBody(output.items, "static uint32_t arg_try(uint8_t * maybe)");
     try expectContains(arg_try_body, "= maybe;");
-    try expectContains(arg_try_body, "return ptr_value(mc_tmp");
+    try expectContains(arg_try_body, "ptr_value(mc_exec_tmp_");
 
     const direct_arg_body = try cFunctionBody(output.items, "static uint32_t direct_arg_try(void)");
     try expectContains(direct_arg_body, "= maybe_ptr();");
-    try expectContains(direct_arg_body, "return ptr_value(mc_tmp");
+    try expectContains(direct_arg_body, "ptr_value(mc_exec_tmp_");
 
     const expr_body = try cFunctionBody(output.items, "static void expr_nullable_try(void)");
     try expectContains(expr_body, "= maybe_ptr();");
-    try expectContains(expr_body, "consume_ptr(mc_tmp");
+    try expectContains(expr_body, "consume_ptr(mc_exec_tmp_");
     try expectNotContains(expr_body, "return consume_ptr");
 }
 
@@ -13928,11 +13928,11 @@ test "lower-c emits nullable try in return statements" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_nullable_try_return.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp0 = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp0 == NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp2 = (make_nullable_mut_pointer());") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= make_nullable_mut_pointer();") != null);
 }
 
 test "lower-c emits nullable try in return call arguments" {
@@ -13964,16 +13964,16 @@ test "lower-c emits nullable try in return call arguments" {
     try appendCTest("emit_c_nullable_try_call_args.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t arg_try(uint8_t const * maybe)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp0 = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp0 == NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return choose(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "choose(mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr_id(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr_id(mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_exec_tmp_") != null);
 }
 
 test "lower-c emits try in local initializer call arguments" {
@@ -14011,7 +14011,7 @@ test "lower-c emits try in local initializer call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t const * local_nullable_try(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = ptr_id(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr_id(mc_exec_tmp_") != null);
 }
 
 test "lower-c emits try in assignment and expression statements" {
@@ -14064,10 +14064,11 @@ test "lower-c emits try in assignment and expression statements" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr = mc_tmp") != null);
+    const assign_nullable = try cFunctionBody(output.items, "static uint8_t const * assign_nullable_try(void)");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "ptr = "));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "mc_trap_NullUnwrap();"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_exec_tmp_") != null);
 }
 
 test "lower-c emits simple functions and race-safe globals" {
