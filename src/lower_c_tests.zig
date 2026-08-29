@@ -2410,6 +2410,23 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     try expectContains(replace, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(1, 2)])");
 }
 
+test "lower-c checked dynamic fixed-array stores use canonical executable MIR" {
+    const source =
+        \\global values: [4]u32 = .{ 0, 0, 0, 0 };
+        \\fn store_at(index: usize, value: u32) -> void {
+        \\    values[index] = value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_dynamic_array_store.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static void store_at(uintptr_t index, uint32_t value)");
+    try std.testing.expect(isCanonicalExecutableCBody(body));
+    try expectContains(body, "mc_race_store_u32(&((values).elems[mc_check_index_usize(");
+    try expectContains(body, ", 4)]");
+}
+
 test "lower-c emits local aggregate projection updates from MIR without body fallback" {
     const source =
         \\struct Pair { left: u32, right: u32 }

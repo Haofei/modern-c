@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-29
 broad sweep over 522 repository MC roots de-duplicated to 1760 C and 1831 LLVM
-functions. It found 576 C and 615 LLVM AST-body fallbacks. Report
+functions. It found 575 C and 610 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -27,8 +27,8 @@ strict-corpus recognizers are no longer an honest completion strategy.
 
 ### Last completed broad census snapshot (2026-08-29)
 
-The 522-root sweep found C **1184/1760 admitted (67.3%)**, 576 fallback, and
-LLVM **1216/1831 admitted (66.4%)**, 615 fallback. There were no unsupported
+The 522-root sweep found C **1185/1760 admitted (67.3%)**, 575 fallback, and
+LLVM **1221/1831 admitted (66.7%)**, 610 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice moved checked direct-call aggregate projection into typed executable-MIR
@@ -38,7 +38,10 @@ slice gave global fixed-array aggregate assignments a typed `SymbolId` storage
 base and deleted the complete aggregate-sequence plan and both backend
 implementations. The strict ratchet is **111 C / 111 LLVM canonical functions**,
 specialized admission has fallen to **49/49**, and specialized plan definitions
-to **10**. Canonical slice-index admission remains restricted to a declared
+to **10**. The latest checked indexed-place slice moved one C and five LLVM
+broad functions off AST fallback and reduced `trap_projection` to 132 C / 146
+LLVM by making the bound and exact statement-owned trap edge part of the place.
+Canonical slice-index admission remains restricted to a declared
 member projected from a direct call so the race-tolerant direct-slice access
 plan is not bypassed.
 `simple_return` remains a bounded safety net at **31 C / 35 LLVM** broad uses;
@@ -56,7 +59,10 @@ operation in both mechanical renderers. This replaces the invalid C aggregate
 comparison that had already been admitted and moves four de-duplicated LLVM
 functions from fallback to canonical executable MIR. Equality between two
 non-null optional aggregates stays closed until MIR defines payload equality.
-The focused no-fallback ratchet is now 153 tests per backend.
+The focused no-fallback ratchet is now 154 tests per backend. The latest
+shared slice makes checked dynamic fixed-array assignment targets explicit in
+`ExecutablePlace` (typed index, bound, check bit, and span identity), with the
+statement owning the exact Bounds edge consumed by both renderers.
 
 Nested fixed-array aggregate construction now carries a recursive layout-
 complete proof. The producer sets that bit only after the child array metadata

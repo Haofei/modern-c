@@ -2793,6 +2793,25 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     try expectContains(replace, "load atomic i32");
 }
 
+test "LLVM checked dynamic fixed-array stores use canonical executable MIR" {
+    const source =
+        \\global values: [4]u32 = .{ 0, 0, 0, 0 };
+        \\fn store_at(index: usize, value: u32) -> void {
+        \\    values[index] = value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_dynamic_array_store.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal void @store_at");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "icmp ult i64");
+    try expectContains(body, ", 4");
+    try expectContains(body, "getelementptr inbounds [4 x i32], ptr @values");
+    try expectContains(body, "store atomic i32");
+}
+
 test "LLVM emits conditional struct parameter field returns from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }
@@ -14272,9 +14291,12 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(field_load_body, "load i32, ptr %");
 
     const array_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_array_store");
-    try expectContains(array_store_body, "store atomic i32 %value, ptr %");
+    // Canonical executable MIR materializes the source parameter as an SSA
+    // value after evaluating the checked target index, so the spelling is
+    // intentionally not tied to the source parameter name.
+    try expectContains(array_store_body, "store atomic i32 %");
     try expectContains(array_store_body, " unordered, align 4");
-    try expectNotContains(array_store_body, "store i32 %value, ptr %");
+    try expectNotContains(array_store_body, "  store i32 %");
 
     const array_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_array_load");
     try expectContains(array_load_body, "load atomic i32, ptr %");

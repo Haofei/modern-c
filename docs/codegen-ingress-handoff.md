@@ -90,7 +90,9 @@ LLVM now consumes the same representation fact rather than falling back. Other
 optional-to-optional equality remains fail-closed. The broad census is now C
 **1170/1778** (1037 canonical / 133 specialized) and LLVM **1196/1849** (1050
 canonical / 146 specialized), with 608 and 653 fallbacks respectively. The
-focused ratchet is 153 tests per backend.
+focused ratchet is 154 tests per backend. Checked dynamic fixed-array stores
+now use a shared executable-place contract and exact statement-owned Bounds
+edge in C and LLVM; slice/pointer and nested indexed places remain fail-closed.
 
 Nested fixed-array construction now completes its recursive layout fact only
 after the child array metadata exists. C reconstructs the already-declared

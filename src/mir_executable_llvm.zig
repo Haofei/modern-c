@@ -187,7 +187,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             if (!atomicPlaceSupported(body, place)) return false;
         } else if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
-        } else if (!scalarAccessPlaceSupported(body, place)) return false;
+        } else if (!scalarAccessPlaceSupported(body, place) and mir.executableFixedArrayIndexPlace(body, place) == null) return false;
     }
     for (body.statements) |statement| {
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
@@ -383,9 +383,13 @@ const Renderer = struct {
                 }
             },
             .store => |store| {
-                const value = try self.emitExpression(store.value);
                 const place = self.body.places[store.place.index()];
-                const pointer = if (computedRawManyDerefPlaceSupported(self.body, place, true))
+                const indexed_pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
+                    try self.emitFixedArrayIndexPlacePointer(statement, place)
+                else
+                    null;
+                const value = try self.emitExpression(store.value);
+                const pointer = indexed_pointer orelse if (computedRawManyDerefPlaceSupported(self.body, place, true))
                     try self.emitComputedRawManyDerefPointer(place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
@@ -1781,6 +1785,49 @@ const Renderer = struct {
         return pointer;
     }
 
+    fn emitFixedArrayIndexPlacePointer(
+        self: *Renderer,
+        statement: mir.ExecutableStatement,
+        place: mir.ExecutablePlace,
+    ) RenderError![]const u8 {
+        const projection = mir.executableFixedArrayIndexPlace(self.body, place) orelse return error.InvalidBody;
+        const root_pointer: []const u8 = switch (place.root) {
+            .local => |local_id| blk: {
+                const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+                if (!local.addressable) return error.InvalidBody;
+                break :blk local.storage;
+            },
+            .symbol => |symbol_id| try std.fmt.allocPrint(
+                self.allocator,
+                "@{s}",
+                .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody},
+            ),
+            .value => return error.InvalidBody,
+        };
+        const index = try self.emitExpression(projection.value);
+        if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
+        if (projection.checked) {
+            const edge = statementBoundsTrapEdge(self.body, statement) orelse return error.InvalidBody;
+            const in_bounds = try self.temp();
+            const continuation = try std.fmt.allocPrint(self.allocator, "mc_index_store_ready_{d}", .{statement.id.raw});
+            try self.output.print(
+                self.allocator,
+                "  {s} = icmp ult i64 {s}, {d}\n" ++
+                    "  br i1 {s}, label %{s}, label %mc_block_{d}\n" ++
+                    "{s}:\n",
+                .{ in_bounds, index.spelling, projection.bound.?, in_bounds, continuation, edge.trap_block.raw, continuation },
+            );
+        }
+        const array_ty = try self.typeText(place.root_ty);
+        const pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n",
+            .{ pointer, array_ty, root_pointer, index.spelling },
+        );
+        return pointer;
+    }
+
     fn emitGuardedParameterDerefPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
@@ -3138,6 +3185,13 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     }
     if (!store.type_id.isValid() or !store.type_id.eql(place.type_id) or
         !value.type_id.isValid() or !value.type_id.eql(store.type_id)) return false;
+    if (mir.executableFixedArrayIndexPlace(body, place)) |index| {
+        return store.representation_source == null and !store.representation_span_id.isValid() and
+            if (index.checked)
+                statementBoundsTrapEdge(body, statement) != null and ownedStatementTrapEdgeCount(body, statement.id) == 1
+            else
+                ownedStatementTrapEdgeCount(body, statement.id) == 0;
+    }
     if (computedRawManyDerefPlaceSupported(body, place, true)) {
         return store.representation_source == null and !store.representation_span_id.isValid() and
             statementRepresentationTrapEdge(body, statement) == null;
@@ -3165,6 +3219,20 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     };
     if (access.alignment != expected_alignment) return false;
     if (place.projection_count != 0) {
+        if (mir.executableFixedArrayIndexPlace(body, place) != null) {
+            const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
+                .local => .plain,
+                .symbol => |id| if (symbolIdentity(body, id)) |identity|
+                    if (identity.kind == .global and (!is_store or identity.mutable))
+                        if (identity.mutable) .race_unordered else .plain
+                    else
+                        return false
+                else
+                    return false,
+                .value => return false,
+            };
+            return sameValueType(place.ty, ty) and access.kind == expected_kind;
+        }
         const local_alias = mir.executableLocalAddressDerefPlace(body, place, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
         return sameValueType(place.ty, ty) and access.kind == expected_kind and
@@ -3284,6 +3352,14 @@ fn ownedExpressionTrapCount(body: *const mir.ExecutableBody, expression_id: mir.
     return count;
 }
 
+fn ownedStatementTrapEdgeCount(body: *const mir.ExecutableBody, statement_id: mir.InstId) usize {
+    var count: usize = 0;
+    for (body.trap_edges) |edge| if (edge.owner.statementId()) |owner| {
+        if (owner.eql(statement_id)) count += 1;
+    };
+    return count;
+}
+
 fn representationTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {
@@ -3315,6 +3391,23 @@ fn statementRepresentationTrapEdge(body: *const mir.ExecutableBody, statement: m
         const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
         switch (trap_terminator.operation) {
             .trap_ => |kind| if (kind != .InvalidRepresentation) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
+}
+
+fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) ?mir.ExecutableTrapEdge {
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.statementId() orelse continue;
+        if (!owner.eql(statement.id)) continue;
+        if (found != null or !edge.from_block.eql(statement.block_id) or
+            edge.kind != .Bounds or edge.source != .bounds_check) return null;
+        const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap_terminator.operation) {
+            .trap_ => |kind| if (kind != .Bounds) return null,
             else => return null,
         }
         found = edge;
@@ -4640,7 +4733,12 @@ test "mechanical renderer guards statement-owned parameter deref before atomic s
     places[0].root_ty.pointer.mutability = .mut;
     parameters[0].ty.pointer.mutability = .mut;
 
-    places[0].projections[0] = .{ .index = mir.ExprId.fromIndex(0) };
+    places[0].projections[0] = .{ .index = .{
+        .value = mir.ExprId.fromIndex(0),
+        .kind = .fixed_array,
+        .bound = 1,
+        .span_id = mir.SpanId.fromIndex(0),
+    } };
     try std.testing.expect(!supports(&body, .void));
     try std.testing.expectError(error.Unsupported, render(std.testing.allocator, &body, .void));
 }

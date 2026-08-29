@@ -566,7 +566,8 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     for (body.places) |place| {
         if (place.storage == .atomic) {
             if (!atomicPlaceSupported(body, place)) return false;
-        } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place)) return false;
+        } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place) and
+            mir.executableFixedArrayIndexPlace(body, place) == null) return false;
         switch (place.root) {
             .local => |local| if (localById(body, local) == null) return false,
             .symbol => |symbol| {
@@ -1753,6 +1754,21 @@ fn memoryStoreSupported(
     if (store.access.alignment != alignment) return false;
     if (place.projection_count != 0) {
         _ = scalarMemoryInfo(store.ty) orelse return false;
+        if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
+            const access_ok = switch (place.root) {
+                .local => store.access.kind == .plain,
+                .symbol => |id| if (symbolById(body, id)) |symbol|
+                    symbol.kind == .global and symbol.mutable and store.access.kind == .race_unordered
+                else
+                    false,
+                .value => false,
+            };
+            return access_ok and store.representation_source == null and !store.representation_span_id.isValid() and
+                if (index.checked)
+                    statementBoundsTrapEdge(body, statement) != null and ownedStatementTrapEdgeCount(body, statement.id) == 1
+                else
+                    ownedStatementTrapEdgeCount(body, statement.id) == 0;
+        }
         const shape = switch (place.root_ty) {
             .pointer => |pointer| pointer,
             else => return false,
@@ -2035,6 +2051,22 @@ fn statementRepresentationOperationHasExactTrapEdge(
         };
     }
     return false;
+}
+
+fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) ?mir.ExecutableTrapEdge {
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByStatement(edge, statement.id)) continue;
+        if (found != null or !edge.from_block.eql(statement.block_id) or
+            edge.kind != .Bounds or edge.source != .bounds_check) return null;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Bounds) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
 }
 
 fn assertGuardHasExactTrapEdge(
@@ -2327,6 +2359,16 @@ fn emitPlace(
 ) (RenderError || std.mem.Allocator.Error)!void {
     const place = placeById(body, id) orelse return error.InvalidPlace;
     if (place.storage != .ordinary) return error.UnsupportedOperation;
+    if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
+        try out.append(allocator, '(');
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").elems[");
+        if (index.checked) try out.appendSlice(allocator, "mc_check_index_usize(");
+        try emitExpression(allocator, out, body, index.value, 0);
+        if (index.checked) try out.print(allocator, ", {d})", .{index.bound.?});
+        try out.append(allocator, ']');
+        return;
+    }
     if (place.projection_count == 1 and mir.executableLocalAddressDerefPlace(body, place.*, false)) {
         try out.appendSlice(allocator, "(*(");
         try emitPlaceRootValue(allocator, out, body, place.*);
@@ -2345,6 +2387,12 @@ fn emitPlaceAddress(
 ) (RenderError || std.mem.Allocator.Error)!void {
     const place = placeById(body, id) orelse return error.InvalidPlace;
     if (place.storage != .ordinary) return error.UnsupportedOperation;
+    if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
+        try out.appendSlice(allocator, "&(");
+        try emitPlace(allocator, out, body, id);
+        try out.append(allocator, ')');
+        return;
+    }
     if (place.projection_count == 0) {
         try out.append(allocator, '&');
         try emitPlaceRootValue(allocator, out, body, place.*);
@@ -3973,7 +4021,12 @@ test "executable C renderer guards statement-owned parameter scalar store with e
     parameters[0].ty = pointer_ty;
     places[0].projections[0] = .{ .field = 0 };
     try std.testing.expect(!canEmitBody(&body));
-    places[0].projections[0] = .{ .index = value_id };
+    places[0].projections[0] = .{ .index = .{
+        .value = value_id,
+        .kind = .fixed_array,
+        .bound = 1,
+        .span_id = mir.SpanId.fromIndex(0),
+    } };
     try std.testing.expect(!canEmitBody(&body));
 }
 

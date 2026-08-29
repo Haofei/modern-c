@@ -1176,7 +1176,17 @@ pub const ExecutablePlace = struct {
 
     pub const Projection = union(enum) {
         field: usize,
-        index: ExprId,
+        /// A checked indexed place owns the same bounds obligation as an
+        /// indexed value expression. Keeping the bound and source identity on
+        /// the place prevents codegen from reconstructing assignment-target
+        /// semantics from source syntax.
+        index: struct {
+            value: ExprId,
+            kind: ExecutableIndexKind,
+            bound: ?usize = null,
+            checked: bool = true,
+            span_id: SpanId = .invalid,
+        },
         deref,
     };
 };
@@ -1465,6 +1475,50 @@ pub fn executableLocalAddressDerefPlace(
     };
     return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut) and
         std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
+/// Validate the complete typed shape of the deliberately bounded first
+/// indexed-place slice. Producer completion remains responsible for creating
+/// it; verifier and both renderers share this predicate so bounds and element
+/// identity cannot drift between consumers.
+pub fn executableFixedArrayIndexPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+) ?@FieldType(ExecutablePlace.Projection, "index") {
+    if (place.storage != .ordinary or place.projection_count != 1 or
+        !place.root_type_id.isValid() or !place.type_id.isValid()) return null;
+    const projection = switch (place.projections[0]) {
+        .index => |value| value,
+        .field, .deref => return null,
+    };
+    if (projection.kind != .fixed_array or projection.bound == null or
+        !projection.span_id.isValid() or !projection.value.isValid() or
+        projection.value.index() >= body.expressions.len) return null;
+    const index = body.expressions[projection.value.index()];
+    if (!index.id.eql(projection.value) or !ValueType.eql(index.result_ty, .{ .integer = "usize" })) return null;
+    const array = switch (place.root_ty) {
+        .array => |shape| shape,
+        else => return null,
+    };
+    const bound = projection.bound.?;
+    if (array.length == null or array.length.? != bound or bound == 0) return null;
+    var aggregate: ?ExecutableAggregateType = null;
+    for (body.aggregate_types) |candidate| if (candidate.type_id.eql(place.root_type_id)) {
+        aggregate = candidate;
+        break;
+    };
+    const shape = aggregate orelse return null;
+    if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
+        !ValueType.eql(shape.ty, place.root_ty) or !ValueType.eql(shape.field_types[0], place.ty) or
+        !shape.field_type_ids[0].eql(place.type_id)) return null;
+    if (!projection.checked) switch (index.operation) {
+        .literal => |literal| switch (literal) {
+            .integer => |value| if (value >= bound) return null,
+            else => return null,
+        },
+        else => return null,
+    };
+    return projection;
 }
 
 pub const Terminator = union(enum) {

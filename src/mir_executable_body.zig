@@ -147,7 +147,10 @@ pub fn verify(function: *const mir.Function) !void {
             .value => |id| try verifyExpr(body, id),
         }
         for (value.projections[0..value.projection_count]) |projection| switch (projection) {
-            .index => |id| try verifyExpr(body, id),
+            .index => |projection_index| {
+                try verifyExpr(body, projection_index.value);
+                try verifySpanId(function, projection_index.span_id);
+            },
             .field, .deref => {},
         };
         if (body.complete) try verifyCompletePlace(body, value);
@@ -655,9 +658,14 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                 switch (owner.operation) {
                     .store => |store| {
                         const target = place(body, store.place) orelse return error.InvalidTrapEdge;
+                        if (edge.kind == .Bounds and edge.source == .bounds_check) {
+                            const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
+                            if (!projection.checked) return error.InvalidTrapEdge;
+                            break :statement_owner .{ .block_id = owner.block_id, .span_id = projection.span_id };
+                        }
                         if (!(isParameterScalarAccessPlace(body, target.*, true) or mir.executableLocalAddressDerefPlace(body, target.*, true)) or
-                            edge.kind != .InvalidRepresentation or
-                            edge.source != .representation_check) return error.InvalidTrapEdge;
+                            edge.kind != .InvalidRepresentation or edge.source != .representation_check)
+                            return error.InvalidTrapEdge;
                         break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
                     },
                     .guard => |guard| {
@@ -835,20 +843,24 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
                 const guarded = placeNeedsRepresentationGuard(target.*);
+                const indexed = mir.executableFixedArrayIndexPlace(body, target.*);
+                const checked_index = indexed != null and indexed.?.checked;
+                const expected_traps = @as(usize, @intFromBool(guarded)) + @as(usize, @intFromBool(checked_index));
                 if (guarded) {
                     const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, operation.representation_span_id, source);
-                    if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 1 or
-                        ownedTrapCount(body, .{ .statement = statement_value.id }, .InvalidRepresentation, .representation_check) != 1)
+                    if (ownedTrapCount(body, .{ .statement = statement_value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
-                } else if (operation.representation_source != null or operation.representation_span_id.isValid() or
-                    ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 0)
-                {
+                } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
+                if (checked_index and ownedTrapCount(body, .{ .statement = statement_value.id }, .Bounds, .bounds_check) != 1)
+                    return error.InvalidMemoryAccessTrap;
+                if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != expected_traps)
+                    return error.InvalidMemoryAccessTrap;
             }
             for (target.projections[0..target.projection_count]) |projection| switch (projection) {
-                .index => |id| try verifyStatementExpr(body, statement_value, id),
+                .index => |index| try verifyStatementExpr(body, statement_value, index.value),
                 .field, .deref => {},
             };
             try verifyStatementExpr(body, statement_value, operation.value);
@@ -1075,7 +1087,8 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.places) |value| {
         if (value.storage == .atomic) {
             if (!atomicPlaceSupported(body, value)) return true;
-        } else if (value.projection_count != 0 and !isScalarAccessPlace(body, value, false)) return true;
+        } else if (value.projection_count != 0 and !isScalarAccessPlace(body, value, false) and
+            mir.executableFixedArrayIndexPlace(body, value) == null) return true;
     }
     for (body.statements) |value| switch (value.operation) {
         .unsupported, .defer_cleanup => return true,
@@ -1339,6 +1352,19 @@ fn verifyMemoryAccess(
     };
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
     if (target.projection_count != 0) {
+        if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
+            switch (target.root) {
+                .local => if (access.kind != .plain) return error.InvalidMemoryAccessKind,
+                .symbol => |id| {
+                    const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
+                    if (identity.kind != .global or (is_store and !identity.mutable)) return error.InvalidMemoryAccessType;
+                    const expected_kind: mir.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+                    if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
+                },
+                .value => return error.InvalidPlaceType,
+            }
+            return;
+        }
         if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
         const expected_kind: mir.ExecutableMemoryAccessKind =
             if (mir.executableLocalAddressDerefPlace(body, target.*, false)) .plain else .race_unordered;
@@ -1366,6 +1392,7 @@ fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePl
         return;
     }
     if (target.projection_count == 0) return;
+    if (mir.executableFixedArrayIndexPlace(body, target) != null) return;
     if (!isScalarAccessPlace(body, target, false)) return error.InvalidPlaceType;
 }
 
@@ -1580,6 +1607,11 @@ fn verifySpan(function: *const mir.Function, id: mir.SpanId, source: mir.SourceP
     if (!id.isValid() or id.index() >= function.span_identities.len) return error.InvalidSpanReference;
     const identity = function.span_identities[id.index()];
     if (!identity.id.eql(id) or !sameSource(identity.source, source)) return error.InvalidSpanReference;
+}
+
+fn verifySpanId(function: *const mir.Function, id: mir.SpanId) !void {
+    if (!id.isValid() or id.index() >= function.span_identities.len) return error.InvalidSpanReference;
+    if (!function.span_identities[id.index()].id.eql(id)) return error.InvalidSpanReference;
 }
 
 fn verifyType(function: *const mir.Function, id: mir.TypeId, ty: mir.ValueType, required: bool) !void {
