@@ -5477,7 +5477,8 @@ test "lower-c sequences dynamic packed bits fields lexically" {
     try std.testing.expect(second < first);
     try expectContains(body[second..first], "2");
     try expectContains(body[first..], "1");
-    try expectContains(body, "bool mc_tmp");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "bool mc_exec_tmp_");
 }
 
 test "lower-c target-typed char literals require MIR facts" {

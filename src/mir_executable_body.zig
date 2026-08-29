@@ -1334,7 +1334,8 @@ fn verifyStructConstruction(
 ) !void {
     const body = &function.executable_body;
     const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
-    if (aggregate.construction != .declared_struct or operation.construction != .declared_struct or
+    if ((aggregate.construction != .declared_struct and aggregate.construction != .packed_bits) or
+        operation.construction != aggregate.construction or
         !sameValueType(aggregate.ty, value.result_ty) or
         operation.operand_count != aggregate.field_count) return error.InvalidAggregateConstruction;
     var seen = [_]bool{false} ** mir.max_executable_operands;

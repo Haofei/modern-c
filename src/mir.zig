@@ -7121,7 +7121,7 @@ const FunctionBuilder = struct {
         expression: ExecutableExpression,
         operation: @FieldType(ExecutableExpression.Operation, "struct_"),
     ) bool {
-        if (operation.construction != .declared_struct or operation.operand_count == 0 or
+        if ((operation.construction != .declared_struct and operation.construction != .packed_bits) or operation.operand_count == 0 or
             operation.operand_count > mir_model.max_executable_operands) return false;
         var aggregate: ?mir_model.ExecutableAggregateType = null;
         for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(expression.type_id)) {
@@ -8810,6 +8810,29 @@ const FunctionBuilder = struct {
                     .struct_ => |name| name,
                     else => break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal),
                 };
+                if (self.packed_bits.get(struct_name)) |packed_summary| {
+                    if (fields.len == 0 or fields.len != packed_summary.fields.len or fields.len > mir_model.max_executable_operands or
+                        !try self.internExecutablePackedBitsType(result_ty, packed_summary))
+                        break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                    var packed_value: @FieldType(ExecutableExpression.Operation, "struct_") = .{
+                        .operand_count = fields.len,
+                        .construction = .packed_bits,
+                    };
+                    var packed_seen = [_]bool{false} ** mir_model.max_executable_operands;
+                    for (fields, 0..) |field, source_index| {
+                        const field_index = self.structFieldIndex(struct_name, field.name.text) orelse
+                            break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                        if (field_index >= packed_summary.fields.len or packed_seen[field_index])
+                            break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                        packed_seen[field_index] = true;
+                        packed_value.field_indices[source_index] = field_index;
+                        packed_value.operands[source_index] = try self.ensureExecutableExprAsType(field.value, .bool, packed_summary.fields[field_index].ty);
+                        try self.contextualizeExecutableLiteral(packed_value.operands[source_index], .bool);
+                    }
+                    for (packed_seen[0..fields.len]) |present| if (!present)
+                        break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                    break :aggregate .{ .struct_ = packed_value };
+                }
                 const summary = self.structs.get(struct_name) orelse
                     break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                 const construction: AggregateConstructionKind = if (summary.is_c_union) .c_union else .declared_struct;

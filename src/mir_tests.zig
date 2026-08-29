@@ -478,6 +478,7 @@ test "executable MIR owns and verifies packed-bits storage metadata" {
     const source =
         \\packed bits Flags: u8 { ready: bool, busy: bool }
         \\fn ready(flags: Flags) -> bool { return flags.ready; }
+        \\fn make(ready: bool, busy: bool) -> Flags { return .{ .ready = ready, .busy = busy }; }
     ;
     var parsed = try test_support.parseCheckedModule("mir_packed_bits_storage.mc", source);
     defer parsed.deinit();
@@ -498,6 +499,12 @@ test "executable MIR owns and verifies packed-bits storage metadata" {
     try std.testing.expectError(error.InvalidAggregateType, mir_executable_body.verify(function));
     aggregate.storage_ty = saved;
     try mir_executable_body.verify(function);
+
+    const constructor = functionByNameMut(&module_mir, "make") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(constructor);
+    try std.testing.expect(constructor.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&constructor.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&constructor.executable_body, constructor.return_ty));
 }
 
 test "executable MIR classifies representation-preserving pointer casts" {

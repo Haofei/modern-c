@@ -524,6 +524,20 @@ fn emitExpressionOperation(
         .struct_ => |aggregate| {
             const shape = aggregateType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!structConstructionSupported(body, expression.*, aggregate)) return error.InvalidExpression;
+            if (shape.construction == .packed_bits) {
+                try out.appendSlice(allocator, "((");
+                try appendCType(allocator, out, body, shape.ty);
+                try out.appendSlice(allocator, ")(0");
+                for (aggregate.operands[0..aggregate.operand_count], aggregate.field_indices[0..aggregate.operand_count]) |operand, field_index| {
+                    try out.appendSlice(allocator, " | ((");
+                    try emitExpression(allocator, out, body, operand, depth + 1);
+                    try out.appendSlice(allocator, ") ? (((");
+                    try appendCType(allocator, out, body, shape.storage_ty);
+                    try out.print(allocator, ")1) << {d}) : 0)", .{field_index});
+                }
+                try out.appendSlice(allocator, "))");
+                return;
+            }
             try out.append(allocator, '(');
             try appendCType(allocator, out, body, shape.ty);
             try out.appendSlice(allocator, "){ ");
@@ -972,7 +986,8 @@ fn structConstructionSupported(
     operation: @FieldType(mir.ExecutableExpression.Operation, "struct_"),
 ) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
-    if (shape.construction != .declared_struct or operation.construction != .declared_struct or
+    if ((shape.construction != .declared_struct and shape.construction != .packed_bits) or
+        operation.construction != shape.construction or
         shape.field_count == 0 or shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
     var seen = [_]bool{false} ** mir.max_executable_operands;
     for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {

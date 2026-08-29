@@ -682,6 +682,29 @@ const Renderer = struct {
         if (!structConstructionSupported(self.body, expression, operation)) return error.InvalidBody;
         const shape = aggregateType(self.body, expression.type_id) orelse return error.InvalidBody;
         const aggregate_ty = try self.typeText(shape.ty);
+        if (shape.construction == .packed_bits) {
+            var current: []const u8 = "0";
+            for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
+                const operand = try self.emitExpression(operand_id);
+                if (!std.mem.eql(u8, operand.ty, "i1")) return error.InvalidBody;
+                const selected = try self.temp();
+                try self.output.print(self.allocator, "  {s} = select i1 {s}, {s} {d}, {s} 0\n", .{
+                    selected,
+                    operand.spelling,
+                    aggregate_ty,
+                    @as(u128, 1) << @intCast(field_index),
+                    aggregate_ty,
+                });
+                if (std.mem.eql(u8, current, "0")) {
+                    current = selected;
+                } else {
+                    const combined = try self.temp();
+                    try self.output.print(self.allocator, "  {s} = or {s} {s}, {s}\n", .{ combined, aggregate_ty, current, selected });
+                    current = combined;
+                }
+            }
+            return .{ .ty = aggregate_ty, .spelling = current };
+        }
         var current: []const u8 = "zeroinitializer";
         for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
             const operand = try self.emitExpression(operand_id);
@@ -2185,7 +2208,8 @@ fn resultConstructionSupported(body: *const mir.ExecutableBody, expression: mir.
 
 fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
-    if (shape.construction != .declared_struct or operation.construction != .declared_struct or
+    if ((shape.construction != .declared_struct and shape.construction != .packed_bits) or
+        operation.construction != shape.construction or
         shape.field_count == 0 or shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
     var seen = [_]bool{false} ** mir.max_executable_operands;
     for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
