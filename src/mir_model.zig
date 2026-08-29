@@ -436,6 +436,7 @@ pub fn executableCheckedBinaryTrapRequirements(op: ExecutableBinaryOp, ty: Value
 pub const ExecutableCastKind = enum {
     identity,
     integer_reinterpret,
+    integer_resize,
     unsigned_resize,
     signed_widen,
     address_to_integer,
@@ -482,7 +483,11 @@ pub const ExecutableCastKind = enum {
         if (source_integer.signed != target_integer.signed and source_integer.bits == target_integer.bits) return .integer_reinterpret;
         if (!source_integer.signed and !target_integer.signed) return .unsigned_resize;
         if (source_integer.signed and target_integer.signed and target_integer.bits >= source_integer.bits) return .signed_widen;
-        return null;
+        // Every remaining integer conversion changes width: mixed-sign
+        // extension follows the source signedness, while any narrowing is a
+        // bit truncation. Same-width sign changes remain the distinct
+        // representation-preserving case above.
+        return .integer_resize;
     }
 
     fn pointerQualificationCompatible(source: PointerShape, target: PointerShape) bool {

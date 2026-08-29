@@ -946,6 +946,16 @@ const Renderer = struct {
         const operation: ?[]const u8 = switch (expected) {
             .identity => null,
             .integer_reinterpret => null,
+            .integer_resize => resize: {
+                const source = source_info orelse return error.InvalidBody;
+                const target = target_info orelse return error.InvalidBody;
+                break :resize if (target.bits > source.bits)
+                    (if (source.signed) "sext" else "zext")
+                else if (target.bits < source.bits)
+                    "trunc"
+                else
+                    null;
+            },
             .integer_to_domain, .domain_to_integer => null,
             .float_resize => float: {
                 const source_bits = switch (operand_expression.result_ty) {
@@ -2701,6 +2711,7 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     return switch (expected) {
         .identity => true,
         .integer_reinterpret => source != null and target != null and source.?.signed != target.?.signed and source.?.bits == target.?.bits,
+        .integer_resize => source != null and target != null and source.?.bits != target.?.bits,
         .float_resize => operand.result_ty == .float and expression.result_ty == .float and
             mir.ExecutableCastKind.floatBits(operand.result_ty.float) != null and
             mir.ExecutableCastKind.floatBits(expression.result_ty.float) != null,
