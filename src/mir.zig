@@ -10062,10 +10062,22 @@ const FunctionBuilder = struct {
                     atomicPayloadTypeExprAlias(declared, self.aliases) orelse declared
                 else
                     null;
-                const executable_ty = if (executable_ty_expr) |storage_type|
+                var executable_ty = if (executable_ty_expr) |storage_type|
                     valueTypeFromTypeAlias(storage_type, self.enums, self.structs, self.packed_bits, self.aliases)
                 else
                     ty;
+                // `ValueType` cannot evaluate named/comptime array lengths by
+                // itself. The function builder owns that const environment,
+                // so resolve the structural length once here and let every
+                // executable place/expression share the same array identity.
+                if (executable_ty == .array and executable_ty.array.length == null) if (executable_ty_expr) |declared| {
+                    const resolved = aggregateTargetTypeAlias(declared, self.aliases);
+                    if (resolved.kind == .array) {
+                        if (parseArrayLen(resolved.kind.array.len, self.const_fns, self.const_globals)) |length| {
+                            executable_ty.array.length = length;
+                        }
+                    }
+                };
                 const mutable = std.meta.activeTag(stmt.kind) == .var_decl;
                 if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(self, local.init)) {
                     if (local.init) |init_expr| {
@@ -10128,7 +10140,11 @@ const FunctionBuilder = struct {
                         self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
                             try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(initializer).span));
                     }
-                    try self.local_types.put(name.text, ty);
+                    const semantic_local_ty = if (ty == .array and ty.array.length == null and executable_ty == .array and executable_ty.array.length != null)
+                        executable_ty
+                    else
+                        ty;
+                    try self.local_types.put(name.text, semantic_local_ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
                     try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);
                     if (self.localRootTypeSymbol(name.text).isValid()) try self.ownership_cleanup_locals.append(self.allocator, name.text);

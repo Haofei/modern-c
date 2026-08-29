@@ -2779,8 +2779,10 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     try expectContains(write, "getelementptr inbounds [2 x i32], ptr @values, i64 0, i64 0");
     try expectContains(write, "store atomic i32 %mc_arg_0");
     const local = try llvmFunctionBody(output.items, "define internal i32 @local_array_copy");
-    try expectContains(local, "extractvalue [2 x i32] %row, 0");
-    try expectNotContains(local, "alloca");
+    try expectContains(local, "; canonical executable MIR");
+    try expectContains(local, "store [2 x i32] %mc_arg_0");
+    try expectContains(local, "getelementptr [2 x i32]");
+    try expectContains(local, "i64 0, i64 0");
     const nested = try llvmFunctionBody(output.items, "define internal i32 @nested_global");
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, nested, "icmp ult i64"));
     try expectContains(nested, "getelementptr [2 x [2 x i32]], ptr @matrix, i64 0, i64 1");

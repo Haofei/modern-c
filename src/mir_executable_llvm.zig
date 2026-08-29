@@ -2486,8 +2486,9 @@ fn indexSupported(
     const global_base = globalAggregateIndexBase(body, operation.base);
     if (global_base) {
         if (operation.kind != .fixed_array or !indexFeedsDirectAggregateLocalStore(body, expression)) return false;
-    } else if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
-        (operation.kind == .slice and !projectionPathHasMember(body, operation.base))) return false;
+    } else if (!directImmutableLocalArrayIndexReturn(body, expression, operation) and
+        (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
+            (operation.kind == .slice and !projectionPathHasMember(body, operation.base)))) return false;
     if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
     const base = body.expressions[operation.base.index()];
     const index = body.expressions[operation.index.index()];
@@ -2534,6 +2535,33 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn directImmutableLocalArrayIndexReturn(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) bool {
+    if (operation.kind != .fixed_array or !indexIsDirectReturn(body, expression) or !expressionValid(body, operation.base)) return false;
+    const base = body.expressions[operation.base.index()];
+    const local_id = switch (base.operation) {
+        .local => |id| id,
+        else => return false,
+    };
+    var initialized = false;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| if (local.local.eql(local_id)) {
+            if (local.mutable or local.value == null or !sameValueType(local.ty, base.result_ty)) return false;
+            initialized = true;
+        },
+        .store => |store| {
+            if (!placeValid(body, store.place)) return false;
+            const place = body.places[store.place.index()];
+            if (place.root == .local and place.root.local.eql(local_id)) return false;
+        },
+        else => {},
+    };
+    return initialized;
 }
 
 fn globalAggregateIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {

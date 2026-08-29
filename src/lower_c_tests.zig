@@ -2402,8 +2402,9 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     try expectContains(write, "mc_race_store_u32(&((values).elems[mc_check_index_usize(");
     try expectContains(write, "mc_race_load_u32(&((values).elems[mc_check_index_usize(");
     const local = try cFunctionBody(output.items, "static uint32_t local_array_copy(mc_array_u32_2 row)");
-    try expectContains(local, "mc_array_u32_2 copy = row;");
-    try expectContains(local, "return copy.elems[mc_check_index_usize(0, 2)];");
+    try std.testing.expect(isCanonicalExecutableCBody(local));
+    try expectContains(local, "mc_array_u32_2 copy = mc_exec_tmp_");
+    try expectContains(local, ".elems[mc_check_index_usize(mc_exec_tmp_");
     const nested = try cFunctionBody(output.items, "static uint32_t nested_global(void)");
     try expectContains(nested, "mc_race_store_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(0, 2)], (uint32_t)mc_tmp");
     try expectContains(nested, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(0, 2)])");
@@ -9599,7 +9600,9 @@ test "lower-c inferred local array and slice calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_array_u32_2 values = make_array()") != null);
+    const array_caller = try cFunctionBody(complete_output.items, "static uint32_t array_caller(void)");
+    try std.testing.expect(isCanonicalExecutableCBody(array_caller));
+    try expectContains(array_caller, "make_array(");
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_slice_const_u32 values = make_slice()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "direct_slice_index") != null);
 
@@ -16088,7 +16091,9 @@ test "lower-c aggregate whole-element access lowers recursively" {
     defer local_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_local_aggregate_load.mc", local_source, &local_output);
     const local_body = try cFunctionBody(local_output.items, "static Cell local_array_cell_load(uintptr_t i)");
-    try expectContains(local_body, "return cells.elems[mc_check_index_usize(i, 4)];");
+    try std.testing.expect(isCanonicalExecutableCBody(local_body));
+    try expectContains(local_body, ".elems[mc_check_index_usize(");
+    try expectContains(local_body, "return mc_exec_tmp_");
 
     const local_pointer_array_source =
         \\struct Cell {
