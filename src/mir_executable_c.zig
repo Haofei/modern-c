@@ -140,7 +140,9 @@ fn emitStatement(
                     try out.appendSlice(allocator, ";\n");
                 },
                 .race_unordered => {
-                    if (store.ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) {
+                    if ((store.ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) or
+                        store.ty == .closed_enum or store.ty == .open_enum)
+                    {
                         try out.appendSlice(allocator, "__atomic_store_n(");
                         try emitPlaceAddress(allocator, out, body, store.place);
                         try out.appendSlice(allocator, ", ");
@@ -292,7 +294,9 @@ fn emitExpressionOperation(
         .load => |load| switch (load.access.kind) {
             .plain => try emitPlace(allocator, out, body, load.place),
             .race_unordered => {
-                if (expression.result_ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, load.place) orelse return error.InvalidPlace).*) != null) {
+                if ((expression.result_ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, load.place) orelse return error.InvalidPlace).*) != null) or
+                    expression.result_ty == .closed_enum or expression.result_ty == .open_enum)
+                {
                     try out.appendSlice(allocator, "__atomic_load_n(");
                     try emitPlaceAddress(allocator, out, body, load.place);
                     try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
@@ -814,6 +818,7 @@ fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir
     return check.operand.index() < expression.id.index() and operand.block_id.eql(expression.block_id) and
         operand.owner_statement.eql(expression.owner_statement) and expression.type_id.eql(operand.type_id) and
         mir.ExecutableRepresentationCheckKind.typesValid(check.kind, expression.result_ty, operand.result_ty) and
+        (check.kind != .valid_closed_enum or executableEnumType(body, expression.type_id) != null) and
         representationOperationHasExactTrapEdge(body, expression);
 }
 
@@ -996,6 +1001,18 @@ fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const m
 
 fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableAggregateType {
     for (body.aggregate_types) |*aggregate| if (sameValueType(aggregate.ty, ty)) return aggregate;
+    return null;
+}
+
+fn executableEnumType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableEnumType {
+    if (!type_id.isValid()) return null;
+    for (body.enum_types) |*enum_ty| if (enum_ty.type_id.eql(type_id) and
+        enum_ty.ty == .closed_enum and enum_ty.valid_value_count != 0) return enum_ty;
+    return null;
+}
+
+fn enumTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableEnumType {
+    for (body.enum_types) |*enum_ty| if (sameValueType(enum_ty.ty, ty)) return enum_ty;
     return null;
 }
 
@@ -1438,8 +1455,8 @@ fn memoryLoadSupported(
             .local, .value => false,
         };
     }
-    const scalar = scalarMemoryInfo(expression.result_ty) orelse return false;
-    if (load.access.alignment != scalar.alignment) return false;
+    if (scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null) return false;
+    if (load.access.alignment != mir.executableStorageAlignment(body.enum_types, expression.result_ty)) return false;
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
@@ -1710,7 +1727,7 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
 fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     if (place.storage != .ordinary) return false;
     if (place.projection_count == 1) return singleParameterScalarDerefPlaceSupported(body, place);
-    if (place.projection_count != 2 or place.projections[0] != .deref or mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null or
+    if (place.projection_count != 2 or place.projections[0] != .deref or mir.executableStorageAlignment(body.enum_types, place.ty) == null or
         !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
     const field_index = switch (place.projections[1]) {
         .field => |index| index,
@@ -1788,7 +1805,7 @@ fn memoryStoreSupported(
     if (!mir.ValueType.eql(store.ty, value.result_ty)) return false;
     const place = placeById(body, store.place) orelse return false;
     if (place.storage != .ordinary) return false;
-    const alignment = mir.ExecutableMemoryAccess.scalarAlignment(store.ty) orelse aggregate_local: {
+    const alignment = mir.executableStorageAlignment(body.enum_types, store.ty) orelse aggregate_local: {
         if (place.projection_count != 0 or store.access.kind != .plain) return false;
         switch (place.root) {
             .local => {},
@@ -1801,7 +1818,7 @@ fn memoryStoreSupported(
     };
     if (store.access.alignment != alignment) return false;
     if (place.projection_count != 0) {
-        if (scalarMemoryInfo(store.ty) == null and
+        if (scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
             mir.executableCallableAggregateField(body.aggregate_types, place.*) == null) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
             const access_ok = switch (place.root) {
@@ -2328,6 +2345,15 @@ fn prepareStatementExpressions(
             switch (guard.kind) {
                 .nonnull_pointer => try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw}),
                 .valid_slice => try out.print(allocator, "if (mc_exec_tmp_{d}.ptr == NULL && mc_exec_tmp_{d}.len != 0) mc_trap_InvalidRepresentation();\n", .{ expression.id.raw, expression.id.raw }),
+                .valid_closed_enum => {
+                    const enum_ty = executableEnumType(body, expression.type_id) orelse return error.InvalidExpression;
+                    try out.appendSlice(allocator, "if (");
+                    for (enum_ty.valid_values[0..enum_ty.valid_value_count], 0..) |value, index| {
+                        if (index != 0) try out.appendSlice(allocator, " && ");
+                        try out.print(allocator, "mc_exec_tmp_{d} != {d}", .{ expression.id.raw, value });
+                    }
+                    try out.appendSlice(allocator, ") mc_trap_InvalidRepresentation();\n");
+                },
             }
         }
     }

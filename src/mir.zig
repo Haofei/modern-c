@@ -6224,6 +6224,11 @@ const FunctionBuilder = struct {
     assignment_target_ty: ValueType = .unknown,
     assignment_target_type_expr: ?ast.TypeExpr = null,
     executable_assignment_rhs: bool = false,
+    // The legacy fact builder still walks an assignment target to record its
+    // place/provenance shape. That walk is not a value read: representation
+    // checks belong to the stored RHS (or to an actual load through the
+    // place), never to the storage being assigned.
+    assignment_target_expr_depth: ?usize = null,
     expr_depth: usize = 0,
     semantic_expr_depth: usize = 0,
     next_contract_region_id: usize = 1,
@@ -7290,7 +7295,7 @@ const FunctionBuilder = struct {
             )) return false;
             break :local_alias place.root_ty;
         };
-        if (!sameValueType(root_ty, place.root_ty) or mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        if (!sameValueType(root_ty, place.root_ty) or mir_model.executableStorageAlignment(self.executable_enum_types.items, place.ty) == null) return false;
         const shape = switch (root_ty) {
             .pointer => |value| value,
             else => return false,
@@ -7355,7 +7360,7 @@ const FunctionBuilder = struct {
 
     fn executableAtomicPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
         if (place.storage != .atomic or !place.root_type_id.isValid() or !place.type_id.isValid() or
-            mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+            mir_model.executableStorageAlignment(self.executable_enum_types.items, place.ty) == null) return false;
         switch (place.ty) {
             .bool, .integer => {},
             else => return false,
@@ -7492,7 +7497,7 @@ const FunctionBuilder = struct {
         is_store: bool,
     ) bool {
         if (!sameValueType(place.ty, ty)) return false;
-        const expected_alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse aggregate_local: {
+        const expected_alignment = mir_model.executableStorageAlignment(self.executable_enum_types.items, ty) orelse aggregate_local: {
             if (place.projection_count != 0 or access.kind != .plain) return false;
             switch (place.root) {
                 .local => {},
@@ -7564,7 +7569,7 @@ const FunctionBuilder = struct {
     ) bool {
         if (place.projection_count != 1 or place.projections[0] != .deref or
             !root_id.isValid() or root_id.index() >= self.executable_expressions.items.len or
-            mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+            mir_model.executableStorageAlignment(self.executable_enum_types.items, place.ty) == null) return false;
         const root = self.executable_expressions.items[root_id.index()];
         if (!sameValueType(root.result_ty, place.root_ty) or !root.type_id.eql(place.root_type_id)) return false;
         const builtin = switch (root.operation) {
@@ -8332,7 +8337,7 @@ const FunctionBuilder = struct {
                     else => false,
                 };
                 if (direct_global_storage and index_kind == .fixed_array and
-                    mir_model.ExecutableMemoryAccess.scalarAlignment(result_ty) != null)
+                    mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
                 {
                     break :index .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
@@ -8418,7 +8423,7 @@ const FunctionBuilder = struct {
                     // representation needs no second trap.  Pointer-valued
                     // fields stay closed until MIR can own both trap edges.
                     if (shape.kind != .single or representationCheckKind(result_ty) != null or
-                        mir_model.ExecutableMemoryAccess.scalarAlignment(result_ty) == null)
+                        mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null)
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
                     break :member .{ .load = .{
@@ -8882,6 +8887,10 @@ const FunctionBuilder = struct {
                 },
                 .raw_many => null,
             },
+            .closed_enum => switch (operation) {
+                .local, .symbol, .load, .member, .direct_call, .indirect_call => .valid_closed_enum,
+                else => null,
+            },
             else => null,
         };
         const check_kind = representation_check_kind orelse return id;
@@ -9206,16 +9215,33 @@ const FunctionBuilder = struct {
         if (std.meta.activeTag(repr_ty) != .integer) return false;
         const type_id = try self.internTypeId(ty);
         const repr_type_id = try self.internTypeId(repr_ty);
+        var valid_values = [_]i128{0} ** mir_model.max_executable_operands;
+        var valid_value_count: usize = 0;
+        if (ty == .closed_enum) {
+            if (summary.cases.len == 0 or summary.cases.len > valid_values.len) return false;
+            valid_value_count = summary.cases.len;
+            for (summary.cases, 0..) |case, index| {
+                const literal = if (case.value) |explicit| numeric.integerLiteralValue(explicit) orelse return false else numeric.LiteralValue{
+                    .negative = false,
+                    .magnitude = index,
+                };
+                const magnitude = std.math.cast(i128, literal.magnitude) orelse return false;
+                valid_values[index] = if (literal.negative) -magnitude else magnitude;
+            }
+        }
         for (self.executable_enum_types.items) |enum_ty| {
             if (!enum_ty.type_id.eql(type_id)) continue;
             return sameValueType(enum_ty.ty, ty) and enum_ty.repr_type_id.eql(repr_type_id) and
-                sameValueType(enum_ty.repr_ty, repr_ty);
+                sameValueType(enum_ty.repr_ty, repr_ty) and enum_ty.valid_value_count == valid_value_count and
+                std.mem.eql(i128, enum_ty.valid_values[0..valid_value_count], valid_values[0..valid_value_count]);
         }
         try self.executable_enum_types.append(self.allocator, .{
             .type_id = type_id,
             .ty = ty,
             .repr_type_id = repr_type_id,
             .repr_ty = repr_ty,
+            .valid_values = valid_values,
+            .valid_value_count = valid_value_count,
         });
         return true;
     }
@@ -9300,7 +9326,7 @@ const FunctionBuilder = struct {
             }
         else
             false;
-        const alignment = mir_model.ExecutableMemoryAccess.scalarAlignment(ty) orelse if (aggregate_local) @as(u16, 1) else 0;
+        const alignment = mir_model.executableStorageAlignment(self.executable_enum_types.items, ty) orelse if (aggregate_local) @as(u16, 1) else 0;
         if (alignment == 0) self.executable_supported = false;
         const kind: mir_model.ExecutableMemoryAccessKind = if (self.executablePlaceHasDeref(place_expr))
             if (root) |name| local_alias: {
@@ -10102,7 +10128,12 @@ const FunctionBuilder = struct {
                     try self.addInstr(.mmio_check, "direct_assign", .value, stmt.span);
                 }
                 try self.addAssignmentTargetCheck(node.target);
-                try self.buildExpr(node.target);
+                {
+                    const previous_assignment_target_expr_depth = self.assignment_target_expr_depth;
+                    self.assignment_target_expr_depth = self.semantic_expr_depth + 1;
+                    defer self.assignment_target_expr_depth = previous_assignment_target_expr_depth;
+                    try self.buildExpr(node.target);
+                }
                 const previous_target = self.assignment_target;
                 const previous_target_ty = self.assignment_target_ty;
                 const previous_target_type_expr = self.assignment_target_type_expr;
@@ -11534,7 +11565,7 @@ const FunctionBuilder = struct {
             .await_expr => unreachable,
             .ident => {
                 const ty = self.exprType(expr);
-                if (representationCheckKind(ty) != null) {
+                if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     const ident = switch (expr.kind) {
                         .ident => |value| value,
@@ -11701,7 +11732,7 @@ const FunctionBuilder = struct {
                     try self.addInstr(.ffi_check, "c_void_deref", .unknown, expr.span);
                 }
                 const ty = self.exprType(expr);
-                if (representationCheckKind(ty) != null) {
+                if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
@@ -12373,7 +12404,7 @@ const FunctionBuilder = struct {
                     else => null,
                 };
                 index_instruction.static_index_bound = self.baseArrayLen(node.base.*);
-                if (representationCheckKind(ty) != null) {
+                if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
@@ -12445,7 +12476,7 @@ const FunctionBuilder = struct {
                     try self.addInstr(.ffi_check, "c_void_no_layout", .unknown, expr.span);
                 }
                 const ty = self.exprType(expr);
-                if (representationCheckKind(ty) != null) {
+                if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
@@ -14259,11 +14290,16 @@ const FunctionBuilder = struct {
     }
 
     fn addRuntimeRepresentationCheck(self: *FunctionBuilder, ty: ValueType, span: ast.Span, value_id: []const u8) !void {
+        if (self.buildingAssignmentTargetValue()) return;
         try self.addInstrWithValue(.representation_check, representationTypeName(ty), ty, span, value_id);
         if (representationCheckTraps(ty)) {
             try self.addTrapEdge(.InvalidRepresentation, .representation_check, span);
             try self.attachExecutableRepresentationTrapEdge(span);
         }
+    }
+
+    fn buildingAssignmentTargetValue(self: *const FunctionBuilder) bool {
+        return if (self.assignment_target_expr_depth) |depth| depth == self.semantic_expr_depth else false;
     }
 
     fn attachExecutableRepresentationTrapEdge(self: *FunctionBuilder, span: ast.Span) !void {

@@ -4272,14 +4272,15 @@ test "LLVM emits local and loop enum returns from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_loop_enum_returns.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i64 @local_color");
-    try expectContains(local_body, "ret i64 1");
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "store");
+    try expectContains(local_body, "; canonical executable MIR");
+    try expectContains(local_body, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(local_body, "ret i64 %");
 
     const assigned_body = try llvmFunctionBody(output.items, "define internal i64 @assigned_color");
-    try expectContains(assigned_body, "ret i64 1");
-    try expectNotContains(assigned_body, "alloca");
-    try expectNotContains(assigned_body, "store");
+    if (std.mem.indexOf(u8, assigned_body, "; canonical executable MIR") != null) {
+        try expectContains(assigned_body, "call void @mc_trap_InvalidRepresentation()");
+        try expectContains(assigned_body, "ret i64 %");
+    } else try expectContains(assigned_body, "ret i64 1");
 
     const loop_body = try llvmFunctionBody(output.items, "define internal i64 @loop_color");
     const branch = std.mem.indexOf(u8, loop_body, "br i1 %mc_arg_0") orelse return error.TestUnexpectedResult;
@@ -4317,17 +4318,16 @@ test "LLVM preserves MIR void calls before local enum returns" {
 
     const local_body = try llvmFunctionBody(output.items, "define internal i64 @side_then_local_color");
     const local_hit = std.mem.indexOf(u8, local_body, "call void @hit(i32 2)") orelse return error.TestUnexpectedResult;
-    const local_ret = std.mem.indexOf(u8, local_body, "ret i64 1") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOf(u8, local_body, "ret i64 %") orelse return error.TestUnexpectedResult;
     try std.testing.expect(local_hit < local_ret);
-    try expectNotContains(local_body, "alloca");
-    try expectNotContains(local_body, "store");
+    try expectContains(local_body, "call void @mc_trap_InvalidRepresentation()");
 
     const assigned_body = try llvmFunctionBody(output.items, "define internal i64 @side_then_assigned_color");
     const assigned_hit = std.mem.indexOf(u8, assigned_body, "call void @hit(i32 3)") orelse return error.TestUnexpectedResult;
-    const assigned_ret = std.mem.indexOf(u8, assigned_body, "ret i64 1") orelse return error.TestUnexpectedResult;
+    const assigned_ret = std.mem.indexOf(u8, assigned_body, if (std.mem.indexOf(u8, assigned_body, "; canonical executable MIR") != null) "ret i64 %" else "ret i64 1") orelse return error.TestUnexpectedResult;
     try std.testing.expect(assigned_hit < assigned_ret);
-    try expectNotContains(assigned_body, "alloca");
-    try expectNotContains(assigned_body, "store");
+    if (std.mem.indexOf(u8, assigned_body, "; canonical executable MIR") != null)
+        try expectContains(assigned_body, "call void @mc_trap_InvalidRepresentation()");
 }
 
 test "LLVM emits conditional enum literal returns from MIR without body fallback" {
@@ -4480,7 +4480,8 @@ test "LLVM emits enum literal direct-call arguments from MIR without body fallba
 
     const body = try llvmFunctionBody(output.items, "define internal i8 @pass");
     try expectContains(body, "call i8 @sink(i8 2)");
-    try expectContains(body, "ret i8 %t");
+    try expectContains(body, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(body, "ret i8 %mc_expr_tmp_");
     try expectNotContains(body, "alloca");
     try expectNotContains(body, "store");
 }
@@ -10307,7 +10308,7 @@ test "LLVM inferred local enum raw calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_enum_raw_local_type.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%raw") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

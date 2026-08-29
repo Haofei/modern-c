@@ -603,6 +603,25 @@ const Renderer = struct {
                 if (!std.mem.eql(u8, operand.ty, "{ ptr, i64 }")) return error.InvalidBody;
                 try self.emitSliceRepresentationGuard(operand.spelling, edge, continuation);
             },
+            .valid_closed_enum => {
+                const enum_ty = enumType(self.body, expression.type_id) orelse return error.InvalidBody;
+                var valid: ?[]const u8 = null;
+                for (enum_ty.valid_values[0..enum_ty.valid_value_count]) |case_value| {
+                    const equal = try self.temp();
+                    try self.output.print(self.allocator, "  {s} = icmp eq {s} {s}, {d}\n", .{ equal, operand.ty, operand.spelling, case_value });
+                    if (valid) |previous| {
+                        const combined = try self.temp();
+                        try self.output.print(self.allocator, "  {s} = or i1 {s}, {s}\n", .{ combined, previous, equal });
+                        valid = combined;
+                    } else valid = equal;
+                }
+                const is_valid = valid orelse return error.InvalidBody;
+                try self.output.print(
+                    self.allocator,
+                    "  br i1 {s}, label %{s}, label %mc_block_{d}\n{s}:\n",
+                    .{ is_valid, continuation, edge.trap_block.raw, continuation },
+                );
+            },
         }
         return operand;
     }
@@ -2117,6 +2136,13 @@ fn enumTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*co
     return null;
 }
 
+fn enumType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableEnumType {
+    if (!type_id.isValid()) return null;
+    for (body.enum_types) |*enum_ty| if (enum_ty.type_id.eql(type_id) and
+        enum_ty.ty == .closed_enum and enum_ty.valid_value_count != 0) return enum_ty;
+    return null;
+}
+
 fn resultType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableResultType {
     if (!type_id.isValid()) return null;
     for (body.result_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
@@ -2370,6 +2396,7 @@ fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir
     return operand.block_id.eql(expression.block_id) and operand.owner_statement.eql(expression.owner_statement) and
         expression.type_id.eql(operand.type_id) and
         mir.ExecutableRepresentationCheckKind.typesValid(check.kind, expression.result_ty, operand.result_ty) and
+        (check.kind != .valid_closed_enum or enumType(body, expression.type_id) != null) and
         representationTrapEdgeIsExact(body, expression);
 }
 
@@ -2953,7 +2980,7 @@ fn singleParameterDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
     };
     const parameter = parameterIdentity(body, local_id) orelse return false;
     if (!parameter.type_id.isValid() or !parameter.type_id.eql(place.root_type_id) or
-        !sameValueType(parameter.ty, place.root_ty) or mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        !sameValueType(parameter.ty, place.root_ty) or mir.executableStorageAlignment(body.enum_types, place.ty) == null) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
         // A projected nullable pointer would need a different representation
@@ -2976,7 +3003,7 @@ fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: m
     if (place.projection_count == 1) return singleParameterDerefPlaceSupported(body, place);
     if (place.projection_count != 2 or place.projections[0] != .deref or
         !place.root_type_id.isValid() or !place.type_id.isValid() or
-        mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        mir.executableStorageAlignment(body.enum_types, place.ty) == null) return false;
     const field_index = switch (place.projections[1]) {
         .field => |index| index,
         .deref, .index => return false,
@@ -3010,7 +3037,7 @@ fn parameterScalarAccessStorePlaceSupported(body: *const mir.ExecutableBody, pla
 fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, require_mutable: bool) bool {
     if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
         !place.root_type_id.isValid() or !place.type_id.isValid() or
-        mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        mir.executableStorageAlignment(body.enum_types, place.ty) == null) return false;
     const root_id = switch (place.root) {
         .value => |id| id,
         .local, .symbol => return false,
@@ -3292,7 +3319,7 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     if (!placeValid(body, place_id)) return false;
     const place = body.places[place_id.index()];
     if (place.storage != .ordinary) return false;
-    const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse aggregate_local: {
+    const expected_alignment = mir.executableStorageAlignment(body.enum_types, ty) orelse aggregate_local: {
         if (place.projection_count != 0 or access.kind != .plain) return false;
         switch (place.root) {
             .local => {},
@@ -3304,6 +3331,10 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
         }
     };
     if (access.alignment != expected_alignment) return false;
+    // LLVM atomic load/store does not accept aggregate values. Aggregate
+    // accesses through shared pointer/global storage must remain on the
+    // legacy leaf-wise path until executable MIR carries a leaf access plan.
+    if (access.kind == .race_unordered and !unorderedMemoryTypeSupported(body, ty)) return false;
     if (place.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, place) != null) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
@@ -3347,6 +3378,16 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
         else
             false,
         .value => false,
+    };
+}
+
+fn unorderedMemoryTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
+    return switch (ty) {
+        .bool, .integer, .domain_integer, .float, .cstr, .address => true,
+        .pointer => |shape| shape.kind != .slice,
+        .nullable_pointer => |shape| shape.kind != .slice,
+        .closed_enum, .open_enum => enumTypeForValueType(body, ty) != null,
+        else => false,
     };
 }
 

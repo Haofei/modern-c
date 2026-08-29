@@ -787,6 +787,7 @@ pub const ExecutablePlaceStorage = enum {
 pub const ExecutableRepresentationCheckKind = enum {
     nonnull_pointer,
     valid_slice,
+    valid_closed_enum,
 
     pub fn typesValid(kind: ExecutableRepresentationCheckKind, result: ValueType, operand: ValueType) bool {
         if (!ValueType.eql(result, operand)) return false;
@@ -799,6 +800,7 @@ pub const ExecutableRepresentationCheckKind = enum {
                 .pointer => |shape| shape.kind == .slice,
                 else => false,
             },
+            .valid_closed_enum => result == .closed_enum,
         };
     }
 };
@@ -818,6 +820,16 @@ pub const ExecutableMemoryAccess = struct {
         };
     }
 };
+
+pub fn executableStorageAlignment(enum_types: []const ExecutableEnumType, ty: ValueType) ?u16 {
+    if (ExecutableMemoryAccess.scalarAlignment(ty)) |alignment| return alignment;
+    switch (ty) {
+        .closed_enum, .open_enum => for (enum_types) |enum_ty| if (ValueType.eql(enum_ty.ty, ty))
+            return ExecutableMemoryAccess.scalarAlignment(enum_ty.repr_ty),
+        else => {},
+    }
+    return null;
+}
 
 pub const ExecutableLiteral = union(enum) {
     /// Canonical unsigned magnitude. A negative source expression is a
@@ -1357,6 +1369,10 @@ pub const ExecutableEnumType = struct {
     ty: ValueType,
     repr_type_id: TypeId,
     repr_ty: ValueType,
+    /// Exact accepted representation set for a closed enum. Open enums keep
+    /// this empty because every value of the repr type is valid.
+    valid_values: [max_executable_operands]i128 = [_]i128{0} ** max_executable_operands,
+    valid_value_count: usize = 0,
 };
 
 /// Canonical payload layout for `Result<Ok, Err>`. The source spelling is

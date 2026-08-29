@@ -406,6 +406,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete and
                 (!mir.ExecutableRepresentationCheckKind.typesValid(operation.kind, value.result_ty, operand.result_ty) or
                     !value.type_id.eql(operand.type_id) or
+                    (operation.kind == .valid_closed_enum and !closedEnumCheckMetadataValid(body, value)) or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                     ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1))
                 return error.InvalidMemoryAccessTrap;
@@ -1214,9 +1215,24 @@ fn verifyEnumType(function: *const mir.Function, enum_ty: mir.ExecutableEnumType
     if (enum_ty.repr_ty != .integer) return error.InvalidEnumType;
     try verifyType(function, enum_ty.type_id, enum_ty.ty, body.complete);
     try verifyType(function, enum_ty.repr_type_id, enum_ty.repr_ty, body.complete);
+    if (enum_ty.ty == .closed_enum) {
+        if (enum_ty.valid_value_count == 0 or enum_ty.valid_value_count > mir.max_executable_operands)
+            return error.InvalidEnumType;
+        for (enum_ty.valid_values[0..enum_ty.valid_value_count], 0..) |value, value_index| {
+            for (enum_ty.valid_values[0..value_index]) |previous| if (previous == value) return error.InvalidEnumType;
+        }
+    } else if (enum_ty.valid_value_count != 0) return error.InvalidEnumType;
     for (body.enum_types[0..index]) |previous| {
         if (previous.type_id.eql(enum_ty.type_id) or sameValueType(previous.ty, enum_ty.ty)) return error.InvalidEnumType;
     }
+}
+
+fn closedEnumCheckMetadataValid(body: *const mir.ExecutableBody, value: mir.ExecutableExpression) bool {
+    for (body.enum_types) |enum_ty| if (enum_ty.type_id.eql(value.type_id)) {
+        return sameValueType(enum_ty.ty, value.result_ty) and enum_ty.ty == .closed_enum and
+            enum_ty.valid_value_count != 0 and enum_ty.valid_value_count <= mir.max_executable_operands;
+    };
+    return false;
 }
 
 fn verifyResultType(function: *const mir.Function, result_ty: mir.ExecutableResultType, index: usize) !void {
@@ -1367,7 +1383,7 @@ fn verifyMemoryAccess(
     const target = place(body, place_id) orelse return error.InvalidPlaceReference;
     if (target.storage != .ordinary) return error.InvalidMemoryAccessType;
     if (!sameValueType(target.ty, ty)) return error.InvalidPlaceType;
-    const expected_alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse aggregate_local: {
+    const expected_alignment = mir.executableStorageAlignment(body.enum_types, ty) orelse aggregate_local: {
         if (target.projection_count != 0 or access.kind != .plain) return error.InvalidMemoryAccessType;
         switch (target.root) {
             .local => {},
@@ -1461,7 +1477,7 @@ fn directAddressablePlace(body: *const mir.ExecutableBody, target: mir.Executabl
 fn isComputedRawManyDerefPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
     if (target.storage != .ordinary or target.projection_count != 1 or target.projections[0] != .deref or
         !target.root_type_id.isValid() or !target.type_id.isValid() or
-        mir.ExecutableMemoryAccess.scalarAlignment(target.ty) == null) return false;
+        mir.executableStorageAlignment(body.enum_types, target.ty) == null) return false;
     const root_id = switch (target.root) {
         .value => |id| id,
         .local, .symbol => return false,
@@ -1518,7 +1534,7 @@ fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
         break;
     };
     const root_ty = parameter_ty orelse return false;
-    if (!sameValueType(root_ty, target.root_ty) or mir.ExecutableMemoryAccess.scalarAlignment(target.ty) == null) return false;
+    if (!sameValueType(root_ty, target.root_ty) or mir.executableStorageAlignment(body.enum_types, target.ty) == null) return false;
     const shape = switch (root_ty) {
         .pointer => |value| value,
         else => return false,
@@ -1550,7 +1566,7 @@ fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.Exe
     };
     const root = parameter orelse return false;
     if (!root.type_id.eql(target.root_type_id) or !sameValueType(root.ty, target.root_ty) or
-        mir.ExecutableMemoryAccess.scalarAlignment(target.ty) == null) return false;
+        mir.executableStorageAlignment(body.enum_types, target.ty) == null) return false;
     const pointer = switch (target.root_ty) {
         .pointer => |shape| shape,
         else => return false,

@@ -4039,14 +4039,16 @@ test "lower-c emits local and loop enum returns from MIR without body fallback" 
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_loop_enum_returns.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static Color local_color(void)");
-    try expectContains(local_body, "return Color_blue;");
-    try expectNotContains(local_body, "Color c");
+    try expectContains(local_body, "/* canonical executable MIR */");
+    try expectContains(local_body, "mc_trap_InvalidRepresentation");
+    try expectContains(local_body, "return mc_exec_tmp_");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static Color assigned_color(void)");
-    try expectContains(assigned_body, "return Color_blue;");
-    try expectNotContains(assigned_body, "Color c");
-    try expectNotContains(assigned_body, "c =");
+    if (isCanonicalExecutableCBody(assigned_body)) {
+        try expectContains(assigned_body, "mc_trap_InvalidRepresentation");
+        try expectContains(assigned_body, "return mc_exec_tmp_");
+    } else try expectContains(assigned_body, "return Color_blue;");
     try expectNotContains(assigned_body, "mc_tmp");
 
     const loop_body = try cFunctionBody(output.items, "static Color loop_color(bool flag)");
@@ -4081,18 +4083,17 @@ test "lower-c preserves MIR void calls before local enum returns" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_local_enum_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static Color side_then_local_color(void)");
-    const local_hit = std.mem.indexOf(u8, local_body, "hit(2);") orelse return error.TestUnexpectedResult;
-    const local_ret = std.mem.indexOf(u8, local_body, "return Color_blue;") orelse return error.TestUnexpectedResult;
+    const local_hit = std.mem.indexOf(u8, local_body, "hit(") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOf(u8, local_body, "return mc_exec_tmp_") orelse return error.TestUnexpectedResult;
     try std.testing.expect(local_hit < local_ret);
-    try expectNotContains(local_body, "Color c");
+    try expectContains(local_body, "mc_trap_InvalidRepresentation");
     try expectNotContains(local_body, "mc_tmp");
 
     const assigned_body = try cFunctionBody(output.items, "static Color side_then_assigned_color(void)");
-    const assigned_hit = std.mem.indexOf(u8, assigned_body, "hit(3);") orelse return error.TestUnexpectedResult;
-    const assigned_ret = std.mem.indexOf(u8, assigned_body, "return Color_blue;") orelse return error.TestUnexpectedResult;
+    const assigned_hit = std.mem.indexOf(u8, assigned_body, "hit(") orelse return error.TestUnexpectedResult;
+    const assigned_ret = std.mem.indexOf(u8, assigned_body, if (isCanonicalExecutableCBody(assigned_body)) "return mc_exec_tmp_" else "return Color_blue;") orelse return error.TestUnexpectedResult;
     try std.testing.expect(assigned_hit < assigned_ret);
-    try expectNotContains(assigned_body, "Color c");
-    try expectNotContains(assigned_body, "c =");
+    if (isCanonicalExecutableCBody(assigned_body)) try expectContains(assigned_body, "mc_trap_InvalidRepresentation");
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
@@ -4330,7 +4331,10 @@ test "lower-c emits enum literal direct-call arguments from MIR without body fal
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_direct_call_argument.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Mode pass(void)");
-    try expectContains(body, "return sink(Mode_write);");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "= sink(");
+    try expectContains(body, "mc_trap_InvalidRepresentation");
+    try expectContains(body, "return mc_exec_tmp_");
     try expectNotContains(body, "mc_tmp");
 }
 
@@ -4346,9 +4350,10 @@ test "lower-c emits enum literal compare operands from MIR without body fallback
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_compare_operands.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static bool is_read(Mode mode)");
-    try expectContains(body, "switch ((int)(mode))");
-    try expectContains(body, "default: mc_trap_InvalidRepresentation();");
-    try expectContains(body, "return (mode == Mode_read);");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "mc_trap_InvalidRepresentation");
+    try expectContains(body, " == ");
+    try expectContains(body, "return mc_exec_tmp_");
     try expectNotContains(body, "mc_tmp");
 }
 
@@ -9652,7 +9657,8 @@ test "lower-c inferred local enum and tagged-union calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Mode mode = make_mode()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "make_mode()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return make_token();") != null);
 
     var missing_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -9704,7 +9710,9 @@ test "lower-c inferred local Result direct calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result = make_result()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "= make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_result_u32_Error result = mc_exec_tmp_") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -14092,7 +14100,10 @@ test "lower-c emits try in assignment and expression statements" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
     const assign_nullable = try cFunctionBody(output.items, "static uint8_t const * assign_nullable_try(void)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "ptr = "));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "mc_trap_NullUnwrap();"));
+    // Two executable null checks plus their two MIR trap blocks. Count the
+    // guarded checks, not textual trap-block bodies that are unreachable on
+    // the successful path.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "== NULL) mc_trap_NullUnwrap();"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_exec_tmp_") != null);
 }
@@ -19900,9 +19911,9 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "global_mode = Mode_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "= 1;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_write;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "= sink(mc_exec_tmp_0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mode == Mode_read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "((Mode)(mc_exec_tmp_0))") != null);
 }
 
@@ -20062,7 +20073,8 @@ test "lower-c emits Result if-let narrowing" {
 
     const has_err = try cFunctionBody(output.items, "static bool has_err(mc_result_u32_Error result)");
     if (isCanonicalExecutableCBody(has_err)) {
-        try expectContains(has_err, "!.is_ok");
+        try expectContains(has_err, "(!mc_exec_tmp_");
+        try expectContains(has_err, ".is_ok)");
         try expectContains(has_err, ".payload.err");
         try expectContains(has_err, "Error e = mc_exec_tmp_");
     } else {
