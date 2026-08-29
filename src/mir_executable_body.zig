@@ -47,6 +47,15 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
         else => {},
     };
     if (body.trap_edges.len != function.trap_edges.len) return "trap_projection";
+    // When every operation has a canonical shape but the producer declined to
+    // mark the body complete, ask the verifier which invariant would fail if it
+    // did. This keeps migration telemetry actionable without duplicating the
+    // verifier's rules in the producer or either backend.
+    var claimed_function = function.*;
+    claimed_function.executable_body = body.*;
+    claimed_function.executable_body.complete = true;
+    claimed_function.executable_body.incomplete_reason = .none;
+    verify(&claimed_function) catch |err| return @errorName(err);
     return "producer_invariant";
 }
 
@@ -1157,9 +1166,10 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
     if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
         !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;
     for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
-    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
-        if (field_ty == .unknown or field_ty == .value) return error.InvalidAggregateType;
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count]) |field_ty, field_type_id, callable_signature| {
+        if (field_ty == .unknown or (field_ty == .value) != (callable_signature != null)) return error.InvalidAggregateType;
         try verifyType(function, field_type_id, field_ty, body.complete);
+        if (callable_signature) |signature| try verifyCallableSignature(function, signature, body.complete);
     }
     if (aggregate.ty == .array) {
         const length = aggregate.array_length orelse return error.InvalidAggregateType;
@@ -1188,8 +1198,9 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
         }
         if (!found) return error.InvalidAggregateType;
     }
-    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..]) |field_spelling, field_ty, field_type_id| {
-        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid()) return error.InvalidAggregateType;
+    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..], aggregate.field_callable_signatures[aggregate.field_count..]) |field_spelling, field_ty, field_type_id, callable_signature| {
+        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid() or callable_signature != null)
+            return error.InvalidAggregateType;
     }
 }
 
@@ -1382,6 +1393,16 @@ fn verifyMemoryAccess(
             }
             return;
         }
+        if (mir.executableDirectAggregateFieldPlace(
+            body.locals,
+            body.statements,
+            body.aggregate_types,
+            target.*,
+            is_store,
+        ) != null) {
+            if (access.kind != .plain) return error.InvalidMemoryAccessKind;
+            return;
+        }
         if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
         const expected_kind: mir.ExecutableMemoryAccessKind =
             if (mir.executableLocalAddressDerefPlace(body, target.*, false)) .plain else .race_unordered;
@@ -1461,7 +1482,13 @@ fn isComputedRawManyDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
 }
 
 fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
-    return isParameterScalarAccessPlace(body, target, require_mutable) or
+    return mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        target,
+        require_mutable,
+    ) != null or isParameterScalarAccessPlace(body, target, require_mutable) or
         mir.executableLocalAddressDerefPlace(body, target, require_mutable) or
         isComputedRawManyDerefPlace(body, target, require_mutable);
 }

@@ -7259,6 +7259,13 @@ const FunctionBuilder = struct {
         if (place.storage == .atomic) return self.executableAtomicPlaceComplete(place);
         if (place.projection_count == 0) return true;
         if (self.executableFixedArrayIndexPlaceComplete(place)) return true;
+        if (mir_model.executableDirectAggregateFieldPlace(
+            self.executable_locals.items,
+            self.executable_statements.items,
+            self.executable_aggregate_types.items,
+            place,
+            false,
+        ) != null) return true;
         if (place.projection_count != 1 and place.projection_count != 2) return false;
         if (place.projections[0] != .deref) return false;
         const local_id = switch (place.root) {
@@ -7509,6 +7516,13 @@ const FunctionBuilder = struct {
                 } else false,
                 .value => false,
             };
+            if (mir_model.executableDirectAggregateFieldPlace(
+                self.executable_locals.items,
+                self.executable_statements.items,
+                self.executable_aggregate_types.items,
+                place,
+                is_store,
+            ) != null) return access.kind == .plain;
             const local_alias = switch (place.root) {
                 .local => |id| mir_model.executableLocalAddressAlias(
                     self.executable_statements.items,
@@ -7950,9 +7964,10 @@ const FunctionBuilder = struct {
         return self.appendExecutableCast(input, operand, target_ty, kind);
     }
 
-    /// Keep the established producer for conversions whose canonical
-    /// renderers have not cut over yet. These two pointer coercions preserve
-    /// representation and are the deliberately bounded slice owned here.
+    /// Materialize every semantically admitted implicit conversion as an
+    /// explicit executable-MIR cast.  The C and LLVM renderers share
+    /// `ExecutableCastKind`; leaving integer/address conversions implicit here
+    /// would make their result type depend on source-level context again.
     fn ensureExecutablePointerCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
         return self.ensureExecutablePointerCoercedExprAsType(input, target_ty, null);
     }
@@ -7977,10 +7992,7 @@ const FunctionBuilder = struct {
         if (sameValueType(operand_ty, target_ty)) return operand;
         if (target_ty == .nullable_value) return self.appendExecutableValueOptional(input, target_ty, operand);
         const kind = mir_model.ExecutableCastKind.classify(operand_ty, target_ty) orelse return operand;
-        return switch (kind) {
-            .pointer_to_nullable, .pointer_const_narrow => self.appendExecutableCast(input, operand, target_ty, kind),
-            else => operand,
-        };
+        return self.appendExecutableCast(input, operand, target_ty, kind);
     }
 
     fn appendExecutableValueOptional(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType, operand: ?ExprId) !ExprId {
@@ -8849,6 +8861,7 @@ const FunctionBuilder = struct {
                         .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
                         else => null,
                     },
+                    .load => .nonnull_pointer,
                     .direct_call, .indirect_call => switch (expr.kind) {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .nonnull_pointer else null,
                         else => null,
@@ -8860,7 +8873,7 @@ const FunctionBuilder = struct {
                     // shapes for which the legacy semantic pass records an
                     // InvalidRepresentation edge. Bounds remain owned by
                     // index/range operations and are deliberately excluded.
-                    .local, .member, .cast => .valid_slice,
+                    .local, .load, .member, .cast => .valid_slice,
                     .direct_call, .indirect_call => switch (expr.kind) {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .valid_slice else null,
                         else => null,
@@ -9051,10 +9064,13 @@ const FunctionBuilder = struct {
         };
         for (fields, 0..) |field, index| {
             const field_ty = valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
-            if (field_ty == .unknown or field_ty == .value) return false;
+            if (field_ty == .unknown) return false;
             aggregate.field_spellings[index] = field.name.text;
             aggregate.field_types[index] = field_ty;
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
+            if (field_ty == .value) {
+                aggregate.field_callable_signatures[index] = try self.executableCallableSignature(field.ty) orelse return false;
+            }
             if (field_ty == .array) aggregate.field_layout_complete[index] = false;
         }
         try self.executable_aggregate_types.append(self.allocator, aggregate);
@@ -9631,13 +9647,14 @@ const FunctionBuilder = struct {
                     .pointer, .nullable_pointer => true,
                     else => false,
                 };
-                if (implicit_deref) {
-                    const struct_name = switch (base_ty) {
-                        .pointer, .nullable_pointer => |shape| shape.child,
-                        else => unreachable,
-                    };
-                    const summary = self.structs.get(struct_name) orelse break :projection false;
-                    if (!try self.internExecutableAggregateType(.{ .struct_ = struct_name }, executableAggregateConstruction(summary), summary.fields)) break :projection false;
+                const struct_name: ?[]const u8 = switch (base_ty) {
+                    .struct_ => |name| name,
+                    .pointer, .nullable_pointer => |shape| shape.child,
+                    else => null,
+                };
+                if (struct_name) |name| {
+                    const summary = self.structs.get(name) orelse break :projection false;
+                    if (!try self.internExecutableAggregateType(.{ .struct_ = name }, executableAggregateConstruction(summary), summary.fields)) break :projection false;
                 }
                 if (!try self.fillExecutablePlace(place, node.base.*) or
                     place.projection_count + @intFromBool(implicit_deref) >= mir_model.max_executable_projections) break :projection false;

@@ -399,6 +399,14 @@ const Renderer = struct {
                     try self.emitComputedRawManyDerefPointer(place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
+                else if (mir.executableDirectAggregateFieldPlace(
+                    self.body.locals,
+                    self.body.statements,
+                    self.body.aggregate_types,
+                    place,
+                    true,
+                ) != null)
+                    try self.emitPlace(store.place, value.ty)
                 else if (place.projection_count != 0)
                     try self.emitGuardedParameterStorePointer(statement, store.place)
                 else
@@ -1613,18 +1621,27 @@ const Renderer = struct {
             try self.emitComputedRawManyDerefPointer(place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
+        else if (mir.executableDirectAggregateFieldPlace(
+            self.body.locals,
+            self.body.statements,
+            self.body.aggregate_types,
+            place,
+            false,
+        ) != null)
+            try self.emitPlace(load.place, value_ty)
         else if (place.projection_count != 0)
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
             try self.emitPlace(load.place, value_ty);
-        const global_bool = placeIsGlobal(self.body, load.place) and expression.result_ty == .bool;
-        const storage_ty: []const u8 = if (global_bool) "i8" else value_ty;
+        const byte_sized_bool = expression.result_ty == .bool and
+            (placeIsGlobal(self.body, load.place) or load.access.kind == .race_unordered);
+        const storage_ty: []const u8 = if (byte_sized_bool) "i8" else value_ty;
         const loaded = try self.temp();
         switch (load.access.kind) {
             .plain => try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}, align {d}\n", .{ loaded, storage_ty, pointer, load.access.alignment }),
             .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ loaded, storage_ty, pointer, load.access.alignment }),
         }
-        if (!global_bool) return .{ .ty = value_ty, .spelling = loaded };
+        if (!byte_sized_bool) return .{ .ty = value_ty, .spelling = loaded };
         const converted = try self.temp();
         try self.output.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ converted, loaded });
         return .{ .ty = "i1", .spelling = converted };
@@ -1745,13 +1762,11 @@ const Renderer = struct {
 
     fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
         const place = &self.body.places[place_id.index()];
-        const global_bool = switch (place.root) {
-            .symbol => std.mem.eql(u8, value.ty, "i1"),
-            .local, .value => false,
-        };
+        const byte_sized_bool = std.mem.eql(u8, value.ty, "i1") and
+            (place.root == .symbol or access.kind == .race_unordered);
         var stored = value.spelling;
-        const storage_ty: []const u8 = if (global_bool) "i8" else value.ty;
-        if (global_bool) {
+        const storage_ty: []const u8 = if (byte_sized_bool) "i8" else value.ty;
+        if (byte_sized_bool) {
             stored = try self.temp();
             try self.output.print(self.allocator, "  {s} = zext i1 {s} to i8\n", .{ stored, value.spelling });
         }
@@ -1788,6 +1803,22 @@ const Renderer = struct {
             .symbol => |symbol_id| try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody}),
             .value => return error.Unsupported,
         };
+        if (mir.executableDirectAggregateFieldPlace(
+            self.body.locals,
+            self.body.statements,
+            self.body.aggregate_types,
+            place.*,
+            false,
+        )) |field_index| {
+            const aggregate_ty = try self.typeText(place.root_ty);
+            const field_pointer = try self.temp();
+            try self.output.print(
+                self.allocator,
+                "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                .{ field_pointer, aggregate_ty, pointer, field_index },
+            );
+            return field_pointer;
+        }
         if (place.projection_count != 0) return error.Unsupported;
         _ = value_ty;
         return pointer;
@@ -2052,6 +2083,7 @@ fn llvmTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
 
 fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
     if (scalarLlvmType(ty) != null) return true;
+    if (ty == .value) return true;
     if (depth >= mir.max_executable_operands) return false;
     if (enumTypeForValueType(body, ty)) |enum_ty| return llvmTypeSupportedDepth(body, enum_ty.repr_ty, depth + 1);
     if (resultTypeForValueType(body, ty)) |shape|
@@ -3000,7 +3032,13 @@ fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
 }
 
 fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
-    return parameterScalarAccessPlaceSupported(body, place) or
+    return mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place,
+        false,
+    ) != null or parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
@@ -3019,6 +3057,14 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
             else
                 ownedExpressionTrapCount(body, expression.id) == 0;
     }
+    if (mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place,
+        false,
+    ) != null) return load.representation_source == null and
+        !load.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
     if (computedRawManyDerefPlaceSupported(body, place, false)) {
         return load.representation_source == null and !load.representation_span_id.isValid() and
             ownedExpressionTrapCount(body, expression.id) == 0;
@@ -3224,6 +3270,14 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             else
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
     }
+    if (mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place,
+        true,
+    ) != null) return store.representation_source == null and
+        !store.representation_span_id.isValid() and ownedStatementTrapEdgeCount(body, statement.id) == 0;
     if (computedRawManyDerefPlaceSupported(body, place, true)) {
         return store.representation_source == null and !store.representation_span_id.isValid() and
             statementRepresentationTrapEdge(body, statement) == null;
@@ -3265,6 +3319,13 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             };
             return sameValueType(place.ty, ty) and access.kind == expected_kind;
         }
+        if (mir.executableDirectAggregateFieldPlace(
+            body.locals,
+            body.statements,
+            body.aggregate_types,
+            place,
+            is_store,
+        ) != null) return sameValueType(place.ty, ty) and access.kind == .plain;
         const local_alias = mir.executableLocalAddressDerefPlace(body, place, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
         return sameValueType(place.ty, ty) and access.kind == expected_kind and

@@ -2455,9 +2455,10 @@ test "lower-c emits local aggregate projection updates from MIR without body fal
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_projection_updates.mc", source, &output);
 
     const field_body = try cFunctionBody(output.items, "static uint32_t assign_field(uint32_t value)");
-    try expectContains(field_body, "Pair pair = (Pair){ .left = 1, .right = 2 };");
-    try expectContains(field_body, "pair.left = value;");
-    try expectContains(field_body, "return pair.left;");
+    try expectContains(field_body, "/* canonical executable MIR */");
+    try expectContains(field_body, "Pair pair = mc_exec_tmp_");
+    try expectContains(field_body, "(pair).left = mc_exec_tmp_");
+    try expectContains(field_body, "return mc_exec_tmp_");
 
     const array_body = try cFunctionBody(output.items, "static uint32_t assign_nested_array(uint32_t value)");
     try expectContains(array_body, "xs.elems[mc_check_index_usize(0, 2)].elems[mc_check_index_usize(1, 2)] = value;");
@@ -10466,7 +10467,8 @@ test "lower-c lowers pointer parameter field stores after specialized plan retir
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("c_mir_pointer_param_field_store.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void store_cell(Cell * cell)");
-    try expectContains(body, "(*cell).value = mc_tmp");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "mc_race_store_u32(&(cell->value), (uint32_t)mc_exec_tmp_");
 }
 
 test "lower-c emits global address direct-call args from MIR without body fallback" {

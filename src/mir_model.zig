@@ -813,7 +813,7 @@ pub const ExecutableMemoryAccess = struct {
             .integer => |name| if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) 1 else if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) 2 else if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) 4 else if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) 8 else null,
             .domain_integer => |shape| if (std.mem.eql(u8, shape.child, "u8") or std.mem.eql(u8, shape.child, "i8")) 1 else if (std.mem.eql(u8, shape.child, "u16") or std.mem.eql(u8, shape.child, "i16")) 2 else if (std.mem.eql(u8, shape.child, "u32") or std.mem.eql(u8, shape.child, "i32")) 4 else if (std.mem.eql(u8, shape.child, "u64") or std.mem.eql(u8, shape.child, "i64") or std.mem.eql(u8, shape.child, "usize") or std.mem.eql(u8, shape.child, "isize")) 8 else null,
             .float => |name| if (std.mem.eql(u8, name, "f32")) 4 else if (std.mem.eql(u8, name, "f64")) 8 else null,
-            .pointer, .nullable_pointer, .cstr, .address => 8,
+            .pointer, .nullable_pointer, .cstr, .address, .value => 8,
             else => null,
         };
     }
@@ -1307,6 +1307,9 @@ pub const ExecutableAggregateType = struct {
     field_spellings: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
     field_types: [max_executable_operands]ValueType = [_]ValueType{.unknown} ** max_executable_operands,
     field_type_ids: [max_executable_operands]TypeId = [_]TypeId{.invalid} ** max_executable_operands,
+    /// Exact function-pointer shape for fields whose deliberately opaque
+    /// `.value` representation would otherwise be ambiguous.
+    field_callable_signatures: [max_executable_operands]?ExecutableCallSignature = [_]?ExecutableCallSignature{null} ** max_executable_operands,
     /// Whether codegen has every nested layout needed to spell this field's
     /// storage type mechanically. This is currently meaningful for fixed-array
     /// fields: producers set it only after interning the nested layout. The
@@ -1318,6 +1321,33 @@ pub const ExecutableAggregateType = struct {
     array_length: ?usize = null,
     field_count: usize = 0,
 };
+
+pub fn executableCallableAggregateField(
+    aggregate_types: []const ExecutableAggregateType,
+    place: ExecutablePlace,
+) ?ExecutableCallSignature {
+    if (!place.root_type_id.isValid() or !place.type_id.isValid() or place.ty != .value) return null;
+    const field_index: usize = if (place.projection_count == 1) switch (place.projections[0]) {
+        .field => |index| index,
+        .deref, .index => return null,
+    } else if (place.projection_count == 2 and place.projections[0] == .deref) switch (place.projections[1]) {
+        .field => |index| index,
+        .deref, .index => return null,
+    } else return null;
+    const aggregate_ty: ValueType = if (place.projection_count == 1)
+        place.root_ty
+    else switch (place.root_ty) {
+        .pointer => |shape| if (shape.kind == .single) .{ .struct_ = shape.child } else return null,
+        else => return null,
+    };
+    for (aggregate_types) |aggregate| {
+        if (!ValueType.eql(aggregate.ty, aggregate_ty) or field_index >= aggregate.field_count or
+            aggregate.field_types[field_index] != .value or
+            !aggregate.field_type_ids[field_index].eql(place.type_id)) continue;
+        return aggregate.field_callable_signatures[field_index];
+    }
+    return null;
+}
 
 /// Canonical scalar representation for an enum used by an executable body.
 /// The enum's nominal `TypeId` remains distinct from its integer repr; LLVM
@@ -1445,6 +1475,56 @@ pub const ExecutableBody = struct {
         self.* = .{};
     }
 };
+
+/// Return the field index for a direct by-value aggregate local projection.
+/// The local declaration/parameter, aggregate layout, and projected field
+/// type must all agree.  This is intentionally shared by the producer,
+/// verifier, and both renderers so `local.field` never becomes a backend-local
+/// source-shape inference again.
+pub fn executableDirectAggregateFieldPlace(
+    locals: []const ExecutableLocalIdentity,
+    statements: []const ExecutableStatement,
+    aggregate_types: []const ExecutableAggregateType,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) ?usize {
+    if (place.storage != .ordinary or place.projection_count != 1 or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return null;
+    const field_index = switch (place.projections[0]) {
+        .field => |index| index,
+        .deref, .index => return null,
+    };
+    const local_id = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return null,
+    };
+    if (!local_id.isValid() or local_id.index() >= locals.len or !locals[local_id.index()].id.eql(local_id)) return null;
+
+    if (require_mutable) {
+        var mutable = false;
+        for (statements) |statement| switch (statement.operation) {
+            .local_init => |init| if (init.local.eql(local_id)) {
+                mutable = init.mutable;
+                break;
+            },
+            else => {},
+        };
+        if (!mutable) return null;
+    }
+
+    var aggregate: ?ExecutableAggregateType = null;
+    for (aggregate_types) |candidate| if (candidate.type_id.eql(place.root_type_id)) {
+        aggregate = candidate;
+        break;
+    };
+    const shape = aggregate orelse return null;
+    if ((shape.construction != .declared_struct and shape.construction != .c_union) or
+        !ValueType.eql(shape.ty, place.root_ty) or field_index >= shape.field_count or
+        !shape.field_type_ids[field_index].eql(place.type_id) or
+        !ValueType.eql(shape.field_types[field_index], place.ty)) return null;
+    return field_index;
+}
 
 /// Check the complete typed shape of a scalar dereference through an
 /// unescaped local-address alias. Producer, verifier, and renderers use this

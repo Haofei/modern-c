@@ -487,12 +487,12 @@ test "LLVM local aggregate place updates return from MIR without body fallback" 
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_aggregate_place_update.mc", source, &output);
 
     const field_body = try llvmFunctionBody(output.items, "define internal i32 @assign_field");
+    try expectContains(field_body, "; canonical executable MIR");
     try expectContains(field_body, "insertvalue { i32, i32 } zeroinitializer, i32 1, 0");
-    try expectContains(field_body, "insertvalue { i32, i32 } %t");
-    try expectContains(field_body, "i32 %value, 0");
-    try expectContains(field_body, "extractvalue { i32, i32 } %t");
-    try expectNotContains(field_body, "alloca");
-    try expectNotContains(field_body, "store");
+    try expectContains(field_body, "insertvalue { i32, i32 } %mc_expr_tmp_");
+    try expectContains(field_body, "store i32 %mc_arg_0, ptr %mc_expr_tmp_");
+    try expectContains(field_body, "extractvalue { i32, i32 } %mc_expr_tmp_");
+    try expectContains(field_body, "alloca { i32, i32 }");
 
     const nested_array_body = try llvmFunctionBody(output.items, "define internal i32 @assign_nested_array");
     try expectContains(nested_array_body, "insertvalue [2 x [2 x i32]] %t");
@@ -11294,8 +11294,9 @@ test "LLVM lowers pointer parameter field stores after specialized plan retireme
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_mir_pointer_param_field_store.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @store_cell");
-    try expectContains(body, "getelementptr { i32 }, ptr %cell, i64 0, i32 0");
-    try expectContains(body, "store i32 7, ptr %");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "getelementptr inbounds { i32 }, ptr %mc_arg_0, i32 0, i32 0");
+    try expectContains(body, "store atomic i32 7, ptr %");
 }
 
 test "LLVM admits direct-return checked arithmetic in normal emit without losing source fidelity" {

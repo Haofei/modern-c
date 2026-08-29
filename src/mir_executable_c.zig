@@ -140,12 +140,20 @@ fn emitStatement(
                     try out.appendSlice(allocator, ";\n");
                 },
                 .race_unordered => {
-                    const scalar = scalarMemoryInfo(store.ty) orelse return error.UnsupportedType;
-                    try out.print(allocator, "mc_race_store_{s}(", .{scalar.helper_suffix});
-                    try emitPlaceAddress(allocator, out, body, store.place);
-                    try out.print(allocator, ", ({s})", .{scalar.c_type});
-                    try emitExpression(allocator, out, body, store.value, 0);
-                    try out.appendSlice(allocator, ");\n");
+                    if (store.ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) {
+                        try out.appendSlice(allocator, "__atomic_store_n(");
+                        try emitPlaceAddress(allocator, out, body, store.place);
+                        try out.appendSlice(allocator, ", ");
+                        try emitExpression(allocator, out, body, store.value, 0);
+                        try out.appendSlice(allocator, ", __ATOMIC_RELAXED);\n");
+                    } else {
+                        const scalar = scalarMemoryInfo(store.ty) orelse return error.UnsupportedType;
+                        try out.print(allocator, "mc_race_store_{s}(", .{scalar.helper_suffix});
+                        try emitPlaceAddress(allocator, out, body, store.place);
+                        try out.print(allocator, ", ({s})", .{scalar.c_type});
+                        try emitExpression(allocator, out, body, store.value, 0);
+                        try out.appendSlice(allocator, ");\n");
+                    }
                 },
             }
         },
@@ -284,6 +292,12 @@ fn emitExpressionOperation(
         .load => |load| switch (load.access.kind) {
             .plain => try emitPlace(allocator, out, body, load.place),
             .race_unordered => {
+                if (expression.result_ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, load.place) orelse return error.InvalidPlace).*) != null) {
+                    try out.appendSlice(allocator, "__atomic_load_n(");
+                    try emitPlaceAddress(allocator, out, body, load.place);
+                    try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
+                    return;
+                }
                 if (expression.result_ty == .nullable_pointer) {
                     try out.appendSlice(allocator, "__atomic_load_n(");
                     try emitPlaceAddress(allocator, out, body, load.place);
@@ -1448,6 +1462,15 @@ fn memoryLoadSupported(
                 else
                     ownedTrapEdgeCount(body, expression.id) == 0;
         }
+        if (mir.executableDirectAggregateFieldPlace(
+            body.locals,
+            body.statements,
+            body.aggregate_types,
+            place.*,
+            false,
+        ) != null) return load.access.kind == .plain and
+            load.representation_source == null and !load.representation_span_id.isValid() and
+            ownedTrapEdgeCount(body, expression.id) == 0;
         if (!scalarAccessPlaceSupported(body, place.*)) return false;
         const local_alias = mir.executableLocalAddressDerefPlace(body, place.*, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
@@ -1687,7 +1710,7 @@ fn singleParameterScalarDerefPlaceSupported(body: *const mir.ExecutableBody, pla
 fn parameterScalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     if (place.storage != .ordinary) return false;
     if (place.projection_count == 1) return singleParameterScalarDerefPlaceSupported(body, place);
-    if (place.projection_count != 2 or place.projections[0] != .deref or scalarMemoryInfo(place.ty) == null or
+    if (place.projection_count != 2 or place.projections[0] != .deref or mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null or
         !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
     const field_index = switch (place.projections[1]) {
         .field => |index| index,
@@ -1745,7 +1768,13 @@ fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
 }
 
 fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
-    return parameterScalarAccessPlaceSupported(body, place) or
+    return mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place,
+        false,
+    ) != null or parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
@@ -1772,7 +1801,8 @@ fn memoryStoreSupported(
     };
     if (store.access.alignment != alignment) return false;
     if (place.projection_count != 0) {
-        _ = scalarMemoryInfo(store.ty) orelse return false;
+        if (scalarMemoryInfo(store.ty) == null and
+            mir.executableCallableAggregateField(body.aggregate_types, place.*) == null) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
             const access_ok = switch (place.root) {
                 .local => store.access.kind == .plain,
@@ -1788,6 +1818,15 @@ fn memoryStoreSupported(
                 else
                     ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
+        if (mir.executableDirectAggregateFieldPlace(
+            body.locals,
+            body.statements,
+            body.aggregate_types,
+            place.*,
+            true,
+        ) != null) return store.access.kind == .plain and
+            store.representation_source == null and !store.representation_span_id.isValid() and
+            ownedStatementTrapEdgeCount(body, statement.id) == 0;
         const shape = switch (place.root_ty) {
             .pointer => |pointer| pointer,
             else => return false,
@@ -2415,6 +2454,20 @@ fn emitPlace(
         try out.append(allocator, ']');
         return;
     }
+    if (mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place.*,
+        false,
+    )) |field_index| {
+        const aggregate = aggregateType(body, place.root_type_id) orelse return error.InvalidPlace;
+        try out.append(allocator, '(');
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").");
+        try appendIdent(allocator, out, aggregate.field_spellings[field_index]);
+        return;
+    }
     if (place.projection_count == 1 and mir.executableLocalAddressDerefPlace(body, place.*, false)) {
         try out.appendSlice(allocator, "(*(");
         try emitPlaceRootValue(allocator, out, body, place.*);
@@ -2434,6 +2487,18 @@ fn emitPlaceAddress(
     const place = placeById(body, id) orelse return error.InvalidPlace;
     if (place.storage != .ordinary) return error.UnsupportedOperation;
     if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
+        try out.appendSlice(allocator, "&(");
+        try emitPlace(allocator, out, body, id);
+        try out.append(allocator, ')');
+        return;
+    }
+    if (mir.executableDirectAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place.*,
+        false,
+    ) != null) {
         try out.appendSlice(allocator, "&(");
         try emitPlace(allocator, out, body, id);
         try out.append(allocator, ')');
