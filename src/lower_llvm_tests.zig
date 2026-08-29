@@ -4523,6 +4523,41 @@ test "LLVM emits enum literal explicit casts from MIR without body fallback" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits enum, pointer-address, and signedness casts from executable MIR" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn enum_raw(mode: Mode) -> u8 { return mode as u8; }
+        \\fn pointer_address(pointer: *mut u8) -> PAddr { unsafe { return pointer as PAddr; } }
+        \\fn signed_bits(value: u64) -> i64 { return value as i64; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_representation_casts.mc", source, &output);
+
+    const enum_body = try llvmFunctionBody(output.items, "define internal i8 @enum_raw");
+    try expectContains(enum_body, "; canonical executable MIR");
+    const pointer_body = try llvmFunctionBody(output.items, "define internal i64 @pointer_address");
+    try expectContains(pointer_body, "ptrtoint ptr %mc_arg_0 to i64");
+    const signed_body = try llvmFunctionBody(output.items, "define internal i64 @signed_bits");
+    try expectContains(signed_body, "ret i64 %mc_arg_0");
+}
+
+test "LLVM emits transparent integer domain casts from executable MIR" {
+    const source =
+        \\fn wrapping_add_u64(a: u64, b: u64) -> u64 {
+        \\    let wa: wrap<u64> = a as wrap<u64>;
+        \\    let wb: wrap<u64> = b as wrap<u64>;
+        \\    return (wa + wb) as u64;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_domain_casts.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @wrapping_add_u64");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "add i64");
+}
+
 test "LLVM scalar switch returns lower from MIR without body fallback" {
     const source =
         \\fn classify(n: i32) -> u32 {

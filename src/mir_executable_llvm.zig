@@ -907,10 +907,12 @@ const Renderer = struct {
         const target_info = mir.ExecutableCastKind.integerInfo(castStorageType(self.body, expression.result_ty) orelse expression.result_ty);
         const operation: ?[]const u8 = switch (expected) {
             .identity => null,
+            .integer_reinterpret => null,
+            .integer_to_domain, .domain_to_integer => null,
             .address_to_integer, .integer_to_address => null,
-            .pointer_to_integer => "ptrtoint",
+            .pointer_to_integer, .pointer_to_address => "ptrtoint",
             .pointer_to_nullable, .pointer_const_narrow => null,
-            .integer_to_open_enum => resize: {
+            .integer_to_open_enum, .enum_to_integer => resize: {
                 const source = source_info orelse return error.InvalidBody;
                 const target = target_info orelse return error.InvalidBody;
                 break :resize if (target.bits > source.bits)
@@ -2643,18 +2645,26 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     const target = mir.ExecutableCastKind.integerInfo(target_storage);
     return switch (expected) {
         .identity => true,
+        .integer_reinterpret => source != null and target != null and source.?.signed != target.?.signed and source.?.bits == target.?.bits,
+        .integer_to_domain => operand.result_ty == .integer and expression.result_ty == .domain_integer and
+            std.mem.eql(u8, operand.result_ty.integer, expression.result_ty.domain_integer.child),
+        .domain_to_integer => operand.result_ty == .domain_integer and expression.result_ty == .integer and
+            std.mem.eql(u8, operand.result_ty.domain_integer.child, expression.result_ty.integer),
         .address_to_integer => operand.result_ty == .address and target != null and !target.?.signed and target.?.bits == 64,
         .integer_to_address => source != null and !source.?.signed and source.?.bits == 64 and expression.result_ty == .address,
         .pointer_to_integer => operand.result_ty == .pointer and target != null,
+        .pointer_to_address => operand.result_ty == .pointer and expression.result_ty == .address,
         .pointer_to_nullable, .pointer_const_narrow => std.mem.eql(u8, scalarLlvmType(operand.result_ty) orelse return false, "ptr") and
             std.mem.eql(u8, scalarLlvmType(expression.result_ty) orelse return false, "ptr"),
         .integer_to_open_enum => source != null and target != null and enumTypeForValueType(body, expression.result_ty) != null,
+        .enum_to_integer => source != null and target != null and enumTypeForValueType(body, operand.result_ty) != null,
         .unsigned_resize => source != null and target != null and !source.?.signed and !target.?.signed,
         .signed_widen => source != null and target != null and source.?.signed and target.?.signed and target.?.bits >= source.?.bits,
     };
 }
 
 fn castStorageType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?mir.ValueType {
+    if (ty == .domain_integer) return .{ .integer = ty.domain_integer.child };
     if (scalarLlvmType(ty) != null) return ty;
     if (enumTypeForValueType(body, ty)) |enum_ty| return enum_ty.repr_ty;
     return null;

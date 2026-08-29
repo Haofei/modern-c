@@ -447,8 +447,10 @@ const ValueType = mir.ValueType;
 test "executable MIR classifies address representation casts" {
     const paddr: ValueType = .{ .address = .paddr };
     const usize_ty: ValueType = .{ .integer = "usize" };
+    const pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     try std.testing.expectEqual(mir.ExecutableCastKind.address_to_integer, mir.ExecutableCastKind.classify(paddr, usize_ty).?);
     try std.testing.expectEqual(mir.ExecutableCastKind.integer_to_address, mir.ExecutableCastKind.classify(usize_ty, paddr).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.pointer_to_address, mir.ExecutableCastKind.classify(pointer, paddr).?);
     try std.testing.expect(mir.ExecutableCastKind.classify(paddr, .{ .integer = "u32" }) == null);
 }
 
@@ -456,9 +458,20 @@ test "executable MIR classifies wide integers and open enum casts" {
     const u8_ty: ValueType = .{ .integer = "u8" };
     const u128_ty: ValueType = .{ .integer = "u128" };
     const open_enum: ValueType = .{ .open_enum = "DeviceState" };
+    const closed_enum: ValueType = .{ .closed_enum = "Mode" };
     try std.testing.expectEqual(@as(u16, 128), mir.ExecutableCastKind.integerInfo(u128_ty).?.bits);
     try std.testing.expectEqual(mir.ExecutableCastKind.unsigned_resize, mir.ExecutableCastKind.classify(u8_ty, u128_ty).?);
     try std.testing.expectEqual(mir.ExecutableCastKind.integer_to_open_enum, mir.ExecutableCastKind.classify(u8_ty, open_enum).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.enum_to_integer, mir.ExecutableCastKind.classify(closed_enum, u8_ty).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.integer_reinterpret, mir.ExecutableCastKind.classify(.{ .integer = "u64" }, .{ .integer = "i64" }).?);
+}
+
+test "executable MIR classifies transparent integer domain casts" {
+    const integer: ValueType = .{ .integer = "u64" };
+    const wrapping: ValueType = .{ .domain_integer = .{ .kind = .wrap, .child = "u64" } };
+    try std.testing.expectEqual(mir.ExecutableCastKind.integer_to_domain, mir.ExecutableCastKind.classify(integer, wrapping).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.domain_to_integer, mir.ExecutableCastKind.classify(wrapping, integer).?);
+    try std.testing.expect(mir.ExecutableCastKind.classify(.{ .integer = "u32" }, wrapping) == null);
 }
 
 test "executable MIR classifies representation-preserving pointer casts" {

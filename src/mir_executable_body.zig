@@ -389,11 +389,12 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
             const expected = mir.ExecutableCastKind.classify(operand.result_ty, value.result_ty) orelse return error.InvalidCast;
             if (operation.kind != expected) return error.InvalidCast;
-            if (operation.kind == .integer_to_open_enum) {
+            if (operation.kind == .integer_to_open_enum or operation.kind == .enum_to_integer) {
                 var exact = false;
                 for (body.enum_types) |enum_ty| {
-                    if (!sameValueType(enum_ty.ty, value.result_ty)) continue;
-                    exact = enum_ty.type_id.eql(value.type_id) and
+                    const enum_value: *const mir.ExecutableExpression = if (operation.kind == .integer_to_open_enum) &value else operand;
+                    if (!sameValueType(enum_ty.ty, enum_value.result_ty)) continue;
+                    exact = enum_ty.type_id.eql(enum_value.type_id) and
                         mir.ExecutableCastKind.integerInfo(enum_ty.repr_ty) != null;
                     break;
                 }

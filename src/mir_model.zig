@@ -435,14 +435,19 @@ pub fn executableCheckedBinaryTrapRequirements(op: ExecutableBinaryOp, ty: Value
 
 pub const ExecutableCastKind = enum {
     identity,
+    integer_reinterpret,
     unsigned_resize,
     signed_widen,
     address_to_integer,
     integer_to_address,
     pointer_to_integer,
+    pointer_to_address,
     pointer_to_nullable,
     pointer_const_narrow,
     integer_to_open_enum,
+    enum_to_integer,
+    integer_to_domain,
+    domain_to_integer,
 
     pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
         if (ValueType.eql(source, target)) return .identity;
@@ -451,6 +456,7 @@ pub const ExecutableCastKind = enum {
             return if (!target_integer.signed and target_integer.bits == 64) .address_to_integer else null;
         }
         if (target == .address) {
+            if (source == .pointer) return .pointer_to_address;
             const source_integer = integerInfo(source) orelse return null;
             return if (!source_integer.signed and source_integer.bits == 64) .integer_to_address else null;
         }
@@ -463,8 +469,14 @@ pub const ExecutableCastKind = enum {
             source.pointer.mutability != target.pointer.mutability)
             return .pointer_const_narrow;
         if (integerInfo(source) != null and target == .open_enum) return .integer_to_open_enum;
+        if ((source == .closed_enum or source == .open_enum) and integerInfo(target) != null) return .enum_to_integer;
+        if (source == .integer and target == .domain_integer and std.mem.eql(u8, source.integer, target.domain_integer.child))
+            return .integer_to_domain;
+        if (source == .domain_integer and target == .integer and std.mem.eql(u8, source.domain_integer.child, target.integer))
+            return .domain_to_integer;
         const source_integer = integerInfo(source) orelse return null;
         const target_integer = integerInfo(target) orelse return null;
+        if (source_integer.signed != target_integer.signed and source_integer.bits == target_integer.bits) return .integer_reinterpret;
         if (!source_integer.signed and !target_integer.signed) return .unsigned_resize;
         if (source_integer.signed and target_integer.signed and target_integer.bits >= source_integer.bits) return .signed_widen;
         return null;

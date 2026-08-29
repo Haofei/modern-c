@@ -4374,6 +4374,38 @@ test "lower-c emits enum literal explicit casts from MIR without body fallback" 
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits enum, pointer-address, and signedness casts from executable MIR" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn enum_raw(mode: Mode) -> u8 { return mode as u8; }
+        \\fn pointer_address(pointer: *mut u8) -> PAddr { unsafe { return pointer as PAddr; } }
+        \\fn signed_bits(value: u64) -> i64 { return value as i64; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_representation_casts.mc", source, &output);
+
+    for ([_][]const u8{ "static uint8_t enum_raw(Mode mode)", "static uintptr_t pointer_address(uint8_t * pointer)", "static int64_t signed_bits(uint64_t value)" }) |signature| {
+        const body = try cFunctionBody(output.items, signature);
+        try expectContains(body, "/* canonical executable MIR */");
+    }
+}
+
+test "lower-c emits transparent integer domain casts from executable MIR" {
+    const source =
+        \\fn wrapping_add_u64(a: u64, b: u64) -> u64 {
+        \\    let wa: wrap<u64> = a as wrap<u64>;
+        \\    let wb: wrap<u64> = b as wrap<u64>;
+        \\    return (wa + wb) as u64;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_domain_casts.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint64_t wrapping_add_u64(uint64_t a, uint64_t b)");
+    try expectContains(body, "/* canonical executable MIR */");
+}
+
 test "lower-c scalar switch returns lower from MIR without body fallback" {
     const source =
         \\fn classify(n: i32) -> u32 {
