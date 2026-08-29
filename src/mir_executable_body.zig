@@ -1611,8 +1611,12 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, target: mir.ExecutableP
             false,
         .value => false,
     };
-    if (target.projection_count != 1 or target.projections[0] != .deref)
-        return false;
+    if (target.projection_count == 2) {
+        var ordinary = target;
+        ordinary.storage = .ordinary;
+        return isParameterScalarAccessPlace(body, ordinary, false);
+    }
+    if (target.projection_count != 1 or target.projections[0] != .deref) return false;
     const local_id = switch (target.root) {
         .local => |id| id,
         .symbol, .value => return false,

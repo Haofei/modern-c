@@ -7383,6 +7383,11 @@ const FunctionBuilder = struct {
                 self.executable_symbols.items[id.index()].atomic_payload_type_id.eql(place.type_id),
             .value => false,
         };
+        if (place.projection_count == 2) {
+            var ordinary = place;
+            ordinary.storage = .ordinary;
+            return self.executablePlaceComplete(ordinary);
+        }
         if (place.projection_count != 1) return false;
         if (place.projections[0] != .deref) return false;
         const local_id = switch (place.root) {
@@ -7691,7 +7696,10 @@ const FunctionBuilder = struct {
                     break :statement .{ .block_id = owner.block_id, .span_id = owner_span_id };
                 },
             };
-            if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) return false;
+            if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) {
+                if (std.mem.eql(u8, self.name, "counter_differs")) std.debug.print(" owner block={} span={} expected block={} span={}\n", .{ owner_identity.block_id.raw, owner_identity.span_id.raw, edge.from_block.raw, legacy.typed_span_id.raw });
+                return false;
+            }
         }
         return executable_index == self.executable_trap_edges.items.len;
     }
@@ -9160,7 +9168,10 @@ const FunctionBuilder = struct {
             .field_count = fields.len,
         };
         for (fields, 0..) |field, index| {
-            const field_ty = valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            const field_ty = if (directAtomicPayloadTypeExprAlias(field.ty, self.aliases, true)) |payload|
+                valueTypeFromTypeAlias(payload, self.enums, self.structs, self.packed_bits, self.aliases)
+            else
+                valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
             if (field_ty == .unknown) return false;
             aggregate.field_spellings[index] = field.name.text;
             aggregate.field_types[index] = field_ty;

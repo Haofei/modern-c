@@ -1837,7 +1837,7 @@ const Renderer = struct {
         if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_atomic_ready_{d}", .{expression.id.raw});
         try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
-        return local.storage;
+        return self.emitParameterAccessPointer(place, local.storage);
     }
 
     fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
@@ -3311,6 +3311,11 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
             false,
         .value => false,
     };
+    if (place.projection_count == 2) {
+        var ordinary = place;
+        ordinary.storage = .ordinary;
+        return parameterScalarAccessPlaceSupported(body, ordinary);
+    }
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local_id = switch (place.root) {
         .local => |id| id,

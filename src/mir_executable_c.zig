@@ -1653,6 +1653,11 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
             false,
         .value => false,
     };
+    if (place.projection_count == 2) {
+        var ordinary = place;
+        ordinary.storage = .ordinary;
+        return parameterScalarAccessPlaceSupported(body, ordinary);
+    }
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local = switch (place.root) {
         .local => |id| id,
@@ -2627,6 +2632,24 @@ fn emitAtomicPlaceAddress(
     if (place.projection_count == 0) {
         try out.append(allocator, '&');
         try emitPlaceRootValue(allocator, out, body, place.*);
+        return;
+    }
+    if (place.projection_count == 2) {
+        const field_index = switch (place.projections[1]) {
+            .field => |index| index,
+            .deref, .index => return error.UnsupportedOperation,
+        };
+        const pointer = switch (place.root_ty) {
+            .pointer => |shape| shape,
+            else => return error.UnsupportedOperation,
+        };
+        const aggregate = aggregateTypeForValueType(body, .{ .struct_ = pointer.child }) orelse return error.UnsupportedOperation;
+        if (field_index >= aggregate.field_count) return error.UnsupportedOperation;
+        try out.appendSlice(allocator, "&(");
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, "->");
+        try appendIdent(allocator, out, aggregate.field_spellings[field_index]);
+        try out.append(allocator, ')');
         return;
     }
     // The value of a direct `*atomic<T>` parameter is the storage address;
