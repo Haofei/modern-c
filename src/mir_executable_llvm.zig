@@ -162,7 +162,13 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .binary => |binary| {
                         if (binary.arithmetic != .checked or !checkedIntegerBinaryHasExactTrapEdges(body, owner)) return false;
                     },
-                    .load, .atomic_load, .atomic_update, .address_of, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .load => |load| {
+                        if (!placeValid(body, load.place)) return false;
+                        if (mir.executableFixedArrayIndexPlace(body, body.places[load.place.index()]) != null) {
+                            if (!fixedArrayLoadBoundsTrapEdgeIsExact(body, owner)) return false;
+                        } else if (!representationTrapEdgeIsExact(body, owner)) return false;
+                    },
+                    .atomic_load, .atomic_update, .address_of, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     .try_unwrap => if (!tryUnwrapTrapEdgeIsExact(body, owner)) return false,
                     .index => |operation| if (!operation.checked or !indexTrapEdgeIsExact(body, owner)) return false,
                     .builtin_call => |call| if (call.kind == .conversion_trap_from) {
@@ -385,7 +391,7 @@ const Renderer = struct {
             .store => |store| {
                 const place = self.body.places[store.place.index()];
                 const indexed_pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
-                    try self.emitFixedArrayIndexPlacePointer(statement, place)
+                    try self.emitFixedArrayIndexPlacePointer(place, .{ .statement = statement.id })
                 else
                     null;
                 const value = try self.emitExpression(store.value);
@@ -1601,7 +1607,9 @@ const Renderer = struct {
         if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
         const value_ty = try self.typeText(expression.result_ty);
         const place = self.body.places[load.place.index()];
-        const pointer = if (computedRawManyDerefPlaceSupported(self.body, place, false))
+        const pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
+            try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id })
+        else if (computedRawManyDerefPlaceSupported(self.body, place, false))
             try self.emitComputedRawManyDerefPointer(place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
@@ -1785,10 +1793,15 @@ const Renderer = struct {
         return pointer;
     }
 
+    const FixedArrayBoundsOwner = union(enum) {
+        statement: mir.InstId,
+        expression: mir.ExprId,
+    };
+
     fn emitFixedArrayIndexPlacePointer(
         self: *Renderer,
-        statement: mir.ExecutableStatement,
         place: mir.ExecutablePlace,
+        owner: FixedArrayBoundsOwner,
     ) RenderError![]const u8 {
         const projection = mir.executableFixedArrayIndexPlace(self.body, place) orelse return error.InvalidBody;
         const root_pointer: []const u8 = switch (place.root) {
@@ -1807,9 +1820,21 @@ const Renderer = struct {
         const index = try self.emitExpression(projection.value);
         if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
         if (projection.checked) {
-            const edge = statementBoundsTrapEdge(self.body, statement) orelse return error.InvalidBody;
+            const edge = switch (owner) {
+                .statement => |id| statementBoundsTrapEdge(
+                    self.body,
+                    statementIdentity(self.body, id) orelse return error.InvalidBody,
+                ),
+                .expression => |id| fixedArrayLoadBoundsTrapEdge(
+                    self.body,
+                    if (expressionValid(self.body, id)) self.body.expressions[id.index()] else return error.InvalidBody,
+                ),
+            } orelse return error.InvalidBody;
             const in_bounds = try self.temp();
-            const continuation = try std.fmt.allocPrint(self.allocator, "mc_index_store_ready_{d}", .{statement.id.raw});
+            const continuation = switch (owner) {
+                .statement => |id| try std.fmt.allocPrint(self.allocator, "mc_index_store_ready_{d}", .{id.raw}),
+                .expression => |id| try std.fmt.allocPrint(self.allocator, "mc_index_load_ready_{d}", .{id.raw}),
+            };
             try self.output.print(
                 self.allocator,
                 "  {s} = icmp ult i64 {s}, {d}\n" ++
@@ -2987,6 +3012,13 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         return load.representation_source == null and !load.representation_span_id.isValid();
     }
     if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return false;
+    if (mir.executableFixedArrayIndexPlace(body, place)) |index| {
+        return load.representation_source == null and !load.representation_span_id.isValid() and
+            if (index.checked)
+                fixedArrayLoadBoundsTrapEdge(body, expression) != null and ownedExpressionTrapCount(body, expression.id) == 1
+            else
+                ownedExpressionTrapCount(body, expression.id) == 0;
+    }
     if (computedRawManyDerefPlaceSupported(body, place, false)) {
         return load.representation_source == null and !load.representation_span_id.isValid() and
             ownedExpressionTrapCount(body, expression.id) == 0;
@@ -3267,6 +3299,34 @@ fn tryUnwrapTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.Exe
 
 fn indexTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return indexTrapEdge(body, expression) != null;
+}
+
+fn fixedArrayLoadBoundsTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    return fixedArrayLoadBoundsTrapEdge(body, expression) != null;
+}
+
+fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    const load = switch (expression.operation) {
+        .load => |value| value,
+        else => return null,
+    };
+    if (!placeValid(body, load.place)) return null;
+    const projection = mir.executableFixedArrayIndexPlace(body, body.places[load.place.index()]) orelse return null;
+    if (!projection.checked or ownedExpressionTrapCount(body, expression.id) != 1) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
+        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check)
+            return null;
+        const trap = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Bounds) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
 }
 
 fn indexTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {

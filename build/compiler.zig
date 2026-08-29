@@ -10,6 +10,10 @@ pub fn build(b: *std.Build) h.Ctx {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const version = b.option([]const u8, "version", "Version string reported by `mcc --version`") orelse "0.7.0-dev";
+    const test_filters: []const []const u8 = if (b.option([]const u8, "test-filter", "Only compile and run tests whose names contain this text")) |filter|
+        b.allocator.dupe([]const u8, &.{filter}) catch @panic("OOM")
+    else
+        &.{};
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
 
@@ -54,17 +58,18 @@ pub fn build(b: *std.Build) h.Ctx {
     });
     const unit_tests = b.addTest(.{
         .root_module = unit_test_module,
+        .filters = test_filters,
     });
     const test_cmd = b.addRunArtifact(unit_tests);
     const unit_test_step = b.step("test-unit", "Run compiler unit tests");
     unit_test_step.dependOn(&test_cmd.step);
 
-    const frontend_shard_step = addTestShard(b, target, optimize, options, "test-shard-frontend", "src/test_shard_frontend.zig", "Run frontend lexer/parser/loader unit-test shard");
-    const sema_shard_step = addTestShard(b, target, optimize, options, "test-shard-sema", "src/test_shard_sema.zig", "Run semantic analysis and monomorphization unit-test shard");
-    const mir_cleanup_shard_step = addTestShard(b, target, optimize, options, "test-shard-mir-cleanup", "src/test_shard_mir_cleanup.zig", "Run MIR/ownership cleanup authority unit-test shard");
-    const lower_c_shard_step = addTestShard(b, target, optimize, options, "test-shard-lower-c", "src/test_shard_lower_c.zig", "Run C backend unit-test shard");
-    const lower_llvm_shard_step = addTestShard(b, target, optimize, options, "test-shard-lower-llvm", "src/test_shard_lower_llvm.zig", "Run LLVM backend unit-test shard");
-    const backend_shard_step = addTestShard(b, target, optimize, options, "test-shard-backend", "src/test_shard_backend.zig", "Run C/LLVM backend unit-test shard");
+    const frontend_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-frontend", "src/test_shard_frontend.zig", "Run frontend lexer/parser/loader unit-test shard");
+    const sema_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-sema", "src/test_shard_sema.zig", "Run semantic analysis and monomorphization unit-test shard");
+    const mir_cleanup_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-mir-cleanup", "src/test_shard_mir_cleanup.zig", "Run MIR/ownership cleanup authority unit-test shard");
+    const lower_c_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-lower-c", "src/test_shard_lower_c.zig", "Run C backend unit-test shard");
+    const lower_llvm_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-lower-llvm", "src/test_shard_lower_llvm.zig", "Run LLVM backend unit-test shard");
+    const backend_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-backend", "src/test_shard_backend.zig", "Run C/LLVM backend unit-test shard");
 
     const unit_shards_step = b.step("test-unit-shards", "Run compiler unit-test shards");
     unit_shards_step.dependOn(frontend_shard_step);
@@ -86,6 +91,7 @@ pub fn build(b: *std.Build) h.Ctx {
     });
     const spec_tests = b.addTest(.{
         .root_module = spec_test_module,
+        .filters = test_filters,
     });
     const spec_test_cmd = b.addRunArtifact(spec_tests);
     const spec_test_step = b.step("test-spec", "Run specification fixture tests");
@@ -115,6 +121,7 @@ fn addTestShard(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     options: *std.Build.Step.Options,
+    filters: []const []const u8,
     name: []const u8,
     root_source_file: []const u8,
     description: []const u8,
@@ -128,7 +135,7 @@ fn addTestShard(
     module.addAnonymousImport("diagnostics_reference_md", .{
         .root_source_file = b.path("docs/diagnostics.md"),
     });
-    const tests = b.addTest(.{ .root_module = module });
+    const tests = b.addTest(.{ .root_module = module, .filters = filters });
     const run = b.addRunArtifact(tests);
     const step = b.step(name, description);
     step.dependOn(&run.step);

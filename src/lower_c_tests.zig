@@ -2394,10 +2394,13 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     const take = try cFunctionBody(output.items, "static uint32_t take_row(mc_array_u32_2 row)");
     try expectContains(take, "return row.elems[mc_check_index_usize(1, 2)];");
     const read = try cFunctionBody(output.items, "static uint32_t read_global_array(void)");
-    try expectContains(read, "mc_race_load_u32(&values.elems[mc_check_index_usize(1, 2)])");
+    try std.testing.expect(isCanonicalExecutableCBody(read));
+    try expectContains(read, "mc_race_load_u32(&((values).elems[mc_check_index_usize(");
+    try expectContains(read, ", 2)]");
     const write = try cFunctionBody(output.items, "static uint32_t write_global_array(uint32_t value)");
-    try expectContains(write, "mc_race_store_u32(&values.elems[mc_check_index_usize(0, 2)], (uint32_t)mc_tmp0);");
-    try expectContains(write, "mc_race_load_u32(&values.elems[mc_check_index_usize(0, 2)])");
+    try std.testing.expect(isCanonicalExecutableCBody(write));
+    try expectContains(write, "mc_race_store_u32(&((values).elems[mc_check_index_usize(");
+    try expectContains(write, "mc_race_load_u32(&((values).elems[mc_check_index_usize(");
     const local = try cFunctionBody(output.items, "static uint32_t local_array_copy(mc_array_u32_2 row)");
     try expectContains(local, "mc_array_u32_2 copy = row;");
     try expectContains(local, "return copy.elems[mc_check_index_usize(0, 2)];");

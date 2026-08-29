@@ -7631,7 +7631,17 @@ const FunctionBuilder = struct {
                     if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return false;
                     const owner = self.executable_expressions.items[id.index()];
                     const owner_span_id = switch (owner.operation) {
-                        .load => |load| load.representation_span_id,
+                        .load => |load| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
+                            if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len) return false;
+                            const place = self.executable_places.items[load.place.index()];
+                            if (place.projection_count != 1) return false;
+                            const projection = switch (place.projections[0]) {
+                                .index => |value| value,
+                                .field, .deref => return false,
+                            };
+                            if (!projection.checked or projection.kind != .fixed_array) return false;
+                            break :bounds projection.span_id;
+                        } else load.representation_span_id,
                         .atomic_load => |load| load.representation_span_id,
                         .atomic_update => |update| update.representation_span_id,
                         .address_of => |address| address.representation_span_id,
@@ -8305,6 +8315,18 @@ const FunctionBuilder = struct {
                 };
                 if (index_kind == .fixed_array and bound == null)
                     break :index self.unsupportedExecutableExpression(.unsupported_index);
+                const direct_global_storage = switch (node.base.*.kind) {
+                    .ident => |ident| self.globals.contains(ident.text),
+                    else => false,
+                };
+                if (direct_global_storage and index_kind == .fixed_array and
+                    mir_model.ExecutableMemoryAccess.scalarAlignment(result_ty) != null)
+                {
+                    break :index .{ .load = .{
+                        .place = try self.appendExecutablePlace(expr),
+                        .access = self.executableMemoryAccess(expr, result_ty),
+                    } };
+                }
                 const base = global_aggregate: {
                     if (!self.executable_assignment_rhs or index_kind != .fixed_array or
                         (result_ty != .array and result_ty != .struct_))
@@ -13024,6 +13046,20 @@ const FunctionBuilder = struct {
                 },
                 .index => |operation| {
                     if (operation.checked and kind == .Bounds and source == .bounds_check) {
+                        owner = expression.id;
+                        break;
+                    }
+                },
+                .load => |load| load_bounds: {
+                    if (kind != .Bounds or source != .bounds_check or
+                        !load.place.isValid() or load.place.index() >= self.executable_places.items.len) break :load_bounds;
+                    const place = self.executable_places.items[load.place.index()];
+                    if (place.projection_count != 1) break :load_bounds;
+                    const projection = switch (place.projections[0]) {
+                        .index => |value| value,
+                        .field, .deref => break :load_bounds,
+                    };
+                    if (projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id)) {
                         owner = expression.id;
                         break;
                     }

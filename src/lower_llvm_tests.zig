@@ -2773,11 +2773,11 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     try expectContains(take, "extractvalue [2 x i32] %row, 1");
     const read = try llvmFunctionBody(output.items, "define internal i32 @read_global_array");
     try expectContains(read, "icmp ult i64 1, 2");
-    try expectContains(read, "getelementptr [2 x i32], ptr @values, i64 0, i64 1");
+    try expectContains(read, "getelementptr inbounds [2 x i32], ptr @values, i64 0, i64 1");
     try expectContains(read, "load atomic i32");
     const write = try llvmFunctionBody(output.items, "define internal i32 @write_global_array");
-    try expectContains(write, "getelementptr [2 x i32], ptr @values, i64 0, i64 0");
-    try expectContains(write, "store atomic i32 %value");
+    try expectContains(write, "getelementptr inbounds [2 x i32], ptr @values, i64 0, i64 0");
+    try expectContains(write, "store atomic i32 %mc_arg_0");
     const local = try llvmFunctionBody(output.items, "define internal i32 @local_array_copy");
     try expectContains(local, "extractvalue [2 x i32] %row, 0");
     try expectNotContains(local, "alloca");

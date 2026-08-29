@@ -1429,6 +1429,25 @@ fn memoryLoadSupported(
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
+        if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
+            const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
+                .local => .plain,
+                .symbol => |id| if (symbolById(body, id)) |symbol|
+                    if (symbol.kind == .global)
+                        if (symbol.mutable) .race_unordered else .plain
+                    else
+                        return false
+                else
+                    return false,
+                .value => return false,
+            };
+            return load.access.kind == expected_kind and
+                load.representation_source == null and !load.representation_span_id.isValid() and
+                if (index.checked)
+                    fixedArrayLoadBoundsTrapEdge(body, expression) != null and ownedTrapEdgeCount(body, expression.id) == 1
+                else
+                    ownedTrapEdgeCount(body, expression.id) == 0;
+        }
         if (!scalarAccessPlaceSupported(body, place.*)) return false;
         const local_alias = mir.executableLocalAddressDerefPlace(body, place.*, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
@@ -1924,7 +1943,14 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
     return switch (expression.operation) {
         .unary => checkedIntegerUnaryHasExactTrapEdges(body, expression),
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
-        .load, .atomic_load, .atomic_update, .address_of, .representation_check => representationOperationHasExactTrapEdge(body, expression),
+        .load => |load| if (placeById(body, load.place)) |place|
+            if (mir.executableFixedArrayIndexPlace(body, place.*) != null)
+                fixedArrayLoadBoundsTrapEdge(body, expression) != null
+            else
+                representationOperationHasExactTrapEdge(body, expression)
+        else
+            false,
+        .atomic_load, .atomic_update, .address_of, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         .builtin_call => |call| if (call.kind == .conversion_trap_from)
             builtinTrapConversionHasExactEdge(body, expression)
         else
@@ -1938,6 +1964,26 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
 fn indexTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
     if (expression.operation != .index or !expression.operation.index.checked or
         ownedTrapEdgeCount(body, expression.id) != 1) return null;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check) return null;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
+        return switch (trap.operation) {
+            .trap_ => |kind| if (kind == .Bounds) edge else null,
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    const load = switch (expression.operation) {
+        .load => |value| value,
+        else => return null,
+    };
+    const place = placeById(body, load.place) orelse return null;
+    const projection = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
+    if (!projection.checked or ownedTrapEdgeCount(body, expression.id) != 1) return null;
     for (body.trap_edges) |edge| {
         if (!edgeOwnedByExpression(edge, expression.id)) continue;
         if (!edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check) return null;

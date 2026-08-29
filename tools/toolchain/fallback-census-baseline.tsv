@@ -3,5 +3,5 @@
 # Policy: total/admitted/canonical/admission_bps may increase;
 # fallback/unsupported/specialized admission/plan definitions may decrease.
 backend	total_min	admitted_min	fallback_max	unsupported_max	admission_bps_min	canonical_min	specialized_max	specialized_plan_defs_max
-c	160	160	0	0	10000	111	49	10
-llvm	160	160	0	0	10000	111	49	10
+c	160	160	0	0	10000	113	47	10
+llvm	160	160	0	0	10000	113	47	10

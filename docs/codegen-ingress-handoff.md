@@ -1,8 +1,8 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-29 after moving aggregate global-index assignment sequences into
-canonical executable MIR and deleting the standalone aggregate-sequence plan.
+2026-08-29 after moving checked fixed-array stores and direct global scalar
+reads onto typed executable places and the canonical memory-access model.
 
 ## TL;DR
 
@@ -10,9 +10,9 @@ canonical executable MIR and deleting the standalone aggregate-sequence plan.
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **576/1760 C** and **615/1831 LLVM** distinct functions using the AST
-  body (C admits 67.3%, LLVM 66.4%). Of the admitted bodies, C now has **1073
-  canonical / 111 specialized** and LLVM has **1092 canonical / 124
+  finds **571/1760 C** and **605/1831 LLVM** distinct functions using the AST
+  body (C admits 67.6%, LLVM 67.0%). Of the admitted bodies, C now has **1080
+  canonical / 109 specialized** and LLVM has **1107 canonical / 119
   specialized**. Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
@@ -53,6 +53,16 @@ physically deleted. The strict ratchet is now **111 canonical / 49
 specialized** per backend, with **10** specialized plan definitions. The broad
 split is now C **1073 canonical / 111 specialized / 576 fallback** and LLVM
 **1092 canonical / 124 specialized / 615 fallback**.
+
+Direct global fixed-array scalar reads now lower as indexed
+`ExecutablePlace` values consumed by the existing syntax-free
+`load(ExecutableMemoryAccess)` operation. The place owns the bound and index,
+the load owns the exact Bounds edge, and mutable globals continue to use the
+same unordered access fact as every other global scalar load. C and LLVM no
+longer need a second memory-ordering field on value-index expressions. The
+strict split is **113 canonical / 47 specialized** per backend; the broad split
+is C **1080 canonical / 109 specialized / 571 fallback** and LLVM **1107
+canonical / 119 specialized / 605 fallback**.
 
 Nullable-pointer `?` is now an explicit executable-MIR `try_unwrap` operation
 with one exact `Unwrap` exceptional edge. The verifier checks the nullable and
@@ -840,6 +850,7 @@ The clean recognizer-only wins are exhausted; everything left is structural.
 # fast iteration (host)
 zig build                                   # build mcc-real
 zig build test-shard-lower-c test-shard-lower-llvm   # ~2min each; run separately if timing out
+zig build test-shard-backend -Dtest-filter='fixed-array constant-index places'  # true compile-time test filtering
 zig-out/bin/mcc-real emit-c  file.mc -o out.c
 zig-out/bin/mcc-real emit-llvm file.mc -o out.ll
 clang -std=c11 -c out.c -o /dev/null
