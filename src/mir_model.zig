@@ -969,7 +969,17 @@ pub const ExecutableExpression = struct {
             representation_span_id: SpanId = .invalid,
         },
         deref: ExprId,
-        index: struct { base: ExprId, index: ExprId },
+        index: struct {
+            base: ExprId,
+            index: ExprId,
+            kind: ExecutableIndexKind,
+            /// Fixed-array bound. Slice length is evaluated from `base`.
+            bound: ?usize = null,
+            /// A checked index owns exactly one Bounds exceptional edge.
+            /// An unchecked fixed-array index is admitted only when the
+            /// operand is a canonical in-range integer literal.
+            checked: bool = true,
+        },
         range_slice: struct { base: ExprId, start: ExprId, end: ExprId },
         member: struct { base: ExprId, field_index: usize },
         slice_length: ExprId,
@@ -1007,6 +1017,11 @@ pub const ExecutableExpression = struct {
         },
         unsupported,
     };
+};
+
+pub const ExecutableIndexKind = enum {
+    fixed_array,
+    slice,
 };
 
 pub const ExecutableVariantKind = enum {
@@ -1375,6 +1390,7 @@ pub const ExecutableIncompleteReason = enum {
     unsupported_address,
     unsupported_borrow,
     unsupported_member,
+    unsupported_index,
     unsupported_call,
     unsupported_array_literal,
     unsupported_struct_literal,

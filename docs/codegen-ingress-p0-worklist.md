@@ -17,7 +17,7 @@ that boundary.
 
 The strict corpus is not the P0 completion definition. The current 2026-08-29
 broad sweep over 522 repository MC roots de-duplicated to 1760 C and 1831 LLVM
-functions. It found 576 C and 617 LLVM AST-body fallbacks. Report
+functions. It found 576 C and 615 LLVM AST-body fallbacks. Report
 mode preserves partial records from reject/unsupported roots, so these totals
 are the current migration snapshot rather than a direct throughput comparison
 with older root sets. Those
@@ -28,16 +28,20 @@ strict-corpus recognizers are no longer an honest completion strategy.
 ### Last completed broad census snapshot (2026-08-29)
 
 The 522-root sweep found C **1184/1760 admitted (67.3%)**, 576 fallback, and
-LLVM **1214/1831 admitted (66.3%)**, 617 fallback. There were no unsupported
+LLVM **1216/1831 admitted (66.4%)**, 615 fallback. There were no unsupported
 bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
-slice moved nullable-pointer unwrap into one typed executable-MIR operation
-with an exact `Unwrap` edge, then deleted `NullableTryPlan` and both backend
-implementations. Six broad-corpus functions per backend moved from specialized
-admission to canonical emission. The broad split is therefore C **1069
-canonical / 115 specialized** and LLVM **1086 canonical / 128 specialized**.
-The strict ratchet is **107 C / 107 LLVM canonical functions**, specialized
-admission has fallen to **53/53**, and specialized plan definitions to **12**.
+slice moved checked direct-call aggregate projection into typed executable-MIR
+`member` and `index` operations, then deleted
+`DirectCallProjectedReturnPlan` and both backend implementations. Three strict
+functions per backend moved from specialized admission to canonical emission;
+two additional LLVM broad-corpus bodies became canonical. The broad split is C
+**1072 canonical / 112 specialized** and LLVM **1091 canonical / 125
+specialized**. The strict ratchet is **110 C / 110 LLVM canonical functions**,
+specialized admission has fallen to **50/50**, and specialized plan definitions
+to **11**. Canonical slice-index admission remains restricted to a declared
+member projected from a direct call so the race-tolerant direct-slice access
+plan is not bypassed.
 `simple_return` remains a bounded safety net at **31 C / 35 LLVM** broad uses;
 its earlier retirement probe was reverted because the lowering shards exposed
 fault-injection and edge-case behavior that canonical MIR does not yet own.

@@ -1620,14 +1620,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const direct_call_projected_return_plan = if (local_aggregate_place_update_return_plan == null and place_return_plan == null)
-            if (mir_statement_plan.buildDirectCallProjectedReturn(fn_mir)) |plan|
-                if (self.mirDirectCallProjectedReturnPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null and direct_call_projected_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1645,7 +1638,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const llvm_structural_access_operation = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and direct_call_projected_return_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1658,7 +1651,6 @@ const LlvmEmitter = struct {
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
             local_aggregate_place_update_return_plan != null,
-            direct_call_projected_return_plan != null,
             simple_return != null,
             place_return_plan != null,
             indirect_call_return_plan != null,
@@ -1739,9 +1731,6 @@ const LlvmEmitter = struct {
         } else if (local_aggregate_place_update_return_plan) |plan| {
             selected_path.* = .local_aggregate_place_update_return;
             try self.emitMirLocalAggregatePlaceUpdateReturnPlan(plan, ret_ty);
-        } else if (direct_call_projected_return_plan) |plan| {
-            selected_path.* = .direct_call_projected_return;
-            try self.emitMirDirectCallProjectedReturnPlan(plan, ret_ty);
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan, ret_ty);
@@ -4040,116 +4029,6 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "{s}:\n", .{after_label});
         const fallback = try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{plan.fallback.value});
         try self.emitReturnValue(ret_ty, fallback, spanFromMirSourcePoint(plan.fallback_return_location.source));
-    }
-
-    fn mirDirectCallProjectedReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.DirectCallProjectedReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        const callee_sig = self.fn_sigs.get(plan.callee_name) orelse return false;
-        if (callee_sig.is_variadic or !type_bridge.sameTypeSyntax(self.resolveAliasType(callee_sig.ret), self.resolveAliasType(plan.result_fact.target_ty))) return false;
-        if (callee_sig.params.len != plan.argument_count or plan.projection_count == 0) return false;
-        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
-            if (argument.index != index or !type_bridge.sameTypeSyntax(self.resolveAliasType(callee_sig.params[index].ty), self.resolveAliasType(argument.type_fact.target_ty))) return false;
-            if (!self.mirDirectCallArgumentSupported(function, argument)) return false;
-        }
-        var ty = plan.result_fact.target_ty;
-        for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
-            .field => |field| {
-                const decl = self.structDeclForType(ty) orelse return false;
-                if (field.field_index >= decl.fields.len or !std.mem.eql(u8, decl.fields[field.field_index].name.text, field.field_name) or !type_bridge.sameTypeSyntax(self.resolveAliasType(decl.fields[field.field_index].ty), self.resolveAliasType(field.type_fact.target_ty))) return false;
-                ty = field.type_fact.target_ty;
-            },
-            .index => |index| {
-                const resolved = self.resolveAliasType(ty);
-                const child_ty = switch (resolved.kind) {
-                    .array => |array| array.child.*,
-                    .slice => |slice| slice.child.*,
-                    else => return false,
-                };
-                if (!index.checked or !type_bridge.sameTypeSyntax(self.resolveAliasType(child_ty), self.resolveAliasType(index.type_fact.target_ty))) return false;
-                var found = false;
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, param.name.text, index.operand_name) and type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(index.operand_fact.target_ty))) found = true;
-                }
-                if (!found) return false;
-                ty = index.type_fact.target_ty;
-            },
-        };
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(ty), self.resolveAliasType(return_ty))) return false;
-        if (plan.representation_check) |check| {
-            if (check.projection_index >= plan.projection_count) return false;
-            const projection_ty = switch (plan.projections[check.projection_index]) {
-                .field => |field| field.type_fact.target_ty,
-                .index => |index| index.type_fact.target_ty,
-            };
-            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(check.type_fact.target_ty), self.resolveAliasType(projection_ty))) return false;
-        }
-        return true;
-    }
-
-    fn emitMirDirectCallProjectedReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.DirectCallProjectedReturnPlan, ret_ty: anytype) !void {
-        const sig = self.fn_sigs.get(plan.callee_name) orelse return error.UnsupportedLlvmEmission;
-        const old_debug_span = self.current_debug_span;
-        self.current_debug_span = spanFromMirSourcePoint(plan.call_location.source);
-        defer self.current_debug_span = old_debug_span;
-        var argument_values: [mir_statement_plan.max_arguments][]const u8 = undefined;
-        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
-            argument_values[index] = try self.emitMirDirectCallArgument(argument);
-        }
-        self.current_debug_span = spanFromMirSourcePoint(plan.call_location.source);
-        const call = try self.nextTemp();
-        const ret_ext = if (sig.c_abi) self.cAbiExtension(plan.result_fact.target_ty) else "";
-        try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ call, ret_ext, try self.llvmType(plan.result_fact.target_ty), plan.callee_name });
-        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
-            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-            const arg_ext = if (sig.c_abi) self.cAbiExtension(argument.type_fact.target_ty) else "";
-            try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(argument.type_fact.target_ty), arg_ext, argument_values[index] });
-        }
-        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
-
-        var value = call;
-        var ty = plan.result_fact.target_ty;
-        for (plan.projections[0..plan.projection_count], 0..) |projection, projection_index| {
-            switch (projection) {
-                .field => |field| {
-                    self.current_debug_span = spanFromMirSourcePoint(field.location.source);
-                    const next = try self.nextTemp();
-                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, field.field_index, try self.debugCallSuffix() });
-                    value = next;
-                    ty = field.type_fact.target_ty;
-                    if (plan.representation_check) |check| if (check.projection_index == projection_index) try self.emitMirDirectCallSliceRepresentationCheck(value, check.type_fact.target_ty, check.location);
-                },
-                .index => |index| {
-                    self.current_debug_span = spanFromMirSourcePoint(index.location.source);
-                    const index_value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{index.operand_name});
-                    switch (self.resolveAliasType(ty).kind) {
-                        .array => |array| {
-                            const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
-                            try self.emitBoundsCheck(index_value, len);
-                            const storage = try self.nextTemp();
-                            try self.emitAllocaConcreteStore(storage, ty, value);
-                            const address = try self.nextTemp();
-                            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}{s}\n", .{ address, try self.llvmType(ty), storage, index_value, try self.debugCallSuffix() });
-                            value = try self.emitOrdinaryLoad(array.child.*, address, false);
-                            ty = index.type_fact.target_ty;
-                        },
-                        .slice => |slice| {
-                            const slice_ty = try self.llvmType(ty);
-                            const ptr = try self.nextTemp();
-                            const len = try self.nextTemp();
-                            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0{s}\n  {s} = extractvalue {s} {s}, 1{s}\n", .{ ptr, slice_ty, value, try self.debugCallSuffix(), len, slice_ty, value, try self.debugCallSuffix() });
-                            try self.emitDynamicBoundsCheck(index_value, len);
-                            const address = try self.nextTemp();
-                            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}{s}\n", .{ address, try self.llvmType(slice.child.*), ptr, index_value, try self.debugCallSuffix() });
-                            const next = try self.emitOrdinaryLoad(slice.child.*, address, false);
-                            value = next;
-                            ty = index.type_fact.target_ty;
-                        },
-                        else => return error.UnsupportedLlvmEmission,
-                    }
-                },
-            }
-        }
-        try self.emitReturnValue(ret_ty, value, spanFromMirSourcePoint(plan.return_location.source));
     }
 
     fn emitMirDirectCallSliceRepresentationCheck(self: *LlvmEmitter, value: []const u8, slice_ty: anytype, location: mir_statement_plan.Location) !void {

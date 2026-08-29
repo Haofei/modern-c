@@ -163,6 +163,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     },
                     .load, .atomic_load, .atomic_update, .address_of, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     .try_unwrap => if (!tryUnwrapTrapEdgeIsExact(body, owner)) return false,
+                    .index => |operation| if (!operation.checked or !indexTrapEdgeIsExact(body, owner)) return false,
                     .builtin_call => |call| if (call.kind == .conversion_trap_from) {
                         if (!builtinTrapConversionEdgeIsExact(body, owner)) return false;
                     } else if (!representationTrapEdgeIsExact(body, owner)) return false,
@@ -528,7 +529,8 @@ const Renderer = struct {
             .array => |aggregate| try self.emitArray(expression, aggregate),
             .struct_ => |aggregate| try self.emitStruct(expression, aggregate),
             .member => |member| try self.emitMember(expression, member),
-            .index, .range_slice, .unsupported => return error.Unsupported,
+            .index => |index| try self.emitIndex(expression, index),
+            .range_slice, .unsupported => return error.Unsupported,
         };
         self.values[id.index()] = result;
         return result;
@@ -693,6 +695,88 @@ const Renderer = struct {
         if (!std.mem.eql(u8, base.ty, aggregate_ty)) return error.InvalidBody;
         const result = try self.temp();
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ result, aggregate_ty, base.spelling, operation.field_index });
+        return .{ .ty = result_ty, .spelling = result };
+    }
+
+    fn emitIndex(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+    ) RenderError!Value {
+        if (!indexSupported(self.body, expression, operation)) return error.InvalidBody;
+        const base = try self.emitExpression(operation.base);
+        const index = try self.emitExpression(operation.index);
+        if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
+        const result_ty = try self.typeText(expression.result_ty);
+        var element_pointer: []const u8 = undefined;
+
+        switch (operation.kind) {
+            .fixed_array => {
+                const bound = operation.bound orelse return error.InvalidBody;
+                if (operation.checked) {
+                    const edge = indexTrapEdge(self.body, expression) orelse return error.InvalidBody;
+                    const invalid = try self.temp();
+                    const continuation = try std.fmt.allocPrint(self.allocator, "mc_index_ready_{d}", .{expression.id.raw});
+                    try self.output.print(
+                        self.allocator,
+                        "  {s} = icmp uge i64 {s}, {d}\n" ++
+                            "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                            "{s}:\n",
+                        .{ invalid, index.spelling, bound, invalid, edge.trap_block.raw, continuation, continuation },
+                    );
+                }
+                // LLVM has no dynamic `extractvalue` for arrays. The bounded
+                // canonical slice therefore materializes the aggregate once
+                // in the entry block and indexes that storage mechanically.
+                const storage = try self.temp();
+                try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
+                    storage,
+                    base.ty,
+                    base.ty,
+                    base.spelling,
+                    storage,
+                });
+                element_pointer = try self.temp();
+                try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{
+                    element_pointer,
+                    base.ty,
+                    storage,
+                    index.spelling,
+                });
+            },
+            .slice => {
+                if (!std.mem.eql(u8, base.ty, "{ ptr, i64 }")) return error.InvalidBody;
+                const pointer = try self.temp();
+                const length = try self.temp();
+                try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n", .{
+                    pointer,
+                    base.spelling,
+                    length,
+                    base.spelling,
+                });
+                if (operation.checked) {
+                    const edge = indexTrapEdge(self.body, expression) orelse return error.InvalidBody;
+                    const invalid = try self.temp();
+                    const continuation = try std.fmt.allocPrint(self.allocator, "mc_index_ready_{d}", .{expression.id.raw});
+                    try self.output.print(
+                        self.allocator,
+                        "  {s} = icmp uge i64 {s}, {s}\n" ++
+                            "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                            "{s}:\n",
+                        .{ invalid, index.spelling, length, invalid, edge.trap_block.raw, continuation, continuation },
+                    );
+                }
+                element_pointer = try self.temp();
+                try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{
+                    element_pointer,
+                    result_ty,
+                    pointer,
+                    index.spelling,
+                });
+            },
+        }
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, result_ty, element_pointer });
         return .{ .ty = result_ty, .spelling = result };
     }
 
@@ -2004,13 +2088,14 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .array => |aggregate| arrayConstructionSupported(body, expression, aggregate),
         .struct_ => |aggregate| structConstructionSupported(body, expression, aggregate),
         .member => |member| memberSupported(body, expression, member),
+        .index => |index| indexSupported(body, expression, index),
         .optional_some => |operand| optionalConstructionSupported(body, expression, operand),
         .optional_none => optionalConstructionSupported(body, expression, null),
         .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .result => |result| resultConstructionSupported(body, expression, result),
-        .index, .range_slice, .unsupported => false,
+        .range_slice, .unsupported => false,
     };
 }
 
@@ -2176,6 +2261,101 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
         expression.type_id.eql(shape.field_type_ids[operation.field_index]) and
         llvmTypeSupported(body, base.result_ty) and llvmTypeSupported(body, expression.result_ty);
+}
+
+fn indexSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) bool {
+    if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
+        (operation.kind == .slice and !projectionPathHasMember(body, operation.base))) return false;
+    if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
+    const base = body.expressions[operation.base.index()];
+    const index = body.expressions[operation.index.index()];
+    if (!base.block_id.eql(expression.block_id) or !index.block_id.eql(expression.block_id) or
+        !base.owner_statement.eql(expression.owner_statement) or !index.owner_statement.eql(expression.owner_statement) or
+        !sameValueType(index.result_ty, .{ .integer = "usize" }) or !llvmTypeSupported(body, expression.result_ty))
+        return false;
+    switch (operation.kind) {
+        .fixed_array => {
+            // Dynamic array extraction is materialized through an entry-block
+            // alloca. Keep loop/body indexes closed until scratch storage is
+            // hoisted by MIR rather than emitted inside a repeated block.
+            if (expression.block_id.raw != 0) return false;
+            const bound = operation.bound orelse return false;
+            const array = switch (base.result_ty) {
+                .array => |shape| shape,
+                else => return false,
+            };
+            const aggregate = aggregateType(body, base.type_id) orelse return false;
+            if (array.length == null or array.length.? != bound or bound == 0 or
+                !sameValueType(aggregate.ty, base.result_ty) or aggregate.array_length == null or
+                aggregate.array_length.? != bound or aggregate.field_count == 0 or
+                !sameValueType(expression.result_ty, aggregate.field_types[0]) or
+                !expression.type_id.eql(aggregate.field_type_ids[0]) or !llvmTypeSupported(body, base.result_ty))
+                return false;
+        },
+        .slice => {
+            if (operation.bound != null) return false;
+            const child = switch (base.result_ty) {
+                .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
+                .slice => |name| name,
+                else => return false,
+            };
+            if (!std.mem.eql(u8, child, expression.result_ty.name()) or !llvmTypeSupported(body, base.result_ty)) return false;
+        },
+    }
+    if (operation.checked) return indexTrapEdgeIsExact(body, expression);
+    if (ownedExpressionTrapCount(body, expression.id) != 0 or operation.kind != .fixed_array) return false;
+    const bound = operation.bound orelse return false;
+    return switch (index.operation) {
+        .literal => |literal| switch (literal) {
+            .integer => |value| value < bound,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn indexIsDirectReturn(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (!expression.owner_statement.isValid() or expression.owner_statement.index() >= body.statements.len) return false;
+    const owner = body.statements[expression.owner_statement.index()];
+    return switch (owner.operation) {
+        .return_ => |value| if (value) |id| id.eql(expression.id) else false,
+        else => false,
+    };
+}
+
+fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
+    var current = start;
+    var depth: usize = 0;
+    while (depth <= mir.max_executable_operands) : (depth += 1) {
+        if (!expressionValid(body, current)) return false;
+        const expression = body.expressions[current.index()];
+        current = switch (expression.operation) {
+            .direct_call => return true,
+            .member => |member| member.base,
+            .representation_check => |check| check.operand,
+            else => return false,
+        };
+    }
+    return false;
+}
+
+fn projectionPathHasMember(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
+    var current = start;
+    var depth: usize = 0;
+    while (depth <= mir.max_executable_operands) : (depth += 1) {
+        if (!expressionValid(body, current)) return false;
+        const expression = body.expressions[current.index()];
+        current = switch (expression.operation) {
+            .member => return true,
+            .representation_check => |check| check.operand,
+            else => return false,
+        };
+    }
+    return false;
 }
 
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
@@ -2960,6 +3140,29 @@ fn representationTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mi
 
 fn tryUnwrapTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return tryUnwrapTrapEdge(body, expression) != null;
+}
+
+fn indexTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    return indexTrapEdge(body, expression) != null;
+}
+
+fn indexTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    if (expression.operation != .index or !expression.operation.index.checked or
+        ownedExpressionTrapCount(body, expression.id) != 1) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
+        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check)
+            return null;
+        const trap = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Bounds) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
 }
 
 fn tryUnwrapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {

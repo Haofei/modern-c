@@ -6937,7 +6937,8 @@ const FunctionBuilder = struct {
 
     fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
         return switch (expression.operation) {
-            .unsupported, .deref, .index, .range_slice => false,
+            .unsupported, .deref, .range_slice => false,
+            .index => |operation| self.executableIndexComplete(expression, operation),
             .array => |operation| self.executableArrayConstructionComplete(expression, operation),
             .optional_some => |operand| optional: {
                 if (expression.result_ty != .nullable_value or !operand.isValid() or
@@ -7182,6 +7183,75 @@ const FunctionBuilder = struct {
             sameValueType(base.result_ty, shape.ty) and
             sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
             expression.type_id.eql(shape.field_type_ids[operation.field_index]);
+    }
+
+    fn executableIndexComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "index"),
+    ) bool {
+        if (!operation.base.isValid() or operation.base.index() >= expression.id.index() or
+            operation.base.index() >= self.executable_expressions.items.len or
+            !operation.index.isValid() or operation.index.index() >= expression.id.index() or
+            operation.index.index() >= self.executable_expressions.items.len)
+            return false;
+        const base = self.executable_expressions.items[operation.base.index()];
+        const index = self.executable_expressions.items[operation.index.index()];
+        if (!base.block_id.eql(expression.block_id) or !index.block_id.eql(expression.block_id) or
+            !base.owner_statement.eql(expression.owner_statement) or !index.owner_statement.eql(expression.owner_statement) or
+            !sameValueType(index.result_ty, .{ .integer = "usize" }))
+            return false;
+
+        switch (operation.kind) {
+            .fixed_array => {
+                const bound = operation.bound orelse return false;
+                const array = switch (base.result_ty) {
+                    .array => |shape| shape,
+                    else => return false,
+                };
+                if (array.length == null or array.length.? != bound or bound == 0) return false;
+                var aggregate: ?mir_model.ExecutableAggregateType = null;
+                for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(base.type_id)) {
+                    aggregate = candidate;
+                    break;
+                };
+                const shape = aggregate orelse return false;
+                if (!sameValueType(shape.ty, base.result_ty) or shape.array_length == null or
+                    shape.array_length.? != bound or shape.field_count == 0 or
+                    !sameValueType(expression.result_ty, shape.field_types[0]) or
+                    !expression.type_id.eql(shape.field_type_ids[0]))
+                    return false;
+            },
+            .slice => {
+                if (operation.bound != null) return false;
+                const child = switch (base.result_ty) {
+                    .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
+                    .slice => |name| name,
+                    else => return false,
+                };
+                if (!std.mem.eql(u8, child, expression.result_ty.name())) return false;
+            },
+        }
+
+        var owned: usize = 0;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .expression => |id| if (id.eql(expression.id)) {
+                if (!operation.checked or edge.kind != .Bounds or edge.source != .bounds_check or
+                    !edge.from_block.eql(expression.block_id)) return false;
+                owned += 1;
+            },
+            .statement => {},
+        };
+        if (operation.checked) return owned == 1;
+        if (owned != 0 or operation.kind != .fixed_array) return false;
+        const bound = operation.bound orelse return false;
+        return switch (index.operation) {
+            .literal => |literal| switch (literal) {
+                .integer => |value| value < bound,
+                else => false,
+            },
+            else => false,
+        };
     }
 
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -8137,10 +8207,31 @@ const FunctionBuilder = struct {
                     .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                 } };
             },
-            .index => |node| .{ .index = .{
-                .base = try self.ensureExecutableExpr(node.base.*),
-                .index = try self.ensureExecutableExpr(node.index.*),
-            } },
+            .index => |node| index: {
+                const base_ty = self.exprType(node.base.*);
+                const index_kind: mir_model.ExecutableIndexKind = switch (base_ty) {
+                    .array => .fixed_array,
+                    .pointer => |shape| if (shape.kind == .slice)
+                        .slice
+                    else
+                        break :index self.unsupportedExecutableExpression(.unsupported_index),
+                    .slice => .slice,
+                    else => break :index self.unsupportedExecutableExpression(.unsupported_index),
+                };
+                const bound: ?usize = switch (base_ty) {
+                    .array => |shape| shape.length,
+                    else => null,
+                };
+                if (index_kind == .fixed_array and bound == null)
+                    break :index self.unsupportedExecutableExpression(.unsupported_index);
+                break :index .{ .index = .{
+                    .base = try self.ensureExecutableExpr(node.base.*),
+                    .index = try self.ensureExecutableExprAs(node.index.*, .{ .integer = "usize" }),
+                    .kind = index_kind,
+                    .bound = bound,
+                    .checked = !(self.optimize and self.indexProvablyInBounds(node.base.*, node.index.*)),
+                } };
+            },
             .slice => |node| .{ .range_slice = .{
                 .base = try self.ensureExecutableExpr(node.base.*),
                 .start = try self.ensureExecutableExpr(node.start.*),
@@ -12097,6 +12188,7 @@ const FunctionBuilder = struct {
                 } else {
                     try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                    try self.attachExecutableTrapEdge(expr.span, .Bounds, .bounds_check);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .index,
                         .source = self.sourcePoint(canonicalOperatorOperand(node.index.*).span),
@@ -12797,6 +12889,12 @@ const FunctionBuilder = struct {
                 },
                 .try_unwrap => {
                     if (kind == .Unwrap and source == .unwrap) {
+                        owner = expression.id;
+                        break;
+                    }
+                },
+                .index => |operation| {
+                    if (operation.checked and kind == .Bounds and source == .bounds_check) {
                         owner = expression.id;
                         break;
                     }

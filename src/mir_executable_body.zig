@@ -23,7 +23,6 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
     for (body.expressions) |expression_value| switch (expression_value.operation) {
         .unsupported => return if (body.incomplete_reason == .none) "unsupported_expression" else @tagName(body.incomplete_reason),
         .deref => return "unlowered_deref",
-        .index => return "unlowered_index",
         .range_slice => return "unlowered_range_slice",
         .member => return "unlowered_member",
         .array => return "unlowered_array",
@@ -458,6 +457,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .index => |operation| {
             try verifyOperand(body, value, operation.base);
             try verifyOperand(body, value, operation.index);
+            if (body.complete) try verifyIndexProjection(function, value, operation);
         },
         .range_slice => |operation| {
             try verifyOperand(body, value, operation.base);
@@ -632,6 +632,10 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .try_unwrap => |operand_id| {
                         const operand = expression(body, operand_id) orelse return error.InvalidTrapEdge;
                         if (operand.result_ty != .nullable_pointer or edge.kind != .Unwrap or edge.source != .unwrap)
+                            return error.InvalidTrapEdge;
+                    },
+                    .index => |operation| {
+                        if (!operation.checked or edge.kind != .Bounds or edge.source != .bounds_check)
                             return error.InvalidTrapEdge;
                     },
                     else => return error.InvalidTrapEdge,
@@ -1051,7 +1055,7 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .deref, .index, .range_slice => return true,
+        .unsupported, .deref, .range_slice => return true,
         .builtin_call => |call| {
             if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return true;
             if (call.argument_count > mir.max_executable_operands) return true;
@@ -1198,6 +1202,64 @@ fn verifyMemberProjection(
         !sameValueType(base.result_ty, aggregate.ty) or
         !sameValueType(value.result_ty, aggregate.field_types[operation.field_index]) or
         !value.type_id.eql(aggregate.field_type_ids[operation.field_index])) return error.InvalidAggregateType;
+}
+
+fn verifyIndexProjection(
+    function: *const mir.Function,
+    value: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) !void {
+    const body = &function.executable_body;
+    const base = expression(body, operation.base) orelse return error.InvalidExpressionReference;
+    const index = expression(body, operation.index) orelse return error.InvalidExpressionReference;
+    if (!base.block_id.eql(value.block_id) or !index.block_id.eql(value.block_id) or
+        !base.owner_statement.eql(value.owner_statement) or !index.owner_statement.eql(value.owner_statement) or
+        !sameValueType(index.result_ty, .{ .integer = "usize" }))
+        return error.InvalidAggregateType;
+
+    switch (operation.kind) {
+        .fixed_array => {
+            const bound = operation.bound orelse return error.InvalidAggregateType;
+            const array = switch (base.result_ty) {
+                .array => |shape| shape,
+                else => return error.InvalidAggregateType,
+            };
+            const aggregate = aggregateType(body, base.type_id) orelse return error.InvalidAggregateType;
+            if (array.length == null or array.length.? != bound or bound == 0 or
+                !sameValueType(aggregate.ty, base.result_ty) or aggregate.array_length == null or
+                aggregate.array_length.? != bound or aggregate.field_count == 0 or
+                !sameValueType(value.result_ty, aggregate.field_types[0]) or
+                !value.type_id.eql(aggregate.field_type_ids[0]))
+                return error.InvalidAggregateType;
+        },
+        .slice => {
+            if (operation.bound != null) return error.InvalidAggregateType;
+            const child = switch (base.result_ty) {
+                .pointer => |shape| if (shape.kind == .slice) shape.child else return error.InvalidAggregateType,
+                .slice => |name| name,
+                else => return error.InvalidAggregateType,
+            };
+            if (!std.mem.eql(u8, child, value.result_ty.name())) return error.InvalidAggregateType;
+        },
+    }
+
+    const owner: mir.ExecutableTrapOwner = .{ .expression = value.id };
+    if (operation.checked) {
+        if (ownedTrapCountAll(body, owner) != 1 or
+            ownedTrapCount(body, owner, .Bounds, .bounds_check) != 1)
+            return error.InvalidMemoryAccessTrap;
+        return;
+    }
+    if (ownedTrapCountAll(body, owner) != 0 or operation.kind != .fixed_array)
+        return error.InvalidMemoryAccessTrap;
+    const bound = operation.bound orelse return error.InvalidAggregateType;
+    switch (index.operation) {
+        .literal => |literal| switch (literal) {
+            .integer => |magnitude| if (magnitude >= bound) return error.InvalidMemoryAccessTrap,
+            else => return error.InvalidMemoryAccessTrap,
+        },
+        else => return error.InvalidMemoryAccessTrap,
+    }
 }
 
 fn verifyStructConstruction(

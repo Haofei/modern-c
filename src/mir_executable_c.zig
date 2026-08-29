@@ -414,9 +414,27 @@ fn emitExpressionOperation(
             try out.appendSlice(allocator, "))");
         },
         .index => |index| {
+            if (!indexSupported(body, expression.*, index)) return error.InvalidExpression;
+            try out.append(allocator, '(');
             try emitExpression(allocator, out, body, index.base, depth + 1);
-            try out.append(allocator, '[');
+            try out.appendSlice(allocator, switch (index.kind) {
+                .fixed_array => ").elems[",
+                .slice => ").ptr[",
+            });
+            if (index.checked) try out.appendSlice(allocator, "mc_check_index_usize(");
             try emitExpression(allocator, out, body, index.index, depth + 1);
+            if (index.checked) {
+                try out.appendSlice(allocator, ", ");
+                switch (index.kind) {
+                    .fixed_array => try out.print(allocator, "{d}", .{index.bound.?}),
+                    .slice => {
+                        try out.append(allocator, '(');
+                        try emitExpression(allocator, out, body, index.base, depth + 1);
+                        try out.appendSlice(allocator, ").len");
+                    },
+                }
+                try out.append(allocator, ')');
+            }
             try out.append(allocator, ']');
         },
         .slice_length => |base| {
@@ -657,7 +675,8 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .result => |result| resultConstructionSupported(body, expression, result),
-        .deref, .index, .range_slice, .unsupported => false,
+        .index => |index| indexSupported(body, expression, index),
+        .deref, .range_slice, .unsupported => false,
     };
 }
 
@@ -791,6 +810,93 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         sameValueType(base.result_ty, shape.ty) and
         sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
         expression.type_id.eql(shape.field_type_ids[operation.field_index]);
+}
+
+fn indexSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) bool {
+    if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
+        (operation.kind == .slice and !projectionPathHasMember(body, operation.base))) return false;
+    const base = expressionById(body, operation.base) orelse return false;
+    const index = expressionById(body, operation.index) orelse return false;
+    if (!base.block_id.eql(expression.block_id) or !index.block_id.eql(expression.block_id) or
+        !base.owner_statement.eql(expression.owner_statement) or !index.owner_statement.eql(expression.owner_statement) or
+        !sameValueType(index.result_ty, .{ .integer = "usize" }) or !supportsType(body, expression.result_ty))
+        return false;
+    switch (operation.kind) {
+        .fixed_array => {
+            const bound = operation.bound orelse return false;
+            const array = switch (base.result_ty) {
+                .array => |shape| shape,
+                else => return false,
+            };
+            const aggregate = aggregateType(body, base.type_id) orelse return false;
+            if (array.length == null or array.length.? != bound or bound == 0 or
+                !sameValueType(aggregate.ty, base.result_ty) or aggregate.array_length == null or
+                aggregate.array_length.? != bound or aggregate.field_count == 0 or
+                !sameValueType(expression.result_ty, aggregate.field_types[0]) or
+                !expression.type_id.eql(aggregate.field_type_ids[0]))
+                return false;
+        },
+        .slice => {
+            if (operation.bound != null) return false;
+            const child = switch (base.result_ty) {
+                .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
+                .slice => |name| name,
+                else => return false,
+            };
+            if (!std.mem.eql(u8, child, expression.result_ty.name())) return false;
+        },
+    }
+    if (operation.checked) return indexTrapEdge(body, expression) != null;
+    if (ownedTrapEdgeCount(body, expression.id) != 0 or operation.kind != .fixed_array) return false;
+    const bound = operation.bound orelse return false;
+    return switch (index.operation) {
+        .literal => |literal| switch (literal) {
+            .integer => |value| value < bound,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn indexIsDirectReturn(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const owner = statementById(body, expression.owner_statement) orelse return false;
+    return switch (owner.operation) {
+        .return_ => |value| if (value) |id| id.eql(expression.id) else false,
+        else => false,
+    };
+}
+
+fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
+    var current = start;
+    var depth: usize = 0;
+    while (depth <= mir.max_executable_operands) : (depth += 1) {
+        const expression = expressionById(body, current) orelse return false;
+        current = switch (expression.operation) {
+            .direct_call => return true,
+            .member => |member| member.base,
+            .representation_check => |check| check.operand,
+            else => return false,
+        };
+    }
+    return false;
+}
+
+fn projectionPathHasMember(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
+    var current = start;
+    var depth: usize = 0;
+    while (depth <= mir.max_executable_operands) : (depth += 1) {
+        const expression = expressionById(body, current) orelse return false;
+        current = switch (expression.operation) {
+            .member => return true,
+            .representation_check => |check| check.operand,
+            else => return false,
+        };
+    }
+    return false;
 }
 
 fn structConstructionSupported(
@@ -1772,8 +1878,24 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
         else
             representationOperationHasExactTrapEdge(body, expression),
         .try_unwrap => tryUnwrapTrapEdge(body, expression) != null,
+        .index => |operation| operation.checked and indexTrapEdge(body, expression) != null,
         else => false,
     };
+}
+
+fn indexTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    if (expression.operation != .index or !expression.operation.index.checked or
+        ownedTrapEdgeCount(body, expression.id) != 1) return null;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check) return null;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
+        return switch (trap.operation) {
+            .trap_ => |kind| if (kind == .Bounds) edge else null,
+            else => null,
+        };
+    }
+    return null;
 }
 
 fn tryUnwrapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {

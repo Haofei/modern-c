@@ -7972,22 +7972,25 @@ test "lower-c projects direct aggregate call results from MIR without body fallb
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_direct_call_projected_return.mc", source, &output);
 
     const direct_body = try cFunctionBody(output.items, "static uint32_t direct_array_call_index(uint32_t seed, uintptr_t index)");
-    try expectContains(direct_body, "make_values(seed);");
+    try expectContains(direct_body, "/* canonical executable MIR */");
+    try expectContains(direct_body, "make_values(mc_exec_tmp_");
     try expectContains(direct_body, "= index;");
     try expectContains(direct_body, ".elems[mc_check_index_usize(");
-    try expectContains(direct_body, "return mc_tmp");
+    try expectContains(direct_body, "return mc_exec_tmp_");
 
     const array_field_body = try cFunctionBody(output.items, "static uint32_t call_array_field_index(uint32_t seed, uintptr_t index)");
-    try expectContains(array_field_body, "make_bag(seed);");
+    try expectContains(array_field_body, "/* canonical executable MIR */");
+    try expectContains(array_field_body, "make_bag(mc_exec_tmp_");
     try expectContains(array_field_body, ".values;");
     try expectContains(array_field_body, ".elems[mc_check_index_usize(");
-    try expectContains(array_field_body, "return mc_tmp");
+    try expectContains(array_field_body, "return mc_exec_tmp_");
 
     const slice_field_body = try cFunctionBody(output.items, "static uint32_t call_slice_field_index(uint32_t seed, uintptr_t index)");
-    try expectContains(slice_field_body, "make_bag(seed);");
+    try expectContains(slice_field_body, "/* canonical executable MIR */");
+    try expectContains(slice_field_body, "make_bag(mc_exec_tmp_");
     try expectContains(slice_field_body, ".tail;");
     try expectContains(slice_field_body, ".ptr[mc_check_index_usize(");
-    try expectContains(slice_field_body, "return mc_tmp");
+    try expectContains(slice_field_body, "return mc_exec_tmp_");
 }
 
 test "lower-c returns first fixed-array element from MIR CFG without body fallback" {

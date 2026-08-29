@@ -1563,165 +1563,64 @@ test "MIR shared local aggregate place-update plan owns nested values and fails 
     try std.testing.expect(mir_statement_plan.buildLocalAggregatePlaceUpdateReturn(bounds_function.*) == null);
 }
 
-test "MIR direct-call aggregate projected returns own identities and checks" {
+test "executable MIR direct-call aggregate projections own typed member index and traps" {
     const source =
-        \\struct Bag { values: [2]u32, tail: [2]*mut u8 }
-        \\fn make_values(seed: u32) -> [2]u32 { return uninit; }
-        \\fn make_bag(seed: u32) -> Bag { return uninit; }
+        \\struct Bag { values: [2]u32, tail: []const u32 }
+        \\extern fn make_values(seed: u32) -> [2]u32;
+        \\extern fn make_bag(seed: u32) -> Bag;
         \\fn values_at(seed: u32, index: usize) -> u32 {
         \\    return make_values(seed)[index];
         \\}
         \\fn bag_values_at(seed: u32, index: usize) -> u32 {
         \\    return make_bag(seed).values[index];
         \\}
-        \\fn bag_tail_at(seed: u32, index: usize) -> *mut u8 {
+        \\fn bag_tail_at(seed: u32, index: usize) -> u32 {
         \\    return make_bag(seed).tail[index];
         \\}
     ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_direct_aggregate_projected_return.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
+    var parsed = try test_support.parseCheckedModule("mir_direct_aggregate_projected_return.mc", source);
+    defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    const values_plan = mir_statement_plan.buildDirectCallProjectedReturn(functionByName(module_mir, "values_at").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("make_values", values_plan.callee_name);
-    try std.testing.expect(values_plan.callee_value_id.isValid());
-    try std.testing.expect(values_plan.call_location.span_id.isValid());
-    try std.testing.expectEqual(@as(usize, 1), values_plan.argument_count);
-    try std.testing.expectEqual(@as(usize, 0), values_plan.arguments[0].index);
-    switch (values_plan.arguments[0].value) {
-        .parameter => |parameter| {
-            try std.testing.expectEqualStrings("seed", parameter.name);
-            try std.testing.expect(parameter.value_id.isValid());
-        },
-        else => return error.TestUnexpectedResult,
-    }
-    try std.testing.expect(values_plan.arguments[0].type_fact.typed_callee_span_id.eql(values_plan.call_location.span_id));
-    try std.testing.expectEqual(@as(usize, 1), values_plan.projection_count);
-    switch (values_plan.projections[0]) {
-        .index => |index| {
-            try std.testing.expectEqualStrings("index", index.operand_name);
-            try std.testing.expect(index.operand_id.isValid());
-            try std.testing.expect(index.operand_fact.typed_span_id.isValid());
-            try std.testing.expect(index.location.span_id.isValid());
-            try std.testing.expect(index.constant_value == null);
-            try std.testing.expect(index.static_bound == null);
-            try std.testing.expect(index.checked);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-    try std.testing.expect(values_plan.representation_check == null);
+    for ([_][]const u8{ "values_at", "bag_values_at", "bag_tail_at" }) |name| {
+        const function = functionByName(module_mir, name) orelse return error.TestUnexpectedResult;
+        try mir_executable_body.verify(&function);
+        try std.testing.expect(function.executable_body.isComplete());
 
-    const bag_values_plan = mir_statement_plan.buildDirectCallProjectedReturn(functionByName(module_mir, "bag_values_at").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("make_bag", bag_values_plan.callee_name);
-    try std.testing.expectEqual(@as(usize, 2), bag_values_plan.projection_count);
-    switch (bag_values_plan.projections[0]) {
-        .field => |field| {
-            try std.testing.expectEqualStrings("values", field.field_name);
-            try std.testing.expectEqual(@as(usize, 0), field.field_index);
-            try std.testing.expect(field.location.span_id.isValid());
-        },
-        else => return error.TestUnexpectedResult,
-    }
-    switch (bag_values_plan.projections[1]) {
-        .index => |index| try std.testing.expectEqualStrings("index", index.operand_name),
-        else => return error.TestUnexpectedResult,
+        var index_count: usize = 0;
+        var member_count: usize = 0;
+        for (function.executable_body.expressions) |expression| switch (expression.operation) {
+            .index => |operation| {
+                index_count += 1;
+                try std.testing.expect(operation.checked);
+                var bounds_edges: usize = 0;
+                for (function.executable_body.trap_edges) |edge| switch (edge.owner) {
+                    .expression => |owner| if (owner.eql(expression.id) and edge.kind == .Bounds) {
+                        bounds_edges += 1;
+                    },
+                    .statement => {},
+                };
+                try std.testing.expectEqual(@as(usize, 1), bounds_edges);
+                if (std.mem.eql(u8, name, "values_at") or std.mem.eql(u8, name, "bag_values_at")) {
+                    try std.testing.expectEqual(@as(@TypeOf(operation.kind), .fixed_array), operation.kind);
+                    try std.testing.expectEqual(@as(?usize, 2), operation.bound);
+                } else {
+                    try std.testing.expectEqual(@as(@TypeOf(operation.kind), .slice), operation.kind);
+                    try std.testing.expect(operation.bound == null);
+                }
+            },
+            .member => member_count += 1,
+            else => {},
+        };
+        try std.testing.expectEqual(@as(usize, 1), index_count);
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, name, "values_at")) 0 else 1), member_count);
     }
 
-    const tail_function = functionByName(module_mir, "bag_tail_at").?;
-    const tail_plan = mir_statement_plan.buildDirectCallProjectedReturn(tail_function) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("make_bag", tail_plan.callee_name);
-    try std.testing.expectEqual(@as(usize, 2), tail_plan.projection_count);
-    switch (tail_plan.projections[0]) {
-        .field => |field| {
-            try std.testing.expectEqualStrings("tail", field.field_name);
-            try std.testing.expectEqual(@as(usize, 1), field.field_index);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-    const tail_index = switch (tail_plan.projections[1]) {
-        .index => |index| index,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqualStrings("index", tail_index.operand_name);
-    try std.testing.expect(tail_index.checked);
-    try std.testing.expect(tail_index.operand_fact.typed_span_id.isValid());
-    const representation = tail_plan.representation_check orelse return error.TestUnexpectedResult;
-    try std.testing.expect(representation.location.span_id.isValid());
-    try std.testing.expect(representation.value_id.isValid());
-    try std.testing.expectEqual(@as(std.meta.Tag(mir.ValueType), .pointer), std.meta.activeTag(representation.result_ty));
-    try std.testing.expectEqual(@as(usize, 1), tail_function.bounds_facts.len);
-    try std.testing.expect(tail_function.bounds_facts[0].typed_span_id.eql(tail_index.operand_fact.typed_span_id));
-    try std.testing.expectEqual(@as(usize, 2), tail_function.trap_edges.len);
-    var saw_bounds_trap = false;
-    var saw_representation_trap = false;
-    for (tail_function.trap_edges) |edge| {
-        if (edge.kind == .Bounds) {
-            try std.testing.expect(edge.typed_span_id.eql(tail_index.location.span_id));
-            saw_bounds_trap = true;
-        }
-        if (edge.kind == .InvalidRepresentation) {
-            try std.testing.expect(edge.typed_span_id.eql(representation.location.span_id));
-            saw_representation_trap = true;
-        }
-    }
-    try std.testing.expect(saw_bounds_trap and saw_representation_trap);
-
-    var callee_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer callee_mir.deinit();
-    const callee_function = functionByNameMut(&callee_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
-    for (callee_function.blocks[0].instructions) |*instruction| {
-        if (instruction.kind == .call) {
-            instruction.typed_callee_span_id = .invalid;
-            break;
-        }
-    }
-    try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(callee_function.*) == null);
-
-    var argument_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer argument_mir.deinit();
-    const argument_function = functionByNameMut(&argument_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
-    for (argument_function.target_type_facts) |*fact| {
-        if (fact.kind == .direct_call_argument) {
-            fact.typed_operand_value_id = .invalid;
-            break;
-        }
-    }
-    try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(argument_function.*) == null);
-
-    var index_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer index_mir.deinit();
-    const index_function = functionByNameMut(&index_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
-    for (index_function.blocks[0].instructions) |*instruction| {
-        if (instruction.kind == .index) {
-            instruction.typed_index_operand_span_id = .invalid;
-            break;
-        }
-    }
-    try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(index_function.*) == null);
-
-    var bounds_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer bounds_mir.deinit();
-    const bounds_function = functionByNameMut(&bounds_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(bounds_function.bounds_facts.len > 0);
-    bounds_function.bounds_facts[0].typed_span_id = .invalid;
-    try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(bounds_function.*) == null);
-
-    var representation_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer representation_mir.deinit();
-    const representation_function = functionByNameMut(&representation_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(representation_function.representation_facts.len > 0);
-    for (representation_function.representation_facts) |*fact| fact.typed_span_id = .invalid;
-    try std.testing.expect(mir_statement_plan.buildDirectCallProjectedReturn(representation_function.*) == null);
+    const tail = functionByName(module_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), tail.executable_body.trap_edges.len);
 }
-
 test "MIR sequence foreach return owns iterable evaluation binding representation and CFG" {
     const source =
         \\struct Bag { values: [4]u32 }
