@@ -1325,6 +1325,10 @@ pub const ExecutableAggregateType = struct {
     type_id: TypeId,
     ty: ValueType,
     construction: AggregateConstructionKind,
+    /// Transparent scalar storage for packed-bits declarations. Ordinary
+    /// aggregates leave these fields invalid/unknown.
+    storage_ty: ValueType = .unknown,
+    storage_type_id: TypeId = .invalid,
     /// Canonical presentation names for mechanical C member emission. Field
     /// identity is still the dense index; these spellings carry no semantic
     /// authority and LLVM does not consume them.

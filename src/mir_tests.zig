@@ -474,6 +474,32 @@ test "executable MIR classifies transparent integer domain casts" {
     try std.testing.expect(mir.ExecutableCastKind.classify(.{ .integer = "u32" }, wrapping) == null);
 }
 
+test "executable MIR owns and verifies packed-bits storage metadata" {
+    const source =
+        \\packed bits Flags: u8 { ready: bool, busy: bool }
+        \\fn ready(flags: Flags) -> bool { return flags.ready; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_packed_bits_storage.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const function = functionByNameMut(&module_mir, "ready") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(function);
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.aggregate_types.len);
+    const aggregate = &function.executable_body.aggregate_types[0];
+    try std.testing.expectEqual(mir.AggregateConstructionKind.packed_bits, aggregate.construction);
+    try std.testing.expect(mir.ValueType.eql(aggregate.storage_ty, .{ .integer = "u8" }));
+
+    const saved = aggregate.storage_ty;
+    aggregate.storage_ty = .unknown;
+    try std.testing.expectError(error.InvalidAggregateType, mir_executable_body.verify(function));
+    aggregate.storage_ty = saved;
+    try mir_executable_body.verify(function);
+}
+
 test "executable MIR classifies representation-preserving pointer casts" {
     const mutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const const_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };

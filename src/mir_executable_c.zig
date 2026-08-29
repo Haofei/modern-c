@@ -544,6 +544,14 @@ fn emitExpressionOperation(
             const base = expressionById(body, member.base) orelse return error.InvalidExpression;
             const shape = aggregateType(body, base.type_id) orelse return error.InvalidExpression;
             if (!memberSupported(body, expression.*, member)) return error.InvalidExpression;
+            if (shape.construction == .packed_bits) {
+                try out.appendSlice(allocator, "((");
+                try emitExpression(allocator, out, body, member.base, depth + 1);
+                try out.appendSlice(allocator, " & (((");
+                try appendCType(allocator, out, body, shape.storage_ty);
+                try out.print(allocator, ")1) << {d})) != 0)", .{member.field_index});
+                return;
+            }
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, member.base, depth + 1);
             try out.appendSlice(allocator, ").");
@@ -825,7 +833,10 @@ fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir
 fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
     const base = expressionById(body, operation.base) orelse return false;
     const shape = aggregateType(body, base.type_id) orelse return false;
-    return shape.construction == .declared_struct and operation.field_index < shape.field_count and
+    const construction_supported = shape.construction == .declared_struct or
+        (shape.construction == .packed_bits and expression.result_ty == .bool and
+            mir.ExecutableCastKind.integerInfo(shape.storage_ty) != null);
+    return construction_supported and operation.field_index < shape.field_count and
         isSafeIdentifier(shape.field_spellings[operation.field_index]) and
         sameValueType(base.result_ty, shape.ty) and
         sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and

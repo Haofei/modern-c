@@ -321,6 +321,7 @@ const Renderer = struct {
             return std.fmt.allocPrint(self.allocator, "{{ i1, {s}, {s} }}", .{ ok_ty, err_ty });
         }
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
+        if (aggregate.construction == .packed_bits) return self.typeTextDepth(aggregate.storage_ty, depth + 1);
         if (aggregate.ty == .array) {
             if (aggregate.field_count == 0 or aggregate.array_length == null) return error.Unsupported;
             const element_ty = try self.typeTextDepth(aggregate.field_types[0], depth + 1);
@@ -731,6 +732,20 @@ const Renderer = struct {
         const aggregate_ty = try self.typeText(shape.ty);
         const result_ty = try self.typeText(expression.result_ty);
         if (!std.mem.eql(u8, base.ty, aggregate_ty)) return error.InvalidBody;
+        if (shape.construction == .packed_bits) {
+            const mask = try self.temp();
+            const result = try self.temp();
+            try self.output.print(self.allocator, "  {s} = and {s} {s}, {d}\n  {s} = icmp ne {s} {s}, 0\n", .{
+                mask,
+                aggregate_ty,
+                base.spelling,
+                @as(u128, 1) << @intCast(operation.field_index),
+                result,
+                aggregate_ty,
+                mask,
+            });
+            return .{ .ty = result_ty, .spelling = result };
+        }
         const result = try self.temp();
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ result, aggregate_ty, base.spelling, operation.field_index });
         return .{ .ty = result_ty, .spelling = result };
@@ -2111,6 +2126,8 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
         return llvmTypeSupportedDepth(body, shape.ok_ty, depth + 1) and
             llvmTypeSupportedDepth(body, shape.err_ty, depth + 1);
     const aggregate = aggregateTypeForValueType(body, ty) orelse return false;
+    if (aggregate.construction == .packed_bits)
+        return llvmTypeSupportedDepth(body, aggregate.storage_ty, depth + 1);
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
     for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count]) |field_ty, layout_complete| {
         // Only fixed arrays need the producer's explicit nested-layout bit.
@@ -2406,7 +2423,10 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     if (!expressionValid(body, operation.base)) return false;
     const base = body.expressions[operation.base.index()];
     const shape = aggregateType(body, base.type_id) orelse return false;
-    return shape.construction == .declared_struct and operation.field_index < shape.field_count and
+    const construction_supported = shape.construction == .declared_struct or
+        (shape.construction == .packed_bits and expression.result_ty == .bool and
+            mir.ExecutableCastKind.integerInfo(shape.storage_ty) != null);
+    return construction_supported and operation.field_index < shape.field_count and
         sameValueType(base.result_ty, shape.ty) and
         sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
         expression.type_id.eql(shape.field_type_ids[operation.field_index]) and

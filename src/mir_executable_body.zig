@@ -1161,9 +1161,16 @@ fn switchValueFitsType(body: *const mir.ExecutableBody, subject_ty: mir.ValueTyp
 fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableAggregateType, index: usize) !void {
     const body = &function.executable_body;
     if (!aggregate.type_id.isValid() or aggregate.field_count == 0 or aggregate.field_count > mir.max_executable_operands or
-        (aggregate.construction != .declared_struct and aggregate.construction != .c_union)) return error.InvalidAggregateType;
+        (aggregate.construction != .declared_struct and aggregate.construction != .c_union and aggregate.construction != .packed_bits)) return error.InvalidAggregateType;
     try verifyType(function, aggregate.type_id, aggregate.ty, body.complete);
     if (aggregate.ty != .array and aggregate.ty != .struct_ and aggregate.ty != .nullable_value) return error.InvalidAggregateType;
+    if (aggregate.construction == .packed_bits) {
+        const storage = mir.ExecutableCastKind.integerInfo(aggregate.storage_ty) orelse return error.InvalidAggregateType;
+        if (aggregate.ty != .struct_ or !aggregate.storage_type_id.isValid() or aggregate.field_count > storage.bits)
+            return error.InvalidAggregateType;
+        try verifyType(function, aggregate.storage_type_id, aggregate.storage_ty, body.complete);
+        for (aggregate.field_types[0..aggregate.field_count]) |field_ty| if (field_ty != .bool) return error.InvalidAggregateType;
+    } else if (aggregate.storage_ty != .unknown or aggregate.storage_type_id.isValid()) return error.InvalidAggregateType;
     if (aggregate.ty == .array and aggregate.construction != .declared_struct) return error.InvalidAggregateType;
     if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
         !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;

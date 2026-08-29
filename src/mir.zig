@@ -7184,7 +7184,10 @@ const FunctionBuilder = struct {
             break;
         };
         const shape = aggregate orelse return false;
-        return shape.construction == .declared_struct and operation.field_index < shape.field_count and
+        const construction_complete = shape.construction == .declared_struct or
+            (shape.construction == .packed_bits and expression.result_ty == .bool and
+                mir_model.ExecutableCastKind.integerInfo(shape.storage_ty) != null);
+        return construction_complete and operation.field_index < shape.field_count and
             shape.field_spellings[operation.field_index].len != 0 and
             sameValueType(base.result_ty, shape.ty) and
             sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
@@ -8408,6 +8411,18 @@ const FunctionBuilder = struct {
                     .pointer => |shape| shape.child,
                     else => break :member self.unsupportedExecutableExpression(.unsupported_member),
                 };
+                if (self.packed_bits.get(struct_name)) |packed_summary| {
+                    if (pointer_shape != null or field_index >= packed_summary.fields.len or
+                        !try self.internExecutablePackedBitsType(.{ .struct_ = struct_name }, packed_summary))
+                        break :member self.unsupportedExecutableExpression(.unsupported_member);
+                    const field_ty = valueTypeFromTypeAlias(packed_summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                    if (field_ty != .bool or result_ty != .bool)
+                        break :member self.unsupportedExecutableExpression(.unsupported_member);
+                    break :member .{ .member = .{
+                        .base = try self.ensureExecutableExprAs(node.base.*, base_ty),
+                        .field_index = field_index,
+                    } };
+                }
                 const summary = self.structs.get(struct_name) orelse
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
                 if (field_index >= summary.fields.len or
@@ -8999,12 +9014,47 @@ const FunctionBuilder = struct {
         }
         switch (ty) {
             .struct_ => |name| {
-                const summary = self.structs.get(name) orelse return false;
-                return self.internExecutableAggregateTypeDepth(ty, executableAggregateConstruction(summary), summary.fields, 0);
+                if (self.structs.get(name)) |summary|
+                    return self.internExecutableAggregateTypeDepth(ty, executableAggregateConstruction(summary), summary.fields, 0);
+                if (self.packed_bits.get(name)) |summary|
+                    return self.internExecutablePackedBitsType(ty, summary);
+                return false;
             },
             .closed_enum, .open_enum => return self.internExecutableEnumType(ty),
             else => return true,
         }
+    }
+
+    fn internExecutablePackedBitsType(self: *FunctionBuilder, ty: ValueType, summary: PackedBitsSummary) !bool {
+        if (ty != .struct_ or summary.fields.len == 0 or summary.fields.len > mir_model.max_executable_operands) return false;
+        const storage_ty = valueTypeFromTypeAlias(summary.repr, self.enums, self.structs, self.packed_bits, self.aliases);
+        const storage_info = mir_model.ExecutableCastKind.integerInfo(storage_ty) orelse return false;
+        if (summary.fields.len > storage_info.bits) return false;
+        const type_id = try self.internTypeId(ty);
+        const storage_type_id = try self.internTypeId(storage_ty);
+        for (self.executable_aggregate_types.items) |aggregate| {
+            if (!aggregate.type_id.eql(type_id)) continue;
+            return aggregate.construction == .packed_bits and sameValueType(aggregate.ty, ty) and
+                sameValueType(aggregate.storage_ty, storage_ty) and aggregate.storage_type_id.eql(storage_type_id) and
+                aggregate.field_count == summary.fields.len;
+        }
+        var aggregate: mir_model.ExecutableAggregateType = .{
+            .type_id = type_id,
+            .ty = ty,
+            .construction = .packed_bits,
+            .storage_ty = storage_ty,
+            .storage_type_id = storage_type_id,
+            .field_count = summary.fields.len,
+        };
+        for (summary.fields, 0..) |field, index| {
+            const field_ty = valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (field_ty != .bool) return false;
+            aggregate.field_spellings[index] = field.name.text;
+            aggregate.field_types[index] = .bool;
+            aggregate.field_type_ids[index] = try self.internTypeId(.bool);
+        }
+        try self.executable_aggregate_types.append(self.allocator, aggregate);
+        return true;
     }
 
     fn executableCallableSignature(self: *FunctionBuilder, type_expr: ast.TypeExpr) !?mir_model.ExecutableCallSignature {
