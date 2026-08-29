@@ -490,6 +490,11 @@ test "executable MIR owns and verifies packed-bits storage metadata" {
         \\packed bits Flags: u8 { ready: bool, busy: bool }
         \\fn ready(flags: Flags) -> bool { return flags.ready; }
         \\fn make(ready: bool, busy: bool) -> Flags { return .{ .ready = ready, .busy = busy }; }
+        \\fn replace(ready: bool) -> Flags {
+        \\    var flags: Flags = .{ .ready = false, .busy = false };
+        \\    flags = .{ .ready = ready, .busy = false };
+        \\    return flags;
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("mir_packed_bits_storage.mc", source);
     defer parsed.deinit();
@@ -516,6 +521,12 @@ test "executable MIR owns and verifies packed-bits storage metadata" {
     try std.testing.expect(constructor.executable_body.complete);
     try std.testing.expect(mir_executable_c.canEmitBody(&constructor.executable_body));
     try std.testing.expect(mir_executable_llvm.supports(&constructor.executable_body, constructor.return_ty));
+
+    const replacement = functionByNameMut(&module_mir, "replace") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(replacement);
+    try std.testing.expect(replacement.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&replacement.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&replacement.executable_body, replacement.return_ty));
 }
 
 test "executable MIR classifies representation-preserving pointer casts" {

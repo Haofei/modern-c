@@ -10092,7 +10092,10 @@ const FunctionBuilder = struct {
                     switch (executable_ty) {
                         .struct_ => |struct_name| {
                             if (self.structs.get(struct_name)) |summary| {
-                                if (!try self.internExecutableAggregateType(ty, executableAggregateConstruction(summary), summary.fields))
+                                if (!try self.internExecutableAggregateType(executable_ty, executableAggregateConstruction(summary), summary.fields))
+                                    self.executable_supported = false;
+                            } else if (self.packed_bits.get(struct_name)) |summary| {
+                                if (!try self.internExecutablePackedBitsType(executable_ty, summary))
                                     self.executable_supported = false;
                             } else self.executable_supported = false;
                         },
@@ -10189,11 +10192,13 @@ const FunctionBuilder = struct {
                 const previous_executable_assignment_rhs = self.executable_assignment_rhs;
                 self.executable_assignment_rhs = true;
                 defer self.executable_assignment_rhs = previous_executable_assignment_rhs;
+                const store_value = try self.ensureExecutablePointerCoercedExprAsType(node.value, assignment_target_ty, assignment_target_type_expr);
+                const store_access = self.executableMemoryAccess(node.target, assignment_target_ty);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = place_id,
-                    .value = try self.ensureExecutablePointerCoercedExprAsType(node.value, assignment_target_ty, assignment_target_type_expr),
+                    .value = store_value,
                     .ty = assignment_target_ty,
-                    .access = self.executableMemoryAccess(node.target, assignment_target_ty),
+                    .access = store_access,
                     .representation_source = representation_source,
                     .representation_span_id = if (representation_source) |source| try self.internSpanId(source) else .invalid,
                 } });
