@@ -10,7 +10,6 @@ const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
-const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
@@ -1470,18 +1469,11 @@ pub const CEmitter = struct {
         // the legacy definition emitter, which still renders every attribute.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
-        const aggregate_sequence_plan = if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
-            if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
+        const workflow_plan = if (mir_workflow_plan.build(&fn_mir)) |plan|
+            if (self.mirWorkflowPlanSupported(function, plan)) plan else null
         else
             null;
-        const workflow_plan = if (aggregate_sequence_plan == null)
-            if (mir_workflow_plan.build(&fn_mir)) |plan|
-                if (self.mirWorkflowPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const alloca_hoist_plan = if (aggregate_sequence_plan == null and workflow_plan == null)
+        const alloca_hoist_plan = if (workflow_plan == null)
             if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
                 if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
             else
@@ -1490,7 +1482,7 @@ pub const CEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const access_slice_plan = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
+        const access_slice_plan = if (workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const plan = access_body_plan orelse break :blk null;
             break :blk if (self.mirAccessSlicePlanSupported(function, plan)) plan else null;
@@ -1527,7 +1519,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1547,7 +1539,6 @@ pub const CEmitter = struct {
         else
             null;
         const specialized_plans = [_]bool{
-            aggregate_sequence_plan != null,
             workflow_plan != null,
             alloca_hoist_plan != null,
             access_slice_plan != null,
@@ -1571,10 +1562,7 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
 
-        if (aggregate_sequence_plan) |plan| {
-            selected_path.* = .aggregate_sequence;
-            try self.emitMirAggregateSequencePlan(plan);
-        } else if (workflow_plan) |plan| {
+        if (workflow_plan) |plan| {
             selected_path.* = .workflow;
             try self.emitMirWorkflowPlan(plan);
         } else if (alloca_hoist_plan) |plan| {
@@ -1811,174 +1799,6 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn mirAggregateSequencePlanSupported(self: *CEmitter, function: anytype, plan: mir_aggregate_sequence_plan.Plan) bool {
-        return switch (plan) {
-            .aggregate_call_after_assignment => |sequence| self.mirAggregateCallAfterAssignmentPlanSupported(function, sequence),
-            .struct_literal_direct_calls => |literal| self.mirStructLiteralDirectCallsPlanSupported(function, literal),
-        };
-    }
-
-    fn mirAggregateCallAfterAssignmentPlanSupported(self: *CEmitter, function: anytype, sequence: mir_aggregate_sequence_plan.AggregateCallAfterAssignment) bool {
-        if (sequence.count != 7 or !self.mirScalarExpressionSourceTypeIs(function.signature.transitionalReturnType() orelse return false, "u32")) return false;
-        const row = switch (sequence.steps[0]) {
-            .local_uninit => |value| value,
-            else => return false,
-        };
-        const copy = switch (sequence.steps[1]) {
-            .copy_index_assignment => |value| value,
-            else => return false,
-        };
-        const pair = switch (sequence.steps[2]) {
-            .local_uninit => |value| value,
-            else => return false,
-        };
-        const aggregate = switch (sequence.steps[3]) {
-            .aggregate_assignment => |value| value,
-            else => return false,
-        };
-        const left = switch (sequence.steps[4]) {
-            .direct_call => |value| value,
-            else => return false,
-        };
-        const right = switch (sequence.steps[5]) {
-            .direct_call => |value| value,
-            else => return false,
-        };
-        const returned = switch (sequence.steps[6]) {
-            .binary_return => |value| value,
-            else => return false,
-        };
-        if (!row.local.id.isValid() or !pair.local.id.isValid() or !copy.target.id.eql(row.local.id) or !aggregate.target.id.eql(pair.local.id) or
-            !copy.source_root.id.isValid() or copy.index != 0 or copy.bound != 2 or copy.bounds_trap.kind != .Bounds or returned.overflow_trap.kind != .IntegerOverflow or
-            !std.mem.eql(u8, returned.operation, "add") or returned.left_call_step != 4 or returned.right_call_step != 5) return false;
-        const matrix = self.globals.get(copy.source_root.name) orelse return false;
-        const row_c = matrix.array_element_info orelse return false;
-        if (matrix.array_len == null or !std.mem.eql(u8, matrix.array_len.?, "2") or std.meta.activeTag(row.type_ref.value_ty) != .array or std.meta.activeTag(copy.source_type.value_ty) != .array) return false;
-        const pair_name = switch (pair.type_ref.value_ty) {
-            .struct_ => |name| name,
-            else => return false,
-        };
-        const pair_decl = self.structs.get(pair_name) orelse return false;
-        if (pair_decl.fields.len != 2 or std.meta.activeTag(aggregate.type_ref.value_ty) != std.meta.activeTag(pair.type_ref.value_ty) or !std.mem.eql(u8, aggregate.type_ref.value_ty.name(), pair.type_ref.value_ty.name()) or aggregate.field_indices[0] != 0 or aggregate.field_indices[1] != 1 or aggregate.literal_values[0] != 71 or aggregate.literal_values[1] != 72) return false;
-        for (pair_decl.fields) |field| if (!self.mirScalarExpressionSourceTypeIs(field.ty, "u32")) return false;
-        return self.mirAggregateSequenceCallSupported(left, row.local, row_c.c_type, "u32") and self.mirAggregateSequenceCallSupported(right, pair.local, pair_name, "u32");
-    }
-
-    fn mirAggregateSequenceCallSupported(self: *CEmitter, call: mir_aggregate_sequence_plan.DirectCall, argument: mir_aggregate_sequence_plan.ValueRef, argument_c: []const u8, result_name: []const u8) bool {
-        if (!call.callee.id.isValid() or !call.argument.id.eql(argument.id) or !std.mem.eql(u8, call.argument.name, argument.name) or !std.mem.eql(u8, call.result.value_ty.name(), result_name)) return false;
-        const signature = self.functions.get(call.callee.name) orelse return false;
-        const return_ty = signature.return_type orelse return false;
-        if (signature.is_variadic or signature.params.len != 1 or !self.mirScalarExpressionSourceTypeIs(return_ty, result_name)) return false;
-        const parameter_c = self.cTypeFor(signature.params[0].ty, .typedef_name) catch return false;
-        return std.mem.eql(u8, parameter_c, argument_c);
-    }
-
-    fn mirStructLiteralDirectCallsPlanSupported(self: *CEmitter, function: anytype, literal: mir_aggregate_sequence_plan.StructLiteralDirectCalls) bool {
-        const result_name = switch (literal.result.value_ty) {
-            .struct_ => |name| name,
-            else => return false,
-        };
-        const result_decl = self.structs.get(result_name) orelse return false;
-        if (result_decl.fields.len != 2 or !self.mirScalarExpressionSourceTypeIs(function.signature.transitionalReturnType() orelse return false, result_name)) return false;
-        for (literal.fields, 0..) |field, index| {
-            if (field.field_index != index or !field.call.argument.id.isValid() or !self.mirAggregateSequenceFieldCallSupported(function, field.call, result_decl.fields[index].ty)) return false;
-            if (index == 1) {
-                const trap = field.representation_trap orelse return false;
-                if (trap.kind != .InvalidRepresentation) return false;
-            } else if (field.representation_trap != null) return false;
-        }
-        return true;
-    }
-
-    fn mirAggregateSequenceFieldCallSupported(self: *CEmitter, function: anytype, call: mir_aggregate_sequence_plan.DirectCall, field_ty: TransitionalTypeExpr) bool {
-        const signature = self.functions.get(call.callee.name) orelse return false;
-        const return_ty = signature.return_type orelse return false;
-        if (!call.callee.id.isValid() or signature.is_variadic or signature.params.len != 1 or !type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(field_ty))) return false;
-        for (function.signature.params) |parameter| {
-            if (!std.mem.eql(u8, parameter.name.text, call.argument.name)) continue;
-            return type_bridge.sameTypeSyntax(self.resolveAliasType(parameter.ty), self.resolveAliasType(signature.params[0].ty));
-        }
-        return false;
-    }
-
-    fn emitMirAggregateSequencePlan(self: *CEmitter, plan: mir_aggregate_sequence_plan.Plan) !void {
-        switch (plan) {
-            .aggregate_call_after_assignment => |sequence| try self.emitMirAggregateCallAfterAssignmentPlan(sequence),
-            .struct_literal_direct_calls => |literal| try self.emitMirStructLiteralDirectCallsPlan(literal),
-        }
-    }
-
-    fn emitMirAggregateCallAfterAssignmentPlan(self: *CEmitter, sequence: mir_aggregate_sequence_plan.AggregateCallAfterAssignment) !void {
-        const row = sequence.steps[0].local_uninit;
-        const copy = sequence.steps[1].copy_index_assignment;
-        const pair = sequence.steps[2].local_uninit;
-        const aggregate = sequence.steps[3].aggregate_assignment;
-        const left = sequence.steps[4].direct_call;
-        const right = sequence.steps[5].direct_call;
-        const returned = sequence.steps[6].binary_return;
-        const matrix = self.globals.get(copy.source_root.name) orelse return error.UnsupportedCEmission;
-        const row_c = matrix.array_element_info orelse return error.UnsupportedCEmission;
-        const pair_name = switch (pair.type_ref.value_ty) {
-            .struct_ => |name| name,
-            else => return error.UnsupportedCEmission,
-        };
-        const pair_decl = self.structs.get(pair_name) orelse return error.UnsupportedCEmission;
-        try self.writeLineDirective(spanFromMirSourcePoint(row.local.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s};\n", .{ row_c.c_type, try self.cIdent(row.local.name) });
-        try self.writeLineDirective(spanFromMirSourcePoint(copy.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = {s}.elems[mc_check_index_usize({d}, {d})];\n", .{ try self.cIdent(row.local.name), try self.cIdent(copy.source_root.name), copy.index, copy.bound });
-        try self.writeLineDirective(spanFromMirSourcePoint(pair.local.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s};\n", .{ pair_name, try self.cIdent(pair.local.name) });
-        try self.writeLineDirective(spanFromMirSourcePoint(aggregate.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = ({s}){{ .{s} = {d}, .{s} = {d} }};\n", .{ try self.cIdent(pair.local.name), pair_name, try self.cIdent(pair_decl.fields[0].name.text), aggregate.literal_values[0], try self.cIdent(pair_decl.fields[1].name.text), aggregate.literal_values[1] });
-        const left_ty = try self.cTypeFor((self.functions.get(left.callee.name) orelse return error.UnsupportedCEmission).return_type orelse return error.UnsupportedCEmission, .typedef_name);
-        const left_name = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(left.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}({s});\n", .{ left_ty, left_name, try self.cIdent(left.callee.name), try self.cIdent(left.argument.name) });
-        const right_ty = try self.cTypeFor((self.functions.get(right.callee.name) orelse return error.UnsupportedCEmission).return_type orelse return error.UnsupportedCEmission, .typedef_name);
-        const right_name = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(right.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}({s});\n", .{ right_ty, right_name, try self.cIdent(right.callee.name), try self.cIdent(right.argument.name) });
-        try self.writeLineDirective(spanFromMirSourcePoint(returned.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s}({s}, {s});\n", .{ try self.checkedHelperName(returned.operation, left.result.value_ty.name()), left_name, right_name });
-    }
-
-    fn emitMirStructLiteralDirectCallsPlan(self: *CEmitter, literal: mir_aggregate_sequence_plan.StructLiteralDirectCalls) !void {
-        const result_name = switch (literal.result.value_ty) {
-            .struct_ => |name| name,
-            else => return error.UnsupportedCEmission,
-        };
-        const result_decl = self.structs.get(result_name) orelse return error.UnsupportedCEmission;
-        const first = literal.fields[0];
-        const second = literal.fields[1];
-        const first_ty = try self.cTypeFor((self.functions.get(first.call.callee.name) orelse return error.UnsupportedCEmission).return_type orelse return error.UnsupportedCEmission, .typedef_name);
-        const first_name = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(first.call.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}({s});\n", .{ first_ty, first_name, try self.cIdent(first.call.callee.name), try self.cIdent(first.call.argument.name) });
-        const second_ty = try self.cTypeFor((self.functions.get(second.call.callee.name) orelse return error.UnsupportedCEmission).return_type orelse return error.UnsupportedCEmission, .typedef_name);
-        const second_name = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(second.call.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}({s});\n", .{ second_ty, second_name, try self.cIdent(second.call.callee.name), try self.cIdent(second.call.argument.name) });
-        if (second.representation_trap != null) {
-            try self.writeIndent();
-            try self.out.print(self.allocator, "if ({s}.ptr == NULL && {s}.len != 0) mc_trap_InvalidRepresentation();\n", .{ second_name, second_name });
-        }
-        try self.writeLineDirective(spanFromMirSourcePoint(literal.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return ({s}){{ .{s} = {s}, .{s} = {s} }};\n", .{ result_name, try self.cIdent(result_decl.fields[first.field_index].name.text), first_name, try self.cIdent(result_decl.fields[second.field_index].name.text), second_name });
-    }
-
-    // These workflows are deliberately rendered from MIR identities plus declaration
-    // artifacts.  In particular, no fallback body artifact is consulted here.
     fn mirWorkflowPlanSupported(self: *CEmitter, function: anytype, plan: mir_workflow_plan.Plan) bool {
         return switch (plan) {
             .local_vtable_call => |workflow| self.mirLocalVtableCallPlanSupported(function, workflow),

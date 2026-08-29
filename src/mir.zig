@@ -6223,6 +6223,7 @@ const FunctionBuilder = struct {
     assignment_target: ?[]const u8 = null,
     assignment_target_ty: ValueType = .unknown,
     assignment_target_type_expr: ?ast.TypeExpr = null,
+    executable_assignment_rhs: bool = false,
     expr_depth: usize = 0,
     semantic_expr_depth: usize = 0,
     next_contract_region_id: usize = 1,
@@ -7960,6 +7961,30 @@ const FunctionBuilder = struct {
         return id;
     }
 
+    fn appendExecutableGlobalAggregateValue(
+        self: *FunctionBuilder,
+        name: []const u8,
+        source: SourcePoint,
+        ty: ValueType,
+        type_expr: ast.TypeExpr,
+        element_ty: ValueType,
+    ) !ExprId {
+        if (!try self.internExecutableTypeExpr(ty, type_expr)) self.executable_supported = false;
+        self.markExecutableArrayElementLayoutComplete(ty, element_ty);
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = ty,
+            .type_id = try self.internTypeId(ty),
+            .operation = .{ .symbol = try self.internExecutableGlobalSymbol(name) },
+        });
+        return id;
+    }
+
     fn appendExecutableVariantOperation(
         self: *FunctionBuilder,
         source: SourcePoint,
@@ -8224,8 +8249,33 @@ const FunctionBuilder = struct {
                 };
                 if (index_kind == .fixed_array and bound == null)
                     break :index self.unsupportedExecutableExpression(.unsupported_index);
+                const base = global_aggregate: {
+                    if (!self.executable_assignment_rhs or index_kind != .fixed_array or
+                        (result_ty != .array and result_ty != .struct_))
+                        break :global_aggregate try self.ensureExecutableExpr(node.base.*);
+                    const name = calleeIdentName(node.base.*) orelse
+                        break :global_aggregate try self.ensureExecutableExpr(node.base.*);
+                    if (!self.globals.contains(name))
+                        break :global_aggregate try self.ensureExecutableExpr(node.base.*);
+                    const type_expr = self.global_type_exprs.get(name) orelse
+                        break :global_aggregate try self.ensureExecutableExpr(node.base.*);
+                    const resolved = aggregateTargetTypeAlias(type_expr, self.aliases);
+                    const array = switch (resolved.kind) {
+                        .array => |value| value,
+                        else => break :global_aggregate try self.ensureExecutableExpr(node.base.*),
+                    };
+                    if (!try self.internExecutableTypeExpr(result_ty, array.child.*))
+                        break :index self.unsupportedExecutableExpression(.unsupported_index);
+                    break :global_aggregate try self.appendExecutableGlobalAggregateValue(
+                        name,
+                        self.sourcePoint(node.base.*.span),
+                        base_ty,
+                        type_expr,
+                        result_ty,
+                    );
+                };
                 break :index .{ .index = .{
-                    .base = try self.ensureExecutableExpr(node.base.*),
+                    .base = base,
                     .index = try self.ensureExecutableExprAs(node.index.*, .{ .integer = "usize" }),
                     .kind = index_kind,
                     .bound = bound,
@@ -9907,6 +9957,9 @@ const FunctionBuilder = struct {
                     self.executableDerefOperandSource(node.target)
                 else
                     null;
+                const previous_executable_assignment_rhs = self.executable_assignment_rhs;
+                self.executable_assignment_rhs = true;
+                defer self.executable_assignment_rhs = previous_executable_assignment_rhs;
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                     .place = place_id,
                     .value = try self.ensureExecutablePointerCoercedExprAsType(node.value, assignment_target_ty, assignment_target_type_expr),

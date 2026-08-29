@@ -265,6 +265,10 @@ test "LLVM shared structural body plans cover nested, aggregate, workflow, and h
         try appendLlvmTestNoFunctionBodyFallback(case.name, source, &output);
         const body = try llvmFunctionBody(output.items, case.function_header);
         try expectContains(body, case.needle);
+        if (std.mem.eql(u8, case.name, "llvm_plan_aggregate_assignment.mc")) {
+            try expectContains(body, "; canonical executable MIR");
+            try expectContains(body, "getelementptr [2 x [2 x i32]], ptr @matrix");
+        }
     }
 }
 

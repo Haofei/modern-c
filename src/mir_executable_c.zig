@@ -635,10 +635,10 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
     if (!supportsType(body, expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
-        // A bare symbol does not state ordinary/atomic/volatile/MMIO access.
-        // Direct calls carry their SymbolId separately; global value reads
-        // remain closed until MIR owns an explicit access mode.
-        .symbol => false,
+        // A global aggregate symbol is only an addressable base for one typed
+        // fixed-array index. The index operation owns the actual read and its
+        // bounds edge; every other bare global value remains fail-closed.
+        .symbol => globalAggregateIndexBaseSupported(body, expression),
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .atomic_init => |operand| atomicInitSupported(body, expression, operand),
@@ -817,7 +817,10 @@ fn indexSupported(
     expression: mir.ExecutableExpression,
     operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
 ) bool {
-    if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
+    const global_base = globalAggregateIndexBase(body, operation.base);
+    if (global_base) {
+        if (operation.kind != .fixed_array or !indexFeedsDirectAggregateLocalStore(body, expression)) return false;
+    } else if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
         (operation.kind == .slice and !projectionPathHasMember(body, operation.base))) return false;
     const base = expressionById(body, operation.base) orelse return false;
     const index = expressionById(body, operation.index) orelse return false;
@@ -860,6 +863,39 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn globalAggregateIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    const expression = expressionById(body, id) orelse return false;
+    const symbol_id = switch (expression.operation) {
+        .symbol => |symbol| symbol,
+        else => return false,
+    };
+    const identity = symbolById(body, symbol_id) orelse return false;
+    return identity.kind == .global and expression.result_ty == .array and supportsType(body, expression.result_ty);
+}
+
+fn globalAggregateIndexBaseSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (!globalAggregateIndexBase(body, expression.id)) return false;
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .index => |index| if (index.base.eql(expression.id) and index.kind == .fixed_array and
+            indexFeedsDirectAggregateLocalStore(body, candidate)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn indexFeedsDirectAggregateLocalStore(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const owner = statementById(body, expression.owner_statement) orelse return false;
+    const store = switch (owner.operation) {
+        .store => |value| value,
+        else => return false,
+    };
+    if (!store.value.eql(expression.id) or store.access.kind != .plain) return false;
+    const place = placeById(body, store.place) orelse return false;
+    return place.projection_count == 0 and place.root == .local and
+        (expression.result_ty == .array or expression.result_ty == .struct_) and
+        sameValueType(place.ty, expression.result_ty);
 }
 
 fn indexIsDirectReturn(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -2126,7 +2162,8 @@ fn prepareStatementExpressions(
         // A function identity is a pure leaf and is emitted directly at its
         // use site. Emitting it here as a discarded expression would add no
         // ordering guarantee and would produce an avoidable C warning.
-        if (functionSymbolExpressionSupported(body, expression)) continue;
+        if (functionSymbolExpressionSupported(body, expression) or
+            globalAggregateIndexBaseSupported(body, expression)) continue;
         if (representationGuard(expression)) |guard| {
             try writeSourceLineDirective(allocator, out, source_path, guard.source);
             try emitRepresentationGuard(allocator, out, body, guard, indent);

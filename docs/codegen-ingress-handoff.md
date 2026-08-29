@@ -1,9 +1,8 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-29 after moving direct-call aggregate projections into canonical
-executable MIR and deleting the standalone `direct_call_projected_return`
-specialized plan.
+2026-08-29 after moving aggregate global-index assignment sequences into
+canonical executable MIR and deleting the standalone aggregate-sequence plan.
 
 ## TL;DR
 
@@ -12,8 +11,8 @@ specialized plan.
   unsupported bodies. The ratchet is locked at 100%. This is a qualification
   checkpoint, not the deletion boundary: the current 522-root broad census
   finds **576/1760 C** and **615/1831 LLVM** distinct functions using the AST
-  body (C admits 67.3%, LLVM 66.4%). Of the admitted bodies, C now has **1072
-  canonical / 112 specialized** and LLVM has **1091 canonical / 125
+  body (C admits 67.3%, LLVM 66.4%). Of the admitted bodies, C now has **1073
+  canonical / 111 specialized** and LLVM has **1092 canonical / 124
   specialized**. Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
@@ -42,8 +41,18 @@ direct slice access keeps the existing race-tolerant access plan. The old
 `DirectCallProjectedReturnPlan`, builder, trap matcher, both backend emitters,
 and census path were physically deleted. The strict ratchet is now **110
 canonical / 50 specialized** per backend, with **11** specialized plan
-definitions. The broad split is C **1072 canonical / 112 specialized / 576
-fallback** and LLVM **1091 canonical / 125 specialized / 615 fallback**.
+definitions. The broad split at that checkpoint was C **1072 canonical / 112
+specialized / 576 fallback** and LLVM **1091 canonical / 125 specialized / 615
+fallback**.
+
+Global fixed-array storage used by a typed aggregate index assignment now has
+a canonical `SymbolId` base; the index owns its exact `Bounds` edge and both
+renderers consume the same aggregate type/layout facts. The old aggregate
+sequence model, recognizer, tests, both backend emitters and census path were
+physically deleted. The strict ratchet is now **111 canonical / 49
+specialized** per backend, with **10** specialized plan definitions. The broad
+split is now C **1073 canonical / 111 specialized / 576 fallback** and LLVM
+**1092 canonical / 124 specialized / 615 fallback**.
 
 Nullable-pointer `?` is now an explicit executable-MIR `try_unwrap` operation
 with one exact `Unwrap` exceptional edge. The verifier checks the nullable and
@@ -791,10 +800,10 @@ MIR records declared nullable/array/struct local storage even when the source
 initializer is `uninit`, then owns the aggregate construction, assignment,
 reload, and return sequence. The old plan model and builder, both backend
 support/rendering branches, its census path, and plan-specific tests are
-deleted. More complex aggregate projections continue to use their existing
-qualified paths: retaining the legacy MIR initializer span keeps
-`aggregate_sequence` and `alloca_hoist` stable while executable MIR treats
-`uninit` only as a storage policy. The strict corpus remains fully admitted and
+deleted. More complex aggregate projections continued to use their qualified
+paths at that checkpoint while executable MIR treated `uninit` only as a
+storage policy. The later canonical aggregate-index cutover retired the whole
+aggregate-sequence plan; `alloca_hoist` remains transitional. The strict corpus remains fully admitted and
 moves two functions per backend to canonical emission (C 86/74, LLVM 85/75);
 the shared specialized-plan registry falls to 14 definitions.
 

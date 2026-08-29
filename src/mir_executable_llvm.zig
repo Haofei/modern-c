@@ -140,7 +140,8 @@ fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
 
 pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
     if (!body.isComplete() or body.terminators.len == 0 or
-        (!llvmTypeSupported(body, return_ty) and !functionSymbolReturnSupported(body, return_ty))) return false;
+        (!llvmTypeSupported(body, return_ty) and !functionSymbolReturnSupported(body, return_ty)))
+        return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
             (parameter.ty == .value and callableParameter(body, parameter.local)))) return false;
@@ -704,7 +705,19 @@ const Renderer = struct {
         operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
     ) RenderError!Value {
         if (!indexSupported(self.body, expression, operation)) return error.InvalidBody;
-        const base = try self.emitExpression(operation.base);
+        const base_expression = self.body.expressions[operation.base.index()];
+        const global_symbol: ?mir.SymbolId = switch (base_expression.operation) {
+            .symbol => |symbol| if (globalAggregateIndexBase(self.body, operation.base)) symbol else null,
+            else => null,
+        };
+        const base = if (global_symbol == null) try self.emitExpression(operation.base) else Value{
+            .ty = try self.typeText(base_expression.result_ty),
+            .spelling = try std.fmt.allocPrint(
+                self.allocator,
+                "@{s}",
+                .{symbolSpelling(self.body, global_symbol.?) orelse return error.InvalidBody},
+            ),
+        };
         const index = try self.emitExpression(operation.index);
         if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
         const result_ty = try self.typeText(expression.result_ty);
@@ -725,17 +738,20 @@ const Renderer = struct {
                         .{ invalid, index.spelling, bound, invalid, edge.trap_block.raw, continuation, continuation },
                     );
                 }
-                // LLVM has no dynamic `extractvalue` for arrays. The bounded
-                // canonical slice therefore materializes the aggregate once
-                // in the entry block and indexes that storage mechanically.
-                const storage = try self.temp();
-                try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
-                    storage,
-                    base.ty,
-                    base.ty,
-                    base.spelling,
-                    storage,
-                });
+                // A global aggregate symbol is already stable storage. Other
+                // aggregate values are materialized once because LLVM has no
+                // dynamic `extractvalue` for arrays.
+                const storage = if (global_symbol != null) base.spelling else storage: {
+                    const slot = try self.temp();
+                    try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
+                        slot,
+                        base.ty,
+                        base.ty,
+                        base.spelling,
+                        slot,
+                    });
+                    break :storage slot;
+                };
                 element_pointer = try self.temp();
                 try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{
                     element_pointer,
@@ -2051,9 +2067,10 @@ fn arrayConstructionSupported(body: *const mir.ExecutableBody, expression: mir.E
 fn operationSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return switch (expression.operation) {
         .local => |id| localExists(body, id),
-        // A bare symbol has no memory access mode. Direct calls carry their
-        // SymbolId separately; global value reads remain fail-closed.
-        .symbol => functionSymbolExpressionSupported(body, expression),
+        // A global aggregate symbol is admitted only as storage owned by one
+        // typed fixed-array index; every standalone global read stays closed.
+        .symbol => functionSymbolExpressionSupported(body, expression) or
+            globalAggregateIndexBaseSupported(body, expression),
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .atomic_init => |operand| atomicInitSupported(body, expression, operand),
@@ -2268,7 +2285,10 @@ fn indexSupported(
     expression: mir.ExecutableExpression,
     operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
 ) bool {
-    if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
+    const global_base = globalAggregateIndexBase(body, operation.base);
+    if (global_base) {
+        if (operation.kind != .fixed_array or !indexFeedsDirectAggregateLocalStore(body, expression)) return false;
+    } else if (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
         (operation.kind == .slice and !projectionPathHasMember(body, operation.base))) return false;
     if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
     const base = body.expressions[operation.base.index()];
@@ -2316,6 +2336,41 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn globalAggregateIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    if (!expressionValid(body, id)) return false;
+    const expression = body.expressions[id.index()];
+    const symbol_id = switch (expression.operation) {
+        .symbol => |symbol| symbol,
+        else => return false,
+    };
+    const identity = symbolIdentity(body, symbol_id) orelse return false;
+    return identity.kind == .global and expression.result_ty == .array and llvmTypeSupported(body, expression.result_ty);
+}
+
+fn globalAggregateIndexBaseSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (!globalAggregateIndexBase(body, expression.id)) return false;
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .index => |index| if (index.base.eql(expression.id) and index.kind == .fixed_array and
+            indexFeedsDirectAggregateLocalStore(body, candidate)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn indexFeedsDirectAggregateLocalStore(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (!expression.owner_statement.isValid() or expression.owner_statement.index() >= body.statements.len) return false;
+    const owner = body.statements[expression.owner_statement.index()];
+    const store = switch (owner.operation) {
+        .store => |value| value,
+        else => return false,
+    };
+    if (!store.value.eql(expression.id) or store.access.kind != .plain or !placeValid(body, store.place)) return false;
+    const place = body.places[store.place.index()];
+    return place.projection_count == 0 and place.root == .local and
+        (expression.result_ty == .array or expression.result_ty == .struct_) and
+        sameValueType(place.ty, expression.result_ty);
 }
 
 fn indexIsDirectReturn(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {

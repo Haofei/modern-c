@@ -33,13 +33,12 @@ bodies because the transitional AST ingress is still present, and no
 canonical-ready body fell through to either backend's legacy ingress. The latest
 slice moved checked direct-call aggregate projection into typed executable-MIR
 `member` and `index` operations, then deleted
-`DirectCallProjectedReturnPlan` and both backend implementations. Three strict
-functions per backend moved from specialized admission to canonical emission;
-two additional LLVM broad-corpus bodies became canonical. The broad split is C
-**1072 canonical / 112 specialized** and LLVM **1091 canonical / 125
-specialized**. The strict ratchet is **110 C / 110 LLVM canonical functions**,
-specialized admission has fallen to **50/50**, and specialized plan definitions
-to **11**. Canonical slice-index admission remains restricted to a declared
+`DirectCallProjectedReturnPlan` and both backend implementations. The following
+slice gave global fixed-array aggregate assignments a typed `SymbolId` storage
+base and deleted the complete aggregate-sequence plan and both backend
+implementations. The strict ratchet is **111 C / 111 LLVM canonical functions**,
+specialized admission has fallen to **49/49**, and specialized plan definitions
+to **10**. Canonical slice-index admission remains restricted to a declared
 member projected from a direct call so the race-tolerant direct-slice access
 plan is not bypassed.
 `simple_return` remains a bounded safety net at **31 C / 35 LLVM** broad uses;

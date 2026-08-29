@@ -11,7 +11,6 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
-const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const parser = @import("parser.zig");
@@ -666,7 +665,7 @@ test "lower-c emits nested classify conditional return from MIR without body fal
     try expectContains(body, " = 7;");
 }
 
-test "lower-c emits aggregate sequence plans without body fallback" {
+test "lower-c emits aggregate assignment sequences from canonical MIR" {
     const source =
         \\struct Pair { left: u32, right: u32 }
         \\struct Bag { values: [4]u32, tail: []const u32 }
@@ -686,21 +685,23 @@ test "lower-c emits aggregate sequence plans without body fallback" {
         \\    return .{ .values = make_values(seed), .tail = make_tail(seed) };
         \\}
     ;
-    var parsed = try test_support.parseCheckedModule("c_mir_aggregate_sequence.mc", source);
+    var parsed = try test_support.parseCheckedModule("c_canonical_aggregate_assignment.mc", source);
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try std.testing.expect(mir_aggregate_sequence_plan.build(&module_mir.functions[5]) != null);
-    try std.testing.expect(mir_aggregate_sequence_plan.build(&module_mir.functions[6]) != null);
+    try std.testing.expect(module_mir.functions[5].executable_body.isComplete());
+    try std.testing.expect(module_mir.functions[6].executable_body.isComplete());
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_aggregate_sequence.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_canonical_aggregate_assignment.mc", .{}, false, null);
     const sequence = try cFunctionBody(output.items, "static uint32_t aggregate_call_after_assignment(void)");
+    try expectContains(sequence, "/* canonical executable MIR */");
     try expectContains(sequence, "row;");
-    try expectContains(sequence, "matrix.elems[mc_check_index_usize(0, 2)]");
-    try expectContains(sequence, "pair = (Pair){ .left = 71, .right = 72 };");
-    const row_call = std.mem.indexOf(u8, sequence, "= consume_row(row);") orelse return error.TestUnexpectedResult;
-    const pair_call = std.mem.indexOf(u8, sequence, "= consume_pair(pair);") orelse return error.TestUnexpectedResult;
+    try expectContains(sequence, "(matrix).elems[mc_check_index_usize(");
+    try expectContains(sequence, ", 2)]");
+    try expectContains(sequence, "pair = mc_exec_tmp_");
+    const row_call = std.mem.indexOf(u8, sequence, "= consume_row(mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    const pair_call = std.mem.indexOf(u8, sequence, "= consume_pair(mc_exec_tmp_") orelse return error.TestUnexpectedResult;
     const add = std.mem.indexOf(u8, sequence, "mc_checked_add_u32") orelse return error.TestUnexpectedResult;
     try std.testing.expect(row_call < pair_call and pair_call < add);
     const bag = try cFunctionBody(output.items, "static Bag make_bag(uint32_t seed)");

@@ -11,7 +11,6 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
-const mir_aggregate_sequence_plan = @import("mir_aggregate_sequence_plan.zig");
 const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
@@ -1570,18 +1569,11 @@ const LlvmEmitter = struct {
         // wrapper or the full legacy emitter, but not a specialized plan that
         // cannot preserve declaration mechanics.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
-        const aggregate_sequence_plan = if (mir_aggregate_sequence_plan.build(&fn_mir)) |plan|
-            if (self.mirAggregateSequencePlanSupported(function, plan)) plan else null
+        const workflow_plan = if (mir_workflow_plan.build(&fn_mir)) |plan|
+            if (self.mirWorkflowPlanSupported(function, plan)) plan else null
         else
             null;
-        const workflow_plan = if (aggregate_sequence_plan == null)
-            if (mir_workflow_plan.build(&fn_mir)) |plan|
-                if (self.mirWorkflowPlanSupported(function, plan)) plan else null
-            else
-                null
-        else
-            null;
-        const alloca_hoist_plan = if (aggregate_sequence_plan == null and workflow_plan == null)
+        const alloca_hoist_plan = if (workflow_plan == null)
             if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
                 if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
             else
@@ -1590,7 +1582,7 @@ const LlvmEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const llvm_access_operation = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null) blk: {
+        const llvm_access_operation = if (workflow_plan == null and alloca_hoist_plan == null) blk: {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
             const body = access_body_plan orelse break :blk null;
             break :blk mir_access_plan.buildSliceOperation(body);
@@ -1620,7 +1612,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1638,12 +1630,11 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const llvm_structural_access_operation = if (aggregate_sequence_plan == null and workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and indirect_call_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
-            aggregate_sequence_plan != null,
             workflow_plan != null,
             alloca_hoist_plan != null,
             llvm_access_operation != null,
@@ -1707,10 +1698,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
         }
 
-        if (aggregate_sequence_plan) |plan| {
-            selected_path.* = .aggregate_sequence;
-            try self.emitMirAggregateSequencePlan(plan, ret_ty);
-        } else if (workflow_plan) |plan| {
+        if (workflow_plan) |plan| {
             selected_path.* = .workflow;
             try self.emitMirWorkflowPlan(plan, ret_ty);
         } else if (alloca_hoist_plan) |plan| {
@@ -2656,140 +2644,6 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn mirAggregateSequencePlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_aggregate_sequence_plan.Plan) bool {
-        return switch (plan) {
-            .aggregate_call_after_assignment => |sequence| self.mirAggregateCallAfterAssignmentPlanSupported(function, sequence),
-            .struct_literal_direct_calls => |literal| self.mirStructLiteralDirectCallsPlanSupported(function, literal),
-        };
-    }
-
-    fn mirAggregateCallAfterAssignmentPlanSupported(self: *LlvmEmitter, function: anytype, sequence: mir_aggregate_sequence_plan.AggregateCallAfterAssignment) bool {
-        if (sequence.count != 7 or !self.mirPlanSourceTypeMatches(.{ .integer = "u32" }, function.signature.transitionalReturnType() orelse return false)) return false;
-        const row = switch (sequence.steps[0]) {
-            .local_uninit => |v| v,
-            else => return false,
-        };
-        const copy = switch (sequence.steps[1]) {
-            .copy_index_assignment => |v| v,
-            else => return false,
-        };
-        const pair = switch (sequence.steps[2]) {
-            .local_uninit => |v| v,
-            else => return false,
-        };
-        const aggregate = switch (sequence.steps[3]) {
-            .aggregate_assignment => |v| v,
-            else => return false,
-        };
-        const left = switch (sequence.steps[4]) {
-            .direct_call => |v| v,
-            else => return false,
-        };
-        const right = switch (sequence.steps[5]) {
-            .direct_call => |v| v,
-            else => return false,
-        };
-        const returned = switch (sequence.steps[6]) {
-            .binary_return => |v| v,
-            else => return false,
-        };
-        if (!copy.target.id.eql(row.local.id) or !aggregate.target.id.eql(pair.local.id) or copy.index >= copy.bound or copy.bounds_trap.kind != .Bounds or
-            !std.mem.eql(u8, returned.operation, "add") or returned.overflow_trap.kind != .IntegerOverflow or returned.left_call_step != 4 or returned.right_call_step != 5) return false;
-        const global_ty = self.global_types.get(copy.source_root.name) orelse return false;
-        const left_sig = self.fn_sigs.get(left.callee.name) orelse return false;
-        const right_sig = self.fn_sigs.get(right.callee.name) orelse return false;
-        if (left_sig.is_variadic or right_sig.is_variadic or left_sig.params.len != 1 or right_sig.params.len != 1) return false;
-        return left.argument.id.eql(row.local.id) and right.argument.id.eql(pair.local.id) and
-            self.mirPlanSourceTypeMatches(left.result.value_ty, left_sig.ret) and self.mirPlanSourceTypeMatches(right.result.value_ty, right_sig.ret) and
-            self.struct_types.contains(pair.type_ref.value_ty.name()) and global_ty.kind == .array;
-    }
-
-    fn mirStructLiteralDirectCallsPlanSupported(self: *LlvmEmitter, function: anytype, literal: mir_aggregate_sequence_plan.StructLiteralDirectCalls) bool {
-        if (!self.mirPlanSourceTypeMatches(literal.result.value_ty, function.signature.transitionalReturnType() orelse return false)) return false;
-        const decl = self.struct_types.get(literal.result.value_ty.name()) orelse return false;
-        if (decl.fields.len != literal.fields.len) return false;
-        for (literal.fields, 0..) |field, index| {
-            const sig = self.fn_sigs.get(field.call.callee.name) orelse return false;
-            if (field.field_index != index or sig.is_variadic or sig.params.len != 1 or
-                !type_bridge.sameTypeSyntax(self.resolveAliasType(sig.ret), self.resolveAliasType(decl.fields[index].ty))) return false;
-            if (index == 1 and field.representation_trap == null) return false;
-        }
-        return true;
-    }
-
-    fn emitMirAggregateSequencePlan(self: *LlvmEmitter, plan: mir_aggregate_sequence_plan.Plan, ret_ty: TransitionalTypeExpr) !void {
-        switch (plan) {
-            .aggregate_call_after_assignment => |sequence| try self.emitMirAggregateCallAfterAssignmentPlan(sequence, ret_ty),
-            .struct_literal_direct_calls => |literal| try self.emitMirStructLiteralDirectCallsPlan(literal, ret_ty),
-        }
-    }
-
-    fn emitMirPlanDirectCall(self: *LlvmEmitter, call: mir_aggregate_sequence_plan.DirectCall, argument: []const u8) ![]const u8 {
-        const sig = self.fn_sigs.get(call.callee.name) orelse return error.UnsupportedLlvmEmission;
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}){s}\n", .{ result, try self.llvmType(sig.ret), call.callee.name, try self.llvmType(sig.params[0].ty), argument, try self.debugCallSuffix() });
-        return result;
-    }
-
-    fn emitMirAggregateCallAfterAssignmentPlan(self: *LlvmEmitter, sequence: mir_aggregate_sequence_plan.AggregateCallAfterAssignment, ret_ty: TransitionalTypeExpr) !void {
-        const copy = sequence.steps[1].copy_index_assignment;
-        const pair = sequence.steps[2].local_uninit;
-        const aggregate = sequence.steps[3].aggregate_assignment;
-        const left = sequence.steps[4].direct_call;
-        const right = sequence.steps[5].direct_call;
-        const returned = sequence.steps[6].binary_return;
-        const global_ty = self.global_types.get(copy.source_root.name) orelse return error.UnsupportedLlvmEmission;
-        const global_llvm = try self.llvmType(global_ty);
-        const row_ty = (self.fn_sigs.get(left.callee.name) orelse return error.UnsupportedLlvmEmission).params[0].ty;
-        const row_llvm = try self.llvmType(row_ty);
-        const row_ptr = try self.nextTemp();
-        const row_value = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr @{s}, i64 0, i64 {d}\n  {s} = load {s}, ptr {s}{s}\n", .{ row_ptr, global_llvm, copy.source_root.name, copy.index, row_value, row_llvm, row_ptr, try self.debugCallSuffix() });
-        const pair_ty = simpleType(spanFromMirSourcePoint(pair.local.location.source), pair.type_ref.value_ty.name());
-        const pair_llvm = try self.llvmType(pair_ty);
-        var pair_value: []const u8 = "zeroinitializer";
-        for (aggregate.literal_values, 0..) |value, index| {
-            const next = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i32 {d}, {d}\n", .{ next, pair_llvm, pair_value, value, index });
-            pair_value = next;
-        }
-        const left_value = try self.emitMirPlanDirectCall(left, row_value);
-        const right_value = try self.emitMirPlanDirectCall(right, pair_value);
-        const pair_result = try self.nextTemp();
-        const sum = try self.nextTemp();
-        const overflow = try self.nextTemp();
-        const trap = try self.nextLabel("aggregate_overflow");
-        const cont = try self.nextLabel("aggregate_ok");
-        try self.out.print(self.allocator, "  {s} = call {{ i32, i1 }} @llvm.uadd.with.overflow.i32(i32 {s}, i32 {s}){s}\n  {s} = extractvalue {{ i32, i1 }} {s}, 0\n  {s} = extractvalue {{ i32, i1 }} {s}, 1\n", .{ pair_result, left_value, right_value, try self.debugCallSuffix(), sum, pair_result, overflow, pair_result });
-        try self.emitTrapBranch(overflow, trap, cont, trap, cont, "IntegerOverflow");
-        try self.emitReturnValue(ret_ty, sum, spanFromMirSourcePoint(returned.return_location.source));
-    }
-
-    fn emitMirStructLiteralDirectCallsPlan(self: *LlvmEmitter, literal: mir_aggregate_sequence_plan.StructLiteralDirectCalls, ret_ty: TransitionalTypeExpr) !void {
-        const result_llvm = try self.llvmType(ret_ty);
-        var result: []const u8 = "zeroinitializer";
-        for (literal.fields) |field| {
-            const argument = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{field.call.argument.name});
-            const value = try self.emitMirPlanDirectCall(field.call, argument);
-            if (field.representation_trap != null) {
-                const ptr_value = try self.nextTemp();
-                const len_value = try self.nextTemp();
-                const ptr_null = try self.nextTemp();
-                const len_nonzero = try self.nextTemp();
-                const invalid = try self.nextTemp();
-                const trap = try self.nextLabel("aggregate_repr");
-                const cont = try self.nextLabel("aggregate_repr_ok");
-                try self.out.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n  {s} = icmp eq ptr {s}, null\n  {s} = icmp ne i64 {s}, 0\n  {s} = and i1 {s}, {s}\n", .{ ptr_value, value, len_value, value, ptr_null, ptr_value, len_nonzero, len_value, invalid, ptr_null, len_nonzero });
-                try self.emitTrapBranch(invalid, trap, cont, trap, cont, "InvalidRepresentation");
-            }
-            const next = try self.nextTemp();
-            const field_ty = (self.fn_sigs.get(field.call.callee.name) orelse return error.UnsupportedLlvmEmission).ret;
-            try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{ next, result_llvm, result, try self.llvmType(field_ty), value, field.field_index });
-            result = next;
-        }
-        try self.emitReturnValue(ret_ty, result, spanFromMirSourcePoint(literal.return_location.source));
-    }
-
     fn mirWorkflowDirectCallSupported(self: *LlvmEmitter, call: mir_workflow_plan.DirectCall) bool {
         const sig = self.fn_sigs.get(call.callee.name) orelse return false;
         if (sig.is_variadic or sig.params.len != call.arg_count or !self.mirPlanSourceTypeMatches(call.result.value_ty, sig.ret)) return false;
@@ -3046,11 +2900,14 @@ const LlvmEmitter = struct {
             // volatile/MMIO access mode.  Keep every memory read on the
             // specialized path until that semantic fact is explicit.
             .symbol => |symbol_id| {
-                // A canonical function identity is an SSA pointer value, not
-                // a read from global storage. Ordinary global reads still
-                // require an explicit MIR load/access mode.
                 const symbol = mir_executable_body.symbol(&fn_mir.executable_body, symbol_id) orelse return false;
-                if (symbol.kind != .function or expression.result_ty != .value) return false;
+                // Functions are SSA pointer values. Aggregate globals may
+                // appear only as storage bases for a renderer-admitted typed
+                // index; supportsWithCallAbi above proves that use. All other
+                // global reads still require an explicit access operation.
+                if (symbol.kind == .function) {
+                    if (expression.result_ty != .value) return false;
+                } else if (symbol.kind != .global or expression.result_ty != .array) return false;
             },
             .deref => return false,
             .direct_call => |call| {
