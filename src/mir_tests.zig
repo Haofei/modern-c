@@ -474,6 +474,11 @@ test "executable MIR classifies transparent integer domain casts" {
     try std.testing.expect(mir.ExecutableCastKind.classify(.{ .integer = "u32" }, wrapping) == null);
 }
 
+test "executable MIR classifies explicit float resizing" {
+    try std.testing.expectEqual(mir.ExecutableCastKind.float_resize, mir.ExecutableCastKind.classify(.{ .float = "f32" }, .{ .float = "f64" }).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.float_resize, mir.ExecutableCastKind.classify(.{ .float = "f64" }, .{ .float = "f32" }).?);
+}
+
 test "executable MIR owns and verifies packed-bits storage metadata" {
     const source =
         \\packed bits Flags: u8 { ready: bool, busy: bool }

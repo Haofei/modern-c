@@ -8276,7 +8276,22 @@ const FunctionBuilder = struct {
                 } };
             },
             .cast => |node| cast: {
-                const operand = try self.ensureExecutableExpr(node.value.*);
+                var cast_operand = node.value.*;
+                while (cast_operand.kind == .grouped or cast_operand.kind == .move_expr) cast_operand = switch (cast_operand.kind) {
+                    .grouped => |inner| inner.*,
+                    .move_expr => |inner| inner.*,
+                    else => unreachable,
+                };
+                const operand = switch (cast_operand.kind) {
+                    .int_literal, .float_literal, .char_literal => try self.ensureExecutableExprAs(node.value.*, result_ty),
+                    .address_of => address: {
+                        const source_type_expr = (try self.expressionResultTypeExpr(cast_operand)) orelse
+                            break :address try self.ensureExecutableExpr(node.value.*);
+                        const source_ty = valueTypeFromTypeAlias(source_type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+                        break :address try self.ensureExecutableExprAsType(node.value.*, source_ty, source_type_expr);
+                    },
+                    else => try self.ensureExecutableExpr(node.value.*),
+                };
                 // Unsuffixed integer/float literals have no runtime source
                 // width. Their explicit cast target supplies that width, so
                 // represent them directly at the checked target type instead

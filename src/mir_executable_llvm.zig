@@ -947,6 +947,17 @@ const Renderer = struct {
             .identity => null,
             .integer_reinterpret => null,
             .integer_to_domain, .domain_to_integer => null,
+            .float_resize => float: {
+                const source_bits = switch (operand_expression.result_ty) {
+                    .float => |name| mir.ExecutableCastKind.floatBits(name) orelse return error.InvalidBody,
+                    else => return error.InvalidBody,
+                };
+                const target_bits = switch (expression.result_ty) {
+                    .float => |name| mir.ExecutableCastKind.floatBits(name) orelse return error.InvalidBody,
+                    else => return error.InvalidBody,
+                };
+                break :float if (target_bits > source_bits) "fpext" else if (target_bits < source_bits) "fptrunc" else null;
+            },
             .address_to_integer, .integer_to_address => null,
             .pointer_to_integer, .pointer_to_address => "ptrtoint",
             .pointer_to_nullable, .pointer_const_narrow => null,
@@ -2690,6 +2701,9 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
     return switch (expected) {
         .identity => true,
         .integer_reinterpret => source != null and target != null and source.?.signed != target.?.signed and source.?.bits == target.?.bits,
+        .float_resize => operand.result_ty == .float and expression.result_ty == .float and
+            mir.ExecutableCastKind.floatBits(operand.result_ty.float) != null and
+            mir.ExecutableCastKind.floatBits(expression.result_ty.float) != null,
         .integer_to_domain => operand.result_ty == .integer and expression.result_ty == .domain_integer and
             std.mem.eql(u8, operand.result_ty.integer, expression.result_ty.domain_integer.child),
         .domain_to_integer => operand.result_ty == .domain_integer and expression.result_ty == .integer and

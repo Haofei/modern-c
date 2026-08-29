@@ -448,9 +448,12 @@ pub const ExecutableCastKind = enum {
     enum_to_integer,
     integer_to_domain,
     domain_to_integer,
+    float_resize,
 
     pub fn classify(source: ValueType, target: ValueType) ?ExecutableCastKind {
         if (ValueType.eql(source, target)) return .identity;
+        if (source == .float and target == .float and floatBits(source.float) != null and floatBits(target.float) != null)
+            return .float_resize;
         if (source == .address) {
             const target_integer = integerInfo(target) orelse return null;
             return if (!target_integer.signed and target_integer.bits == 64) .address_to_integer else null;
@@ -503,6 +506,12 @@ pub const ExecutableCastKind = enum {
         if (std.mem.eql(u8, name, "i32")) return .{ .signed = true, .bits = 32 };
         if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return .{ .signed = true, .bits = 64 };
         if (std.mem.eql(u8, name, "i128")) return .{ .signed = true, .bits = 128 };
+        return null;
+    }
+
+    pub fn floatBits(name: []const u8) ?u16 {
+        if (std.mem.eql(u8, name, "f32")) return 32;
+        if (std.mem.eql(u8, name, "f64")) return 64;
         return null;
     }
 };
