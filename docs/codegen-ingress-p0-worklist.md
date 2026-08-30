@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1414/1809 admitted | 1433/1861 admitted |
-| AST fallback | 395 | 428 |
+| broad sweep | 1431/1827 admitted | 1447/1879 admitted |
+| AST fallback | 396 | 432 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -33,6 +33,13 @@ The fixed-array index renderer slice is closed for `arrays_slices.mc`: all 29
 functions are canonical in both backends, and four source-consumer-specific
 admission helpers were deleted. Canonical `uninit` now means uninitialized
 local storage rather than a runtime value.
+
+The parameter-pointee fixed-array/address family is also closed. A leading
+typed parameter dereference is part of the shared fixed-array place metadata;
+the two backends no longer reconstruct it independently, and both retain the
+representation and bounds trap edges. Immutable local copies of pointer
+parameters use a narrow canonical provenance proof. The three address-return
+helpers in `pointer_field_addr.mc` are now canonical in C and LLVM.
 
 ## Rules
 

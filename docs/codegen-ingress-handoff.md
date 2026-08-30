@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1414/1809 C functions and 1433/1861 LLVM functions.
-  The remaining 395 C and 428 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1431/1827 C functions and 1447/1879 LLVM functions.
+  The remaining 396 C and 432 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -44,6 +44,14 @@ locals, nested projections, and direct-call array values share one path. The
 `arrays_slices.mc` root is 29/29 canonical in both backends. `uninit` is also
 modeled as a local storage policy, so C no longer claims it is an ordinary
 renderable value and LLVM no longer emits a fake initializer store.
+
+Fixed-array places may now begin at one checked dereference of a typed pointer
+parameter. The shared place predicate reports that provenance explicitly, so
+the producer, verifier and both renderers preserve both the non-null
+representation edge and every bounds edge. Immutable local pointer copies of a
+parameter use the same field-address path. Consequently all three address
+helpers in `pointer_field_addr.mc` are canonical in both backends; only its
+larger aggregate-construction caller still falls back.
 
 Each slice must:
 

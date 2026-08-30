@@ -194,9 +194,17 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
                 if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
-                    if (operation.representation_source != null or operation.representation_span_id.isValid())
+                    const indexed = mir.executableFixedArrayIndexPlace(body, target.*).?;
+                    const representation_count: usize = @intFromBool(indexed.parameter_pointee);
+                    if (indexed.parameter_pointee) {
+                        const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
+                        try verifySpan(function, operation.representation_span_id, source);
+                        if (ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
+                            return error.InvalidMemoryAccessTrap;
+                    } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
                         return error.InvalidMemoryAccessTrap;
-                    if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*))
+                    }
+                    if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*, representation_count))
                         return error.InvalidMemoryAccessTrap;
                     return;
                 }
@@ -477,9 +485,18 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) {
                 if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
                 if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
-                    if (!fixedArrayAddressableRoot(body, target.*) or address.representation_source != null or
-                        address.representation_span_id.isValid()) return error.InvalidMemoryAccessTrap;
-                    if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*))
+                    const indexed = mir.executableFixedArrayIndexPlace(body, target.*).?;
+                    if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidMemoryAccessTrap;
+                    const representation_count: usize = @intFromBool(indexed.parameter_pointee);
+                    if (indexed.parameter_pointee) {
+                        const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
+                        try verifySpan(function, address.representation_span_id, source);
+                        if (ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
+                            return error.InvalidMemoryAccessTrap;
+                    } else if (address.representation_source != null or address.representation_span_id.isValid()) {
+                        return error.InvalidMemoryAccessTrap;
+                    }
+                    if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*, representation_count))
                         return error.InvalidMemoryAccessTrap;
                 } else if (mir.executableAggregateFieldPlace(
                     body.locals,
@@ -597,7 +614,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
 }
 
 fn fixedArrayAddressableRoot(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
-    if (mir.executableFixedArrayIndexPlace(body, target) == null) return false;
+    const indexed = mir.executableFixedArrayIndexPlace(body, target) orelse return false;
+    if (indexed.parameter_pointee) return true;
     return switch (target.root) {
         .local => |id| local: {
             for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
@@ -727,12 +745,14 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     },
                     .address_of => |address| {
                         const target = place(body, address.place) orelse return error.InvalidTrapEdge;
+                        const indexed = mir.executableFixedArrayIndexPlace(body, target.*);
                         if (edge.kind == .Bounds and edge.source == .bounds_check) {
                             _ = indexedProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
-                            if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
+                            if (indexed != null and !fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
                         } else if (!(isSingleParameterDerefPlace(body, target.*, false) or
                             mir.executableLocalAddressDerefPlace(body, target.*, false) or
-                            mir.executableParameterFieldPlace(body, target.*, false)) or
+                            mir.executableParameterFieldPlace(body, target.*, false) or
+                            (indexed != null and indexed.?.parameter_pointee)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
@@ -797,7 +817,9 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         }
                         if (!(isParameterScalarAccessPlace(body, target.*, true) or
                             mir.executableLocalAddressDerefPlace(body, target.*, true) or
-                            mir.executableGlobalPointerDerefPlace(body, target.*, true)) or
+                            mir.executableGlobalPointerDerefPlace(body, target.*, true) or
+                            mir.executableAggregatePointerFieldDerefPlace(body, target.*, true) != null or
+                            mir.executableParameterFieldPlace(body, target.*, true)) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                         break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
@@ -916,11 +938,12 @@ fn indexedBoundsEdgesExact(
     owner: mir.ExecutableTrapOwner,
     block_id: mir.BlockId,
     target: mir.ExecutablePlace,
+    additional_traps: usize,
 ) bool {
     if (mir.executableFixedArrayIndexPlace(body, target) == null and
         mir.executableSliceIndexPlace(body, target) == null) return false;
     const expected = mir.executableCheckedIndexProjectionCount(target);
-    if (ownedTrapCountAll(body, owner) != expected or
+    if (ownedTrapCountAll(body, owner) != expected + additional_traps or
         ownedTrapCount(body, owner, .Bounds, .bounds_check) != expected) return false;
     for (target.projections[0..target.projection_count]) |projection| switch (projection) {
         .index => |index| if (index.checked) {
@@ -1032,8 +1055,7 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                 } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
-                if (indexed and !indexedBoundsEdgesExact(body, .{ .statement = statement_value.id }, statement_value.block_id, target.*)) {
-                    std.debug.print("index exact fail id={d} guard={} checked={d} all={d} bounds={d}\n", .{ statement_value.id.raw, guarded, checked_indices, ownedTrapCountAll(body, .{ .statement = statement_value.id }), ownedTrapCount(body, .{ .statement = statement_value.id }, .Bounds, .bounds_check) });
+                if (indexed and !indexedBoundsEdgesExact(body, .{ .statement = statement_value.id }, statement_value.block_id, target.*, 0)) {
                     return error.InvalidMemoryAccessTrap;
                 }
                 if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != expected_traps) {

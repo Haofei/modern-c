@@ -1771,10 +1771,62 @@ pub const ExecutableAggregatePointerFieldDeref = struct {
     pointer_ty: ValueType,
 };
 
-/// Recognize a field selected through a single-pointer parameter (`p->field`).
-/// Unlike scalar-access predicates, this also admits aggregate fields so an
-/// address-of operation can pass them to another function without loading or
-/// copying the aggregate.
+fn executableParameterPointerRoot(
+    body: *const ExecutableBody,
+    local: LocalId,
+    pointer_ty: ValueType,
+    pointer_type_id: TypeId,
+) bool {
+    for (body.parameters) |parameter| if (parameter.local.eql(local)) {
+        return parameter.type_id.eql(pointer_type_id) and ValueType.eql(parameter.ty, pointer_ty);
+    };
+    var initializer: ?ExprId = null;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local)) {
+            if (initializer != null or init.mutable or init.value == null or
+                !init.type_id.eql(pointer_type_id) or !ValueType.eql(init.ty, pointer_ty)) return false;
+            initializer = init.value.?;
+        },
+        .store => |store| if (store.place.isValid() and store.place.index() < body.places.len) {
+            const target = body.places[store.place.index()];
+            if (target.projection_count == 0) switch (target.root) {
+                .local => |stored| if (stored.eql(local)) return false,
+                .symbol, .value => {},
+            };
+        },
+        else => {},
+    };
+    const value_id = initializer orelse return false;
+    if (!value_id.isValid() or value_id.index() >= body.expressions.len) return false;
+    const value = body.expressions[value_id.index()];
+    if (!value.id.eql(value_id) or !ValueType.eql(value.result_ty, pointer_ty) or
+        !value.type_id.eql(pointer_type_id)) return false;
+    const source = switch (value.operation) {
+        .representation_check => |check| blk: {
+            if (check.kind != .nonnull_pointer or !check.operand.isValid() or check.operand.index() >= body.expressions.len)
+                return false;
+            const operand = body.expressions[check.operand.index()];
+            if (!operand.id.eql(check.operand) or !ValueType.eql(operand.result_ty, pointer_ty) or
+                !operand.type_id.eql(pointer_type_id)) return false;
+            break :blk operand;
+        },
+        else => value,
+    };
+    const source_local = switch (source.operation) {
+        .local => |id| id,
+        else => return false,
+    };
+    for (body.parameters) |parameter| if (parameter.local.eql(source_local)) {
+        return parameter.type_id.eql(pointer_type_id) and ValueType.eql(parameter.ty, pointer_ty);
+    };
+    return false;
+}
+
+/// Recognize a field selected through a single-pointer parameter (`p->field`)
+/// or an immutable local initialized exactly once from that parameter. Unlike
+/// scalar-access predicates, this also admits aggregate fields so an address-
+/// of operation can pass them to another function without loading or copying
+/// the aggregate.
 pub fn executableParameterFieldPlace(
     body: *const ExecutableBody,
     place: ExecutablePlace,
@@ -1791,14 +1843,8 @@ pub fn executableParameterFieldPlace(
         .local => |id| id,
         .symbol, .value => return false,
     };
-    var parameter: ?ExecutableParameter = null;
-    for (body.parameters) |candidate| if (candidate.local.eql(local)) {
-        parameter = candidate;
-        break;
-    };
-    const root = parameter orelse return false;
-    if (!root.type_id.eql(place.root_type_id) or !ValueType.eql(root.ty, place.root_ty)) return false;
-    const pointer = switch (root.ty) {
+    if (!executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id)) return false;
+    const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
         else => return false,
     };
@@ -1935,20 +1981,62 @@ pub fn executableGlobalPointerDerefPlace(
         std.mem.eql(u8, pointer.child, place.ty.name());
 }
 
+pub const ExecutableFixedArrayIndexPlace = struct {
+    first_index: @FieldType(ExecutablePlace.Projection, "index"),
+    /// The place starts at a checked single-pointer parameter and its first
+    /// projection dereferences that parameter.  Consumers must preserve the
+    /// representation guard before walking the remaining field/index chain.
+    parameter_pointee: bool,
+};
+
 /// Validate a typed projection chain containing at least one fixed-array
 /// index. Every index and field advances through the canonical aggregate
-/// table. Producer, verifier and both renderers share this predicate so nested
-/// bounds, interleaved fields and element identity cannot drift.
+/// table. A single leading dereference is admitted only for a typed pointer
+/// parameter; it is reported explicitly so consumers cannot confuse the
+/// parameter value with addressable local storage. Producer, verifier and
+/// both renderers share this predicate so nested bounds, representation
+/// guards, interleaved fields and element identity cannot drift.
 pub fn executableFixedArrayIndexPlace(
     body: *const ExecutableBody,
     place: ExecutablePlace,
-) ?@FieldType(ExecutablePlace.Projection, "index") {
+) ?ExecutableFixedArrayIndexPlace {
     if (place.storage != .ordinary or place.projection_count == 0 or
         !place.root_type_id.isValid() or !place.type_id.isValid()) return null;
     var current_ty = place.root_ty;
     var current_type_id = place.root_type_id;
+    var projection_start: usize = 0;
+    var parameter_pointee = false;
+    if (place.projections[0] == .deref) {
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return null,
+        };
+        var parameter: ?ExecutableParameter = null;
+        for (body.parameters) |candidate| if (candidate.local.eql(local_id)) {
+            parameter = candidate;
+            break;
+        };
+        const root = parameter orelse return null;
+        if (!root.type_id.eql(place.root_type_id) or !ValueType.eql(root.ty, place.root_ty)) return null;
+        const pointer = switch (root.ty) {
+            .pointer => |shape| shape,
+            else => return null,
+        };
+        if (pointer.kind != .single) return null;
+        var pointee: ?ExecutableAggregateType = null;
+        for (body.aggregate_types) |candidate| if (ValueType.eql(candidate.ty, .{ .struct_ = pointer.child })) {
+            pointee = candidate;
+            break;
+        };
+        const aggregate = pointee orelse return null;
+        if (aggregate.construction != .declared_struct and aggregate.construction != .c_union) return null;
+        current_ty = aggregate.ty;
+        current_type_id = aggregate.type_id;
+        projection_start = 1;
+        parameter_pointee = true;
+    }
     var first_index: ?@FieldType(ExecutablePlace.Projection, "index") = null;
-    for (place.projections[0..place.projection_count], 0..) |item, projection_index| switch (item) {
+    for (place.projections[projection_start..place.projection_count]) |item| switch (item) {
         .index => |projection| {
             if (projection.kind != .fixed_array or projection.bound == null or
                 !projection.span_id.isValid() or !projection.value.isValid() or
@@ -1981,7 +2069,6 @@ pub fn executableFixedArrayIndexPlace(
             current_type_id = shape.field_type_ids[0];
         },
         .field => |field_index| {
-            _ = projection_index;
             var aggregate: ?ExecutableAggregateType = null;
             for (body.aggregate_types) |candidate| if (candidate.type_id.eql(current_type_id)) {
                 aggregate = candidate;
@@ -1995,7 +2082,7 @@ pub fn executableFixedArrayIndexPlace(
         .deref => return null,
     };
     if (!ValueType.eql(current_ty, place.ty) or !current_type_id.eql(place.type_id)) return null;
-    return first_index;
+    return .{ .first_index = first_index orelse return null, .parameter_pointee = parameter_pointee };
 }
 
 pub fn executableFixedArrayCheckedProjectionCount(place: ExecutablePlace) usize {

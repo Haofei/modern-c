@@ -7448,7 +7448,17 @@ const FunctionBuilder = struct {
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
         if (place.storage == .atomic) return self.executableAtomicPlaceComplete(place);
         if (place.projection_count == 0) return true;
-        if (self.executableFixedArrayIndexPlaceComplete(place)) return true;
+        if (self.executableFixedArrayIndexPlaceComplete(place)) {
+            const transient_body: mir_model.ExecutableBody = .{
+                .parameters = self.executable_parameters.items,
+                .locals = self.executable_locals.items,
+                .statements = self.executable_statements.items,
+                .expressions = self.executable_expressions.items,
+                .aggregate_types = self.executable_aggregate_types.items,
+            };
+            const indexed = mir_model.executableFixedArrayIndexPlace(&transient_body, place) orelse return false;
+            if (!indexed.parameter_pointee) return true;
+        }
         if (self.executableSliceIndexPlaceComplete(place)) return true;
         if (mir_model.executableAggregateFieldPlace(
             self.executable_locals.items,
@@ -7465,6 +7475,8 @@ const FunctionBuilder = struct {
         };
         if (mir_model.executableAggregatePointerFieldDerefPlace(&transient_body, place, false) != null) return true;
         if (mir_model.executableGlobalPointerDerefPlace(&transient_body, place, false)) return true;
+        if (mir_model.executableStorageAlignment(self.executable_enum_types.items, place.ty) != null and
+            self.executableParameterFieldPlaceComplete(place)) return true;
         if (place.projection_count != 1 and place.projection_count != 2) return false;
         if (place.projections[0] != .deref) return false;
         const local_id = switch (place.root) {
@@ -7519,64 +7531,23 @@ const FunctionBuilder = struct {
         const transient_body: mir_model.ExecutableBody = .{
             .parameters = self.executable_parameters.items,
             .locals = self.executable_locals.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
             .aggregate_types = self.executable_aggregate_types.items,
         };
         return mir_model.executableParameterFieldPlace(&transient_body, place, false);
     }
 
     fn executableFixedArrayIndexPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
-        if (place.storage != .ordinary or place.projection_count == 0 or
-            !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
-        var current_ty = place.root_ty;
-        var current_type_id = place.root_type_id;
-        var saw_index = false;
-        for (place.projections[0..place.projection_count], 0..) |item, projection_index| switch (item) {
-            .index => |projection| {
-                if (projection.kind != .fixed_array or projection.bound == null or
-                    !projection.span_id.isValid() or !projection.value.isValid() or
-                    projection.value.index() >= self.executable_expressions.items.len) return false;
-                const index = self.executable_expressions.items[projection.value.index()];
-                if (!sameValueType(index.result_ty, .{ .integer = "usize" })) return false;
-                const array = switch (current_ty) {
-                    .array => |shape| shape,
-                    else => return false,
-                };
-                const bound = projection.bound.?;
-                if (array.length == null or array.length.? != bound or bound == 0) return false;
-                var aggregate: ?mir_model.ExecutableAggregateType = null;
-                for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(current_type_id)) {
-                    aggregate = candidate;
-                    break;
-                };
-                const shape = aggregate orelse return false;
-                if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
-                    !sameValueType(shape.ty, current_ty)) return false;
-                if (!projection.checked) switch (index.operation) {
-                    .literal => |literal| switch (literal) {
-                        .integer => |value| if (value >= bound) return false,
-                        else => return false,
-                    },
-                    else => return false,
-                };
-                saw_index = true;
-                current_ty = shape.field_types[0];
-                current_type_id = shape.field_type_ids[0];
-            },
-            .field => |field_index| {
-                _ = projection_index;
-                var aggregate: ?mir_model.ExecutableAggregateType = null;
-                for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(current_type_id)) {
-                    aggregate = candidate;
-                    break;
-                };
-                const shape = aggregate orelse return false;
-                if (!sameValueType(shape.ty, current_ty) or field_index >= shape.field_count) return false;
-                current_ty = shape.field_types[field_index];
-                current_type_id = shape.field_type_ids[field_index];
-            },
-            .deref => return false,
+        const transient_body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .aggregate_types = self.executable_aggregate_types.items,
         };
-        return saw_index and sameValueType(current_ty, place.ty) and current_type_id.eql(place.type_id);
+        return mir_model.executableFixedArrayIndexPlace(&transient_body, place) != null;
     }
 
     fn executableSliceIndexPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -7707,20 +7678,35 @@ const FunctionBuilder = struct {
     }
 
     fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
-        if (!self.executablePlaceComplete(place) or !executableAddressResultMatchesPlace(result_ty, place.ty)) return false;
-        if (self.executableFixedArrayIndexPlaceComplete(place)) return switch (place.root) {
-            .local => |id| local: {
-                for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local false;
-                for (self.executable_statements.items) |statement| switch (statement.operation) {
-                    .local_init => |value| if (value.local.eql(id)) break :local true,
-                    else => {},
-                };
-                break :local false;
-            },
-            .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
-                self.executable_symbols.items[id.index()].kind == .global,
-            .value => false,
+        if (!executableAddressResultMatchesPlace(result_ty, place.ty)) return false;
+        const transient_body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .aggregate_types = self.executable_aggregate_types.items,
         };
+        if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| {
+            if (indexed.parameter_pointee) return true;
+        }
+        if (!self.executablePlaceComplete(place)) return false;
+        if (self.executableFixedArrayIndexPlaceComplete(place)) {
+            const indexed = mir_model.executableFixedArrayIndexPlace(&transient_body, place) orelse return false;
+            if (indexed.parameter_pointee) return true;
+            return switch (place.root) {
+                .local => |id| local: {
+                    for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local false;
+                    for (self.executable_statements.items) |statement| switch (statement.operation) {
+                        .local_init => |value| if (value.local.eql(id)) break :local true,
+                        else => {},
+                    };
+                    break :local false;
+                },
+                .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
+                    self.executable_symbols.items[id.index()].kind == .global,
+                .value => false,
+            };
+        }
         if (mir_model.executableAggregateFieldPlace(
             self.executable_locals.items,
             self.executable_statements.items,
@@ -7733,6 +7719,7 @@ const FunctionBuilder = struct {
                 self.executable_symbols.items[id.index()].kind == .global,
             .value => false,
         };
+        if (self.executableParameterFieldPlaceComplete(place)) return true;
         if (place.projection_count == 1) return switch (place.root) {
             .value => true,
             .local, .symbol => sameValueType(result_ty, place.root_ty),
@@ -13947,7 +13934,15 @@ const FunctionBuilder = struct {
         place: ExecutablePlace,
         span_id: SpanId,
     ) ?@FieldType(ExecutablePlace.Projection, "index") {
-        if (!self.executableFixedArrayIndexPlaceComplete(place) and !self.executableSliceIndexPlaceComplete(place)) return null;
+        const transient_body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+        };
+        if (mir_model.executableFixedArrayIndexPlace(&transient_body, place) == null and
+            !self.executableSliceIndexPlaceComplete(place)) return null;
         for (place.projections[0..place.projection_count]) |item| switch (item) {
             .index => |projection| if (projection.checked and projection.span_id.eql(span_id)) return projection,
             .field, .deref => {},
@@ -15156,12 +15151,24 @@ const FunctionBuilder = struct {
             const place_id = representation.place;
             if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) continue;
             const place = self.executable_places.items[place_id.index()];
+            const transient_body: mir_model.ExecutableBody = .{
+                .parameters = self.executable_parameters.items,
+                .locals = self.executable_locals.items,
+                .statements = self.executable_statements.items,
+                .expressions = self.executable_expressions.items,
+                .aggregate_types = self.executable_aggregate_types.items,
+            };
+            const parameter_index_address = if (representation.parameter_field_address)
+                if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| indexed.parameter_pointee else false
+            else
+                false;
             // Trap ownership is established when the checked operation is
             // created. Aggregate/type tables may still be growing at this
             // point; final place completeness is verified after construction.
             if (place.projection_count == 0 or
                 (!self.executablePlaceComplete(place) and
-                    !(representation.parameter_field_address and self.executableParameterFieldPlaceComplete(place)))) continue;
+                    !(representation.parameter_field_address and self.executableParameterFieldPlaceComplete(place)) and
+                    !parameter_index_address)) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
                 legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;

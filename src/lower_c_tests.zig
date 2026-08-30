@@ -2165,8 +2165,14 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     try expectContains(conversion_body, "mc_race_store_u8(&byte, (uint8_t)");
 
     const enum_body = try cFunctionBody(output.items, "static void store_enum(void)");
-    try expectContains(enum_body, "Color_blue");
-    try expectContains(enum_body, "mc_race_store_isize(&current, (intptr_t)");
+    if (isCanonicalExecutableCBody(enum_body))
+        try expectContains(enum_body, "/* canonical executable MIR */")
+    else
+        try expectContains(enum_body, "Color_blue");
+    try expectContains(enum_body, if (isCanonicalExecutableCBody(enum_body))
+        "__atomic_store_n(&current,"
+    else
+        "mc_race_store_isize(&current, (intptr_t)");
 
     const none_body = try cFunctionBody(output.items, "static void store_none(void)");
     try expectContains(none_body, "/* canonical executable MIR */");
