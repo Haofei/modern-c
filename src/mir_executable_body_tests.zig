@@ -1134,6 +1134,32 @@ test "checked add owns an explicit verified overflow edge" {
     try executable.verify(function);
 }
 
+test "checked add with reflection operand owns its overflow edge" {
+    const source = "fn reflected(value: u8) -> usize { return sizeof([4]u8) + (value as usize); }";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_reflected_checked_add.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+    try std.testing.expect(executable.isComplete(function));
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+    const owner_id = function.executable_body.trap_edges[0].owner.expressionId() orelse
+        return error.TestUnexpectedResult;
+    const owner = function.executable_body.expressions[owner_id.index()];
+    switch (owner.operation) {
+        .binary => |binary| try std.testing.expectEqual(mir.ExecutableArithmeticSemantics.checked, binary.arithmetic),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "checked neg owns an explicit verified overflow edge" {
     const source = "fn checked(value: i32) -> i32 { return -value; }";
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_checked_neg.mc", source);

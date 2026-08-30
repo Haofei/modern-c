@@ -47,6 +47,7 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
         else => {},
     };
     if (body.trap_edges.len != function.trap_edges.len) return "trap_projection";
+    if (body.incomplete_reason != .none) return @tagName(body.incomplete_reason);
     // When every operation has a canonical shape but the producer declined to
     // mark the body complete, ask the verifier which invariant would fail if it
     // did. This keeps migration telemetry actionable without duplicating the
@@ -498,6 +499,12 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     if (address.representation_source != null or address.representation_span_id.isValid() or
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
+                } else if (mir.executableParameterFieldPlace(body, target.*, false)) {
+                    const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
+                    try verifySpan(function, address.representation_span_id, source);
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                        ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
+                        return error.InvalidMemoryAccessTrap;
                 } else {
                     if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
                         !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
@@ -723,7 +730,9 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         if (edge.kind == .Bounds and edge.source == .bounds_check) {
                             _ = indexedProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                             if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
-                        } else if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
+                        } else if (!(isSingleParameterDerefPlace(body, target.*, false) or
+                            mir.executableLocalAddressDerefPlace(body, target.*, false) or
+                            mir.executableParameterFieldPlace(body, target.*, false)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
@@ -1290,6 +1299,7 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         if (value.storage == .atomic) {
             if (!atomicPlaceSupported(body, value)) return true;
         } else if (value.projection_count != 0 and !isScalarAccessPlace(body, value, false) and
+            !mir.executableParameterFieldPlace(body, value, false) and
             mir.executableFixedArrayIndexPlace(body, value) == null and
             mir.executableSliceIndexPlace(body, value) == null) return true;
     }
@@ -1842,41 +1852,8 @@ fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
 fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
     if (target.storage != .ordinary) return false;
     if (target.projection_count == 1) return isSingleParameterDerefPlace(body, target, require_mutable);
-    if (target.projection_count != 2 or !target.root_type_id.isValid() or !target.type_id.isValid()) return false;
-    switch (target.projections[0]) {
-        .deref => {},
-        .field, .index => return false,
-    }
-    const field_index = switch (target.projections[1]) {
-        .field => |index| index,
-        .deref, .index => return false,
-    };
-    const local_id = switch (target.root) {
-        .local => |id| id,
-        .symbol, .value => return false,
-    };
-    var parameter: ?mir.ExecutableParameter = null;
-    for (body.parameters) |candidate| if (candidate.local.eql(local_id)) {
-        parameter = candidate;
-        break;
-    };
-    const root = parameter orelse return false;
-    if (!root.type_id.eql(target.root_type_id) or !sameValueType(root.ty, target.root_ty) or
-        mir.executableStorageAlignment(body.enum_types, target.ty) == null) return false;
-    const pointer = switch (target.root_ty) {
-        .pointer => |shape| shape,
-        else => return false,
-    };
-    if (pointer.kind != .single or (require_mutable and pointer.mutability != .mut)) return false;
-    var pointee: ?*const mir.ExecutableAggregateType = null;
-    for (body.aggregate_types) |*aggregate| if (sameValueType(aggregate.ty, .{ .struct_ = pointer.child })) {
-        pointee = aggregate;
-        break;
-    };
-    const aggregate = pointee orelse return false;
-    return (aggregate.construction == .declared_struct or aggregate.construction == .c_union) and field_index < aggregate.field_count and
-        aggregate.field_type_ids[field_index].eql(target.type_id) and
-        sameValueType(aggregate.field_types[field_index], target.ty);
+    return mir.executableStorageAlignment(body.enum_types, target.ty) != null and
+        mir.executableParameterFieldPlace(body, target, require_mutable);
 }
 
 fn atomicPlaceSupported(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {

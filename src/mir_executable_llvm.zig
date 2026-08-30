@@ -201,6 +201,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         } else if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
         } else if (!scalarAccessPlaceSupported(body, place) and
+            !mir.executableParameterFieldPlace(body, place, false) and
             mir.executableFixedArrayIndexPlace(body, place) == null and
             mir.executableSliceIndexPlace(body, place) == null) return false;
     }
@@ -2187,6 +2188,9 @@ const Renderer = struct {
         if (addressOfAggregateFieldSupported(self.body, expression, address)) {
             return .{ .ty = "ptr", .spelling = try self.emitPlace(address.place, "ptr") };
         }
+        if (addressOfParameterFieldSupported(self.body, expression, address)) {
+            return .{ .ty = "ptr", .spelling = try self.emitGuardedParameterFieldPointer(expression, address.place) };
+        }
         if (computedRawManyDerefPlaceSupported(self.body, place, false)) {
             return .{ .ty = "ptr", .spelling = try self.emitComputedRawManyDerefPointer(place) };
         }
@@ -2396,6 +2400,37 @@ const Renderer = struct {
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
         try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
         return local.storage;
+    }
+
+    fn emitGuardedParameterFieldPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableParameterFieldPlace(self.body, place, false)) return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_parameter_field_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
+        const pointer = switch (place.root_ty) {
+            .pointer => |shape| shape,
+            else => return error.InvalidBody,
+        };
+        const aggregate_ty = try self.typeText(.{ .struct_ = pointer.child });
+        const field_index = switch (place.projections[1]) {
+            .field => |index| index,
+            .deref, .index => return error.InvalidBody,
+        };
+        const field_pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+            .{ field_pointer, aggregate_ty, local.storage, field_index },
+        );
+        return field_pointer;
     }
 
     fn emitGuardedAggregatePointerFieldDerefPointer(
@@ -2767,6 +2802,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfFixedArrayIndexSupported(body, expression, address) or
             addressOfAggregateFieldSupported(body, expression, address) or
+            addressOfParameterFieldSupported(body, expression, address) or
             addressOfParameterDerefSupported(body, expression, address) or
             addressOfLocalAddressAliasDerefSupported(body, expression, address) or
             addressOfComputedRawManyDerefSupported(body, expression, address),
@@ -4059,6 +4095,15 @@ fn addressOfAggregateFieldSupported(body: *const mir.ExecutableBody, expression:
     ) and addressResultMatchesPlace(expression.result_ty, place.ty) and
         expression.type_id.isValid() and address.representation_source == null and
         !address.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn addressOfParameterFieldSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    return mir.executableParameterFieldPlace(body, place, false) and
+        addressResultMatchesPlace(expression.result_ty, place.ty) and
+        expression.type_id.isValid() and address.representation_source != null and
+        address.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
 }
 
 fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {

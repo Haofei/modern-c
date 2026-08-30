@@ -1596,6 +1596,7 @@ pub const ExecutableIncompleteReason = enum {
     unsupported_block_expression,
     unsupported_unreachable_expression,
     unsupported_await,
+    compile_time_statement,
 };
 
 pub const ExecutableBody = struct {
@@ -1748,6 +1749,49 @@ pub const ExecutableAggregatePointerFieldDeref = struct {
     field_index: usize,
     pointer_ty: ValueType,
 };
+
+/// Recognize a field selected through a single-pointer parameter (`p->field`).
+/// Unlike scalar-access predicates, this also admits aggregate fields so an
+/// address-of operation can pass them to another function without loading or
+/// copying the aggregate.
+pub fn executableParameterFieldPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count != 2 or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        place.projections[0] != .deref) return false;
+    const field_index = switch (place.projections[1]) {
+        .field => |index| index,
+        .deref, .index => return false,
+    };
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    var parameter: ?ExecutableParameter = null;
+    for (body.parameters) |candidate| if (candidate.local.eql(local)) {
+        parameter = candidate;
+        break;
+    };
+    const root = parameter orelse return false;
+    if (!root.type_id.eql(place.root_type_id) or !ValueType.eql(root.ty, place.root_ty)) return false;
+    const pointer = switch (root.ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    if (pointer.kind != .single or (require_mutable and pointer.mutability != .mut)) return false;
+    var aggregate: ?ExecutableAggregateType = null;
+    for (body.aggregate_types) |candidate| if (ValueType.eql(candidate.ty, .{ .struct_ = pointer.child })) {
+        aggregate = candidate;
+        break;
+    };
+    const shape = aggregate orelse return false;
+    return (shape.construction == .declared_struct or shape.construction == .c_union) and
+        field_index < shape.field_count and shape.field_type_ids[field_index].eql(place.type_id) and
+        ValueType.eql(shape.field_types[field_index], place.ty);
+}
 
 /// Recognize `aggregate_local.pointer_field.*` from canonical place and layout
 /// metadata.  The pointer-bearing field is the representation-guard subject;

@@ -674,6 +674,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         if (place.storage == .atomic) {
             if (!atomicPlaceSupported(body, place)) return false;
         } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place) and
+            !mir.executableParameterFieldPlace(body, place, false) and
             mir.executableFixedArrayIndexPlace(body, place) == null and
             mir.executableSliceIndexPlace(body, place) == null) return false;
         switch (place.root) {
@@ -1115,6 +1116,10 @@ fn indexSupported(
         },
         .slice => {
             if (operation.bound != null) return false;
+            // Slice indexing is emitted through the race-tolerant scalar
+            // load helpers. Aggregate elements require a separate copy
+            // lowering and must remain on the legacy path until that exists.
+            if (scalarMemoryInfo(expression.result_ty) == null) return false;
             const child = switch (base.result_ty) {
                 .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
                 .slice => |name| name,
@@ -2166,6 +2171,10 @@ fn addressOfSupported(
         false,
     )) return address.representation_source == null and
         !address.representation_span_id.isValid() and ownedTrapEdgeCount(body, expression.id) == 0;
+    if (mir.executableParameterFieldPlace(body, place.*, false)) {
+        return address.representation_source != null and address.representation_span_id.isValid() and
+            representationOperationHasExactTrapEdge(body, expression);
+    }
     if (place.projection_count == 0) {
         return directAddressablePlaceSupported(body, place.*) and address.representation_source == null and
             !address.representation_span_id.isValid() and ownedTrapEdgeCount(body, expression.id) == 0;
@@ -2702,7 +2711,8 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
         .address_of => |address| blk: {
             const place = placeById(body, address.place) orelse return false;
             if (!(singleParameterScalarDerefPlaceSupported(body, place.*) or
-                mir.executableLocalAddressDerefPlace(body, place.*, false))) return false;
+                mir.executableLocalAddressDerefPlace(body, place.*, false) or
+                mir.executableParameterFieldPlace(body, place.*, false))) return false;
             break :blk .{ .source = address.representation_source, .span_id = address.representation_span_id };
         },
         .builtin_call => |call| blk: {
@@ -3233,8 +3243,7 @@ fn emitPlaceAddress(
         try emitPlaceRootValue(allocator, out, body, place.*);
         return;
     }
-    if (!scalarAccessPlaceSupported(body, place.*)) return error.UnsupportedOperation;
-    if (place.projection_count == 2) {
+    if (place.projection_count == 2 and mir.executableParameterFieldPlace(body, place.*, false)) {
         const field_index = switch (place.projections[1]) {
             .field => |index| index,
             .deref, .index => return error.UnsupportedOperation,
@@ -3256,6 +3265,7 @@ fn emitPlaceAddress(
         try out.append(allocator, ')');
         return;
     }
+    if (!scalarAccessPlaceSupported(body, place.*)) return error.UnsupportedOperation;
     // `&p.*` is the original pointer value. Keeping this identity also avoids
     // creating a second C dereference after the explicit representation guard.
     try emitPlaceRootValue(allocator, out, body, place.*);

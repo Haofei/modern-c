@@ -17,8 +17,8 @@
         "measured_at": "2026-08-30",
         "strict_c": "160/160 admitted through canonical MIR, 0 fallback, 0 specialized, 0 plan definitions",
         "strict_llvm": "160/160 admitted through canonical MIR, 0 fallback, 0 specialized, 0 plan definitions",
-        "broad_c": "1335/1777 admitted through canonical MIR, 442 explicit AST fallbacks",
-        "broad_llvm": "1370/1829 admitted through canonical MIR, 459 explicit AST fallbacks",
+        "broad_c": "1397/1809 admitted through canonical MIR, 412 explicit AST fallbacks",
+        "broad_llvm": "1419/1861 admitted through canonical MIR, 442 explicit AST fallbacks",
         "completion_note": "Specialized-plan retirement is complete. P0 remains incomplete until the fallback artifact and both backend AST-body ingress branches are deleted."
       },
       "current_evidence": [

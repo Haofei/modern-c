@@ -6119,25 +6119,6 @@ const ValueTypeContext = struct {
 
 const TypeIdMap = std.HashMap(ValueType, TypeId, ValueTypeContext, std.hash_map.default_max_load_percentage);
 
-fn executableScalarSliceStoreCompletionCandidate(body: *const ExecutableBody) bool {
-    if (body.aggregate_types.len != 0) return false;
-    var has_slice_store = false;
-    for (body.places) |place| {
-        if (place.projection_count == 0) continue;
-        if (mir_model.executableSliceIndexPlace(body, place) == null) return false;
-    }
-    for (body.statements) |statement| switch (statement.operation) {
-        .store => |store| {
-            if (!store.place.isValid() or store.place.index() >= body.places.len or
-                mir_model.executableSliceIndexPlace(body, body.places[store.place.index()]) == null) return false;
-            has_slice_store = true;
-        },
-        .local_init, .eval, .return_, .guard, .contract_marker, .control_transfer => {},
-        .defer_cleanup, .unsupported => return false,
-    };
-    return has_slice_store;
-}
-
 const FunctionBuilder = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -6778,9 +6759,13 @@ const FunctionBuilder = struct {
         // carries conservative migration checks, but an unclassified false
         // negative must not permanently strand a fully verified body on the
         // legacy path. Specific incomplete reasons remain fail-closed.
-        if (!result.executable_body.complete and self.executable_supported and
-            result.executable_body.incomplete_reason == .none and
-            executableScalarSliceStoreCompletionCandidate(&result.executable_body))
+        if (result.executable_body.complete) {
+            mir_executable_body.verify(&result) catch {
+                result.executable_body.complete = false;
+            };
+        }
+        if (!result.executable_body.complete and
+            result.executable_body.incomplete_reason == .none)
         {
             result.executable_body.complete = true;
             mir_executable_body.verify(&result) catch {
@@ -7528,6 +7513,15 @@ const FunctionBuilder = struct {
             sameValueType(pointee.ty, aggregate_ty) and
             sameValueType(place.ty, pointee.field_types[field_index]) and
             place.type_id.eql(pointee.field_type_ids[field_index]);
+    }
+
+    fn executableParameterFieldPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
+        const transient_body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+        };
+        return mir_model.executableParameterFieldPlace(&transient_body, place, false);
     }
 
     fn executableFixedArrayIndexPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -10929,6 +10923,8 @@ const FunctionBuilder = struct {
                 // representation, retain the verified legacy lowering and
                 // fail closed instead of emitting its assertions at runtime.
                 self.executable_supported = false;
+                if (self.executable_incomplete_reason == .none)
+                    self.executable_incomplete_reason = .compile_time_statement;
                 return try self.buildBlock(body);
             },
             .unsafe_block => |body| return try self.buildUnsafeBlock(body),
@@ -15144,19 +15140,28 @@ const FunctionBuilder = struct {
                 });
                 return;
             }
-            const Representation = struct { place: PlaceId, span_id: SpanId };
+            const Representation = struct { place: PlaceId, span_id: SpanId, parameter_field_address: bool = false };
             const representation: Representation = switch (expression.operation) {
                 .load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 .atomic_load => |value| .{ .place = value.place, .span_id = value.representation_span_id },
                 .atomic_update => |value| .{ .place = value.place, .span_id = value.representation_span_id },
-                .address_of => |value| .{ .place = value.place, .span_id = value.representation_span_id },
+                .address_of => |value| .{
+                    .place = value.place,
+                    .span_id = value.representation_span_id,
+                    .parameter_field_address = true,
+                },
                 else => continue,
             };
             if (!representation.span_id.eql(span_id)) continue;
             const place_id = representation.place;
             if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) continue;
             const place = self.executable_places.items[place_id.index()];
-            if (!self.executablePlaceComplete(place) or place.projection_count == 0) continue;
+            // Trap ownership is established when the checked operation is
+            // created. Aggregate/type tables may still be growing at this
+            // point; final place completeness is verified after construction.
+            if (place.projection_count == 0 or
+                (!self.executablePlaceComplete(place) and
+                    !(representation.parameter_field_address and self.executableParameterFieldPlaceComplete(place)))) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
                 legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;

@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1335/1777 C functions and 1370/1829 LLVM functions.
-  The remaining 442 C and 459 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1397/1809 C functions and 1419/1861 LLVM functions.
+  The remaining 412 C and 442 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -28,10 +28,16 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
   bash tools/toolchain/fallback-census.sh
 ```
 
-Current leading blockers are `trap_projection`, `producer_invariant`,
-`unsupported_statement`, `unsupported_member`, `general_switch`, string and
+Current leading blockers are `trap_projection`, `unsupported_statement`,
+`unsupported_member`, `general_switch`, string and
 aggregate construction, `try`, and unsupported calls. Renderer rejection is a
 smaller secondary group.
+
+The producer no longer carries a one-off slice-store completion recognizer.
+The executable-body verifier promotes every valid body without an explicit
+incomplete reason; compile-time statements are explicitly classified and stay
+outside runtime MIR. Parameter-field addresses now own their representation
+trap at construction time and are rendered mechanically by both backends.
 
 Each slice must:
 

@@ -1444,11 +1444,10 @@ pub const CEmitter = struct {
         if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return false;
         for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
         const body = &function.executable_body;
-        // Keep the existing fact-inventory fixtures on their diagnostic path
-        // while a function body is available.  The no-body-fallback gate still
-        // forces this shape through canonical MIR and proves it is independently
-        // executable; the broad migration can retire those diagnostic-only
-        // assertions separately from broad fallback retirement.
+        // The canonical renderer does not yet consume aggregate-return
+        // pointer provenance. Keep those bodies on the qualified path until
+        // that fact is represented by executable MIR rather than silently
+        // changing race-tolerant field reads into plain accesses.
         if (!self.noFunctionBodyFallbacksAvailable()) for (body.places) |place| {
             if (mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null) return false;
         };

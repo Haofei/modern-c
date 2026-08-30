@@ -155,10 +155,16 @@ fn writeRecordJson(
     try writeJsonString(out, a, shape.term);
     try out.appendSlice(a, ",\"ret\":");
     try writeJsonString(out, a, shape.ret);
-    try out.print(a, ",\"traps\":{d},\"cleanup\":{s},\"instrs\":", .{ shape.traps, if (shape.cleanup) "true" else "false" });
+    try out.print(a, ",\"traps\":{d},\"executable_traps\":{d},\"cleanup\":{s},\"instrs\":", .{
+        shape.traps,
+        fn_mir.executable_body.trap_edges.len,
+        if (shape.cleanup) "true" else "false",
+    });
     try writeInstrSet(out, a, fn_mir);
     try out.appendSlice(a, ",\"call_targets\":");
     try writeCallTargetSet(out, a, fn_mir);
+    try out.appendSlice(a, ",\"executable_ops\":");
+    try writeExecutableOperationSet(out, a, fn_mir.executable_body);
     try out.appendSlice(a, "}");
 }
 
@@ -235,6 +241,20 @@ fn writeInstrSet(out: *std.ArrayList(u8), a: std.mem.Allocator, fn_mir: mir.Func
             first = false;
         }
     }
+    try out.append(a, '"');
+}
+
+fn writeExecutableOperationSet(out: *std.ArrayList(u8), a: std.mem.Allocator, body: mir.ExecutableBody) !void {
+    const fields = @typeInfo(mir.ExecutableExpression.Operation).@"union".fields;
+    var present = [_]bool{false} ** fields.len;
+    for (body.expressions) |expression| present[@intFromEnum(std.meta.activeTag(expression.operation))] = true;
+    try out.append(a, '"');
+    var first = true;
+    inline for (fields, 0..) |field, i| if (present[i]) {
+        if (!first) try out.append(a, ',');
+        try out.appendSlice(a, field.name);
+        first = false;
+    };
     try out.append(a, '"');
 }
 
@@ -349,8 +369,8 @@ test "fallback census JSON includes normalized call targets" {
     try std.testing.expectEqualStrings(
         "{\"backend\":\"c\",\"status\":\"fallback\",\"selected_path\":\"ast_fallback\",\"canonical\":\"producer_incomplete\",\"canonical_detail\":\"unlowered_member\",\"module\":\"module.mc\"," ++
             "\"fn\":\"example\",\"blocks\":1,\"term\":\"return\",\"ret\":\"none\"," ++
-            "\"traps\":0,\"cleanup\":false,\"instrs\":\"call_target\"," ++
-            "\"call_targets\":\"phys,wrapping_add\"}",
+            "\"traps\":0,\"executable_traps\":0,\"cleanup\":false,\"instrs\":\"call_target\"," ++
+            "\"call_targets\":\"phys,wrapping_add\",\"executable_ops\":\"\"}",
         out.items,
     );
 }
