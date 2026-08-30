@@ -105,6 +105,7 @@ pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
 pub const ExecutableCastKind = mir_model.ExecutableCastKind;
+pub const ExecutableUnaryOp = mir_model.ExecutableUnaryOp;
 pub const ExecutableIncompleteReason = mir_model.ExecutableIncompleteReason;
 pub const IntegerDomainKind = mir_model.IntegerDomainKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;

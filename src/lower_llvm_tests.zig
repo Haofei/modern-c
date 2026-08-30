@@ -4800,6 +4800,7 @@ test "LLVM typed indirect call returns lower from MIR without body fallback" {
         \\global default_box: BinOp = .{ .combine = add };
         \\global default_boxes: [2]BinOp = .{ .{ .combine = add }, .{ .combine = mul } };
         \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
+        \\fn dispatch(o: *BinOp, x: u32, y: u32) -> u32 { return o.combine(x, y); }
         \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
         \\fn global_op_array_call(x: u32, y: u32) -> u32 { return default_ops[1](x, y); }
         \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
@@ -4819,7 +4820,14 @@ test "LLVM typed indirect call returns lower from MIR without body fallback" {
     try expectContains(param_body, "ret i32");
     try expectNotContains(param_body, "alloca");
 
+    const dispatch_body = try llvmFunctionBody(output.items, "define internal i32 @dispatch");
+    try expectContains(dispatch_body, "; canonical executable MIR");
+    try expectContains(dispatch_body, "getelementptr inbounds { ptr }, ptr %mc_arg_0, i32 0, i32 0");
+    try expectContains(dispatch_body, "load atomic ptr");
+    try expectContains(dispatch_body, "call i32 %");
+
     const global_body = try llvmFunctionBody(output.items, "define internal i32 @global_op_call");
+    try expectContains(global_body, "; canonical executable MIR");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, global_body, "load atomic ptr, ptr @default_op unordered"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, global_body, "call i32 %"));
     try expectContains(global_body, "ret i32");

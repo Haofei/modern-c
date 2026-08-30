@@ -294,7 +294,7 @@ fn emitExpressionOperation(
         .load => |load| switch (load.access.kind) {
             .plain => try emitPlace(allocator, out, body, load.place),
             .race_unordered => {
-                if ((expression.result_ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, load.place) orelse return error.InvalidPlace).*) != null) or
+                if ((expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load)) or
                     expression.result_ty == .closed_enum or expression.result_ty == .open_enum)
                 {
                     try out.appendSlice(allocator, "__atomic_load_n(");
@@ -770,10 +770,36 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .local => |local| localById(body, local) != null and
             (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
+        .load => |load| expressionUsedAsIndirectCallee(body, expression.id) and
+            memoryLoadSupported(body, expression, load),
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
         else => false,
+    };
+}
+
+fn expressionUsedAsIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .indirect_call => |call| if (call.callee.eql(id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn callableLoadTargetSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    load: @FieldType(mir.ExecutableExpression.Operation, "load"),
+) bool {
+    if (expression.result_ty != .value or !expressionUsedAsIndirectCallee(body, expression.id)) return false;
+    const place = placeById(body, load.place) orelse return false;
+    if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
+    if (mir.executableCallableAggregateField(body.aggregate_types, place.*) != null) return true;
+    if (place.projection_count != 0) return false;
+    return switch (place.root) {
+        .symbol => |id| if (symbolById(body, id)) |symbol| symbol.kind == .global else false,
+        .local, .value => false,
     };
 }
 
@@ -1509,7 +1535,8 @@ fn memoryLoadSupported(
             .local, .value => false,
         };
     }
-    if (scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null) return false;
+    if (scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null and
+        !callableLoadTargetSupported(body, expression, load)) return false;
     if (load.access.alignment != mir.executableStorageAlignment(body.enum_types, expression.result_ty)) return false;
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary) return false;

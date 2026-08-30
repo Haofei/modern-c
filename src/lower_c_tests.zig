@@ -4679,6 +4679,7 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
         \\global default_box: BinOp = .{ .combine = add };
         \\global default_boxes: [2]BinOp = .{ .{ .combine = add }, .{ .combine = mul } };
         \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
+        \\fn dispatch(o: *BinOp, x: u32, y: u32) -> u32 { return o.combine(x, y); }
         \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
         \\fn global_op_array_call(x: u32, y: u32) -> u32 { return default_ops[1](x, y); }
         \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
@@ -4699,8 +4700,15 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
     try expectContains(param_body, "return mc_exec_tmp_3;");
     try expectNotContains(param_body, "mc_tmp");
 
+    const dispatch_body = try cFunctionBody(output.items, "static uint32_t dispatch(");
+    try expectContains(dispatch_body, "/* canonical executable MIR */");
+    try expectContains(dispatch_body, "__atomic_load_n(");
+    try expectContains(dispatch_body, ")(mc_exec_tmp_");
+
     const global_body = try cFunctionBody(output.items, "static uint32_t global_op_call(");
-    try expectContains(global_body, "__atomic_load_n(&default_op, __ATOMIC_RELAXED))(x, y)");
+    try expectContains(global_body, "/* canonical executable MIR */");
+    try expectContains(global_body, "__auto_type mc_exec_tmp_0 = __atomic_load_n(&default_op, __ATOMIC_RELAXED);");
+    try expectContains(global_body, ")(mc_exec_tmp_");
     try expectNotContains(global_body, "mc_tmp");
 
     const field_body = try cFunctionBody(output.items, "static uint32_t global_box_call(");

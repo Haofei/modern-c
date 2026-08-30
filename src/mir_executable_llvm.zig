@@ -1714,7 +1714,14 @@ const Renderer = struct {
     }
 
     fn emitMemoryLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
-        if (!memoryAccessSupported(self.body, load.place, expression.result_ty, load.access, false)) return error.InvalidBody;
+        if (!memoryAccessSupported(
+            self.body,
+            load.place,
+            expression.result_ty,
+            load.access,
+            false,
+            callableLoadTargetSupported(self.body, expression, load),
+        )) return error.InvalidBody;
         const value_ty = try self.typeText(expression.result_ty);
         const place = self.body.places[load.place.index()];
         const pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
@@ -2421,10 +2428,32 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .local => |local| localExists(body, local) and
             (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
+        .load => |load| expressionUsedAsIndirectCallee(body, expression.id) and
+            memoryLoadSupported(body, expression, load),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and
             symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
         else => false,
+    };
+}
+
+fn expressionUsedAsIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .indirect_call => |call| if (call.callee.eql(id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
+    if (expression.result_ty != .value or !expressionUsedAsIndirectCallee(body, expression.id) or !placeValid(body, load.place)) return false;
+    const place = body.places[load.place.index()];
+    if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
+    if (mir.executableCallableAggregateField(body.aggregate_types, place) != null) return true;
+    if (place.projection_count != 0) return false;
+    return switch (place.root) {
+        .symbol => |id| if (symbolIdentity(body, id)) |symbol| symbol.kind == .global else false,
+        .local, .value => false,
     };
 }
 
@@ -3212,7 +3241,14 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
 }
 
 fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
-    if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false)) return false;
+    if (!memoryAccessSupported(
+        body,
+        load.place,
+        expression.result_ty,
+        load.access,
+        false,
+        callableLoadTargetSupported(body, expression, load),
+    )) return false;
     const place = body.places[load.place.index()];
     if (place.projection_count == 0) {
         return load.representation_source == null and !load.representation_span_id.isValid();
@@ -3446,7 +3482,7 @@ fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) 
 }
 
 fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement, store: anytype) bool {
-    if (!memoryAccessSupported(body, store.place, store.ty, store.access, true) or !expressionValid(body, store.value)) return false;
+    if (!memoryAccessSupported(body, store.place, store.ty, store.access, true, false) or !expressionValid(body, store.value)) return false;
     const place = body.places[store.place.index()];
     const value = body.expressions[store.value.index()];
     if (!sameValueType(store.ty, value.result_ty)) return false;
@@ -3480,7 +3516,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         statementRepresentationTrapEdgeIsExact(body, statement);
 }
 
-fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool) bool {
+fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool, allow_unordered_value: bool) bool {
     if (!placeValid(body, place_id)) return false;
     const place = body.places[place_id.index()];
     if (place.storage != .ordinary) return false;
@@ -3499,7 +3535,8 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     // LLVM atomic load/store does not accept aggregate values. Aggregate
     // accesses through shared pointer/global storage must remain on the
     // legacy leaf-wise path until executable MIR carries a leaf access plan.
-    if (access.kind == .race_unordered and !unorderedMemoryTypeSupported(body, ty)) return false;
+    if (access.kind == .race_unordered and !unorderedMemoryTypeSupported(body, ty) and
+        !(allow_unordered_value and ty == .value)) return false;
     if (place.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, place) != null) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
