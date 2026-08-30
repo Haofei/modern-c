@@ -1072,6 +1072,17 @@ const Renderer = struct {
     }
 
     fn emitBinary(self: *Renderer, expression: mir.ExecutableExpression, result_ty: []const u8, binary: anytype) RenderError!Value {
+        if (binary.arithmetic == .unchecked) {
+            try self.output.print(self.allocator, "  ; mir range_fact consumed region={} op={s} assumption=no_overflow\n", .{
+                binary.contract_region_id orelse return error.InvalidBody,
+                switch (binary.op) {
+                    .add => "add",
+                    .sub => "sub",
+                    .mul => "mul",
+                    else => return error.InvalidBody,
+                },
+            });
+        }
         const left = try self.emitExpression(binary.left);
         const right = try self.emitExpression(binary.right);
         if (!std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
@@ -2826,6 +2837,7 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     if (!expressionValid(body, binary.left) or !expressionValid(body, binary.right)) return false;
     const left_ty = body.expressions[binary.left.index()].result_ty;
     const right_ty = body.expressions[binary.right.index()].result_ty;
+    if (binary.arithmetic != .unchecked and binary.contract_region_id != null) return false;
     if (!sameValueType(left_ty, right_ty)) return false;
     if (binary.op == .logical_and or binary.op == .logical_or) {
         return binary.eager_safe and binary.arithmetic == .ordinary and expression.result_ty == .bool and
@@ -2862,8 +2874,12 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         };
     }
     return switch (binary.op) {
-        .add, .sub, .mul => sameValueType(expression.result_ty, left_ty) and arithmeticIntegerType(left_ty) and
-            (binary.arithmetic == .ordinary or checkedIntegerBinaryHasExactTrapEdges(body, expression)),
+        .add, .sub, .mul => sameValueType(expression.result_ty, left_ty) and arithmeticIntegerType(left_ty) and switch (binary.arithmetic) {
+            .ordinary => ownedExpressionTrapCount(body, expression.id) == 0,
+            .checked => checkedIntegerBinaryHasExactTrapEdges(body, expression),
+            .unchecked => binary.contract_region_id != null and ownedExpressionTrapCount(body, expression.id) == 0,
+            else => false,
+        },
         .div, .mod, .shl, .shr => binary.arithmetic == .checked and sameValueType(expression.result_ty, left_ty) and
             arithmeticIntegerType(left_ty) and checkedIntegerBinaryHasExactTrapEdges(body, expression),
         .bit_or, .bit_xor, .bit_and => binary.arithmetic == .ordinary and sameValueType(expression.result_ty, left_ty) and integerLike(left_ty),

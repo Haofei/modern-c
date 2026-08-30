@@ -1934,6 +1934,7 @@ fn binarySupported(
 ) bool {
     const left = expressionById(body, binary.left) orelse return false;
     const right = expressionById(body, binary.right) orelse return false;
+    if (binary.arithmetic != .unchecked and binary.contract_region_id != null) return false;
     if (binary.op == .logical_and or binary.op == .logical_or) {
         return binary.eager_safe and binary.arithmetic == .ordinary and expression.result_ty == .bool and
             mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) and
@@ -1966,6 +1967,13 @@ fn binarySupported(
     return switch (binary.arithmetic) {
         .ordinary => ownedTrapEdgeCount(body, expression.id) == 0,
         .checked => checkedIntegerBinaryHasExactTrapEdges(body, expression),
+        .unchecked => binary.contract_region_id != null and
+            sameValueType(expression.result_ty, left.result_ty) and
+            mir.ExecutableCastKind.integerInfo(expression.result_ty) != null and
+            ownedTrapEdgeCount(body, expression.id) == 0 and switch (binary.op) {
+            .add, .sub, .mul => true,
+            else => false,
+        },
         .wrapping, .saturating => false,
     };
 }
@@ -2373,6 +2381,19 @@ fn prepareStatementExpressions(
             try out.appendSlice(allocator, " == NULL) mc_trap_NullUnwrap();\n");
         }
         switch (expression.operation) {
+            .binary => |binary| if (binary.arithmetic == .unchecked) {
+                try writeSourceLineDirective(allocator, out, source_path, expression.source);
+                try writeIndent(allocator, out, indent);
+                try out.print(allocator, "/* MC_MIR_RANGE no_overflow region={} op={s} */\n", .{
+                    binary.contract_region_id orelse return error.InvalidExpression,
+                    switch (binary.op) {
+                        .add => "add",
+                        .sub => "sub",
+                        .mul => "mul",
+                        else => return error.InvalidExpression,
+                    },
+                });
+            },
             .mmio_write => |write| if (write.ordering == .release) {
                 try writeSourceLineDirective(allocator, out, source_path, expression.source);
                 try writeIndent(allocator, out, indent);

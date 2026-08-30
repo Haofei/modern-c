@@ -6632,7 +6632,14 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(representation_facts);
         const elided_bounds = try self.elided_bounds.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(elided_bounds);
-        var executable_body = try self.finishExecutableBody(trap_edges, call_target_facts, span_identities, blocks.items);
+        var executable_body = try self.finishExecutableBody(
+            trap_edges,
+            call_target_facts,
+            contract_regions,
+            range_facts,
+            span_identities,
+            blocks.items,
+        );
         errdefer executable_body.deinit(self.allocator);
         const param_types = try self.allocator.alloc(ValueType, executable_body.parameters.len);
         errdefer self.allocator.free(param_types);
@@ -6731,6 +6738,8 @@ const FunctionBuilder = struct {
         self: *FunctionBuilder,
         trap_edges: []const TrapEdge,
         call_target_facts: []const CallTargetFact,
+        contract_regions: []const ContractRegion,
+        range_facts: []const RangeFact,
         span_identities: []const SpanIdentity,
         legacy_blocks: []const Block,
     ) !ExecutableBody {
@@ -6776,7 +6785,8 @@ const FunctionBuilder = struct {
                 },
                 else => {},
             }
-            if (!expression.span_id.isValid() or !expression.type_id.isValid() or !executableExpressionComplete(self, expression.*)) complete = false;
+            if (!expression.span_id.isValid() or !expression.type_id.isValid() or
+                !executableExpressionComplete(self, expression.*, contract_regions, range_facts)) complete = false;
         }
         for (self.executable_places.items) |*place| {
             place.span_id = self.span_ids.get(place.source) orelse .invalid;
@@ -6941,7 +6951,12 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn executableExpressionComplete(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
+    fn executableExpressionComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        contract_regions: []const ContractRegion,
+        range_facts: []const RangeFact,
+    ) bool {
         return switch (expression.operation) {
             .unsupported, .deref, .range_slice => false,
             .index => |operation| self.executableIndexComplete(expression, operation),
@@ -7016,7 +7031,11 @@ const FunctionBuilder = struct {
                 .string, .uninit, .enum_value => false,
                 else => true,
             },
-            .binary => |binary| if (binary.op == .logical_and or binary.op == .logical_or)
+            .binary => |binary| if (binary.arithmetic == .unchecked)
+                self.executableUncheckedBinaryComplete(expression, binary, contract_regions, range_facts)
+            else if (binary.contract_region_id != null)
+                false
+            else if (binary.op == .logical_and or binary.op == .logical_or)
                 binary.eager_safe and self.executablePureBoolOperand(binary.left) and self.executablePureBoolOperand(binary.right)
             else
                 !binary.eager_safe,
@@ -7030,6 +7049,40 @@ const FunctionBuilder = struct {
             .representation_check => |check| self.executableRepresentationCheckComplete(expression, check),
             else => true,
         };
+    }
+
+    fn executableUncheckedBinaryComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        binary: @FieldType(ExecutableExpression.Operation, "binary"),
+        contract_regions: []const ContractRegion,
+        range_facts: []const RangeFact,
+    ) bool {
+        if (binary.eager_safe or !binary.left.isValid() or !binary.right.isValid() or
+            binary.left.index() >= expression.id.index() or binary.right.index() >= expression.id.index() or
+            binary.left.index() >= self.executable_expressions.items.len or
+            binary.right.index() >= self.executable_expressions.items.len) return false;
+        const left = self.executable_expressions.items[binary.left.index()];
+        const right = self.executable_expressions.items[binary.right.index()];
+        if (!sameValueType(expression.result_ty, left.result_ty) or
+            !sameValueType(left.result_ty, right.result_ty) or
+            mir_model.ExecutableCastKind.integerInfo(expression.result_ty) == null) return false;
+        const op: []const u8 = switch (binary.op) {
+            .add => "add",
+            .sub => "sub",
+            .mul => "mul",
+            else => return false,
+        };
+        const region_id = binary.contract_region_id orelse return false;
+        const region_valid = for (contract_regions) |region| {
+            if (region.id == region_id) break std.mem.eql(u8, region.kind, "no_overflow");
+        } else false;
+        if (!region_valid) return false;
+        for (range_facts) |fact| {
+            if (fact.region_id == region_id and fact.typed_span_id.eql(expression.span_id) and
+                std.mem.eql(u8, fact.op, op) and sameValueType(fact.result_ty, expression.result_ty)) return true;
+        }
+        return false;
     }
 
     fn executableVariantOperationComplete(
@@ -8619,6 +8672,26 @@ const FunctionBuilder = struct {
                     },
                     else => {},
                 };
+                if (self.uncheckedCallTarget(node)) |target| {
+                    const region_id = self.active_contract_region_id orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow"))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    result_ty = target.result_ty;
+                    const operation: mir_model.ExecutableBinaryOp = switch (target.kind) {
+                        .unchecked_add => .add,
+                        .unchecked_sub => .sub,
+                        .unchecked_mul => .mul,
+                        else => unreachable,
+                    };
+                    break :call .{ .binary = .{
+                        .op = operation,
+                        .left = try self.ensureExecutableExprAsType(node.args[0], target.left_value_ty, target.left_ty),
+                        .right = try self.ensureExecutableExprAsType(node.args[1], target.right_value_ty, target.right_ty),
+                        .arithmetic = .unchecked,
+                        .contract_region_id = region_id,
+                    } };
+                }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
                     const raw_target = self.rawCallTarget(node);
                     const wrapping_target = self.wrappingCallTarget(node);
@@ -14546,6 +14619,7 @@ const FunctionBuilder = struct {
             .left = exprText(args[0]),
             .right = exprText(args[1]),
             .result_ty = self.assignment_target_ty,
+            .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
             .line = span.line,
             .column = span.column,
         });
@@ -14576,6 +14650,7 @@ const FunctionBuilder = struct {
             .left = exprText(call.args[0]),
             .right = exprText(call.args[1]),
             .result_ty = result_ty,
+            .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
             .line = expr.span.line,
             .column = expr.span.column,
         });

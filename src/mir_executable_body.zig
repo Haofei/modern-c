@@ -331,6 +331,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             // owns.  Exact executable arithmetic invariants become mandatory
             // only when the producer claims this body is complete.
             if (body.complete) {
+                if (operation.arithmetic != .unchecked and operation.contract_region_id != null)
+                    return error.InvalidUncheckedArithmetic;
                 const logical = operation.op == .logical_and or operation.op == .logical_or;
                 if (logical) {
                     if (!operation.eager_safe or value.result_ty != .bool or
@@ -373,6 +375,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                         else => unreachable,
                     };
                     if (!supported) return error.InvalidDomainArithmetic;
+                },
+                .unchecked => {
+                    if (!uncheckedBinaryHasExactProof(function, body, value, operation, left.*, right.*))
+                        return error.InvalidUncheckedArithmetic;
                 },
                 .ordinary => if (left.result_ty == .domain_integer) {
                     const comparison = operation.op == .eq or operation.op == .ne or operation.op == .lt or
@@ -554,6 +560,37 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) try verifyStructConstruction(function, value, operation);
         },
     }
+}
+
+fn uncheckedBinaryHasExactProof(
+    function: *const mir.Function,
+    body: *const mir.ExecutableBody,
+    value: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "binary"),
+    left: mir.ExecutableExpression,
+    right: mir.ExecutableExpression,
+) bool {
+    if (operation.eager_safe or
+        !sameValueType(value.result_ty, left.result_ty) or
+        !sameValueType(left.result_ty, right.result_ty) or
+        mir.ExecutableCastKind.integerInfo(value.result_ty) == null or
+        ownedTrapCountAll(body, .{ .expression = value.id }) != 0) return false;
+    const op: []const u8 = switch (operation.op) {
+        .add => "add",
+        .sub => "sub",
+        .mul => "mul",
+        else => return false,
+    };
+    const region_id = operation.contract_region_id orelse return false;
+    const region_valid = for (function.contract_regions) |region| {
+        if (region.id == region_id) break std.mem.eql(u8, region.kind, "no_overflow");
+    } else false;
+    if (!region_valid) return false;
+    for (function.range_facts) |fact| {
+        if (fact.region_id == region_id and fact.typed_span_id.eql(value.span_id) and
+            std.mem.eql(u8, fact.op, op) and sameValueType(fact.result_ty, value.result_ty)) return true;
+    }
+    return false;
 }
 
 fn verifyVariantOperation(

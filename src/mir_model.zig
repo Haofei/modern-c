@@ -371,6 +371,10 @@ pub const ExecutableBinaryOp = enum {
 pub const ExecutableArithmeticSemantics = enum {
     ordinary,
     checked,
+    /// Arithmetic admitted by an exact `no_overflow` contract region. The
+    /// frontend records the region on the binary operation and the MIR
+    /// verifier checks the matching range fact before codegen admission.
+    unchecked,
     wrapping,
     saturating,
 };
@@ -964,6 +968,7 @@ pub const ExecutableExpression = struct {
             left: ExprId,
             right: ExprId,
             arithmetic: ExecutableArithmeticSemantics = .ordinary,
+            contract_region_id: ?usize = null,
             /// Eager operand evaluation is equivalent to source short-circuit
             /// semantics for this logical operation.
             eager_safe: bool = false,
@@ -1695,6 +1700,7 @@ pub const RangeFact = struct {
     left: []const u8,
     right: []const u8,
     result_ty: ValueType,
+    typed_span_id: SpanId = .invalid,
     line: usize,
     column: usize,
 };

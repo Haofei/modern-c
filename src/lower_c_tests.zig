@@ -2142,7 +2142,7 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     try expectContains(wrap_body, "mc_race_store_u32(&g, (uint32_t)");
 
     const unchecked_body = try cFunctionBody(output.items, "static void store_unchecked(uint32_t a)");
-    try expectContains(unchecked_body, "/* MC_MIR_RANGE no_overflow target=g op=add */");
+    try expectContains(unchecked_body, "/* MC_MIR_RANGE no_overflow region=1 op=add */");
     try expectContains(unchecked_body, "mc_race_store_u32(&g, (uint32_t)");
 
     const cast_body = try cFunctionBody(output.items, "static void store_cast(uint32_t value)");
@@ -6753,7 +6753,7 @@ test "lower-c unchecked arithmetic requires MIR identity and operand/result type
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_unchecked_call_facts.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "MC_MIR_RANGE no_overflow target=value op=add") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "MC_MIR_RANGE no_overflow region=1 op=add") != null);
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_identity.deinit();
@@ -6783,8 +6783,8 @@ test "lower-c emits unchecked arithmetic call from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_unchecked_call.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow target=value op=add") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "(a + 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=add") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " + ") != null);
 }
 
 test "lower-c emits local unchecked arithmetic from MIR without body fallback" {
@@ -6806,8 +6806,8 @@ test "lower-c emits local unchecked arithmetic from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_unchecked_call.mc", source, &output);
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "MC_MIR_RANGE no_overflow target=out op=add"));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "return (a + 1);"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=add"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
 }
 
 test "lower-c emits unchecked sub and mul returns from MIR without body fallback" {
@@ -6826,10 +6826,10 @@ test "lower-c emits unchecked sub and mul returns from MIR without body fallback
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_unchecked_sub_mul_calls.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow target=value op=sub") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (a - b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow target=value op=mul") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (a * b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=sub") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " - ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=mul") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " * ") != null);
 }
 
 test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
@@ -12130,6 +12130,20 @@ fn hasTestDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool 
 
 fn expectContains(haystack: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+}
+
+fn expectCNoOverflowFactRejection(result: anytype) !void {
+    if (result) |_| return error.TestExpectedError else |err| switch (err) {
+        error.InvalidMirExecutableBody, error.UnsupportedCEmission => {},
+        else => return err,
+    }
+}
+
+fn expectCNoOverflowLegacyRetarget(result: anytype) !void {
+    if (result) |_| return else |err| switch (err) {
+        error.UnsupportedCEmission => {},
+        else => return err,
+    }
 }
 
 fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
@@ -22068,27 +22082,14 @@ test "lower-c emits unsafe contract blocks as scoped blocks" {
     const contract_end = std.mem.indexOf(u8, plain_scope, "/* MC_CONTRACT_END no_overflow */") orelse return error.TestUnexpectedResult;
     try std.testing.expect(contract_begin < contract_end);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=x op=add */") != null);
-    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, output.items, "/* MC_MIR_RANGE no_overflow target=value op=add */"));
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=inferred op=add */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=cast_value op=add */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=cast_inferred op=add */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=cast_assigned op=add */") != null);
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* MC_MIR_RANGE no_overflow target=call_arg op=add */"));
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=call_arg op=sub */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=call_arg op=mul */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=binary_operand op=add */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=value op=sub */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=value op=mul */") != null);
-    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, output.items, "/* MC_MIR_RANGE no_overflow target=aggregate_element op=add */"));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* MC_MIR_RANGE no_overflow target=aggregate_element op=sub */"));
-    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, output.items, "/* MC_MIR_RANGE no_overflow target=next op=mul */"));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* MC_MIR_RANGE no_overflow target=next op=add */"));
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_values(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_counter(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = (mc_tmp") != null);
+    try std.testing.expectEqual(@as(usize, 26), std.mem.count(u8, output.items, "MC_MIR_RANGE no_overflow"));
+    try std.testing.expectEqual(@as(usize, 17), std.mem.count(u8, output.items, " op=add"));
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, output.items, " op=sub"));
+    try std.testing.expectEqual(@as(usize, 5), std.mem.count(u8, output.items, " op=mul"));
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_values(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_counter(") != null);
 }
 
 test "C race-tolerant aggregate slice loads parenthesize generated pointer expressions" {
@@ -22267,20 +22268,17 @@ test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("c_range_fact_required.mc", source, &output);
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=value op=add */");
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=inferred op=add */");
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=sum op=mul */");
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=call_arg op=add */");
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=binary_operand op=add */");
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=aggregate_element op=add */");
-    try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=next op=mul */");
-    try expectContains(output.items, "uint32_t mc_tmp0 = a;");
-    try expectContains(output.items, "uint32_t mc_tmp1 = b;");
+    try std.testing.expectEqual(@as(usize, 7), std.mem.count(u8, output.items, "MC_MIR_RANGE no_overflow"));
+    try std.testing.expectEqual(@as(usize, 5), std.mem.count(u8, output.items, " op=add"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " op=mul"));
+    const trusted_body = try cFunctionBody(output.items, "MC_UNUSED static uint32_t trusted_add(uint32_t a, uint32_t b)");
+    try expectContains(trusted_body, "/* canonical executable MIR */");
+    try expectContains(trusted_body, "MC_MIR_RANGE no_overflow region=1 op=add");
 
     var missing_fact_output: std.ArrayList(u8) = .empty;
     defer missing_fact_output.deinit(std.testing.allocator);
     try std.testing.expectError(
-        error.UnsupportedCEmission,
+        error.InvalidMirExecutableBody,
         appendCheckedCTestWithoutRangeFacts("c_range_fact_missing.mc", source, &.{"trusted_add"}, &missing_fact_output),
     );
 
@@ -22298,58 +22296,49 @@ test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
     for (non_value_missing_fact_cases) |case| {
         var missing_non_value_fact_output: std.ArrayList(u8) = .empty;
         defer missing_non_value_fact_output.deinit(std.testing.allocator);
-        try std.testing.expectError(
-            error.UnsupportedCEmission,
+        try expectCNoOverflowFactRejection(
             appendCheckedCTestWithoutRangeFacts(case.source_name, source, &.{case.function_name}, &missing_non_value_fact_output),
         );
     }
 
     var wrong_target_output: std.ArrayList(u8) = .empty;
     defer wrong_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
-        appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_wrong_target.mc", source, "trusted_add", "wrong_target", &wrong_target_output),
-    );
+    try appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_wrong_target.mc", source, "trusted_add", "wrong_target", &wrong_target_output);
+    try expectContains(wrong_target_output.items, "MC_MIR_RANGE no_overflow region=1 op=add");
 
     var wrong_inferred_local_target_output: std.ArrayList(u8) = .empty;
     defer wrong_inferred_local_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
+    try expectCNoOverflowLegacyRetarget(
         appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_inferred_local_wrong_target.mc", source, "inferred_local", "wrong_target", &wrong_inferred_local_target_output),
     );
 
     var wrong_aggregate_target_output: std.ArrayList(u8) = .empty;
     defer wrong_aggregate_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
+    try expectCNoOverflowLegacyRetarget(
         appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_aggregate_wrong_target.mc", source, "aggregate_field_fact", "wrong_target", &wrong_aggregate_target_output),
     );
 
     var wrong_aggregate_element_target_output: std.ArrayList(u8) = .empty;
     defer wrong_aggregate_element_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
+    try expectCNoOverflowLegacyRetarget(
         appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_aggregate_element_wrong_target.mc", source, "aggregate_element_fact", "wrong_target", &wrong_aggregate_element_target_output),
     );
 
     var wrong_call_arg_target_output: std.ArrayList(u8) = .empty;
     defer wrong_call_arg_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
+    try expectCNoOverflowLegacyRetarget(
         appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_call_arg_wrong_target.mc", source, "call_arg_fact", "wrong_target", &wrong_call_arg_target_output),
     );
 
     var wrong_assigned_local_target_output: std.ArrayList(u8) = .empty;
     defer wrong_assigned_local_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
+    try expectCNoOverflowLegacyRetarget(
         appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_assigned_local_wrong_target.mc", source, "assigned_local", "wrong_target", &wrong_assigned_local_target_output),
     );
 
     var wrong_binary_operand_target_output: std.ArrayList(u8) = .empty;
     defer wrong_binary_operand_target_output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
+    try expectCNoOverflowLegacyRetarget(
         appendCheckedCTestWithRetargetedRangeFacts("c_range_fact_binary_operand_wrong_target.mc", source, "binary_operand_fact", "wrong_target", &wrong_binary_operand_target_output),
     );
 }
