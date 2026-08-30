@@ -17,9 +17,9 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 admitted, 0 fallback | 160/160 admitted, 0 fallback |
-| broad repository sweep | 1252/1774 admitted, 522 fallback | 1292/1845 admitted, 553 fallback |
-| canonical bodies | 1153 | 1185 |
-| transitional specialized bodies | 99 | 107 |
+| broad repository sweep | 1271/1769 admitted, 498 fallback | 1310/1840 admitted, 530 fallback |
+| canonical bodies | 1177 | 1209 |
+| transitional specialized bodies | 94 | 101 |
 
 The strict ratchet is a regression gate, not the completion definition. The
 broad sweep includes partial records from unsupported/reject roots and is the
@@ -35,22 +35,28 @@ worklist snapshot.
 - Named/comptime local array lengths are resolved once in the MIR builder's
   const environment. Direct returns from immutable, initialized, never-written
   local fixed arrays are canonical; mutable locals and slices remain closed.
-- These slices reduced broad fallback by 15 functions in each backend during
-  the current batch. MIR/cleanup is 358/358 and backend is 1034/1034.
+- Atomic aggregate-field access, global arithmetic-domain operations, low-level
+  `cpu.pause`/physical-address calls, and `unchecked.add/sub/mul` are now
+  canonical. Unchecked arithmetic carries its exact no-overflow contract-region
+  ID and typed span into executable MIR; admission rejects a missing proof
+  before either renderer runs.
+- Since the preceding snapshot, broad fallback fell by 24 C and 23 LLVM bodies
+  while canonical bodies rose by 24 in each backend. MIR/cleanup is 358/358;
+  the backend shard is 1034/1034.
 
 ## Remaining producer blockers
 
 Ranked by broad frequency (C / LLVM where different):
 
-1. `trap_projection`: 130 / 138
+1. `trap_projection`: 120 / 128
 2. `unsupported_member`: 63 / 63
 3. `producer_invariant`: 28 / 28
 4. `unsupported_statement`: 27 / 27
 5. `unlowered_array`: 25 / 27
-6. `unsupported_call`: 25 / 25
+6. `unsupported_call`: 22 / 22
 7. `general_switch`: 21 / 23
-8. `InvalidBuiltinCall`: 20 / 19
-9. `unsupported_struct_literal`: 20 / 20
+8. `unsupported_struct_literal`: 19 / 19
+9. `InvalidBuiltinCall`: 10 / 10
 10. `noncanonical_string_literal`: 18 / 18
 11. `unsupported_try`: 15 / 15
 12. `unlowered_member`: 14 / 14
