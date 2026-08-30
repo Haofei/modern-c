@@ -11,7 +11,6 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
-const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_executable_llvm = @import("mir_executable_llvm.zig");
@@ -1518,15 +1517,9 @@ const LlvmEmitter = struct {
         // wrapper or the full legacy emitter, but not a specialized plan that
         // cannot preserve declaration mechanics.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
-        const alloca_hoist_plan = if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
-            if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
-        else
-            null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        if (alloca_hoist_plan == null) {
-            access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
-        }
+        access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
         const sequence_foreach_update_plan = if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
             if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
         else
@@ -1538,30 +1531,18 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const local_aggregate_place_update_return_plan = if (sequence_foreach_return_plan == null)
-            if (mir_statement_plan.buildLocalAggregatePlaceUpdateReturn(fn_mir)) |plan|
-                if (self.mirLocalAggregatePlaceUpdateReturnPlanSupported(function, plan)) plan else null
-            else
-                null
+        const place_return_plan = if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
+            if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
         else
             null;
-        const place_return_plan = if (local_aggregate_place_update_return_plan == null)
-            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
-                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
-            else
-                null
-        else
-            null;
-        const llvm_structural_access_operation = if (alloca_hoist_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
-            alloca_hoist_plan != null,
             llvm_structural_access_operation != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
-            local_aggregate_place_update_return_plan != null,
             place_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
@@ -1616,10 +1597,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
         }
 
-        if (alloca_hoist_plan) |plan| {
-            selected_path.* = .alloca_hoist;
-            try self.emitMirAllocaHoistPlan(plan, ret_ty);
-        } else if (llvm_structural_access_operation) |operation| {
+        if (llvm_structural_access_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirStructuralAccessPlan(access_body_plan.?, operation, ret_llvm);
         } else if (sequence_foreach_update_plan) |plan| {
@@ -1628,9 +1606,6 @@ const LlvmEmitter = struct {
         } else if (sequence_foreach_return_plan) |plan| {
             selected_path.* = .sequence_foreach_return;
             try self.emitMirSequenceForEachReturnPlan(plan, ret_ty);
-        } else if (local_aggregate_place_update_return_plan) |plan| {
-            selected_path.* = .local_aggregate_place_update_return;
-            try self.emitMirLocalAggregatePlaceUpdateReturnPlan(plan, ret_ty);
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan, ret_ty);
@@ -1782,72 +1757,6 @@ const LlvmEmitter = struct {
             },
             else => false,
         };
-    }
-
-    fn mirAllocaHoistPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_alloca_hoist_plan.Plan) bool {
-        if (function.signature.params.len != 0 or !typeNameEql(function.signature.transitionalReturnType() orelse return false, "u32")) return false;
-        if (!plan.entry_block.isValid() or !plan.loop_block.isValid() or !plan.return_block.isValid() or !plan.scratch.static_function_storage or plan.scratch.array_len != 256) return false;
-        if (plan.initial_sum.value != 0 or plan.initial_index.value != 0 or plan.bit_mask.value != 255 or plan.increment_by.value != 1 or plan.store.bound != 256 or plan.load.bound != 256) return false;
-        return std.mem.eql(u8, plan.sum.type_ref.value_ty.name(), "u32") and std.mem.eql(u8, plan.index.type_ref.value_ty.name(), "u32") and
-            std.mem.eql(u8, plan.slot.type_ref.value_ty.name(), "usize") and std.mem.eql(u8, plan.store.element.value_ty.name(), "u8") and
-            self.global_types.contains(plan.iteration_limit.name) and self.global_types.contains(plan.buffer_limit.name);
-    }
-
-    fn emitMirAllocaHoistPlan(self: *LlvmEmitter, plan: mir_alloca_hoist_plan.Plan, ret_ty: TransitionalTypeExpr) !void {
-        const sum_slot = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.mir.addr", .{plan.sum.value.name});
-        const index_slot = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.mir.addr", .{plan.index.value.name});
-        const scratch_slot = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.mir.addr", .{plan.scratch.local.value.name});
-        const slot_slot = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.mir.addr", .{plan.slot.value.name});
-        try self.out.print(self.allocator, "  {s} = alloca i32\n  {s} = alloca i32\n  {s} = alloca [{d} x i8]\n  {s} = alloca i64\n  store i32 0, ptr {s}\n  store i32 0, ptr {s}\n", .{ sum_slot, index_slot, scratch_slot, plan.scratch.array_len, slot_slot, sum_slot, index_slot });
-        const condition_label = try self.nextLabel("alloca_loop_cond");
-        const body_label = try self.nextLabel("alloca_loop_body");
-        const end_label = try self.nextLabel("alloca_loop_end");
-        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ condition_label, try self.debugCallSuffix(), condition_label });
-        const index = try self.nextTemp();
-        const limit = try self.nextTemp();
-        const condition = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load i32, ptr {s}\n  {s} = load i32, ptr @{s}\n  {s} = icmp ult i32 {s}, {s}\n  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ index, index_slot, limit, plan.iteration_limit.name, condition, index, limit, condition, body_label, end_label, try self.debugCallSuffix(), body_label });
-        const index64 = try self.nextTemp();
-        const divisor = try self.nextTemp();
-        const divisor_zero = try self.nextTemp();
-        const div_trap = try self.nextLabel("alloca_div_zero");
-        const div_ok = try self.nextLabel("alloca_div_ok");
-        try self.out.print(self.allocator, "  {s} = zext i32 {s} to i64\n  {s} = load i64, ptr @{s}\n  {s} = icmp eq i64 {s}, 0\n", .{ index64, index, divisor, plan.buffer_limit.name, divisor_zero, divisor });
-        try self.emitTrapBranch(divisor_zero, div_trap, div_ok, div_trap, div_ok, "DivideByZero");
-        const slot = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = urem i64 {s}, {s}\n  store i64 {s}, ptr {s}\n", .{ slot, index64, divisor, slot, slot_slot });
-        const in_bounds = try self.nextTemp();
-        const bounds_trap = try self.nextLabel("alloca_store_bounds");
-        const bounds_ok = try self.nextLabel("alloca_store_ok");
-        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {d}\n", .{ in_bounds, slot, plan.store.bound });
-        try self.emitTrapBranch(in_bounds, bounds_ok, bounds_trap, bounds_trap, bounds_ok, "Bounds");
-        const element = try self.nextTemp();
-        const masked = try self.nextTemp();
-        const byte = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr [{d} x i8], ptr {s}, i64 0, i64 {s}\n  {s} = and i32 {s}, {d}\n  {s} = trunc i32 {s} to i8\n  store i8 {s}, ptr {s}\n", .{ element, plan.scratch.array_len, scratch_slot, slot, masked, index, plan.bit_mask.value, byte, masked, byte, element });
-        const loaded_byte = try self.nextTemp();
-        const loaded_u32 = try self.nextTemp();
-        const sum = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n  {s} = zext i8 {s} to i32\n  {s} = load i32, ptr {s}\n", .{ loaded_byte, element, loaded_u32, loaded_byte, sum, sum_slot });
-        const add_pair = try self.nextTemp();
-        const next_sum = try self.nextTemp();
-        const sum_overflow = try self.nextTemp();
-        const sum_trap = try self.nextLabel("alloca_sum_overflow");
-        const sum_ok = try self.nextLabel("alloca_sum_ok");
-        try self.out.print(self.allocator, "  {s} = call {{ i32, i1 }} @llvm.uadd.with.overflow.i32(i32 {s}, i32 {s})\n  {s} = extractvalue {{ i32, i1 }} {s}, 0\n  {s} = extractvalue {{ i32, i1 }} {s}, 1\n", .{ add_pair, sum, loaded_u32, next_sum, add_pair, sum_overflow, add_pair });
-        try self.emitTrapBranch(sum_overflow, sum_trap, sum_ok, sum_trap, sum_ok, "IntegerOverflow");
-        try self.out.print(self.allocator, "  store i32 {s}, ptr {s}\n", .{ next_sum, sum_slot });
-        const inc_pair = try self.nextTemp();
-        const next_index = try self.nextTemp();
-        const index_overflow = try self.nextTemp();
-        const index_trap = try self.nextLabel("alloca_index_overflow");
-        const index_ok = try self.nextLabel("alloca_index_ok");
-        try self.out.print(self.allocator, "  {s} = call {{ i32, i1 }} @llvm.uadd.with.overflow.i32(i32 {s}, i32 {d})\n  {s} = extractvalue {{ i32, i1 }} {s}, 0\n  {s} = extractvalue {{ i32, i1 }} {s}, 1\n", .{ inc_pair, index, plan.increment_by.value, next_index, inc_pair, index_overflow, inc_pair });
-        try self.emitTrapBranch(index_overflow, index_trap, index_ok, index_trap, index_ok, "IntegerOverflow");
-        try self.out.print(self.allocator, "  store i32 {s}, ptr {s}\n  br label %{s}{s}\n{s}:\n", .{ next_index, index_slot, condition_label, try self.debugCallSuffix(), end_label });
-        const final_sum = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load i32, ptr {s}\n", .{ final_sum, sum_slot });
-        try self.emitReturnValue(ret_ty, final_sum, spanFromMirSourcePoint(plan.return_location.source));
     }
 
     const MirStructuralLocal = struct {
@@ -2884,180 +2793,6 @@ const LlvmEmitter = struct {
         const trap = try self.nextLabel("repr_trap");
         const cont = try self.nextLabel("repr_ok");
         try self.emitTrapBranch(valid, cont, trap, trap, cont, "InvalidRepresentation");
-    }
-
-    fn mirLocalAggregatePlaceUpdateReturnPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.LocalAggregatePlaceUpdateReturnPlan) bool {
-        const return_ty = function.signature.transitionalReturnType() orelse return false;
-        const initializer_ty = self.mirAggregateValuePlanNodeType(function, plan.initializer, plan.initializer.root, 0) catch return false;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(initializer_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) return false;
-        if (plan.returned.root_kind != .local or !plan.returned.root_id.eql(plan.local_id) or !type_bridge.sameTypeSyntax(self.resolveAliasType(plan.returned.root_type_fact.target_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) return false;
-        const returned_ty = self.mirPlaceType(plan.returned, function.signature.name.span) catch return false;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(returned_ty), self.resolveAliasType(return_ty))) return false;
-
-        if (plan.update) |update| {
-            if (update.target.root_kind != .local or !update.target.root_id.eql(plan.local_id) or !type_bridge.sameTypeSyntax(self.resolveAliasType(update.target.root_type_fact.target_ty), self.resolveAliasType(plan.local_type_fact.target_ty))) return false;
-            const target_ty = self.mirPlaceType(update.target, function.signature.name.span) catch return false;
-            const value_ty = self.mirLocalAggregatePlaceStoreValueType(function, update.value) catch return false;
-            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(target_ty), self.resolveAliasType(value_ty))) return false;
-        }
-        return true;
-    }
-
-    fn mirAggregateValuePlanNodeType(self: *LlvmEmitter, function: anytype, plan: mir_statement_plan.AggregateValuePlan, node_index: usize, depth: usize) !TransitionalTypeExpr {
-        if (node_index >= plan.count or depth >= mir_statement_plan.max_aggregate_value_nodes) return error.UnsupportedLlvmEmission;
-        const node = plan.nodes[node_index];
-        const ty = node.type_fact.target_ty;
-        switch (node.operation) {
-            .parameter => |parameter| {
-                var found = false;
-                for (function.signature.params) |param| {
-                    if (!std.mem.eql(u8, param.name.text, parameter.name)) continue;
-                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(param.ty), self.resolveAliasType(ty))) return error.UnsupportedLlvmEmission;
-                    found = true;
-                }
-                if (!found) return error.UnsupportedLlvmEmission;
-            },
-            .integer_literal => if (node.type_fact.result_ty != .integer) return error.UnsupportedLlvmEmission,
-            .array_literal => |array_value| {
-                if (node.type_fact.result_ty != .array) return error.UnsupportedLlvmEmission;
-                const array = switch (self.resolveAliasType(ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                const declared_bound = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
-                if (declared_bound != array_value.child_count) return error.UnsupportedLlvmEmission;
-                for (array_value.children[0..array_value.child_count]) |child| {
-                    if (child.field_index != std.math.maxInt(usize)) return error.UnsupportedLlvmEmission;
-                    const child_ty = try self.mirAggregateValuePlanNodeType(function, plan, child.node, depth + 1);
-                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(child_ty), self.resolveAliasType(array.child.*))) return error.UnsupportedLlvmEmission;
-                }
-            },
-            .struct_literal => |struct_value| {
-                if (node.type_fact.result_ty != .struct_) return error.UnsupportedLlvmEmission;
-                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-                if (struct_value.child_count != struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                for (struct_value.children[0..struct_value.child_count], 0..) |child, index| {
-                    if (child.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                    for (struct_value.children[0..index]) |earlier| if (earlier.field_index == child.field_index) return error.UnsupportedLlvmEmission;
-                    const child_ty = try self.mirAggregateValuePlanNodeType(function, plan, child.node, depth + 1);
-                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(child_ty), self.resolveAliasType(struct_decl.fields[child.field_index].ty))) return error.UnsupportedLlvmEmission;
-                }
-            },
-        }
-        _ = try self.llvmType(ty);
-        return ty;
-    }
-
-    fn mirLocalAggregatePlaceStoreValueType(self: *LlvmEmitter, function: anytype, value: mir_statement_plan.PlaceStoreValue) !TransitionalTypeExpr {
-        _ = self;
-        return switch (value) {
-            .parameter => |parameter| blk: {
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, param.name.text, parameter.name)) {
-                        break :blk param.ty;
-                    }
-                }
-                return error.UnsupportedLlvmEmission;
-            },
-            .integer_literal => |literal| literal.type_fact.target_ty,
-            else => error.UnsupportedLlvmEmission,
-        };
-    }
-
-    fn emitMirLocalAggregatePlaceUpdateReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.LocalAggregatePlaceUpdateReturnPlan, ret_ty: anytype) !void {
-        var aggregate = try self.emitMirAggregateValuePlan(plan.initializer);
-        if (plan.update) |update| {
-            const old_debug_span = self.current_debug_span;
-            self.current_debug_span = spanFromMirSourcePoint(update.location.source);
-            defer self.current_debug_span = old_debug_span;
-            const value = try self.emitMirLocalAggregatePlaceStoreValue(update.value);
-            aggregate = try self.emitMirInsertedPlaceValue(update.target, aggregate, value);
-        }
-        const return_span = spanFromMirSourcePoint(plan.return_location.source);
-        const value = try self.emitMirProjectedValue(plan.returned, aggregate, return_span);
-        try self.emitReturnValue(ret_ty, value, return_span);
-    }
-
-    fn emitMirAggregateValuePlan(self: *LlvmEmitter, plan: mir_statement_plan.AggregateValuePlan) ![]const u8 {
-        if (plan.count == 0 or plan.root >= plan.count) return error.UnsupportedLlvmEmission;
-        return self.emitMirAggregateValuePlanNode(plan, plan.root, 0);
-    }
-
-    fn emitMirAggregateValuePlanNode(self: *LlvmEmitter, plan: mir_statement_plan.AggregateValuePlan, node_index: usize, depth: usize) ![]const u8 {
-        if (node_index >= plan.count or depth >= mir_statement_plan.max_aggregate_value_nodes) return error.UnsupportedLlvmEmission;
-        const node = plan.nodes[node_index];
-        const old_debug_span = self.current_debug_span;
-        self.current_debug_span = spanFromMirSourcePoint(node.location.source);
-        defer self.current_debug_span = old_debug_span;
-
-        return switch (node.operation) {
-            .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
-            .integer_literal => |literal| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{literal}),
-            .array_literal => |array_value| blk: {
-                const array = switch (self.resolveAliasType(node.type_fact.target_ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                const aggregate_ty = try self.llvmType(node.type_fact.target_ty);
-                var aggregate: []const u8 = "zeroinitializer";
-                for (array_value.children[0..array_value.child_count], 0..) |child, index| {
-                    const child_value = try self.emitMirAggregateValuePlanNode(plan, child.node, depth + 1);
-                    const next = try self.nextTemp();
-                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}{s}\n", .{ next, aggregate_ty, aggregate, try self.llvmType(array.child.*), child_value, index, try self.debugCallSuffix() });
-                    aggregate = next;
-                }
-                break :blk aggregate;
-            },
-            .struct_literal => |struct_value| blk: {
-                const struct_decl = self.structDeclForType(node.type_fact.target_ty) orelse return error.UnsupportedLlvmEmission;
-                const aggregate_ty = try self.llvmType(node.type_fact.target_ty);
-                var aggregate: []const u8 = "zeroinitializer";
-                for (struct_value.children[0..struct_value.child_count]) |child| {
-                    if (child.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                    const child_value = try self.emitMirAggregateValuePlanNode(plan, child.node, depth + 1);
-                    const next = try self.nextTemp();
-                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}{s}\n", .{ next, aggregate_ty, aggregate, try self.llvmType(struct_decl.fields[child.field_index].ty), child_value, child.field_index, try self.debugCallSuffix() });
-                    aggregate = next;
-                }
-                break :blk aggregate;
-            },
-        };
-    }
-
-    fn emitMirLocalAggregatePlaceStoreValue(self: *LlvmEmitter, value: mir_statement_plan.PlaceStoreValue) ![]const u8 {
-        return switch (value) {
-            .parameter => |parameter| std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
-            .integer_literal => |literal| std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{literal.value}),
-            else => error.UnsupportedLlvmEmission,
-        };
-    }
-
-    fn emitMirInsertedPlaceValue(self: *LlvmEmitter, place: mir_statement_plan.Place, aggregate: []const u8, value: []const u8) ![]const u8 {
-        if (place.root_kind != .local or place.projection_count == 0) return error.UnsupportedLlvmEmission;
-        const leaf_ty = try self.mirPlaceType(place, spanFromMirSourcePoint(place.root_location.source));
-        try self.emitMirPlaceBoundsChecks(place);
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}", .{ result, try self.llvmType(place.root_type_fact.target_ty), aggregate, try self.llvmType(leaf_ty), value });
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .field => |field| try self.out.print(self.allocator, ", {d}", .{field.field_index}),
-            .constant_index => |index| try self.out.print(self.allocator, ", {d}", .{index.index}),
-        };
-        try self.out.print(self.allocator, "{s}\n", .{try self.debugCallSuffix()});
-        return result;
-    }
-
-    fn emitMirPlaceBoundsChecks(self: *LlvmEmitter, place: mir_statement_plan.Place) !void {
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .field => {},
-            .constant_index => |index| if (index.checked) {
-                {
-                    const old_debug_span = self.current_debug_span;
-                    self.current_debug_span = spanFromMirSourcePoint(index.location.source);
-                    defer self.current_debug_span = old_debug_span;
-                    try self.emitBoundsCheck(try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{index.index}), index.bound);
-                }
-            },
-        };
     }
 
     const MirPlacePointer = struct {

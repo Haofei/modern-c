@@ -1561,13 +1561,13 @@ fn verifyMemoryAccess(
                 access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
             return;
         }
-        if (mir.executableDirectAggregateFieldPlace(
+        if (mir.executableAggregateFieldPlace(
             body.locals,
             body.statements,
             body.aggregate_types,
             target.*,
             is_store,
-        ) != null) {
+        )) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (target.root) {
                 .local => .plain,
                 .symbol => |id| global: {
@@ -1660,13 +1660,13 @@ fn isComputedRawManyDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
 }
 
 fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
-    return mir.executableDirectAggregateFieldPlace(
+    return mir.executableAggregateFieldPlace(
         body.locals,
         body.statements,
         body.aggregate_types,
         target,
         require_mutable,
-    ) != null or mir.executableAggregatePointerFieldDerefPlace(body, target, require_mutable) != null or
+    ) or mir.executableAggregatePointerFieldDerefPlace(body, target, require_mutable) != null or
         isParameterScalarAccessPlace(body, target, require_mutable) or
         mir.executableLocalAddressDerefPlace(body, target, require_mutable) or
         isComputedRawManyDerefPlace(body, target, require_mutable);

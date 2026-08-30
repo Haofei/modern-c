@@ -9,7 +9,6 @@ const type_syntax = @import("type_syntax.zig");
 /// MIR, while each backend only encodes the admitted operations.
 pub const max_arguments = 8;
 pub const max_place_projections = 4;
-pub const max_aggregate_value_nodes = 32;
 
 pub const Location = struct {
     span_id: mir.SpanId,
@@ -206,47 +205,6 @@ pub const SequenceForEachUpdatePlan = struct {
     control: LoopControl,
     control_location: Location,
     return_location: Location,
-};
-
-pub const AggregateValueNode = struct {
-    type_fact: mir.TargetTypeFact,
-    location: Location,
-    operation: Operation,
-
-    pub const Child = struct {
-        node: usize,
-        field_index: usize = std.math.maxInt(usize),
-    };
-
-    pub const Aggregate = struct {
-        children: [mir.Instruction.max_aggregate_operands]Child = undefined,
-        child_count: usize,
-    };
-
-    pub const Operation = union(enum) {
-        parameter: struct {
-            name: []const u8,
-            value_id: mir.ValueId,
-        },
-        integer_literal: usize,
-        array_literal: Aggregate,
-        struct_literal: Aggregate,
-    };
-};
-
-/// A bounded, backend-neutral aggregate value graph. Children are referenced
-/// by node index so nested arrays/structs do not require recursive Zig types.
-/// Admission currently accepts only parameter and integer leaves; calls,
-/// loads, conversions with effects, and dynamic indexing remain fail-closed.
-pub const AggregateValuePlan = struct {
-    nodes: [max_aggregate_value_nodes]AggregateValueNode = undefined,
-    count: usize = 0,
-    root: usize = 0,
-
-    pub fn resultType(self: AggregateValuePlan) mir.ValueType {
-        if (self.count == 0 or self.root >= self.count) return .unknown;
-        return self.nodes[self.root].type_fact.result_ty;
-    }
 };
 
 pub const PlaceStoreValue = union(enum) {
@@ -528,17 +486,6 @@ pub const PlaceReturnPlan = struct {
     return_location: Location,
 };
 
-pub const LocalAggregatePlaceUpdateReturnPlan = struct {
-    local_name: []const u8,
-    local_id: mir.ValueId,
-    local_type_fact: mir.TargetTypeFact,
-    declaration_location: Location,
-    initializer: AggregateValuePlan,
-    update: ?PlaceStore = null,
-    returned: Place,
-    return_location: Location,
-};
-
 /// Admit the deliberately narrow CFG produced by:
 ///
 ///   for value in array_parameter { return value; }
@@ -742,82 +689,6 @@ pub fn buildSequenceForEachReturn(function: mir.Function) ?SequenceForEachReturn
     return plan;
 }
 
-/// Admit a straight-line local aggregate generation: initialize one local from
-/// a pure (possibly nested) aggregate value, optionally update one projected
-/// field/index, and return a projection from the same local generation. The
-/// local, update target, and returned place are joined by ValueId, never by
-/// source spelling alone.
-pub fn buildLocalAggregatePlaceUpdateReturn(function: mir.Function) ?LocalAggregatePlaceUpdateReturnPlan {
-    if (function.return_ty == .void or function.blocks.len == 0) return null;
-    if (function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const block = function.blocks[0];
-    if (block.terminator != .return_) return null;
-    var local: ?mir.Instruction = null;
-    var assignment: ?mir.Instruction = null;
-    var returned: ?mir.Instruction = null;
-    var expression_count: usize = 0;
-    for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .target_type, .cmp_bounds, .index, .integer_literal_conversion => {},
-        .expr => expression_count += 1,
-        .local => {
-            if (local != null) return null;
-            local = instruction;
-        },
-        .assign => {
-            if (assignment != null) return null;
-            assignment = instruction;
-        },
-        .return_value => {
-            if (returned != null) return null;
-            returned = instruction;
-        },
-        else => return null,
-    };
-
-    const local_instruction = local orelse return null;
-    const local_id = local_instruction.typed_value_id orelse return null;
-    if (!local_id.isValid() or !local_instruction.typed_value_operand_span_id.isValid()) return null;
-    var initializer: AggregateValuePlan = .{};
-    initializer.root = appendAggregateValueNode(function, block, local_instruction.typed_value_operand_span_id, &initializer, 0) orelse return null;
-    if (initializer.count == 0 or !sameRepresentationType(initializer.resultType(), local_instruction.result_ty)) return null;
-
-    const return_instruction = returned orelse return null;
-    if (!return_instruction.typed_value_operand_span_id.isValid()) return null;
-    const returned_place = buildPlace(function, block, return_instruction.typed_value_operand_span_id) orelse return null;
-    if (returned_place.root_kind != .local or !returned_place.root_id.eql(local_id) or returned_place.projection_count == 0) return null;
-    if (!placeHasAggregateIntermediates(returned_place) or !sameRepresentationType(returned_place.resultType(), function.return_ty)) return null;
-
-    var plan: LocalAggregatePlaceUpdateReturnPlan = .{
-        .local_name = local_instruction.detail,
-        .local_id = local_id,
-        .local_type_fact = initializer.nodes[initializer.root].type_fact,
-        .declaration_location = locationFromInstruction(local_instruction),
-        .initializer = initializer,
-        .returned = returned_place,
-        .return_location = locationFromInstruction(return_instruction),
-    };
-    var consumed_expressions = initializer.count + returned_place.projection_count + 1;
-    if (assignment) |store_instruction| {
-        if (!store_instruction.typed_target_operand_span_id.isValid() or !store_instruction.typed_value_operand_span_id.isValid()) return null;
-        const target = buildPlace(function, block, store_instruction.typed_target_operand_span_id) orelse return null;
-        if (target.root_kind != .local or !target.root_id.eql(local_id) or target.projection_count == 0) return null;
-        if (!placeHasAggregateIntermediates(target) or !sameRepresentationType(target.resultType(), store_instruction.result_ty)) return null;
-        const value = buildPlaceStoreValue(function, block, store_instruction.typed_value_operand_span_id) orelse return null;
-        switch (value) {
-            .parameter, .integer_literal => {},
-            else => return null,
-        }
-        if (!sameRepresentationType(value.resultType(), target.resultType())) return null;
-        plan.update = .{ .target = target, .value = value, .location = locationFromInstruction(store_instruction) };
-        consumed_expressions += target.projection_count + 1 + value.expressionCount();
-    }
-    if (consumed_expressions != expression_count or !localAggregateBoundsTrapsMatch(function, plan)) return null;
-    return plan;
-}
-
 /// Admit a straight-line aggregate-place body from typed MIR edges. Fields and
 /// fixed-array constant indexes may be combined; checked indexes retain their
 /// explicit Bounds trap edges. Every base/index/member, assignment target/value,
@@ -966,57 +837,6 @@ fn buildPlaceStoreValue(function: mir.Function, block: mir.Block, span_id: mir.S
     } };
 }
 
-fn appendAggregateValueNode(function: mir.Function, block: mir.Block, span_id: mir.SpanId, plan: *AggregateValuePlan, depth: usize) ?usize {
-    if (!span_id.isValid() or depth >= max_aggregate_value_nodes or plan.count >= max_aggregate_value_nodes) return null;
-    const instruction = expressionAtSpan(block, span_id) orelse return null;
-    const type_fact_kind: mir.TargetTypeKind = if (std.mem.eql(u8, instruction.detail, "array_literal"))
-        .array_literal
-    else if (std.mem.eql(u8, instruction.detail, "struct_literal"))
-        .struct_literal
-    else
-        .expression_result;
-    const type_fact = targetFactBySpan(function, type_fact_kind, span_id) orelse return null;
-    const converted_integer_literal = type_fact_kind == .expression_result and
-        type_fact.result_ty == .integer and instruction.constant_usize_value != null;
-    if (!sameRepresentationType(instruction.result_ty, type_fact.result_ty) and
-        !(type_fact_kind == .struct_literal and instruction.result_ty == .value and type_fact.result_ty == .struct_) and
-        !converted_integer_literal) return null;
-
-    const operation: AggregateValueNode.Operation = if (std.mem.eql(u8, instruction.detail, "array_literal")) blk: {
-        if (type_fact.result_ty != .array or instruction.typed_aggregate_operand_count == 0) return null;
-        var aggregate: AggregateValueNode.Aggregate = .{ .child_count = instruction.typed_aggregate_operand_count };
-        for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |child_span, index| {
-            aggregate.children[index] = .{ .node = appendAggregateValueNode(function, block, child_span, plan, depth + 1) orelse return null };
-        }
-        break :blk .{ .array_literal = aggregate };
-    } else if (std.mem.eql(u8, instruction.detail, "struct_literal")) blk: {
-        if (type_fact.result_ty != .struct_ or instruction.typed_aggregate_operand_count == 0) return null;
-        var aggregate: AggregateValueNode.Aggregate = .{ .child_count = instruction.typed_aggregate_operand_count };
-        for (instruction.typed_aggregate_operand_span_ids[0..instruction.typed_aggregate_operand_count], 0..) |child_span, index| {
-            const field_index = instruction.typed_aggregate_field_indices[index];
-            if (field_index == std.math.maxInt(usize)) return null;
-            aggregate.children[index] = .{
-                .node = appendAggregateValueNode(function, block, child_span, plan, depth + 1) orelse return null,
-                .field_index = field_index,
-            };
-        }
-        break :blk .{ .struct_literal = aggregate };
-    } else if (instruction.typed_value_id) |value_id| blk: {
-        const name = valueIdentityName(function, value_id) orelse return null;
-        const parameter_ty = parameterType(function, name) orelse return null;
-        if (!sameRepresentationType(parameter_ty, type_fact.result_ty)) return null;
-        break :blk .{ .parameter = .{ .name = name, .value_id = value_id } };
-    } else blk: {
-        if (type_fact.result_ty != .integer) return null;
-        break :blk .{ .integer_literal = instruction.constant_usize_value orelse return null };
-    };
-
-    const index = plan.count;
-    plan.nodes[index] = .{ .type_fact = type_fact, .location = locationFromInstruction(instruction), .operation = operation };
-    plan.count += 1;
-    return index;
-}
-
 fn placeHasAggregateIntermediates(place: Place) bool {
     if (place.projection_count <= 1) return true;
     for (place.projections[0 .. place.projection_count - 1]) |projection| {
@@ -1067,14 +887,6 @@ fn placeBoundsTrapsMatch(function: mir.Function, plan: PlaceReturnPlan) bool {
     appendCheckedIndexLocations(plan.returned, &indexes, &index_count) orelse return false;
     if (plan.local_init) |local| appendCheckedIndexLocations(local.value, &indexes, &index_count) orelse return false;
     if (plan.store) |store| appendCheckedIndexLocations(store.target, &indexes, &index_count) orelse return false;
-    return boundsTrapLocationsMatch(function, indexes[0..index_count]);
-}
-
-fn localAggregateBoundsTrapsMatch(function: mir.Function, plan: LocalAggregatePlaceUpdateReturnPlan) bool {
-    var indexes: [max_place_projections * 2]CheckedIndexIdentity = undefined;
-    var index_count: usize = 0;
-    appendCheckedIndexLocations(plan.returned, &indexes, &index_count) orelse return false;
-    if (plan.update) |update| appendCheckedIndexLocations(update.target, &indexes, &index_count) orelse return false;
     return boundsTrapLocationsMatch(function, indexes[0..index_count]);
 }
 

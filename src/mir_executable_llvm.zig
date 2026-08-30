@@ -420,13 +420,13 @@ const Renderer = struct {
                     try self.emitComputedRawManyDerefPointer(place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
-                else if (mir.executableDirectAggregateFieldPlace(
+                else if (mir.executableAggregateFieldPlace(
                     self.body.locals,
                     self.body.statements,
                     self.body.aggregate_types,
                     place,
                     true,
-                ) != null)
+                ))
                     try self.emitPlace(store.place, value.ty)
                 else if (place.projection_count != 0)
                     try self.emitGuardedParameterStorePointer(statement, store.place)
@@ -817,13 +817,23 @@ const Renderer = struct {
             .symbol => |symbol| if (globalAggregateIndexBase(self.body, operation.base)) symbol else null,
             else => null,
         };
-        const base = if (global_symbol == null) try self.emitExpression(operation.base) else Value{
+        const local_storage: ?Local = switch (base_expression.operation) {
+            .local => |local| if (operation.kind == .fixed_array and localArrayIndexBase(self.body, operation.base))
+                self.locals.get(local.raw)
+            else
+                null,
+            else => null,
+        };
+        const base = if (global_symbol == null and local_storage == null) try self.emitExpression(operation.base) else Value{
             .ty = try self.typeText(base_expression.result_ty),
-            .spelling = try std.fmt.allocPrint(
-                self.allocator,
-                "@{s}",
-                .{symbolSpelling(self.body, global_symbol.?) orelse return error.InvalidBody},
-            ),
+            .spelling = if (local_storage) |local|
+                local.storage
+            else
+                try std.fmt.allocPrint(
+                    self.allocator,
+                    "@{s}",
+                    .{symbolSpelling(self.body, global_symbol.?) orelse return error.InvalidBody},
+                ),
         };
         const index = try self.emitExpression(operation.index);
         if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
@@ -848,7 +858,7 @@ const Renderer = struct {
                 // A global aggregate symbol is already stable storage. Other
                 // aggregate values are materialized once because LLVM has no
                 // dynamic `extractvalue` for arrays.
-                const storage = if (global_symbol != null) base.spelling else storage: {
+                const storage = if (global_symbol != null or local_storage != null) base.spelling else storage: {
                     const slot = try self.temp();
                     try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
                         slot,
@@ -1804,13 +1814,13 @@ const Renderer = struct {
             try self.emitComputedRawManyDerefPointer(place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
-        else if (mir.executableDirectAggregateFieldPlace(
+        else if (mir.executableAggregateFieldPlace(
             self.body.locals,
             self.body.statements,
             self.body.aggregate_types,
             place,
             false,
-        ) != null)
+        ))
             try self.emitPlace(load.place, value_ty)
         else if (mir.executableAggregatePointerFieldDerefPlace(self.body, place, false) != null)
             try self.emitGuardedAggregatePointerFieldDerefPointer(expression, load.place)
@@ -2017,20 +2027,34 @@ const Renderer = struct {
             .symbol => |symbol_id| try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody}),
             .value => return error.Unsupported,
         };
-        if (mir.executableDirectAggregateFieldPlace(
+        if (mir.executableAggregateFieldPlace(
             self.body.locals,
             self.body.statements,
             self.body.aggregate_types,
             place.*,
             false,
-        )) |field_index| {
-            const aggregate_ty = try self.typeText(place.root_ty);
-            const field_pointer = try self.temp();
-            try self.output.print(
-                self.allocator,
-                "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
-                .{ field_pointer, aggregate_ty, pointer, field_index },
-            );
+        )) {
+            var field_pointer = pointer;
+            var current_ty = place.root_ty;
+            var current_type_id = place.root_type_id;
+            for (place.projections[0..place.projection_count]) |projection| {
+                const field_index = switch (projection) {
+                    .field => |index| index,
+                    .deref, .index => return error.InvalidBody,
+                };
+                const aggregate = aggregateType(self.body, current_type_id) orelse return error.InvalidBody;
+                if (field_index >= aggregate.field_count) return error.InvalidBody;
+                const aggregate_ty = try self.typeText(current_ty);
+                const next_pointer = try self.temp();
+                try self.output.print(
+                    self.allocator,
+                    "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                    .{ next_pointer, aggregate_ty, field_pointer, field_index },
+                );
+                field_pointer = next_pointer;
+                current_ty = aggregate.field_types[field_index];
+                current_type_id = aggregate.field_type_ids[field_index];
+            }
             return field_pointer;
         }
         if (place.projection_count != 0) return error.Unsupported;
@@ -2783,7 +2807,9 @@ fn indexSupported(
     if (operation.kind == .fixed_array) {
         if (global_base) {
             if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
-        } else if (!directImmutableLocalArrayIndexReturn(body, expression, operation) and
+        } else if (!localArrayIndexBase(body, operation.base) and
+            !(expression.block_id.raw == 0 and projectionRootIsLocalArray(body, operation.base)) and
+            !directImmutableLocalArrayIndexReturn(body, expression, operation) and
             (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression))) return false;
     }
     if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
@@ -2798,7 +2824,7 @@ fn indexSupported(
             // Dynamic array extraction is materialized through an entry-block
             // alloca. Keep loop/body indexes closed until scratch storage is
             // hoisted by MIR rather than emitted inside a repeated block.
-            if (expression.block_id.raw != 0) return false;
+            if (expression.block_id.raw != 0 and !localArrayIndexBase(body, operation.base)) return false;
             const bound = operation.bound orelse return false;
             const array = switch (base.result_ty) {
                 .array => |shape| shape,
@@ -2832,6 +2858,42 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn projectionRootIsLocalArray(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
+    var current = start;
+    var depth: usize = 0;
+    while (depth <= mir.max_executable_projections) : (depth += 1) {
+        if (localArrayIndexBase(body, current)) return true;
+        if (!expressionValid(body, current)) return false;
+        current = switch (body.expressions[current.index()].operation) {
+            .index => |index| if (index.kind == .fixed_array) index.base else return false,
+            else => return false,
+        };
+    }
+    return false;
+}
+
+fn localArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    if (!expressionValid(body, id)) return false;
+    const expression = body.expressions[id.index()];
+    const local_id = switch (expression.operation) {
+        .local => |local| local,
+        else => return false,
+    };
+    if (expression.result_ty != .array) return false;
+    var identity_found = false;
+    for (body.locals) |local| if (local.id.eql(local_id)) {
+        identity_found = true;
+        break;
+    };
+    if (!identity_found) return false;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| if (local.local.eql(local_id))
+            return sameValueType(local.ty, expression.result_ty),
+        else => {},
+    };
+    return false;
 }
 
 fn directImmutableLocalArrayIndexReturn(
@@ -3453,13 +3515,13 @@ fn computedRawManyDerefPlaceSupported(body: *const mir.ExecutableBody, place: mi
 }
 
 fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
-    return mir.executableDirectAggregateFieldPlace(
+    return mir.executableAggregateFieldPlace(
         body.locals,
         body.statements,
         body.aggregate_types,
         place,
         false,
-    ) != null or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
+    ) or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
         parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
@@ -3487,13 +3549,13 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
             else
                 ownedExpressionTrapCount(body, expression.id) == 0;
     }
-    if (mir.executableDirectAggregateFieldPlace(
+    if (mir.executableAggregateFieldPlace(
         body.locals,
         body.statements,
         body.aggregate_types,
         place,
         false,
-    ) != null) return load.representation_source == null and
+    )) return load.representation_source == null and
         !load.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
     if (computedRawManyDerefPlaceSupported(body, place, false)) {
         return load.representation_source == null and !load.representation_span_id.isValid() and
@@ -3736,13 +3798,13 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             statementBoundsTrapEdge(body, statement) != null and
             ownedStatementTrapEdgeCount(body, statement.id) == 1;
     }
-    if (mir.executableDirectAggregateFieldPlace(
+    if (mir.executableAggregateFieldPlace(
         body.locals,
         body.statements,
         body.aggregate_types,
         place,
         true,
-    ) != null) return store.representation_source == null and
+    )) return store.representation_source == null and
         !store.representation_span_id.isValid() and ownedStatementTrapEdgeCount(body, statement.id) == 0;
     if (computedRawManyDerefPlaceSupported(body, place, true)) {
         return store.representation_source == null and !store.representation_span_id.isValid() and
@@ -3799,13 +3861,13 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             return sameValueType(parameter.ty, place.root_ty) and parameter.type_id.eql(place.root_type_id) and
                 sameValueType(place.ty, ty) and access.kind == .race_unordered;
         }
-        if (mir.executableDirectAggregateFieldPlace(
+        if (mir.executableAggregateFieldPlace(
             body.locals,
             body.statements,
             body.aggregate_types,
             place,
             is_store,
-        ) != null) {
+        )) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
                 .local => .plain,
                 .symbol => |id| if (symbolIdentity(body, id)) |identity|

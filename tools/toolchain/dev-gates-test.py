@@ -259,7 +259,6 @@ def main() -> None:
     assert_gates_include(module, ["src/backend.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/lower_c_emitter.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/lower_llvm.zig"], ["architecture-boundary-inventory-test"])
-    assert_gates_include(module, ["src/mir_alloca_hoist_plan.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/type_syntax.zig"], ["architecture-boundary-inventory-test"])
     assert_route(module, ["docs/typed-semantic-facts.md"], ["semantic-facts-inventory-test", "mir-identity-inventory-test"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/compilation-session-inventory.py"], ["compilation-session-inventory-test"])

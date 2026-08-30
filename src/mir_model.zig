@@ -1630,6 +1630,60 @@ pub fn executableDirectAggregateFieldPlace(
     return field_index;
 }
 
+/// Validate a by-value aggregate local/global field chain such as
+/// `local.outer.inner`.  The complete projection is checked against the
+/// canonical aggregate table; source spelling is never consulted.
+pub fn executableAggregateFieldPlace(
+    locals: []const ExecutableLocalIdentity,
+    statements: []const ExecutableStatement,
+    aggregate_types: []const ExecutableAggregateType,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count == 0 or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+    const local_id: ?LocalId = switch (place.root) {
+        .local => |id| id,
+        .symbol => if (require_mutable) return false else null,
+        .value => return false,
+    };
+    if (local_id) |id| {
+        if (!id.isValid() or id.index() >= locals.len or !locals[id.index()].id.eql(id)) return false;
+        if (require_mutable) {
+            var mutable = false;
+            for (statements) |statement| switch (statement.operation) {
+                .local_init => |init| if (init.local.eql(id)) {
+                    mutable = init.mutable;
+                    break;
+                },
+                else => {},
+            };
+            if (!mutable) return false;
+        }
+    }
+
+    var current_ty = place.root_ty;
+    var current_type_id = place.root_type_id;
+    for (place.projections[0..place.projection_count]) |projection| {
+        const field_index = switch (projection) {
+            .field => |index| index,
+            .deref, .index => return false,
+        };
+        var aggregate: ?ExecutableAggregateType = null;
+        for (aggregate_types) |candidate| if (candidate.type_id.eql(current_type_id)) {
+            aggregate = candidate;
+            break;
+        };
+        const shape = aggregate orelse return false;
+        if ((shape.construction != .declared_struct and shape.construction != .c_union) or
+            !ValueType.eql(shape.ty, current_ty) or field_index >= shape.field_count) return false;
+        current_ty = shape.field_types[field_index];
+        current_type_id = shape.field_type_ids[field_index];
+    }
+    return current_type_id.eql(place.type_id) and ValueType.eql(current_ty, place.ty);
+}
+
 pub const ExecutableAggregatePointerFieldDeref = struct {
     field_index: usize,
     pointer_ty: ValueType,

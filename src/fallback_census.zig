@@ -59,11 +59,9 @@ pub const CanonicalStatus = enum {
 /// measurable instead of inferred from source shape.
 pub const SelectedPath = enum {
     canonical,
-    alloca_hoist,
     access_structural,
     sequence_foreach_update,
     sequence_foreach_return,
-    local_aggregate_place_update_return,
     place_return,
     ast_fallback,
     unsupported,

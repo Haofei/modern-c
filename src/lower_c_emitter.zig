@@ -10,7 +10,6 @@ const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
-const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
 const mir_statement_plan = @import("mir_statement_plan.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -1424,15 +1423,9 @@ pub const CEmitter = struct {
         // the legacy definition emitter, which still renders every attribute.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
-        const alloca_hoist_plan = if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
-            if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
-        else
-            null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        if (alloca_hoist_plan == null) {
-            access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
-        }
+        access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
         const access_structural_operation = if (access_body_plan != null)
             if (mir_access_plan.buildStructuralOperation(access_body_plan.?)) |operation|
                 if (self.mirAccessStructuralPlanSupported(function, access_body_plan.?, operation)) operation else null
@@ -1453,24 +1446,14 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const local_aggregate_place_update_return_plan =
-            if (mir_statement_plan.buildLocalAggregatePlaceUpdateReturn(fn_mir)) |plan|
-                if (self.mirLocalAggregatePlaceUpdateReturnPlanSupported(function, plan)) plan else null
-            else
-                null;
-        const place_return_plan = if (local_aggregate_place_update_return_plan == null)
-            if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
-                if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
-            else
-                null
+        const place_return_plan = if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
+            if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
         else
             null;
         const specialized_plans = [_]bool{
-            alloca_hoist_plan != null,
             access_structural_operation != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
-            local_aggregate_place_update_return_plan != null,
             place_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
@@ -1485,10 +1468,7 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
 
-        if (alloca_hoist_plan) |plan| {
-            selected_path.* = .alloca_hoist;
-            try self.emitMirAllocaHoistPlan(plan);
-        } else if (access_structural_priority) {
+        if (access_structural_priority) {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, access_structural_operation.?);
         } else if (sequence_foreach_update_plan) |plan| {
@@ -1497,9 +1477,6 @@ pub const CEmitter = struct {
         } else if (sequence_foreach_return_plan) |plan| {
             selected_path.* = .sequence_foreach_return;
             try self.emitMirSequenceForEachReturnPlan(plan);
-        } else if (local_aggregate_place_update_return_plan) |plan| {
-            selected_path.* = .local_aggregate_place_update_return;
-            try self.emitMirLocalAggregatePlaceUpdateReturnPlan(plan);
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan);
@@ -1576,53 +1553,6 @@ pub const CEmitter = struct {
     fn mirFunctionByName(self: *const CEmitter, name: []const u8) ?mir.Function {
         for (self.mir_module.functions) |function| if (std.mem.eql(u8, function.name, name)) return function;
         return null;
-    }
-
-    fn mirAllocaHoistTypeIs(value: mir_alloca_hoist_plan.TypeRef, expected: []const u8) bool {
-        return value.id.isValid() and std.mem.eql(u8, value.value_ty.name(), expected);
-    }
-
-    fn mirAllocaHoistPlanSupported(self: *CEmitter, function: anytype, plan: mir_alloca_hoist_plan.Plan) bool {
-        if (function.signature.params.len != 0 or !self.mirScalarExpressionSourceTypeIs(function.signature.transitionalReturnType() orelse return false, "u32")) return false;
-        if (!plan.entry_block.isValid() or !plan.loop_block.isValid() or !plan.return_block.isValid() or !plan.sum.value.id.isValid() or !plan.index.value.id.isValid() or !plan.iteration_limit.id.isValid() or !plan.buffer_limit.id.isValid() or !plan.scratch.local.value.id.isValid() or !plan.slot.value.id.isValid()) return false;
-        if (plan.initial_sum.value != 0 or plan.initial_index.value != 0 or plan.bit_mask.value != 255 or plan.increment_by.value != 1 or !plan.scratch.static_function_storage or plan.scratch.array_len != 256 or !plan.scratch.loop_block.eql(plan.loop_block) or plan.store.bound != plan.scratch.array_len or plan.load.bound != plan.scratch.array_len) return false;
-        if (!mirAllocaHoistTypeIs(plan.sum.type_ref, "u32") or !mirAllocaHoistTypeIs(plan.index.type_ref, "u32") or !mirAllocaHoistTypeIs(plan.slot.type_ref, "usize") or !mirAllocaHoistTypeIs(plan.store.element, "u8") or !mirAllocaHoistTypeIs(plan.load.element, "u8") or !mirAllocaHoistTypeIs(plan.index_cast.source, "u32") or !mirAllocaHoistTypeIs(plan.index_cast.target, "usize") or !mirAllocaHoistTypeIs(plan.store_cast.target, "u8") or !mirAllocaHoistTypeIs(plan.load_cast.target, "u32")) return false;
-        if (plan.slot_modulo.trap.kind != .DivideByZero or plan.store.trap.kind != .Bounds or plan.load.trap.kind != .Bounds or plan.sum_add.trap.kind != .IntegerOverflow or plan.increment.trap.kind != .IntegerOverflow or !std.mem.eql(u8, plan.slot_modulo.operation, "mod") or !std.mem.eql(u8, plan.sum_add.operation, "add") or !std.mem.eql(u8, plan.increment.operation, "add")) return false;
-        return self.globals.contains(plan.iteration_limit.name) and self.globals.contains(plan.buffer_limit.name);
-    }
-
-    fn emitMirAllocaHoistPlan(self: *CEmitter, plan: mir_alloca_hoist_plan.Plan) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.sum.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint32_t {s} = {d};\n", .{ try self.cIdent(plan.sum.value.name), plan.initial_sum.value });
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.index.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint32_t {s} = {d};\n", .{ try self.cIdent(plan.index.value.name), plan.initial_index.value });
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.iteration_limit.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "while ({s} < {s}) {{\n", .{ try self.cIdent(plan.index.value.name), try self.cIdent(plan.iteration_limit.name) });
-        self.indent += 1;
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.scratch.local.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uint8_t {s}[{d}];\n", .{ try self.cIdent(plan.scratch.local.value.name), plan.scratch.array_len });
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.slot_modulo.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "uintptr_t {s} = {s}((uintptr_t){s}, {s});\n", .{ try self.cIdent(plan.slot.value.name), try self.checkedHelperName(plan.slot_modulo.operation, plan.slot.type_ref.value_ty.name()), try self.cIdent(plan.index.value.name), try self.cIdent(plan.buffer_limit.name) });
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.store.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s}[mc_check_index_usize({s}, {d})] = (uint8_t)({s} & {d});\n", .{ try self.cIdent(plan.scratch.local.value.name), try self.cIdent(plan.slot.value.name), plan.store.bound, try self.cIdent(plan.index.value.name), plan.bit_mask.value });
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.load.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = {s}({s}, (uint32_t){s}[mc_check_index_usize({s}, {d})]);\n", .{ try self.cIdent(plan.sum.value.name), try self.checkedHelperName(plan.sum_add.operation, plan.sum.type_ref.value_ty.name()), try self.cIdent(plan.sum.value.name), try self.cIdent(plan.scratch.local.value.name), try self.cIdent(plan.slot.value.name), plan.load.bound });
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.increment.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = {s}({s}, {d});\n", .{ try self.cIdent(plan.index.value.name), try self.checkedHelperName(plan.increment.operation, plan.index.type_ref.value_ty.name()), try self.cIdent(plan.index.value.name), plan.increment_by.value });
-        self.indent -= 1;
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "}\n");
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.sum.value.name)});
     }
 
     fn mirAccessStructuralPlanSupported(self: *CEmitter, function: anytype, body: mir_access_plan.AccessBodyPlan, operation: mir_access_plan.StructuralOperation) bool {
@@ -2871,82 +2801,6 @@ pub const CEmitter = struct {
         };
     }
 
-    fn mirLocalAggregatePlaceUpdateReturnPlanSupported(self: *CEmitter, function: anytype, plan: mir_statement_plan.LocalAggregatePlaceUpdateReturnPlan) bool {
-        const local_ty = plan.local_type_fact.target_ty;
-        if (!self.mirAggregateValuePlanSupported(function, plan.initializer, local_ty)) return false;
-        if (!std.mem.eql(u8, plan.local_name, plan.returned.root_name) or !plan.returned.root_id.eql(plan.local_id)) return false;
-
-        const declared_return = function.signature.transitionalReturnType() orelse return false;
-        const returned_ty = self.mirPlaceType(plan.returned, spanFromMirSourcePoint(plan.return_location.source)) catch return false;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_return), self.resolveAliasType(returned_ty))) return false;
-
-        if (plan.update) |update| {
-            if (update.target.root_kind != .local or !update.target.root_id.eql(plan.local_id) or !std.mem.eql(u8, update.target.root_name, plan.local_name)) return false;
-            const target_ty = self.mirPlaceType(update.target, spanFromMirSourcePoint(update.location.source)) catch return false;
-            switch (update.value) {
-                .parameter => |parameter| {
-                    if (!parameter.value_id.isValid() or !self.mirAggregateParameterMatchesSignature(function, parameter.name, target_ty)) return false;
-                },
-                .integer_literal => |literal| {
-                    if (literal.type_fact.result_ty != .integer or !type_bridge.sameTypeSyntax(self.resolveAliasType(literal.type_fact.target_ty), self.resolveAliasType(target_ty))) return false;
-                },
-                else => return false,
-            }
-        }
-        return true;
-    }
-
-    fn mirAggregateValuePlanSupported(self: *CEmitter, function: anytype, value: mir_statement_plan.AggregateValuePlan, expected_ty: anytype) bool {
-        if (value.count == 0 or value.count > value.nodes.len or value.root >= value.count) return false;
-        var seen = [_]bool{false} ** mir_statement_plan.max_aggregate_value_nodes;
-        if (!self.mirAggregateValueNodeSupported(function, value, value.root, expected_ty, &seen)) return false;
-        for (seen[0..value.count]) |used| if (!used) return false;
-        return true;
-    }
-
-    fn mirAggregateValueNodeSupported(self: *CEmitter, function: anytype, value: mir_statement_plan.AggregateValuePlan, index: usize, expected_ty: anytype, seen: *[mir_statement_plan.max_aggregate_value_nodes]bool) bool {
-        if (index >= value.count or seen[index]) return false;
-        const node = value.nodes[index];
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(node.type_fact.target_ty), self.resolveAliasType(expected_ty))) return false;
-        seen[index] = true;
-        switch (node.operation) {
-            .parameter => |parameter| {
-                if (!parameter.value_id.isValid() or !self.mirAggregateParameterMatchesSignature(function, parameter.name, expected_ty)) return false;
-            },
-            .integer_literal => {
-                if (node.type_fact.result_ty != .integer) return false;
-            },
-            .array_literal => |array_value| {
-                if (node.type_fact.result_ty != .array or array_value.child_count > array_value.children.len) return false;
-                const array = switch (self.resolveAliasType(expected_ty).kind) {
-                    .array => |array| array,
-                    else => return false,
-                };
-                const bound_text = self.arrayLenTextForExpr(array.len) catch return false;
-                const bound = std.fmt.parseUnsigned(usize, bound_text, 10) catch return false;
-                if (array_value.child_count != bound) return false;
-                for (array_value.children[0..array_value.child_count]) |child| {
-                    if (child.field_index != std.math.maxInt(usize) or !self.mirAggregateValueNodeSupported(function, value, child.node, array.child.*, seen)) return false;
-                }
-            },
-            .struct_literal => |struct_value| {
-                if (node.type_fact.result_ty != .struct_ or struct_value.child_count > struct_value.children.len) return false;
-                const struct_name = switch (self.resolveAliasType(expected_ty).kind) {
-                    .name => |name| name.text,
-                    else => return false,
-                };
-                const struct_decl = self.structs.get(struct_name) orelse return false;
-                if (struct_value.child_count != struct_decl.fields.len) return false;
-                for (struct_value.children[0..struct_value.child_count], 0..) |child, child_index| {
-                    if (child.field_index >= struct_decl.fields.len) return false;
-                    for (struct_value.children[0..child_index]) |earlier| if (earlier.field_index == child.field_index) return false;
-                    if (!self.mirAggregateValueNodeSupported(function, value, child.node, struct_decl.fields[child.field_index].ty, seen)) return false;
-                }
-            },
-        }
-        return true;
-    }
-
     fn mirAggregateParameterMatchesSignature(self: *CEmitter, function: anytype, name: []const u8, expected_ty: anytype) bool {
         var found = false;
         for (function.signature.params) |parameter| {
@@ -2955,71 +2809,6 @@ pub const CEmitter = struct {
             found = true;
         }
         return found;
-    }
-
-    fn emitMirLocalAggregatePlaceUpdateReturnPlan(self: *CEmitter, plan: mir_statement_plan.LocalAggregatePlaceUpdateReturnPlan) !void {
-        const local_ty = plan.local_type_fact.target_ty;
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.declaration_location.source));
-        try self.writeIndent();
-        try self.emitDeclarator(local_ty, plan.local_name);
-        try self.out.appendSlice(self.allocator, " = ");
-        try self.emitMirAggregateValuePlan(plan.initializer, plan.initializer.root, local_ty);
-        try self.out.appendSlice(self.allocator, ";\n");
-
-        if (plan.update) |update| {
-            const target = try self.mirPlaceAccess(update.target);
-            try self.writeLineDirective(spanFromMirSourcePoint(update.location.source));
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} = ", .{target});
-            switch (update.value) {
-                .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
-                .integer_literal => |literal| try self.out.print(self.allocator, "{d}", .{literal.value}),
-                else => return error.UnsupportedCEmission,
-            }
-            try self.out.appendSlice(self.allocator, ";\n");
-        }
-
-        const returned = try self.mirPlaceAccess(plan.returned);
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{returned});
-    }
-
-    fn emitMirAggregateValuePlan(self: *CEmitter, value: mir_statement_plan.AggregateValuePlan, index: usize, expected_ty: anytype) !void {
-        if (index >= value.count) return error.UnsupportedCEmission;
-        const node = value.nodes[index];
-        switch (node.operation) {
-            .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
-            .integer_literal => |literal| try self.out.print(self.allocator, "{d}", .{literal}),
-            .array_literal => |array_value| {
-                const array = switch (self.resolveAliasType(expected_ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedCEmission,
-                };
-                try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(expected_ty, .typedef_name)});
-                for (array_value.children[0..array_value.child_count], 0..) |child, child_index| {
-                    if (child_index != 0) try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitMirAggregateValuePlan(value, child.node, array.child.*);
-                }
-                try self.out.appendSlice(self.allocator, " } }");
-            },
-            .struct_literal => |struct_value| {
-                const struct_name = switch (self.resolveAliasType(expected_ty).kind) {
-                    .name => |name| name.text,
-                    else => return error.UnsupportedCEmission,
-                };
-                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
-                try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(expected_ty, .typedef_name)});
-                for (struct_value.children[0..struct_value.child_count], 0..) |child, child_index| {
-                    if (child.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
-                    if (child_index != 0) try self.out.appendSlice(self.allocator, ", ");
-                    const field = struct_decl.fields[child.field_index];
-                    try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name.text)});
-                    try self.emitMirAggregateValuePlan(value, child.node, field.ty);
-                }
-                try self.out.appendSlice(self.allocator, " }");
-            },
-        }
     }
 
     fn emitMirAggregateAssignmentValue(self: *CEmitter, local_ty: anytype, value: mir_statement_plan.PlaceStoreValue) !void {

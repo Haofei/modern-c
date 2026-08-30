@@ -514,27 +514,25 @@ test "LLVM local aggregate place updates return from MIR without body fallback" 
     try expectContains(field_body, "alloca { i32, i32 }");
 
     const nested_array_body = try llvmFunctionBody(output.items, "define internal i32 @assign_nested_array");
-    try expectContains(nested_array_body, "insertvalue [2 x [2 x i32]] %t");
-    try expectContains(nested_array_body, "i32 %value, 0, 1");
-    try expectContains(nested_array_body, "extractvalue [2 x [2 x i32]] %t");
+    try expectContains(nested_array_body, "; canonical executable MIR");
+    try expectContains(nested_array_body, "alloca [2 x [2 x i32]]");
+    try expectContains(nested_array_body, "store i32 %mc_arg_0, ptr %");
+    try expectContains(nested_array_body, "load i32, ptr %");
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, nested_array_body, "call void @mc_trap_Bounds()"));
-    try expectNotContains(nested_array_body, "alloca");
-    try expectNotContains(nested_array_body, "store");
 
     const nested_struct_body = try llvmFunctionBody(output.items, "define internal i32 @local_nested_struct");
-    try expectContains(nested_struct_body, "insertvalue { { i32, i32 } } %t");
-    try expectContains(nested_struct_body, "i32 %value, 0, 1");
-    try expectContains(nested_struct_body, "extractvalue { { i32, i32 } } %t");
-    try expectNotContains(nested_struct_body, "alloca");
-    try expectNotContains(nested_struct_body, "store");
+    try expectContains(nested_struct_body, "; canonical executable MIR");
+    try expectContains(nested_struct_body, "alloca { { i32, i32 } }");
+    try expectContains(nested_struct_body, "getelementptr inbounds { i32, i32 }");
+    try expectContains(nested_struct_body, "store i32 %mc_arg_0, ptr %");
+    try expectContains(nested_struct_body, "ret i32 %mc_expr_tmp_");
 
     const array_body = try llvmFunctionBody(output.items, "define internal i32 @assign_array_element");
-    try expectContains(array_body, "insertvalue [2 x i32] %t");
-    try expectContains(array_body, "i32 %value, 0");
-    try expectContains(array_body, "extractvalue [2 x i32] %t");
+    try expectContains(array_body, "; canonical executable MIR");
+    try expectContains(array_body, "alloca [2 x i32]");
+    try expectContains(array_body, "store i32 %mc_arg_0, ptr %");
+    try expectContains(array_body, "load i32, ptr %");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, array_body, "call void @mc_trap_Bounds()"));
-    try expectNotContains(array_body, "alloca");
-    try expectNotContains(array_body, "store");
 }
 
 test "LLVM direct-call aggregate projections return from MIR without body fallback" {
@@ -654,12 +652,14 @@ test "LLVM emits break and continue while CFG from MIR without body fallback" {
 
     const stop = try llvmFunctionBody(output.items, "define internal void @stop");
     try expectContains(stop, "; canonical executable MIR");
-    try expectContains(stop, "br i1 %mc_arg_0, label %mc_block_1, label %mc_block_2");
-    try expectContains(stop, "mc_block_1:\n  br label %mc_block_2");
+    try expectContains(stop, "br label %mc_block_1");
+    try expectContains(stop, "br i1 %mc_arg_0, label %mc_block_2, label %mc_block_3");
+    try expectContains(stop, "mc_block_2:\n  br label %mc_block_3");
     const repeat = try llvmFunctionBody(output.items, "define internal void @repeat");
     try expectContains(repeat, "; canonical executable MIR");
-    try expectContains(repeat, "br i1 %mc_arg_0, label %mc_block_1, label %mc_block_2");
-    try expectContains(repeat, "mc_block_1:\n  br label %mc_block_0");
+    try expectContains(repeat, "br label %mc_block_1");
+    try expectContains(repeat, "br i1 %mc_arg_0, label %mc_block_2, label %mc_block_3");
+    try expectContains(repeat, "mc_block_2:\n  br label %mc_block_1");
 }
 
 test "LLVM function symbol returns lower from MIR without body fallback" {
@@ -15863,12 +15863,13 @@ test "LLVM indexed aggregate scalar fields lower race-tolerantly" {
     try expectNotContains(pointer_array_body, "load i32, ptr %");
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_array_member_load");
-    try expectContains(local_body, "load i32, ptr %");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal i32 @local_array_member_store");
-    try expectContains(local_store_body, "store i32 %value, ptr %");
-    try expectContains(local_store_body, "load i32, ptr %");
+    try expectContains(local_store_body, "; canonical executable MIR");
+    try expectContains(local_store_body, "store i32 %mc_arg_");
+    try expectContains(local_store_body, "ret i32 %");
     try expectNotContains(local_store_body, " atomic ");
 }
 
@@ -15944,12 +15945,13 @@ test "LLVM nested indexed aggregate scalar member chains lower race-tolerantly" 
     try expectNotContains(pointer_array_store_body, "store i32 %value, ptr %");
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_array_nested_load");
-    try expectContains(local_body, "load i32, ptr %");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal i32 @local_array_nested_store");
-    try expectContains(local_store_body, "store i32 %value, ptr %");
-    try expectContains(local_store_body, "load i32, ptr %");
+    try expectContains(local_store_body, "; canonical executable MIR");
+    try expectContains(local_store_body, "store i32 %mc_arg_");
+    try expectContains(local_store_body, "ret i32 %");
     try expectNotContains(local_store_body, " atomic ");
 }
 
@@ -16027,7 +16029,7 @@ test "LLVM indexed aggregate field value copies lower recursively" {
     try expectContains(pointer_array_store_body, " unordered, align 4");
 
     const local_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_inner_load");
-    try expectContains(local_body, "load { i32 }, ptr %");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_inner_store");
@@ -16329,7 +16331,7 @@ test "LLVM nested indexed aggregate field value copies lower recursively" {
     try expectContains(pointer_array_store_body, " unordered, align 4");
 
     const local_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_leaf_load");
-    try expectContains(local_body, "load { i32 }, ptr %");
+    try expectContains(local_body, "; canonical executable MIR");
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_leaf_store");

@@ -7374,13 +7374,13 @@ const FunctionBuilder = struct {
         if (place.projection_count == 0) return true;
         if (self.executableFixedArrayIndexPlaceComplete(place)) return true;
         if (self.executableSliceIndexPlaceComplete(place)) return true;
-        if (mir_model.executableDirectAggregateFieldPlace(
+        if (mir_model.executableAggregateFieldPlace(
             self.executable_locals.items,
             self.executable_statements.items,
             self.executable_aggregate_types.items,
             place,
             false,
-        ) != null) return true;
+        )) return true;
         const transient_body: mir_model.ExecutableBody = .{
             .locals = self.executable_locals.items,
             .aggregate_types = self.executable_aggregate_types.items,
@@ -7693,13 +7693,13 @@ const FunctionBuilder = struct {
                 } else false,
                 .value => false,
             };
-            if (mir_model.executableDirectAggregateFieldPlace(
+            if (mir_model.executableAggregateFieldPlace(
                 self.executable_locals.items,
                 self.executable_statements.items,
                 self.executable_aggregate_types.items,
                 place,
                 is_store,
-            ) != null) return switch (place.root) {
+            )) return switch (place.root) {
                 .local => access.kind == .plain,
                 .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
                     const identity = self.executable_symbols.items[id.index()];
@@ -11891,6 +11891,19 @@ const FunctionBuilder = struct {
         self.local_function_aliases.clearRetainingCapacity();
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
+
+        // A while back-edge must re-enter a dedicated condition block, never
+        // the function entry/preheader that owns local initializers.  Reusing
+        // the current block as the header made canonical codegen reinitialize
+        // every pre-loop local on each iteration.
+        const header_id = if (node.kind == .@"while") header: {
+            const preheader_id = self.current;
+            const id = try self.addBlock("loop_header");
+            try self.addSuccessor(preheader_id, id);
+            self.blocks.items[preheader_id].terminator = .{ .jump = id };
+            self.current = id;
+            break :header id;
+        } else self.current;
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
         var for_binding_ty_expr: ?ast.TypeExpr = null;
         if (node.iterable) |iterable| {
@@ -11913,7 +11926,6 @@ const FunctionBuilder = struct {
             }
             try self.buildExpr(iterable);
         }
-        const header_id = self.current;
         const body_id = try self.addBlock("loop_body");
         const after_id = try self.addBlock("loop_after");
         try self.addSuccessor(header_id, body_id);
