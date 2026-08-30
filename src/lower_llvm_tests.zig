@@ -4814,7 +4814,8 @@ test "LLVM typed indirect call returns lower from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_indirect_call_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i32 @apply");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, param_body, "call i32 %op(i32 %x, i32 %y)"));
+    try expectContains(param_body, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, param_body, "call i32 %mc_arg_0(i32 %mc_arg_1, i32 %mc_arg_2)"));
     try expectContains(param_body, "ret i32");
     try expectNotContains(param_body, "alloca");
 
@@ -10176,7 +10177,9 @@ test "LLVM inferred local indirect calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_indirect_call_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%result") != null);
+    try expectContains(complete_output.items, "; canonical executable MIR");
+    try expectContains(complete_output.items, "call i32 %mc_arg_0(i32 %mc_arg_1)");
+    try expectContains(complete_output.items, "ret i32 %mc_expr_tmp_");
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

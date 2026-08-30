@@ -8876,11 +8876,6 @@ const FunctionBuilder = struct {
                     break :call self.unsupportedExecutableExpression(.unsupported_call);
                 if (indirect_target.params.len != node.args.len or indirect_target.params.len > mir_model.max_executable_operands)
                     break :call self.unsupportedExecutableExpression(.unsupported_call);
-                const canonical_indirect_slice = switch (aggregateTargetTypeAlias(indirect_target.callee_type_expr, self.aliases).kind) {
-                    .fn_pointer => indirect_target.params.len == 0 and indirect_target.result_ty == .void,
-                    else => false,
-                };
-                if (!canonical_indirect_slice) self.executable_supported = false;
                 result_ty = indirect_target.result_ty;
                 var signature: mir_model.ExecutableCallSignature = .{
                     .parameter_count = indirect_target.params.len,

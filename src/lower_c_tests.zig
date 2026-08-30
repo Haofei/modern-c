@@ -4693,7 +4693,10 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_indirect_call_returns.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint32_t apply(");
-    try expectContains(param_body, "return op(x, y);");
+    try expectContains(param_body, "/* canonical executable MIR */");
+    try expectContains(param_body, "__auto_type mc_exec_tmp_0 = op;");
+    try expectContains(param_body, "(mc_exec_tmp_0)(mc_exec_tmp_1, mc_exec_tmp_2)");
+    try expectContains(param_body, "return mc_exec_tmp_3;");
     try expectNotContains(param_body, "mc_tmp");
 
     const global_body = try cFunctionBody(output.items, "static uint32_t global_op_call(");
@@ -4715,9 +4718,10 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
     try expectNotContains(array_field_body, "mc_tmp");
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_fn_pointer_call(");
-    try expectContains(local_body, "mc_fnptr_");
-    try expectContains(local_body, " op = mul;");
-    try expectContains(local_body, "return op(x, y);");
+    try expectContains(local_body, "/* canonical executable MIR */");
+    try expectContains(local_body, "= mul;");
+    try expectContains(local_body, ")(mc_exec_tmp_");
+    try expectContains(local_body, "return mc_exec_tmp_");
 }
 
 test "lower-c value optional pointer derefs lower race-tolerantly" {
@@ -10243,7 +10247,8 @@ test "lower-c indirect calls require MIR callee signature facts" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "callback(") != null);
+    try expectContains(complete_output.items, "/* canonical executable MIR */");
+    try expectContains(complete_output.items, ")(mc_exec_tmp_");
 
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
         var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
