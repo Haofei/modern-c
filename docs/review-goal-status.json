@@ -17,8 +17,8 @@
         "measured_at": "2026-08-29",
         "strict_c": "160/160 admitted, 0 fallback",
         "strict_llvm": "160/160 admitted, 0 fallback",
-        "broad_c": "1271/1769 admitted, 498 fallback",
-        "broad_llvm": "1310/1840 admitted, 530 fallback",
+        "broad_c": "1280/1769 admitted, 489 fallback",
+        "broad_llvm": "1320/1840 admitted, 520 fallback",
         "completion_note": "Incomplete until the fallback artifact and both backend AST-body ingress branches are deleted."
       },
       "current_evidence": [

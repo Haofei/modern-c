@@ -16,10 +16,10 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
-| strict ratchet | 160/160 admitted, 0 fallback | 160/160 admitted, 0 fallback |
-| broad repository sweep | 1271/1769 admitted, 498 fallback | 1310/1840 admitted, 530 fallback |
-| canonical bodies | 1177 | 1209 |
-| transitional specialized bodies | 94 | 101 |
+| strict ratchet | 160/160 admitted, 0 fallback (118 canonical) | 160/160 admitted, 0 fallback (119 canonical) |
+| broad repository sweep | 1280/1769 admitted, 489 fallback | 1320/1840 admitted, 520 fallback |
+| canonical bodies | 1189 | 1221 |
+| transitional specialized bodies | 91 | 99 |
 
 The strict ratchet is a regression gate, not the completion definition. The
 broad sweep includes partial records from unsupported/reject roots and is the
@@ -40,28 +40,36 @@ worklist snapshot.
   canonical. Unchecked arithmetic carries its exact no-overflow contract-region
   ID and typed span into executable MIR; admission rejects a missing proof
   before either renderer runs.
-- Since the preceding snapshot, broad fallback fell by 24 C and 23 LLVM bodies
-  while canonical bodies rose by 24 in each backend. MIR/cleanup is 358/358;
-  the backend shard is 1034/1034.
+- Taking a checked address of a fixed-array element now owns an exact Bounds
+  edge in executable MIR. Builder, verifier and both renderers share the typed
+  `PlaceId` projection; seven C and eight LLVM broad-corpus fallbacks retired.
+- Typed indirect calls are no longer limited to the old zero-parameter/void
+  canonical slice. Existing signature facts and renderer admission now cover
+  parameter and local function pointers with arguments and return values; the
+  strict corpus moved two more bodies per backend from specialized plans to the
+  canonical emitter.
+- Since the preceding snapshot, broad fallback fell by 9 C and 10 LLVM bodies,
+  while canonical bodies rose by 12 in each backend and specialized bodies
+  fell by 3 C / 2 LLVM. MIR/cleanup is 358/358; the backend shard is 1036/1036.
 
 ## Remaining producer blockers
 
 Ranked by broad frequency (C / LLVM where different):
 
-1. `trap_projection`: 120 / 128
+1. `trap_projection`: 108 / 115
 2. `unsupported_member`: 63 / 63
-3. `producer_invariant`: 28 / 28
-4. `unsupported_statement`: 27 / 27
+3. `unsupported_statement`: 27 / 27
+4. `producer_invariant`: 27 / 27
 5. `unlowered_array`: 25 / 27
 6. `unsupported_call`: 22 / 22
 7. `general_switch`: 21 / 23
 8. `unsupported_struct_literal`: 19 / 19
-9. `InvalidBuiltinCall`: 10 / 10
-10. `noncanonical_string_literal`: 18 / 18
-11. `unsupported_try`: 15 / 15
-12. `unlowered_member`: 14 / 14
+9. `noncanonical_string_literal`: 18 / 18
+10. `unsupported_try`: 15 / 15
+11. `unlowered_member`: 14 / 14
+12. `InvalidBuiltinCall`: 10 / 10
 
-Renderer-only rejection remains 46 C / 61 LLVM bodies. It must be reduced by
+Renderer-only rejection remains 50 C / 65 LLVM bodies. It must be reduced by
 typed, verifier-checked slices; renderer admission must not infer source
 semantics.
 
