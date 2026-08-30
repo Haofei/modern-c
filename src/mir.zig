@@ -9000,6 +9000,7 @@ const FunctionBuilder = struct {
                     const enum_raw_target = self.enumRawCallTarget(node);
                     const domain_target = try self.domainCallTarget(node);
                     const conversion_target = self.conversionCallFactInfo(node);
+                    const byte_view_target = self.byteViewCallTarget(node);
                     const result_target_type = if (kind == .result_ok or kind == .result_err)
                         (expected_type_expr orelse self.assignment_target_type_expr)
                     else
@@ -9032,6 +9033,8 @@ const FunctionBuilder = struct {
                             if (!try self.internExecutableResultType(result_ty, result_type))
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
                         }
+                    } else if (byte_view_target) |target| {
+                        result_ty = target.result_ty;
                     } else if (kind == .forget_unchecked or kind == .cpu_pause or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
@@ -9081,7 +9084,16 @@ const FunctionBuilder = struct {
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
                             const payload_ty = valueTypeFromTypeAlias(payload_type, self.enums, self.structs, self.packed_bits, self.aliases);
                             break :result_arg try self.ensureExecutableExprAsType(argument, payload_ty, payload_type);
-                        } else if (kind == .raw_many_offset)
+                        } else if (byte_view_target) |target|
+                            if (target.kind == .byte_view_as_bytes and source_index == 0)
+                                try self.ensureExecutableExprAs(argument, .{ .pointer = .{
+                                    .kind = .single,
+                                    .mutability = .@"const",
+                                    .child = target.source_ty.name(),
+                                } })
+                            else
+                                try self.ensureExecutableExpr(argument)
+                        else if (kind == .raw_many_offset)
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
                         else if (kind == .phys)
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
@@ -9359,6 +9371,10 @@ const FunctionBuilder = struct {
                     .local, .load, .member, .cast => .valid_slice,
                     .direct_call, .indirect_call => switch (expr.kind) {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .valid_slice else null,
+                        else => null,
+                    },
+                    .builtin_call => switch (expr.kind) {
+                        .call => |call| if (self.byteViewCallTarget(call) != null) .valid_slice else null,
                         else => null,
                     },
                     else => null,

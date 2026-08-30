@@ -9976,8 +9976,9 @@ test "lower-c inferred local byte-view calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_slice_const_u8 bytes") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool equal") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "((mc_slice_const_u8){") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "__builtin_memcmp") != null);
 
     for ([_][]const u8{ "inferred_byte_view", "inferred_byte_equal" }) |name| {
         var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());

@@ -55,7 +55,18 @@ pub fn emitBodyWithSourcePath(
         if (isSliceType(expression.result_ty) or expression.result_ty == .value) continue;
         try writeIndent(allocator, out, indent);
         if (expression.operation == .optional_none) try out.appendSlice(allocator, "MC_UNUSED ");
-        try appendCType(allocator, out, body, expression.result_ty);
+        switch (expression.operation) {
+            .address_of => |address| {
+                const place = placeById(body, address.place) orelse return error.InvalidPlace;
+                const pointer = switch (expression.result_ty) {
+                    .pointer => |shape| shape,
+                    else => return error.InvalidExpression,
+                };
+                try appendCType(allocator, out, body, place.ty);
+                try out.appendSlice(allocator, if (pointer.mutability == .mut) " *" else " const *");
+            },
+            else => try appendCType(allocator, out, body, expression.result_ty),
+        }
         try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
     }
 
@@ -483,7 +494,7 @@ fn emitExpressionOperation(
                 try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
             }
         },
-        .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression.result_ty, call, depth),
+        .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression, call, depth),
         .representation_check => |check| try emitExpression(allocator, out, body, check.operand, depth + 1),
         .address_of => |address| try emitPlaceAddress(allocator, out, body, address.place),
         .deref => |operand| {
@@ -1484,7 +1495,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -1557,15 +1568,41 @@ fn emitBuiltinCall(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     body: *const mir.ExecutableBody,
-    result_ty: mir.ValueType,
+    expression: *const mir.ExecutableExpression,
     call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
     depth: usize,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    const result_ty = expression.result_ty;
     switch (call.kind) {
         .phys => {
             try out.appendSlice(allocator, "((uintptr_t)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
+        },
+        .byte_view_as_bytes => {
+            if (call.argument_count != 1) return error.InvalidExpression;
+            try out.appendSlice(allocator, "((");
+            try appendSliceCType(allocator, out, result_ty);
+            try out.appendSlice(allocator, "){ .ptr = (uint8_t const *)(void *)(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, "), .len = (uintptr_t)sizeof(*(");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ")) })");
+        },
+        .byte_view_equal => {
+            if (call.argument_count != 2) return error.InvalidExpression;
+            const id = expression.id.raw;
+            try out.print(allocator, "({{ __auto_type mc_bytes_left_{d} = ", .{id});
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.print(allocator, "; __auto_type mc_bytes_right_{d} = ", .{id});
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
+            try out.print(
+                allocator,
+                "; (mc_bytes_left_{d}.len == mc_bytes_right_{d}.len) && " ++
+                    "((mc_bytes_left_{d}.len == 0) || " ++
+                    "(__builtin_memcmp(mc_bytes_left_{d}.ptr, mc_bytes_right_{d}.ptr, mc_bytes_left_{d}.len) == 0)); }})",
+                .{ id, id, id, id, id, id },
+            );
         },
         .conversion_from, .conversion_wrap_from, .conversion_from_mod => {
             try out.appendSlice(allocator, "((");
@@ -3529,7 +3566,12 @@ fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType,
 
 fn appendLocal(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, id: mir.LocalId) (RenderError || std.mem.Allocator.Error)!void {
     const local = localById(body, id) orelse return error.InvalidLocal;
-    if (std.mem.startsWith(u8, local.spelling, "__mc_"))
+    var first_same_spelling = id;
+    for (body.locals) |candidate| {
+        if (std.mem.eql(u8, candidate.spelling, local.spelling) and candidate.id.raw < first_same_spelling.raw)
+            first_same_spelling = candidate.id;
+    }
+    if (std.mem.startsWith(u8, local.spelling, "__mc_") or !first_same_spelling.eql(id))
         return out.print(allocator, "{s}_{d}", .{ local.spelling, id.raw });
     return appendIdent(allocator, out, local.spelling);
 }

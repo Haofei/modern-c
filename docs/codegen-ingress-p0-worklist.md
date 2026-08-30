@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1440/1827 admitted | 1476/1879 admitted |
-| AST fallback | 387 | 403 |
+| broad sweep | 1447/1825 admitted | 1488/1879 admitted |
+| AST fallback | 378 | 391 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -49,6 +49,14 @@ same fact for function signatures, direct-call results, local storage, and
 aggregate callable fields, so closure values are consistently represented as
 `{ ptr, ptr }`. The last four `canonical=ready` LLVM fallbacks are retired;
 every remaining LLVM fallback is either producer-incomplete or renderer-owned.
+
+Byte-view construction and equality are canonical executable operations in
+both renderers. Their source object size comes from the addressed canonical
+place type rather than from a pointer-child spelling, so fixed arrays retain
+their exact length. The three direct byte-view fixtures are 3/3 canonical in
+both backends; the newly completed array callers also closed nine LLVM ingress
+fallbacks. C gives later same-spelled lexical local generations a stable ID
+suffix, preventing flat CFG emission from redeclaring one C name.
 
 The parameter-pointee fixed-array/address family is also closed. A leading
 typed parameter dereference is part of the shared fixed-array place metadata;

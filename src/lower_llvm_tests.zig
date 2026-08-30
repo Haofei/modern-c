@@ -10379,8 +10379,9 @@ test "LLVM inferred local byte-view calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_byte_view_local_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%bytes") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%equal") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "insertvalue { ptr, i64 }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_bytes_equal_cond_") != null);
 
     for ([_][]const u8{ "inferred_byte_view", "inferred_byte_equal" }) |name| {
         var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());

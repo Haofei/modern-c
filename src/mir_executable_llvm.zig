@@ -1777,6 +1777,28 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ value.ty, value.spelling, pointer });
                 return .{ .ty = "void", .spelling = "" };
             },
+            .byte_view_as_bytes => {
+                if (call.argument_count != 1 or !std.mem.eql(u8, result_ty, "{ ptr, i64 }") or
+                    !std.mem.eql(u8, operands[0].ty, "ptr")) return error.InvalidBody;
+                const operand_expression = self.body.expressions[call.arguments[0].index()];
+                const address = switch (operand_expression.operation) {
+                    .address_of => |value| value,
+                    else => return error.InvalidBody,
+                };
+                if (!placeValid(self.body, address.place)) return error.InvalidBody;
+                const pointee_ty = self.body.places[address.place.index()].ty;
+                const pointee_text = try self.typeText(pointee_ty);
+                const with_pointer = try self.temp();
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = insertvalue {{ ptr, i64 }} zeroinitializer, ptr {s}, 0\n", .{ with_pointer, operands[0].spelling });
+                try self.output.print(
+                    self.allocator,
+                    "  {s} = insertvalue {{ ptr, i64 }} {s}, i64 ptrtoint (ptr getelementptr ({s}, ptr null, i64 1) to i64), 1\n",
+                    .{ result, with_pointer, pointee_text },
+                );
+                return .{ .ty = result_ty, .spelling = result };
+            },
+            .byte_view_equal => return self.emitByteViewEqual(expression, operands[0], operands[1]),
             .forget_unchecked => {
                 // `operands` were rendered above in source order.  Forgetting
                 // consumes the ownership obligation but has no LLVM runtime
@@ -1826,6 +1848,102 @@ const Renderer = struct {
             "zext";
         try self.output.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, operation, operand.ty, operand.spelling, target_ty });
         return .{ .ty = target_ty, .spelling = result };
+    }
+
+    fn emitByteViewEqual(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        left: Value,
+        right: Value,
+    ) RenderError!Value {
+        if (!std.mem.eql(u8, left.ty, "{ ptr, i64 }") or !std.mem.eql(u8, right.ty, "{ ptr, i64 }") or
+            expression.result_ty != .bool) return error.InvalidBody;
+        const left_pointer = try self.temp();
+        const left_length = try self.temp();
+        const right_pointer = try self.temp();
+        const right_length = try self.temp();
+        const index_slot = try self.temp();
+        const result_slot = try self.temp();
+        const lengths_equal = try self.temp();
+        const index = try self.temp();
+        const in_range = try self.temp();
+        const left_element = try self.temp();
+        const right_element = try self.temp();
+        const left_byte = try self.temp();
+        const right_byte = try self.temp();
+        const bytes_equal = try self.temp();
+        const next_index = try self.temp();
+        const result = try self.temp();
+        const id = expression.id.raw;
+        try self.output.print(
+            self.allocator,
+            "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n" ++
+                "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n" ++
+                "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n" ++
+                "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n" ++
+                "  {s} = alloca i64\n" ++
+                "  {s} = alloca i1\n" ++
+                "  store i64 0, ptr {s}\n" ++
+                "  store i1 false, ptr {s}\n" ++
+                "  {s} = icmp eq i64 {s}, {s}\n" ++
+                "  br i1 {s}, label %mc_bytes_equal_cond_{d}, label %mc_bytes_equal_done_{d}\n" ++
+                "mc_bytes_equal_cond_{d}:\n" ++
+                "  {s} = load i64, ptr {s}\n" ++
+                "  {s} = icmp ult i64 {s}, {s}\n" ++
+                "  br i1 {s}, label %mc_bytes_equal_body_{d}, label %mc_bytes_equal_true_{d}\n" ++
+                "mc_bytes_equal_body_{d}:\n",
+            .{
+                left_pointer,  left.spelling,
+                left_length,   left.spelling,
+                right_pointer, right.spelling,
+                right_length,  right.spelling,
+                index_slot,    result_slot,
+                index_slot,    result_slot,
+                lengths_equal, left_length,
+                right_length,  lengths_equal,
+                id,            id,
+                id,            index,
+                index_slot,    in_range,
+                index,         left_length,
+                in_range,      id,
+                id,            id,
+            },
+        );
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr i8, ptr {s}, i64 {s}\n" ++
+                "  {s} = getelementptr i8, ptr {s}, i64 {s}\n" ++
+                "  {s} = load i8, ptr {s}\n" ++
+                "  {s} = load i8, ptr {s}\n" ++
+                "  {s} = icmp eq i8 {s}, {s}\n" ++
+                "  br i1 {s}, label %mc_bytes_equal_step_{d}, label %mc_bytes_equal_done_{d}\n" ++
+                "mc_bytes_equal_step_{d}:\n" ++
+                "  {s} = add i64 {s}, 1\n" ++
+                "  store i64 {s}, ptr {s}\n" ++
+                "  br label %mc_bytes_equal_cond_{d}\n" ++
+                "mc_bytes_equal_true_{d}:\n" ++
+                "  store i1 true, ptr {s}\n" ++
+                "  br label %mc_bytes_equal_done_{d}\n" ++
+                "mc_bytes_equal_done_{d}:\n" ++
+                "  {s} = load i1, ptr {s}\n",
+            .{
+                left_element,  left_pointer,
+                index,         right_element,
+                right_pointer, index,
+                left_byte,     left_element,
+                right_byte,    right_element,
+                bytes_equal,   left_byte,
+                right_byte,    bytes_equal,
+                id,            id,
+                id,            next_index,
+                index,         next_index,
+                index_slot,    id,
+                id,            result_slot,
+                id,            id,
+                result,        result_slot,
+            },
+        );
+        return .{ .ty = "i1", .spelling = result };
     }
 
     fn emitSaturatingConversionCall(
@@ -3405,7 +3523,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;

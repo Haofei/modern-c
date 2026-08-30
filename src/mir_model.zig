@@ -644,6 +644,20 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             .address => |class| class == .paddr,
             else => false,
         },
+        .byte_view_as_bytes => operands.len == 1 and switch (operands[0]) {
+            .pointer => |shape| shape.kind == .single,
+            else => false,
+        } and switch (result) {
+            .pointer => |shape| shape.kind == .slice and shape.mutability == .@"const" and
+                std.mem.eql(u8, shape.child, "u8"),
+            else => false,
+        },
+        .byte_view_equal => operands.len == 2 and result == .bool and
+            ValueType.eql(operands[0], operands[1]) and switch (operands[0]) {
+            .pointer => |shape| shape.kind == .slice and shape.mutability == .@"const" and
+                std.mem.eql(u8, shape.child, "u8"),
+            else => false,
+        },
         // `forget_unchecked` consumes its operand at the ownership layer, but
         // deliberately has no runtime release action.  The executable body
         // still carries the operand so both mechanical renderers must evaluate

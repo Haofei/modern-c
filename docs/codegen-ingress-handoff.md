@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1440/1827 C functions and 1476/1879 LLVM functions.
-  The remaining 387 C and 403 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1447/1825 C functions and 1488/1879 LLVM functions.
+  The remaining 378 C and 391 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -46,6 +46,14 @@ the declaration, call result, local slot, and aggregate field representation,
 which retires the final four bodies that were renderer-ready but rejected by
 the integration ingress. The remaining LLVM fallback set has no
 `canonical=ready` tail.
+
+Canonical MIR now owns byte-view construction and equality. Both renderers use
+the addressed `Place.ty` for object size instead of reconstructing it from a
+lossy pointer child spelling; fixed-array byte views therefore preserve their
+length and compile in both outputs. The direct byte-view fixture is 3/3
+canonical in C and LLVM, and the nine LLVM bodies exposed by this producer
+cutover no longer fall back. Later lexical generations with a repeated local
+name are also distinct in canonical C output.
 
 The producer no longer carries a one-off slice-store completion recognizer.
 The executable-body verifier promotes every valid body without an explicit
