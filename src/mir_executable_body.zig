@@ -199,7 +199,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                         return error.InvalidMemoryAccessTrap;
                     return;
                 }
-                const expected_traps: usize = if (placeNeedsRepresentationGuard(target.*)) 1 else 0;
+                const expected_traps: usize = if (placeNeedsRepresentationGuard(body, target.*)) 1 else 0;
                 if (expected_traps == 1) {
                     const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, operation.representation_span_id, source);
@@ -218,7 +218,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 if (!operation.ordering.validForLoad() or !atomicPlaceSupported(body, target.*) or
                     !sameValueType(target.ty, value.result_ty) or !target.type_id.eql(value.type_id))
                     return error.InvalidAtomicLoad;
-                const guarded = placeNeedsRepresentationGuard(target.*);
+                const guarded = placeNeedsRepresentationGuard(body, target.*);
                 if (guarded) {
                     const source = operation.representation_source orelse return error.InvalidAtomicLoad;
                     try verifySpan(function, operation.representation_span_id, source);
@@ -254,7 +254,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     (operation.kind == .store and value.result_ty != .void) or
                     (operation.kind != .store and (!sameValueType(target.ty, value.result_ty) or !target.type_id.eql(value.type_id))))
                     return error.InvalidAtomicLoad;
-                const guarded = placeNeedsRepresentationGuard(target.*);
+                const guarded = placeNeedsRepresentationGuard(body, target.*);
                 if (guarded) {
                     const source = operation.representation_source orelse return error.InvalidAtomicLoad;
                     try verifySpan(function, operation.representation_span_id, source);
@@ -688,19 +688,21 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         if (edge.kind == .Bounds and edge.source == .bounds_check) {
                             _ = indexedProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                         } else if (target.storage != .ordinary or
-                            !(isParameterScalarAccessPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
+                            !(isParameterScalarAccessPlace(body, target.*, false) or
+                                mir.executableLocalAddressDerefPlace(body, target.*, false) or
+                                mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     .atomic_load => |load| {
                         const target = place(body, load.place) orelse return error.InvalidTrapEdge;
-                        if (!atomicPlaceSupported(body, target.*) or !placeNeedsRepresentationGuard(target.*) or
+                        if (!atomicPlaceSupported(body, target.*) or !placeNeedsRepresentationGuard(body, target.*) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                     },
                     .atomic_update => |update| {
                         const target = place(body, update.place) orelse return error.InvalidTrapEdge;
-                        if (!atomicPlaceSupported(body, target.*) or !placeNeedsRepresentationGuard(target.*) or
+                        if (!atomicPlaceSupported(body, target.*) or !placeNeedsRepresentationGuard(body, target.*) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                     },
@@ -990,7 +992,7 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             try verifyType(function, operation.type_id, operation.ty, body.complete);
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
-                const guarded = placeNeedsRepresentationGuard(target.*);
+                const guarded = placeNeedsRepresentationGuard(body, target.*);
                 const indexed = mir.executableFixedArrayIndexPlace(body, target.*) != null or
                     mir.executableSliceIndexPlace(body, target.*) != null;
                 const checked_indices = if (indexed) mir.executableCheckedIndexProjectionCount(target.*) else 0;
@@ -1301,8 +1303,8 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
     if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
         !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;
     for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
-    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count]) |field_ty, field_type_id, callable_signature| {
-        if (field_ty == .unknown or (field_ty == .value) != (callable_signature != null)) return error.InvalidAggregateType;
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count]) |field_ty, field_type_id, callable_signature, dyn_trait| {
+        if (field_ty == .unknown or (field_ty == .value) != ((callable_signature != null) != dyn_trait)) return error.InvalidAggregateType;
         try verifyType(function, field_type_id, field_ty, body.complete);
         if (callable_signature) |signature| try verifyCallableSignature(function, signature, body.complete);
     }
@@ -1333,8 +1335,8 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
         }
         if (!found) return error.InvalidAggregateType;
     }
-    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..], aggregate.field_callable_signatures[aggregate.field_count..]) |field_spelling, field_ty, field_type_id, callable_signature| {
-        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid() or callable_signature != null)
+    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..], aggregate.field_callable_signatures[aggregate.field_count..], aggregate.field_dyn_traits[aggregate.field_count..]) |field_spelling, field_ty, field_type_id, callable_signature, dyn_trait| {
+        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid() or callable_signature != null or dyn_trait)
             return error.InvalidAggregateType;
     }
 }
@@ -1664,13 +1666,15 @@ fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePl
         body.aggregate_types,
         target,
         require_mutable,
-    ) != null or isParameterScalarAccessPlace(body, target, require_mutable) or
+    ) != null or mir.executableAggregatePointerFieldDerefPlace(body, target, require_mutable) != null or
+        isParameterScalarAccessPlace(body, target, require_mutable) or
         mir.executableLocalAddressDerefPlace(body, target, require_mutable) or
         isComputedRawManyDerefPlace(body, target, require_mutable);
 }
 
-fn placeNeedsRepresentationGuard(target: mir.ExecutablePlace) bool {
+fn placeNeedsRepresentationGuard(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
     if (target.projection_count == 0) return false;
+    if (mir.executableAggregatePointerFieldDerefPlace(body, target, false) != null) return true;
     return switch (target.root_ty) {
         .pointer => |shape| shape.kind == .single,
         .nullable_pointer => true,

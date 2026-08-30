@@ -654,13 +654,12 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         if (!hasBlock(body, statement.block_id)) return false;
         switch (statement.operation) {
             .local_init => |local| {
-                if (!(supportsType(body, local.ty) or
-                    (local.ty == .value and callableLocalUsedAsIndirectCallee(body, local.local))) or
-                    localById(body, local.local) == null) return false;
+                if (localById(body, local.local) == null) return false;
                 if (local.value) |value| {
                     const expression = expressionById(body, value) orelse return false;
                     if (!sameValueType(local.ty, expression.result_ty)) return false;
-                    if (local.ty == .value and !callableValueExpressionSupported(body, expression.*)) return false;
+                    if (!(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
+                        opaqueValueExpressionSupported(body, expression.*))) return false;
                 } else if (isSliceType(local.ty) or local.ty == .value) return false;
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
@@ -705,7 +704,8 @@ fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.Execu
 
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (functionSymbolExpressionSupported(body, expression)) return true;
-    if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression);
+    if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression) or
+        opaqueValueExpressionSupported(body, expression);
     if (!supportsType(body, expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
@@ -752,6 +752,16 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .result => |result| resultConstructionSupported(body, expression, result),
         .index => |index| indexSupported(body, expression, index),
         .deref, .range_slice, .unsupported => false,
+    };
+}
+
+fn opaqueValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    if (expression.result_ty != .value or !expression.type_id.isValid()) return false;
+    return switch (expression.operation) {
+        .local => |local| localById(body, local) != null,
+        .direct_call => |call| call.argument_count <= call.arguments.len and
+            symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
+        else => false,
     };
 }
 
@@ -1668,6 +1678,9 @@ fn memoryLoadSupported(
                 load.representation_source == null and !load.representation_span_id.isValid() and
                 ownedTrapEdgeCount(body, expression.id) == 0;
         }
+        if (mir.executableAggregatePointerFieldDerefPlace(body, place.*, false) != null) {
+            return load.access.kind == .race_unordered and representationOperationHasExactTrapEdge(body, expression);
+        }
         if (!scalarAccessPlaceSupported(body, place.*)) return false;
         const local_alias = mir.executableLocalAddressDerefPlace(body, place.*, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
@@ -2000,7 +2013,8 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
         body.aggregate_types,
         place,
         false,
-    ) != null or parameterScalarAccessPlaceSupported(body, place) or
+    ) != null or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
+        parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
@@ -2344,7 +2358,8 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
         .load => |load| blk: {
             const place = placeById(body, load.place) orelse return false;
             if (!(parameterScalarAccessPlaceSupported(body, place.*) or
-                mir.executableLocalAddressDerefPlace(body, place.*, false))) return false;
+                mir.executableLocalAddressDerefPlace(body, place.*, false) or
+                mir.executableAggregatePointerFieldDerefPlace(body, place.*, false) != null)) return false;
             break :blk .{ .source = load.representation_source, .span_id = load.representation_span_id };
         },
         .atomic_load => |load| blk: {
@@ -2688,7 +2703,14 @@ fn emitRepresentationGuard(
 ) (RenderError || std.mem.Allocator.Error)!void {
     try writeIndent(allocator, out, indent);
     try out.appendSlice(allocator, "if (");
-    try emitPlaceRoot(allocator, out, body, guard.place);
+    const place = placeById(body, guard.place) orelse return error.InvalidPlace;
+    if (mir.executableAggregatePointerFieldDerefPlace(body, place.*, false)) |projection| {
+        const aggregate = aggregateType(body, place.root_type_id) orelse return error.InvalidPlace;
+        try out.append(allocator, '(');
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").");
+        try appendIdent(allocator, out, aggregate.field_spellings[projection.field_index]);
+    } else try emitPlaceRoot(allocator, out, body, guard.place);
     try out.appendSlice(allocator, " == NULL) mc_trap_InvalidRepresentation();\n");
 }
 
@@ -2803,6 +2825,15 @@ fn emitPlace(
         try appendIdent(allocator, out, aggregate.field_spellings[field_index]);
         return;
     }
+    if (mir.executableAggregatePointerFieldDerefPlace(body, place.*, false)) |projection| {
+        const aggregate = aggregateType(body, place.root_type_id) orelse return error.InvalidPlace;
+        try out.appendSlice(allocator, "(*((");
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").");
+        try appendIdent(allocator, out, aggregate.field_spellings[projection.field_index]);
+        try out.appendSlice(allocator, "))");
+        return;
+    }
     if (place.projection_count == 1 and mir.executableLocalAddressDerefPlace(body, place.*, false)) {
         try out.appendSlice(allocator, "(*(");
         try emitPlaceRootValue(allocator, out, body, place.*);
@@ -2843,6 +2874,14 @@ fn emitPlaceAddress(
         try out.appendSlice(allocator, "&(");
         try emitPlace(allocator, out, body, id);
         try out.append(allocator, ')');
+        return;
+    }
+    if (mir.executableAggregatePointerFieldDerefPlace(body, place.*, false)) |projection| {
+        const aggregate = aggregateType(body, place.root_type_id) orelse return error.InvalidPlace;
+        try out.append(allocator, '(');
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").");
+        try appendIdent(allocator, out, aggregate.field_spellings[projection.field_index]);
         return;
     }
     if (place.projection_count == 0) {

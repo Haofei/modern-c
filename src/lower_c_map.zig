@@ -32,6 +32,7 @@ pub fn appendSourceMap(
     try payload.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
     var mapper = SourceMapEmitter{
         .allocator = allocator,
+        .scratch = std.heap.ArenaAllocator.init(allocator),
         .out = &payload,
         .source_path = source_path,
         .generated_c_path = generated_c_path orelse "-",
@@ -393,6 +394,7 @@ fn cLineDirectiveSourceLine(line: []const u8) ?usize {
 
 const SourceMapEmitter = struct {
     allocator: std.mem.Allocator,
+    scratch: std.heap.ArenaAllocator,
     out: *std.ArrayList(u8),
     source_path: []const u8,
     generated_c_path: []const u8,
@@ -409,6 +411,7 @@ const SourceMapEmitter = struct {
 
     fn deinit(self: *SourceMapEmitter) void {
         self.decl_row_artifacts.deinit(self.allocator);
+        self.scratch.deinit();
     }
 
     fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const declaration_artifacts.SourceMapArtifact) !void {
@@ -556,9 +559,20 @@ const SourceMapEmitter = struct {
         return diagnostics.invalid_file_id;
     }
 
-    fn pathForSourcePoint(self: *const SourceMapEmitter, span: mir.SourcePoint) []const u8 {
+    fn pathForSourcePoint(self: *SourceMapEmitter, span: mir.SourcePoint) []const u8 {
         if (span.file_id != diagnostics.invalid_file_id) {
-            if (self.reporter) |reporter| if (reporter.pathForFileId(span.file_id)) |path| return path;
+            if (self.reporter) |reporter| if (reporter.pathForFileId(span.file_id)) |path| {
+                if (std.mem.eql(u8, path, reporter.path)) return self.source_path;
+
+                const raw_dir = std.fs.path.dirname(reporter.path) orelse return path;
+                const artifact_dir = std.fs.path.dirname(self.source_path) orelse return path;
+                if (path.len > raw_dir.len and std.mem.startsWith(u8, path, raw_dir) and
+                    std.fs.path.isSep(path[raw_dir.len]))
+                {
+                    return std.fmt.allocPrint(self.scratch.allocator(), "{s}{s}", .{ artifact_dir, path[raw_dir.len..] }) catch path;
+                }
+                return path;
+            };
         }
         return self.source_path;
     }

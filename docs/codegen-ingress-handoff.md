@@ -857,6 +857,26 @@ Remaining buckets are all large or medium-with-risk:
 
 The clean recognizer-only wins are exhausted; everything left is structural.
 
+The broad `simple_return` plan has now been physically retired rather than
+left as a shadow implementation. Both integration branches, the return union,
+the two root recognizers, and their transitively dead private helpers were
+deleted, removing roughly 4.4k lines. The six remaining specialized plans are
+`alloca_hoist`, `access_structural`, `sequence_foreach_update`,
+`sequence_foreach_return`, `local_aggregate_place_update_return`, and
+`place_return`. The strict corpus remains 160/160 admitted with a 132/28
+canonical/specialized split. The 522-root broad census is C 1305/1781 admitted
+(1258 canonical, 47 specialized, 476 fallback) and LLVM 1337/1833 admitted
+(1288 canonical, 49 specialized, 496 fallback).
+
+This deletion also exposed and fixed two correctness holes. Aggregate-return
+pointer-field dereference now uses one canonical typed projection and exact
+InvalidRepresentation edge in C and LLVM. A qualified tagged-union constructor
+such as `Token.number(value)` is no longer allowed to masquerade as a direct
+call to a same-named function; until executable MIR owns variant construction,
+the producer marks that body incomplete and the correct legacy body path is
+used. The resulting fallback increase is intentional fail-closed behavior, not
+an admission regression to hide with a new recognizer.
+
 ## Validation quick-reference
 
 ```

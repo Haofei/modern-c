@@ -16,10 +16,10 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
-| strict ratchet | 160/160 admitted, 0 fallback (131 canonical) | 160/160 admitted, 0 fallback (131 canonical) |
-| broad repository sweep | 1305/1771 admitted, 466 fallback | 1337/1822 admitted, 485 fallback |
-| canonical bodies | 1234 | 1262 |
-| transitional specialized bodies | 71 | 75 |
+| strict ratchet | 160/160 admitted, 0 fallback (132 canonical) | 160/160 admitted, 0 fallback (132 canonical) |
+| broad repository sweep | 1305/1781 admitted, 476 fallback | 1337/1833 admitted, 496 fallback |
+| canonical bodies | 1258 | 1288 |
+| transitional specialized bodies | 47 | 49 |
 
 The strict ratchet is a regression gate, not the completion definition. The
 broad sweep includes partial records from unsupported/reject roots and is the
@@ -69,6 +69,16 @@ worklist snapshot.
   two backend emitters, tests, import surface and census category were deleted.
   The strict split is now 132 canonical / 28 specialized for both backends;
   seven specialized plan definitions remain.
+- The broad `simple_return` plan is fully retired. Its integration entry,
+  result union, both backend recognizers, and every helper made unreachable by
+  that deletion were removed (about 4.4k lines). The specialized-plan registry
+  now has six definitions. Canonical aggregate-pointer field dereference owns
+  its typed place and representation edge in both renderers. Qualified tagged-
+  union constructors remain deliberately producer-incomplete: the cutover
+  exposed a same-named constructor/function ambiguity that could recursively
+  call the function, so executable MIR now fails closed until it gains a
+  first-class variant-construction operation. This intentionally favors the
+  correct AST fallback over preserving an unsound admission count.
 
 ## Remaining producer blockers
 

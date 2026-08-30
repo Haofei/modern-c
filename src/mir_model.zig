@@ -1373,6 +1373,11 @@ pub const ExecutableAggregateType = struct {
     /// Exact function-pointer shape for fields whose deliberately opaque
     /// `.value` representation would otherwise be ambiguous.
     field_callable_signatures: [max_executable_operands]?ExecutableCallSignature = [_]?ExecutableCallSignature{null} ** max_executable_operands,
+    /// Trait-object fields also use the deliberately opaque `.value` semantic
+    /// type, but their storage is a fixed two-pointer fat value rather than a
+    /// callable pointer. Keep that layout distinction in canonical aggregate
+    /// metadata so LLVM never has to recover it from syntax.
+    field_dyn_traits: [max_executable_operands]bool = [_]bool{false} ** max_executable_operands,
     /// Whether codegen has every nested layout needed to spell this field's
     /// storage type mechanically. This is currently meaningful for fixed-array
     /// fields: producers set it only after interning the nested layout. The
@@ -1623,6 +1628,51 @@ pub fn executableDirectAggregateFieldPlace(
         !shape.field_type_ids[field_index].eql(place.type_id) or
         !ValueType.eql(shape.field_types[field_index], place.ty)) return null;
     return field_index;
+}
+
+pub const ExecutableAggregatePointerFieldDeref = struct {
+    field_index: usize,
+    pointer_ty: ValueType,
+};
+
+/// Recognize `aggregate_local.pointer_field.*` from canonical place and layout
+/// metadata.  The pointer-bearing field is the representation-guard subject;
+/// the final dereference is the scalar access.  Keeping this predicate in MIR
+/// prevents either backend from reconstructing alias shape from source text.
+pub fn executableAggregatePointerFieldDerefPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) ?ExecutableAggregatePointerFieldDeref {
+    if (place.storage != .ordinary or place.projection_count != 2 or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return null;
+    const field_index = switch (place.projections[0]) {
+        .field => |index| index,
+        .deref, .index => return null,
+    };
+    if (place.projections[1] != .deref) return null;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return null,
+    };
+    if (!local.isValid() or local.index() >= body.locals.len or !body.locals[local.index()].id.eql(local)) return null;
+    var aggregate: ?ExecutableAggregateType = null;
+    for (body.aggregate_types) |candidate| if (candidate.type_id.eql(place.root_type_id)) {
+        aggregate = candidate;
+        break;
+    };
+    const shape = aggregate orelse return null;
+    if (shape.construction != .declared_struct or !ValueType.eql(shape.ty, place.root_ty) or
+        field_index >= shape.field_count) return null;
+    const pointer_ty = shape.field_types[field_index];
+    const pointer = switch (pointer_ty) {
+        .pointer => |value| value,
+        else => return null,
+    };
+    if (pointer.kind != .single or (require_mutable and pointer.mutability != .mut) or
+        !std.mem.eql(u8, pointer.child, place.ty.name())) return null;
+    return .{ .field_index = field_index, .pointer_ty = pointer_ty };
 }
 
 /// Check the complete typed shape of a scalar dereference through an

@@ -3220,6 +3220,35 @@ test "LLVM canonical executable MIR emits nested by-value struct member reads" {
     try expectContains(body, "extractvalue { i32 }");
 }
 
+test "LLVM canonical executable MIR emits guarded pointer member reads" {
+    const source =
+        \\struct State { winner: i32, ready: bool, count: usize }
+        \\struct Cell { address: PAddr, length: usize }
+        \\struct LargeState { cells: [40]Cell, spare: [40]Cell, count: usize }
+        \\fn winner(state: *State) -> i32 { return state.winner; }
+        \\fn ready(state: *State) -> bool { return state.ready; }
+        \\fn count(state: *State) -> usize { return state.count; }
+        \\fn large_count(state: *mut LargeState) -> usize { return state.count; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_pointer_member.mc", source, &output);
+
+    for ([_][]const u8{
+        "define internal i32 @winner",
+        "define internal i1 @ready",
+        "define internal i64 @count",
+        "define internal i64 @large_count",
+    }) |signature| {
+        const body = try llvmFunctionBody(output.items, signature);
+        try expectContains(body, "; canonical executable MIR");
+        try expectContains(body, "icmp eq ptr %mc_arg_0, null");
+        try expectContains(body, "getelementptr inbounds");
+        try expectContains(body, "load atomic");
+        try expectContains(body, "ret ");
+    }
+}
+
 test "LLVM canonical executable MIR keeps ordinary len fields distinct from slice length" {
     const source =
         \\struct WithLen { items: [8]u32, len: u32 }
@@ -4520,10 +4549,9 @@ test "LLVM emits enum literal compare operands from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_compare_operands.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i1 @is_read");
-    try expectContains(body, "switch i8 %mode");
     try expectContains(body, "call void @mc_trap_InvalidRepresentation()");
-    try expectContains(body, "icmp eq i8 %mode, 1");
-    try expectContains(body, "ret i1 %t");
+    try expectContains(body, "icmp eq i8");
+    try expectContains(body, "ret i1 %");
     try expectNotContains(body, "alloca");
     try expectNotContains(body, "store");
 }
@@ -10157,7 +10185,8 @@ test "LLVM inferred local Result direct calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_result_call_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@make_result()") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -11283,7 +11312,8 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_aggregate_return_pointer_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_direct_holder");
-    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_direct_holder callee=direct_holder field=ptr provenance=global_storage");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "mc_aggregate_pointer_ready_");
     try expectContains(body, "load atomic i32, ptr %");
 
     var missing_output: std.ArrayList(u8) = .empty;

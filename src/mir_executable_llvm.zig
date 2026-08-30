@@ -337,9 +337,9 @@ const Renderer = struct {
         }
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.allocator, "{ ");
-        for (aggregate.field_types[0..aggregate.field_count], 0..) |field_ty, index| {
+        for (aggregate.field_types[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count], 0..) |field_ty, dyn_trait, index| {
             if (index != 0) try text.appendSlice(self.allocator, ", ");
-            try text.appendSlice(self.allocator, try self.typeTextDepth(field_ty, depth + 1));
+            try text.appendSlice(self.allocator, if (dyn_trait) "{ ptr, ptr }" else try self.typeTextDepth(field_ty, depth + 1));
         }
         try text.appendSlice(self.allocator, " }");
         return text.toOwnedSlice(self.allocator);
@@ -1812,6 +1812,8 @@ const Renderer = struct {
             false,
         ) != null)
             try self.emitPlace(load.place, value_ty)
+        else if (mir.executableAggregatePointerFieldDerefPlace(self.body, place, false) != null)
+            try self.emitGuardedAggregatePointerFieldDerefPointer(expression, load.place)
         else if (place.projection_count != 0)
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
@@ -2190,6 +2192,35 @@ const Renderer = struct {
         return local.storage;
     }
 
+    fn emitGuardedAggregatePointerFieldDerefPointer(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        place_id: mir.PlaceId,
+    ) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        const projection = mir.executableAggregatePointerFieldDerefPlace(self.body, place, false) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (!local.addressable) return error.InvalidBody;
+        const aggregate_ty = try self.typeText(place.root_ty);
+        const field_pointer = try self.temp();
+        const pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n" ++
+                "  {s} = load ptr, ptr {s}\n",
+            .{ field_pointer, aggregate_ty, local.storage, projection.field_index, pointer, field_pointer },
+        );
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_aggregate_pointer_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
+    }
+
     fn emitComputedRawManyDerefPointer(self: *Renderer, place: mir.ExecutablePlace) RenderError![]const u8 {
         if (!computedRawManyDerefPlaceSupported(self.body, place, false)) return error.InvalidBody;
         const root_id = switch (place.root) {
@@ -2383,12 +2414,12 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
     if (aggregate.construction == .packed_bits)
         return llvmTypeSupportedDepth(body, aggregate.storage_ty, depth + 1);
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
-    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count]) |field_ty, layout_complete| {
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count]) |field_ty, layout_complete, dyn_trait| {
         // Only fixed arrays need the producer's explicit nested-layout bit.
         // Other aggregates are resolved recursively from their canonical type
         // metadata, and scalar fields have no nested layout to complete.
         if (field_ty == .array and !layout_complete) return false;
-        if (!llvmTypeSupportedDepth(body, field_ty, depth + 1)) return false;
+        if (!dyn_trait and !llvmTypeSupportedDepth(body, field_ty, depth + 1)) return false;
     }
     return true;
 }
@@ -3256,7 +3287,7 @@ fn orderedIntegerType(ty: mir.ValueType) bool {
 
 fn comparableEqualityType(ty: mir.ValueType) bool {
     return switch (ty) {
-        .bool, .integer, .domain_integer, .address, .pointer, .nullable_pointer, .cstr => true,
+        .bool, .integer, .domain_integer, .address, .pointer, .nullable_pointer, .cstr, .closed_enum, .open_enum => true,
         else => false,
     };
 }
@@ -3428,7 +3459,8 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
         body.aggregate_types,
         place,
         false,
-    ) != null or parameterScalarAccessPlaceSupported(body, place) or
+    ) != null or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
+        parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }

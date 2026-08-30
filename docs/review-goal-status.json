@@ -15,10 +15,10 @@
       "requested_end_state": "FunctionArtifact/body fallback is no longer an AST body ingress for codegen; codegen is driven by VerifiedProgram/MIR typed facts.",
       "progress": {
         "measured_at": "2026-08-30",
-        "strict_c": "160/160 admitted, 0 fallback, 132 canonical, 28 specialized",
-        "strict_llvm": "160/160 admitted, 0 fallback, 132 canonical, 28 specialized",
-        "broad_c": "1313/1771 admitted, 458 fallback, 1244 canonical, 69 specialized",
-        "broad_llvm": "1343/1822 admitted, 479 fallback, 1269 canonical, 74 specialized",
+        "strict_c": "160/160 admitted, 0 fallback, 132 canonical, 28 specialized, 6 plan definitions",
+        "strict_llvm": "160/160 admitted, 0 fallback, 132 canonical, 28 specialized, 6 plan definitions",
+        "broad_c": "1305/1781 admitted, 476 fallback, 1258 canonical, 47 specialized",
+        "broad_llvm": "1337/1833 admitted, 496 fallback, 1288 canonical, 49 specialized",
         "completion_note": "Incomplete until the fallback artifact and both backend AST-body ingress branches are deleted."
       },
       "current_evidence": [

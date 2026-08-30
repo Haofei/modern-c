@@ -9732,7 +9732,7 @@ test "lower-c inferred local enum and tagged-union calls require MIR types" {
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "make_mode()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return make_token();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "make_token()") != null);
 
     var missing_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_enum_result.deinit();
@@ -10451,7 +10451,8 @@ test "lower-c consumes MIR aggregate-return pointer facts and fails closed when 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_aggregate_return_pointer_fact.mc", source, &output);
-    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+    try expectContains(output.items, "/* canonical executable MIR */");
+    try expectContains(output.items, "mc_race_load_u32");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
@@ -13095,12 +13096,22 @@ test "lower-c admits address-typed pointer-field-load returns from MIR" {
 
 test "lower-c pointer member load uses typed place without body fallback" {
     const source =
-        \\struct Pair { first: u32, second: u64 }
+        \\struct Pair { first: i32, ready: bool, second: u64 }
+        \\fn read_first(pair: *Pair) -> i32 { return pair.first; }
+        \\fn read_ready(pair: *Pair) -> bool { return pair.ready; }
         \\fn read_second(pair: *Pair) -> u64 { return pair.second; }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_executable_pointer_member.mc", source, &output);
+    const first_body = try cFunctionBody(output.items, "static int32_t read_first(Pair * pair)");
+    try expectContains(first_body, "mc_race_load_i32(");
+    try expectContains(first_body, "if (pair == NULL) mc_trap_InvalidRepresentation();");
+    try expectContains(first_body, "return mc_exec_tmp_");
+    const ready_body = try cFunctionBody(output.items, "static bool read_ready(Pair * pair)");
+    try expectContains(ready_body, "mc_race_load_bool(");
+    try expectContains(ready_body, "if (pair == NULL) mc_trap_InvalidRepresentation();");
+    try expectContains(ready_body, "return mc_exec_tmp_");
     const body = try cFunctionBody(output.items, "static uint64_t read_second(Pair * pair)");
     try expectContains(body, "mc_race_load_u64(");
     if (isCanonicalExecutableCBody(body)) {
@@ -13896,7 +13907,11 @@ test "lower-c emits tagged union constructors" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_eof });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = ((Token){ .tag = TokenTag_value, .payload.value = 7 });\n    return id(mc_tmp0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_value, .payload.value = 9 });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return number(11);") != null);
+    const number_body = try cFunctionBody(output.items, "static Token number(int64_t value)");
+    try expectContains(number_body, "TokenTag_number");
+    const call_number_body = try cFunctionBody(output.items, "static Token call_number(void)");
+    try expectContains(call_number_body, "= 11;");
+    try expectContains(call_number_body, "number(");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_ok, .payload.ok = 12 });") != null);
 }
 

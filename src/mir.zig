@@ -751,6 +751,8 @@ pub const ExecutablePlaceStorage = mir_model.ExecutablePlaceStorage;
 pub const ExecutableTrapOwner = mir_model.ExecutableTrapOwner;
 pub const ExecutableTrapEdge = mir_model.ExecutableTrapEdge;
 pub const ExecutablePlace = mir_model.ExecutablePlace;
+pub const ExecutableAggregatePointerFieldDeref = mir_model.ExecutableAggregatePointerFieldDeref;
+pub const executableAggregatePointerFieldDerefPlace = mir_model.executableAggregatePointerFieldDerefPlace;
 pub const ExecutableStatement = mir_model.ExecutableStatement;
 pub const ExecutableTerminator = mir_model.ExecutableTerminator;
 pub const ExecutableBody = mir_model.ExecutableBody;
@@ -7379,6 +7381,11 @@ const FunctionBuilder = struct {
             place,
             false,
         ) != null) return true;
+        const transient_body: mir_model.ExecutableBody = .{
+            .locals = self.executable_locals.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+        };
+        if (mir_model.executableAggregatePointerFieldDerefPlace(&transient_body, place, false) != null) return true;
         if (place.projection_count != 1 and place.projection_count != 2) return false;
         if (place.projections[0] != .deref) return false;
         const local_id = switch (place.root) {
@@ -8661,11 +8668,13 @@ const FunctionBuilder = struct {
                 }
                 if (pointer_shape) |shape| {
                     // Pointer member access is a memory operation, not a pure
-                    // aggregate projection.  This first slice admits a direct
-                    // non-null single pointer and a scalar field whose loaded
-                    // representation needs no second trap.  Pointer-valued
-                    // fields stay closed until MIR can own both trap edges.
-                    if (shape.kind != .single or representationCheckKind(result_ty) != null or
+                    // aggregate projection. The load owns the pointer
+                    // representation guard through representation_source;
+                    // scalar result validation, when required, is already an
+                    // independent MIR representation edge for this expression.
+                    // Pointer-valued fields stay closed until MIR can own both
+                    // pointer-result and storage representation edges.
+                    if (shape.kind != .single or
                         mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null)
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
@@ -8683,6 +8692,13 @@ const FunctionBuilder = struct {
             },
             .call => |node| call: {
                 if (node.args.len > mir_model.max_executable_operands)
+                    break :call self.unsupportedExecutableExpression(.unsupported_call);
+                // A qualified tagged-union constructor such as
+                // `Token.number(value)` is not an ordinary function call.
+                // Keep the canonical body closed until executable MIR has a
+                // first-class variant-construction operation; otherwise a
+                // same-named function can be selected and recursively called.
+                if (self.qualifiedUnionConstructorTypeExpr(node) != null)
                     break :call self.unsupportedExecutableExpression(.unsupported_call);
                 // Reflection is a compile-time semantic operation.  Legalize it
                 // before the generic builtin path so executable MIR owns the
@@ -9455,16 +9471,28 @@ const FunctionBuilder = struct {
             .field_count = fields.len,
         };
         for (fields, 0..) |field, index| {
-            const field_ty = if (directAtomicPayloadTypeExprAlias(field.ty, self.aliases, true)) |payload|
+            var field_ty = if (directAtomicPayloadTypeExprAlias(field.ty, self.aliases, true)) |payload|
                 valueTypeFromTypeAlias(payload, self.enums, self.structs, self.packed_bits, self.aliases)
             else
                 valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (field_ty == .array and field_ty.array.length == null) {
+                const resolved_field = aggregateTargetTypeAlias(field.ty, self.aliases);
+                const array = switch (resolved_field.kind) {
+                    .array => |value| value,
+                    else => return false,
+                };
+                field_ty.array.length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
+            }
             if (field_ty == .unknown) return false;
             aggregate.field_spellings[index] = field.name.text;
             aggregate.field_types[index] = field_ty;
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
             if (field_ty == .value) {
-                aggregate.field_callable_signatures[index] = try self.executableCallableSignature(field.ty) orelse return false;
+                if (dynTraitNameFromTypeAlias(field.ty, self.aliases) != null) {
+                    aggregate.field_dyn_traits[index] = true;
+                } else {
+                    aggregate.field_callable_signatures[index] = try self.executableCallableSignature(field.ty) orelse return false;
+                }
             }
             if (field_ty == .array) aggregate.field_layout_complete[index] = false;
         }
@@ -10039,8 +10067,13 @@ const FunctionBuilder = struct {
         return if (self.rawManyOffsetCallTarget(call) != null) root else null;
     }
 
-    fn executablePlaceNeedsRepresentationGuard(_: *const FunctionBuilder, place: ExecutablePlace) bool {
+    fn executablePlaceNeedsRepresentationGuard(self: *const FunctionBuilder, place: ExecutablePlace) bool {
         if (place.projection_count == 0) return false;
+        const transient_body: mir_model.ExecutableBody = .{
+            .locals = self.executable_locals.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+        };
+        if (mir_model.executableAggregatePointerFieldDerefPlace(&transient_body, place, false) != null) return true;
         return switch (place.root_ty) {
             .pointer => |shape| shape.kind == .single,
             .nullable_pointer => true,
