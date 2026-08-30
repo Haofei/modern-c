@@ -442,22 +442,6 @@ test "access body plan rejects a stale direct-call or store identity" {
     try std.testing.expect((try plan.buildAccessBody(std.testing.allocator, store_function)) == null);
 }
 
-test "access admission accepts only the initial strict slice bucket" {
-    var module = try buildBodyFixture();
-    defer module.deinit();
-    for ([_][]const u8{ "read_slice", "read_literal" }) |name| {
-        var body = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, name).?) orelse return error.TestUnexpectedResult;
-        defer body.deinit(std.testing.allocator);
-        try std.testing.expectEqual(plan.SliceOperation.Kind.load, (plan.buildSliceOperation(body) orelse return error.TestUnexpectedResult).kind);
-    }
-    var store = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "write_slice").?) orelse return error.TestUnexpectedResult;
-    defer store.deinit(std.testing.allocator);
-    try std.testing.expectEqual(plan.SliceOperation.Kind.store, (plan.buildSliceOperation(store) orelse return error.TestUnexpectedResult).kind);
-    var unsupported = try plan.buildAccessBody(std.testing.allocator, functionByName(&module, "direct_call_slice").?) orelse return error.TestUnexpectedResult;
-    defer unsupported.deinit(std.testing.allocator);
-    try std.testing.expectEqual(plan.SliceOperation.Kind.load, (plan.buildSliceOperation(unsupported) orelse return error.TestUnexpectedResult).kind);
-}
-
 test "access body admits real local-address update" {
     const source =
         \\fn local_address(value: u32) -> u32 { var x: u32 = value; let p: *mut u32 = &x; *p = x + 1; return x; }

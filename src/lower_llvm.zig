@@ -1582,11 +1582,9 @@ const LlvmEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const llvm_access_operation = if (workflow_plan == null and alloca_hoist_plan == null) blk: {
+        if (workflow_plan == null and alloca_hoist_plan == null) {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
-            const body = access_body_plan orelse break :blk null;
-            break :blk mir_access_plan.buildSliceOperation(body);
-        } else null;
+        }
         const sequence_foreach_update_plan = if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
             if (self.mirSequenceForEachUpdatePlanSupported(function, plan)) plan else null
         else
@@ -1612,7 +1610,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1623,14 +1621,13 @@ const LlvmEmitter = struct {
             }
             break :blk null;
         };
-        const llvm_structural_access_operation = if (workflow_plan == null and alloca_hoist_plan == null and llvm_access_operation == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (workflow_plan == null and alloca_hoist_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
             workflow_plan != null,
             alloca_hoist_plan != null,
-            llvm_access_operation != null,
             llvm_structural_access_operation != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
@@ -1696,9 +1693,6 @@ const LlvmEmitter = struct {
         } else if (alloca_hoist_plan) |plan| {
             selected_path.* = .alloca_hoist;
             try self.emitMirAllocaHoistPlan(plan, ret_ty);
-        } else if (llvm_access_operation) |operation| {
-            selected_path.* = .access_operation;
-            try self.emitMirAccessPlan(operation, ret_llvm);
         } else if (llvm_structural_access_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirStructuralAccessPlan(access_body_plan.?, operation, ret_llvm);
@@ -3526,62 +3520,6 @@ const LlvmEmitter = struct {
                 const value = try self.emitMirStructuralBuiltinProjection(returned.member, &state);
                 if (!std.mem.eql(u8, ret_llvm, value.llvm_ty)) return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  ret {s} {s}\n", .{ ret_llvm, value.value });
-            },
-        }
-    }
-
-    fn emitMirAccessPlan(self: *LlvmEmitter, operation: mir_access_plan.SliceOperation, ret_llvm: []const u8) !void {
-        const scalar_ty: []const u8 = switch (operation.scalar) {
-            .u8 => "i8",
-            .u32 => "i32",
-        };
-        const alignment: u8 = switch (operation.scalar) {
-            .u8 => 1,
-            .u32 => 4,
-        };
-        switch (operation.kind) {
-            .load => if (!std.mem.eql(u8, ret_llvm, scalar_ty)) return error.UnsupportedLlvmEmission,
-            .store => if (!std.mem.eql(u8, ret_llvm, "void")) return error.UnsupportedLlvmEmission,
-        }
-        switch (operation.base) {
-            .named => {},
-            .direct_call => |call| {
-                const callee = self.fn_sigs.get(call.callee_name) orelse return error.UnsupportedLlvmEmission;
-                if (callee.c_abi or callee.is_variadic or callee.params.len != 0 or !std.mem.eql(u8, try self.llvmType(callee.ret), "{ ptr, i64 }")) return error.UnsupportedLlvmEmission;
-            },
-        }
-        const slice_value = try self.nextTemp();
-        const pointer = try self.nextTemp();
-        const length = try self.nextTemp();
-        const empty = try self.nextTemp();
-        const nonnull = try self.nextTemp();
-        const representation_valid = try self.nextTemp();
-        const representation_trap = try self.nextLabel("access_repr_trap");
-        const representation_ok = try self.nextLabel("access_repr_ok");
-        const bounds_valid = try self.nextTemp();
-        const bounds_trap = try self.nextLabel("access_bounds_trap");
-        const bounds_ok = try self.nextLabel("access_bounds_ok");
-        const element_pointer = try self.nextTemp();
-        const result = try self.nextTemp();
-        var base_buffer: [256]u8 = undefined;
-        const base = switch (operation.base) {
-            .named => |operand| try std.fmt.bufPrint(&base_buffer, "%{s}", .{operand.name orelse return error.UnsupportedLlvmEmission}),
-            .direct_call => |call| blk: {
-                try self.out.print(self.allocator, "  {s} = call {{ ptr, i64 }} @{s}()\n", .{ slice_value, call.callee_name });
-                break :blk slice_value;
-            },
-        };
-        var index_buffer: [64]u8 = undefined;
-        const index = switch (operation.index) {
-            .named => |operand| try std.fmt.bufPrint(&index_buffer, "%{s}", .{operand.name orelse return error.UnsupportedLlvmEmission}),
-            .constant => |value| try std.fmt.bufPrint(&index_buffer, "{d}", .{value}),
-        };
-        try self.out.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n  {s} = icmp eq i64 {s}, 0\n  {s} = icmp ne ptr {s}, null\n  {s} = or i1 {s}, {s}\n  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidRepresentation()\n  unreachable\n{s}:\n  {s} = icmp ult i64 {s}, {s}\n  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ pointer, base, length, base, empty, length, nonnull, pointer, representation_valid, empty, nonnull, representation_valid, representation_ok, representation_trap, representation_trap, representation_ok, bounds_valid, index, length, bounds_valid, bounds_ok, bounds_trap, bounds_trap, bounds_ok, element_pointer, scalar_ty, pointer, index });
-        switch (operation.kind) {
-            .load => try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n  ret {s} {s}\n", .{ result, scalar_ty, element_pointer, alignment, scalar_ty, result }),
-            .store => {
-                const value = operation.value orelse return error.UnsupportedLlvmEmission;
-                try self.out.print(self.allocator, "  store atomic {s} %{s}, ptr {s} unordered, align {d}\n  ret void\n", .{ scalar_ty, value.name orelse return error.UnsupportedLlvmEmission, element_pointer, alignment });
             },
         }
     }

@@ -199,7 +199,9 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             if (!atomicPlaceSupported(body, place)) return false;
         } else if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
-        } else if (!scalarAccessPlaceSupported(body, place) and mir.executableFixedArrayIndexPlace(body, place) == null) return false;
+        } else if (!scalarAccessPlaceSupported(body, place) and
+            mir.executableFixedArrayIndexPlace(body, place) == null and
+            mir.executableSliceIndexPlace(body, place) == null) return false;
     }
     for (body.statements) |statement| {
         if (!statement.id.isValid() or !statement.block_id.isValid()) return false;
@@ -397,7 +399,9 @@ const Renderer = struct {
             },
             .store => |store| {
                 const place = self.body.places[store.place.index()];
-                const indexed_pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
+                const indexed_pointer = if (mir.executableSliceIndexPlace(self.body, place) != null)
+                    try self.emitSliceIndexPlacePointer(place, statement.id)
+                else if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
                     try self.emitFixedArrayIndexPlacePointer(place, .{ .statement = statement.id })
                 else
                     null;
@@ -873,7 +877,12 @@ const Renderer = struct {
             },
         }
         const result = try self.temp();
-        try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, result_ty, element_pointer });
+        if (operation.kind == .slice) {
+            const alignment = mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty) orelse return error.InvalidBody;
+            try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ result, result_ty, element_pointer, alignment });
+        } else {
+            try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, result_ty, element_pointer });
+        }
         return .{ .ty = result_ty, .spelling = result };
     }
 
@@ -2034,6 +2043,49 @@ const Renderer = struct {
         return found;
     }
 
+    fn emitSliceIndexPlacePointer(
+        self: *Renderer,
+        place: mir.ExecutablePlace,
+        owner: mir.InstId,
+    ) RenderError![]const u8 {
+        const projection = mir.executableSliceIndexPlace(self.body, place) orelse return error.InvalidBody;
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const slice = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (!std.mem.eql(u8, slice.ty, "{ ptr, i64 }")) return error.InvalidBody;
+        const pointer = try self.temp();
+        const length = try self.temp();
+        try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n", .{
+            pointer,
+            slice.storage,
+            length,
+            slice.storage,
+        });
+        const index = try self.emitExpression(projection.value);
+        if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
+        const edge = self.fixedArrayBoundsTrapEdge(.{ .statement = owner }, projection.span_id) orelse return error.InvalidBody;
+        const invalid = try self.temp();
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_slice_store_ready_{d}", .{owner.raw});
+        try self.output.print(
+            self.allocator,
+            "  {s} = icmp uge i64 {s}, {s}\n" ++
+                "  br i1 {s}, label %mc_block_{d}, label %{s}\n" ++
+                "{s}:\n",
+            .{ invalid, index.spelling, length, invalid, edge.trap_block.raw, continuation, continuation },
+        );
+        const element_ty = try self.typeText(place.ty);
+        const element_pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{
+            element_pointer,
+            element_ty,
+            pointer,
+            index.spelling,
+        });
+        return element_pointer;
+    }
+
     fn emitGuardedParameterDerefPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
@@ -2577,11 +2629,12 @@ fn indexSupported(
     operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
 ) bool {
     const global_base = globalAggregateIndexBase(body, operation.base);
-    if (global_base) {
-        if (operation.kind != .fixed_array or !indexFeedsDirectAggregateLocalStore(body, expression)) return false;
-    } else if (!directImmutableLocalArrayIndexReturn(body, expression, operation) and
-        (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
-            (operation.kind == .slice and !projectionPathHasMember(body, operation.base)))) return false;
+    if (operation.kind == .fixed_array) {
+        if (global_base) {
+            if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
+        } else if (!directImmutableLocalArrayIndexReturn(body, expression, operation) and
+            (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression))) return false;
+    }
     if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
     const base = body.expressions[operation.base.index()];
     const index = body.expressions[operation.index.index()];
@@ -2710,21 +2763,6 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
         current = switch (expression.operation) {
             .direct_call => return true,
             .member => |member| member.base,
-            .representation_check => |check| check.operand,
-            else => return false,
-        };
-    }
-    return false;
-}
-
-fn projectionPathHasMember(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
-    var current = start;
-    var depth: usize = 0;
-    while (depth <= mir.max_executable_operands) : (depth += 1) {
-        if (!expressionValid(body, current)) return false;
-        const expression = body.expressions[current.index()];
-        current = switch (expression.operation) {
-            .member => return true,
             .representation_check => |check| check.operand,
             else => return false,
         };
@@ -3536,6 +3574,16 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             else
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
     }
+    if (mir.executableSliceIndexPlace(body, place) != null) {
+        const mutable_slice = switch (place.root_ty) {
+            .pointer => |shape| shape.kind == .slice and shape.mutability == .mut,
+            else => false,
+        };
+        return mutable_slice and place.root == .local and store.access.kind == .race_unordered and
+            store.representation_source == null and !store.representation_span_id.isValid() and
+            statementBoundsTrapEdge(body, statement) != null and
+            ownedStatementTrapEdgeCount(body, statement.id) == 1;
+    }
     if (mir.executableDirectAggregateFieldPlace(
         body.locals,
         body.statements,
@@ -3589,6 +3637,15 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
                 .value => return false,
             };
             return sameValueType(place.ty, ty) and access.kind == expected_kind;
+        }
+        if (mir.executableSliceIndexPlace(body, place) != null) {
+            const local_id = switch (place.root) {
+                .local => |id| id,
+                .symbol, .value => return false,
+            };
+            const parameter = parameterIdentity(body, local_id) orelse return false;
+            return sameValueType(parameter.ty, place.root_ty) and parameter.type_id.eql(place.root_type_id) and
+                sameValueType(place.ty, ty) and access.kind == .race_unordered;
         }
         if (mir.executableDirectAggregateFieldPlace(
             body.locals,
@@ -3668,11 +3725,12 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
     };
     if (!placeValid(body, place_id)) return null;
     const place = body.places[place_id.index()];
-    _ = mir.executableFixedArrayIndexPlace(body, place) orelse return null;
-    const expected = mir.executableFixedArrayCheckedProjectionCount(place);
+    if (mir.executableFixedArrayIndexPlace(body, place) == null and
+        mir.executableSliceIndexPlace(body, place) == null) return null;
+    const expected = mir.executableCheckedIndexProjectionCount(place);
     if (expected == 0 or ownedExpressionTrapCount(body, expression.id) != expected) return null;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-        .index => |index| if (index.kind == .fixed_array and index.checked) {
+        .index => |index| if (index.checked) {
             var matching_span: usize = 0;
             for (body.trap_edges) |edge| {
                 const owner = edge.owner.expressionId() orelse continue;
@@ -3834,11 +3892,12 @@ fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.Execu
     };
     if (!placeValid(body, store.place)) return null;
     const place = body.places[store.place.index()];
-    _ = mir.executableFixedArrayIndexPlace(body, place) orelse return null;
-    const expected = mir.executableFixedArrayCheckedProjectionCount(place);
+    if (mir.executableFixedArrayIndexPlace(body, place) == null and
+        mir.executableSliceIndexPlace(body, place) == null) return null;
+    const expected = mir.executableCheckedIndexProjectionCount(place);
     if (expected == 0 or ownedStatementTrapEdgeCount(body, statement.id) != expected) return null;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-        .index => |index| if (index.kind == .fixed_array and index.checked) {
+        .index => |index| if (index.checked) {
             var matching_span: usize = 0;
             for (body.trap_edges) |edge| {
                 const owner = edge.owner.statementId() orelse continue;

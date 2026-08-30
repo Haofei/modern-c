@@ -381,83 +381,6 @@ fn uniqueLocalForAccess(statements: []const AccessBodyStatement, access_index: u
     return found;
 }
 
-/// Backend-neutral admission for one scalar slice load/store.  Backends own
-/// only representation spelling; the operation, base, index, value and scalar
-/// width are selected once from the verified access plan.
-pub const SliceScalar = enum { u8, u32 };
-pub const SliceOperation = struct {
-    pub const Kind = enum { load, store };
-    pub const Base = union(enum) { named: Operand, direct_call: DirectCall };
-    pub const IndexValue = union(enum) { named: Operand, constant: usize };
-
-    kind: Kind,
-    scalar: SliceScalar,
-    base: Base,
-    index: IndexValue,
-    value: ?Operand = null,
-};
-
-pub fn buildSliceOperation(body: AccessBodyPlan) ?SliceOperation {
-    var index: ?Index = null;
-    var store: ?Store = null;
-    var returned: ?Return = null;
-    var direct_call: ?DirectCall = null;
-    for (body.statements) |statement| switch (statement) {
-        .index => |event| {
-            if (index != null or event.access_index >= body.accesses.len) return null;
-            const value = switch (body.accesses[event.access_index]) {
-                .index => |entry| entry,
-                else => return null,
-            };
-            if (!event.location.span_id.eql(value.location.span_id)) return null;
-            index = value;
-        },
-        .index_store => |value| {
-            if (store != null) return null;
-            store = value;
-        },
-        .direct_call => |value| {
-            if (direct_call != null) return null;
-            direct_call = value;
-        },
-        .return_value => |value| {
-            if (returned != null) return null;
-            returned = value;
-        },
-        else => return null,
-    };
-    const indexed = index orelse return null;
-    const result = returned orelse return null;
-    const scalar = sliceScalarFor(indexed.result.value_ty) orelse return null;
-    if (!isSlice(indexed.base.type_ref.value_ty)) return null;
-    const base: SliceOperation.Base = if (direct_call) |call| blk: {
-        if (call.argument_count != 0 or !isSlice(call.result.value_ty) or indexed.base.name != null or indexed.base.value_id != null or !indexed.base.location.span_id.eql(call.location.span_id) or !sameTypeRef(indexed.base.type_ref, call.result)) return null;
-        break :blk .{ .direct_call = call };
-    } else if (namedOperand(indexed.base)) blk: {
-        break :blk .{ .named = indexed.base };
-    } else return null;
-    const index_value: SliceOperation.IndexValue = if (indexed.constant_index) |constant|
-        .{ .constant = constant }
-    else if (isUsize(indexed.index.type_ref.value_ty) and namedOperand(indexed.index) and indexed.index.integer_value == null)
-        .{ .named = indexed.index }
-    else
-        return null;
-    if (indexed.constant_index == null and indexed.index.integer_value != null) return null;
-
-    if (store) |stored| {
-        const target = accessIndex(body.accesses, indexed) orelse return null;
-        const value = switch (stored.value) {
-            .operand => |operand| operand,
-            else => return null,
-        };
-        if (stored.target_access_index != target or sliceScalarFor(value.type_ref.value_ty) != scalar or !namedOperand(value) or value.integer_value != null or result.value != null) return null;
-        return .{ .kind = .store, .scalar = scalar, .base = base, .index = index_value, .value = value };
-    }
-    const returned_value = result.value orelse return null;
-    if (!returned_value.location.span_id.eql(indexed.location.span_id) or sliceScalarFor(returned_value.type_ref.value_ty) != scalar) return null;
-    return .{ .kind = .load, .scalar = scalar, .base = base, .index = index_value };
-}
-
 /// Build a finite statement/value plan for the strict address and slice
 /// bucket. `build` first verifies every AccessFact/instruction/bounds edge;
 /// this layer then admits only locals, direct calls, access stores, and a
@@ -1295,13 +1218,6 @@ fn isUsize(value_ty: mir.ValueType) bool {
     return switch (value_ty) {
         .integer => |name| std.mem.eql(u8, name, "usize"),
         else => false,
-    };
-}
-
-fn sliceScalarFor(value_ty: mir.ValueType) ?SliceScalar {
-    return switch (value_ty) {
-        .integer => |name| if (std.mem.eql(u8, name, "u8")) .u8 else if (std.mem.eql(u8, name, "u32")) .u32 else null,
-        else => null,
     };
 }
 

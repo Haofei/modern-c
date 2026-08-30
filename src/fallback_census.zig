@@ -61,8 +61,6 @@ pub const SelectedPath = enum {
     canonical,
     workflow,
     alloca_hoist,
-    access_slice,
-    access_operation,
     access_structural,
     sequence_foreach_update,
     sequence_foreach_return,

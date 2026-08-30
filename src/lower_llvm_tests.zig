@@ -14810,7 +14810,7 @@ test "LLVM slice scalar index access lowers race-tolerantly" {
     try expectNotContains(load_body, "load i32, ptr %");
 
     const store_body = try llvmFunctionBody(output.items, "define internal void @slice_scalar_store");
-    try expectContains(store_body, "store atomic i32 %value, ptr %");
+    try expectContains(store_body, "store atomic i32 ");
     try expectContains(store_body, " unordered, align 4");
     try expectNotContains(store_body, "store i32 %value, ptr %");
 
@@ -14837,18 +14837,18 @@ test "LLVM access-plan slice bucket lowers without function body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_access_plan_slice_bucket.mc", source, &output);
 
     const read_body = try llvmFunctionBody(output.items, "define internal i8 @read_slice");
-    try expectContains(read_body, "access_repr_trap");
+    try expectContains(read_body, "mc_representation_ready_");
     try expectContains(read_body, "call void @mc_trap_InvalidRepresentation()");
     try expectContains(read_body, "call void @mc_trap_Bounds()");
     try expectContains(read_body, "load atomic i8, ptr %");
 
     const literal_body = try llvmFunctionBody(output.items, "define internal i8 @read_literal");
-    try expectContains(literal_body, "icmp ult i64 0, %");
+    try expectContains(literal_body, "icmp uge i64 0, %");
     try expectContains(literal_body, "load atomic i8, ptr %");
 
     const write_body = try llvmFunctionBody(output.items, "define internal void @write_slice");
-    try expectContains(write_body, "icmp ult i64 %i, %");
-    try expectContains(write_body, "store atomic i32 %value, ptr %");
+    try expectContains(write_body, "icmp uge i64 ");
+    try expectContains(write_body, "store atomic i32 ");
 
     const direct_body = try llvmFunctionBody(output.items, "define internal i8 @direct_call_slice");
     try expectContains(direct_body, "call { ptr, i64 } @make_slice()");

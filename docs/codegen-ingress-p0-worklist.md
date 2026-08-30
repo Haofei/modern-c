@@ -16,10 +16,10 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
-| strict ratchet | 160/160 admitted, 0 fallback (124 canonical) | 160/160 admitted, 0 fallback (125 canonical) |
-| broad repository sweep | 1284/1769 admitted, 485 fallback | 1323/1840 admitted, 517 fallback |
-| canonical bodies | 1201 | 1235 |
-| transitional specialized bodies | 83 | 88 |
+| strict ratchet | 160/160 admitted, 0 fallback (130 canonical) | 160/160 admitted, 0 fallback (131 canonical) |
+| broad repository sweep | 1305/1771 admitted, 466 fallback | 1337/1822 admitted, 485 fallback |
+| canonical bodies | 1234 | 1262 |
+| transitional specialized bodies | 71 | 75 |
 
 The strict ratchet is a regression gate, not the completion definition. The
 broad sweep includes partial records from unsupported/reject roots and is the
@@ -58,25 +58,31 @@ worklist snapshot.
   C canonical bodies rose by 12 and specialized bodies fell by 8; LLVM
   canonical bodies rose by 14 and specialized bodies fell by 11. Broad AST
   fallback fell by 4 C and 3 LLVM bodies. MIR/cleanup and backend shards pass.
+- Scalar slice reads and writes now use the canonical executable place/index
+  model, including exact representation/bounds edges, race-unordered loads and
+  stores, and RHS-before-LHS assignment evaluation. The old `access_slice` and
+  `access_operation` models, builders and both backend emitters were deleted.
+  The strict split is now C 130 canonical / 30 specialized and LLVM 131 / 29;
+  only eight specialized plan definitions remain.
 
 ## Remaining producer blockers
 
 Ranked by broad frequency (C / LLVM where different):
 
-1. `trap_projection`: 107 / 114
+1. `trap_projection`: 94 / 98
 2. `unsupported_member`: 63 / 63
 3. `unsupported_statement`: 27 / 27
-4. `producer_invariant`: 27 / 27
-5. `unlowered_array`: 25 / 26
+4. `producer_invariant`: 28 / 28
+5. `unlowered_array`: 25 / 25
 6. `unsupported_call`: 22 / 22
 7. `general_switch`: 21 / 23
 8. `unsupported_struct_literal`: 19 / 19
 9. `noncanonical_string_literal`: 18 / 18
 10. `unsupported_try`: 15 / 15
-11. `unlowered_member`: 14 / 14
+11. `unlowered_member`: 12 / 12
 12. `InvalidBuiltinCall`: 10 / 10
 
-Renderer-only rejection remains 47 C / 64 LLVM bodies. It must be reduced by
+Renderer-only rejection remains 41 C / 49 LLVM bodies. It must be reduced by
 typed, verifier-checked slices; renderer admission must not infer source
 semantics.
 

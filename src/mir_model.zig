@@ -1716,6 +1716,15 @@ pub fn executableFixedArrayCheckedProjectionCount(place: ExecutablePlace) usize 
     return count;
 }
 
+pub fn executableCheckedIndexProjectionCount(place: ExecutablePlace) usize {
+    var count: usize = 0;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| count += @intFromBool(index.checked),
+        .field, .deref => {},
+    };
+    return count;
+}
+
 pub fn executableFixedArrayProjectionForSpan(
     body: *const ExecutableBody,
     place: ExecutablePlace,
@@ -1727,6 +1736,30 @@ pub fn executableFixedArrayProjectionForSpan(
         .field, .deref => {},
     };
     return null;
+}
+
+pub fn executableSliceIndexPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+) ?@FieldType(ExecutablePlace.Projection, "index") {
+    if (place.storage != .ordinary or place.projection_count != 1 or
+        !place.root_type_id.isValid() or !place.type_id.isValid()) return null;
+    const projection = switch (place.projections[0]) {
+        .index => |index| index,
+        .field, .deref => return null,
+    };
+    if (projection.kind != .slice or projection.bound != null or !projection.checked or
+        !projection.span_id.isValid() or !projection.value.isValid() or
+        projection.value.index() >= body.expressions.len) return null;
+    const index = body.expressions[projection.value.index()];
+    if (!index.id.eql(projection.value) or !ValueType.eql(index.result_ty, .{ .integer = "usize" })) return null;
+    const child = switch (place.root_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape.child else return null,
+        .slice => |name| name,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, child, place.ty.name())) return null;
+    return projection;
 }
 
 pub const Terminator = union(enum) {

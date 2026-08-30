@@ -1482,12 +1482,10 @@ pub const CEmitter = struct {
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        const access_slice_plan = if (workflow_plan == null and alloca_hoist_plan == null) blk: {
+        if (workflow_plan == null and alloca_hoist_plan == null) {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
-            const plan = access_body_plan orelse break :blk null;
-            break :blk if (self.mirAccessSlicePlanSupported(function, plan)) plan else null;
-        } else null;
-        const access_structural_operation = if (access_slice_plan == null and access_body_plan != null)
+        }
+        const access_structural_operation = if (access_body_plan != null)
             if (mir_access_plan.buildStructuralOperation(access_body_plan.?)) |operation|
                 if (self.mirAccessStructuralPlanSupported(function, access_body_plan.?, operation)) operation else null
             else
@@ -1519,7 +1517,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and access_slice_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1534,7 +1532,6 @@ pub const CEmitter = struct {
         const specialized_plans = [_]bool{
             workflow_plan != null,
             alloca_hoist_plan != null,
-            access_slice_plan != null,
             access_structural_operation != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
@@ -1560,9 +1557,6 @@ pub const CEmitter = struct {
         } else if (alloca_hoist_plan) |plan| {
             selected_path.* = .alloca_hoist;
             try self.emitMirAllocaHoistPlan(plan);
-        } else if (access_slice_plan) |plan| {
-            selected_path.* = .access_slice;
-            try self.emitMirAccessSlicePlan(plan);
         } else if (access_structural_priority) {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, access_structural_operation.?);
@@ -2024,106 +2018,6 @@ pub const CEmitter = struct {
         try self.writeLineDirective(spanFromMirSourcePoint(plan.return_location.source));
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(plan.sum.value.name)});
-    }
-
-    fn mirAccessSlicePlanSupported(self: *CEmitter, function: anytype, body: mir_access_plan.AccessBodyPlan) bool {
-        _ = self;
-        if (!std.mem.eql(u8, body.function_name, function.signature.name.text) or !body.function_symbol_id.isValid()) return false;
-        var indexes: usize = 0;
-        var returned: usize = 0;
-        var calls: usize = 0;
-        var stores: usize = 0;
-        var index_access: ?usize = null;
-        var returned_value: ?mir_access_plan.Operand = null;
-        var store_value: ?mir_access_plan.Operand = null;
-        for (body.statements) |statement| switch (statement) {
-            .index => |event| {
-                if (event.access_index >= body.accesses.len) return false;
-                const index = switch (body.accesses[event.access_index]) {
-                    .index => |value| value,
-                    else => return false,
-                };
-                const slice_base = switch (index.base.type_ref.value_ty) {
-                    .slice => true,
-                    .pointer => |shape| shape.kind == .slice,
-                    else => false,
-                };
-                if (index.static_bound != null or !index.block_id.isValid() or !slice_base or simpleMirScalarCInfo(index.result.value_ty) == null) return false;
-                index_access = event.access_index;
-                indexes += 1;
-            },
-            .return_value => |value| {
-                if (returned != 0) return false;
-                returned_value = value.value;
-                returned += 1;
-            },
-            .direct_call => |call| {
-                if (calls != 0 or call.argument_count != 0) return false;
-                calls += 1;
-            },
-            .index_store => |store| {
-                if (stores != 0 or index_access == null or store.target_access_index != index_access.?) return false;
-                const value = switch (store.value) {
-                    .operand => |operand| operand,
-                    else => return false,
-                };
-                if (value.name == null or value.value_id == null or !value.value_id.?.isValid()) return false;
-                store_value = value;
-                stores += 1;
-            },
-            else => return false,
-        };
-        if (indexes != 1 or returned != 1 or calls > 1 or stores > 1) return false;
-        if (stores == 1) return returned_value == null and store_value != null;
-        const operand = returned_value orelse return false;
-        return operand.location.span_id.eql(switch (body.accesses[index_access.?]) {
-            .index => |index| index.location.span_id,
-            else => return false,
-        });
-    }
-
-    fn emitMirAccessSlicePlan(self: *CEmitter, body: mir_access_plan.AccessBodyPlan) !void {
-        var indexed: ?mir_access_plan.Index = null;
-        var call: ?mir_access_plan.DirectCall = null;
-        for (body.statements) |statement| switch (statement) {
-            .index => |event| indexed = switch (body.accesses[event.access_index]) {
-                .index => |value| value,
-                else => return error.UnsupportedCEmission,
-            },
-            .direct_call => |value| call = value,
-            else => {},
-        };
-        const index = indexed orelse return error.UnsupportedCEmission;
-        const index_text = if (index.constant_index) |value| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) else try self.cIdent(index.index.name orelse return error.UnsupportedCEmission);
-        const base = if (call) |direct| blk: {
-            const signature = self.functions.get(direct.callee_name) orelse return error.UnsupportedCEmission;
-            const ty = try self.cTypeFor(signature.return_type orelse return error.UnsupportedCEmission, .typedef_name);
-            const temporary = try self.nextTempName();
-            try self.writeLineDirective(spanFromMirSourcePoint(direct.location.source));
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = {s}();\n", .{ ty, temporary, try self.cIdent(direct.callee_name) });
-            break :blk temporary;
-        } else try self.cIdent(index.base.name orelse return error.UnsupportedCEmission);
-        try self.writeLineDirective(spanFromMirSourcePoint(index.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s}.ptr == NULL && {s}.len != 0) mc_trap_InvalidRepresentation();\n", .{ base, base });
-        const scalar = simpleMirScalarCInfo(index.result.value_ty) orelse return error.UnsupportedCEmission;
-        var element: ?[]const u8 = null;
-        for (body.statements) |statement| switch (statement) {
-            .index_store => |store| element = switch (store.value) {
-                .operand => |operand| operand.name orelse return error.UnsupportedCEmission,
-                else => return error.UnsupportedCEmission,
-            },
-            else => {},
-        };
-        try self.writeIndent();
-        if (element) |value| {
-            try self.out.print(self.allocator, "mc_race_store_{s}(&({s}.ptr[mc_check_index_usize({s}, {s}.len)]), ({s}){s});\n", .{ scalar.race_type_name, base, index_text, base, scalar.c_type, value });
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "return;\n");
-        } else {
-            try self.out.print(self.allocator, "return (({s})mc_race_load_{s}(&({s}.ptr[mc_check_index_usize({s}, {s}.len)])));\n", .{ scalar.c_type, scalar.race_type_name, base, index_text, base });
-        }
     }
 
     fn mirAccessStructuralPlanSupported(self: *CEmitter, function: anytype, body: mir_access_plan.AccessBodyPlan, operation: mir_access_plan.StructuralOperation) bool {

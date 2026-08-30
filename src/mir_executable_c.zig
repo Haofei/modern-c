@@ -433,6 +433,11 @@ fn emitExpressionOperation(
         },
         .index => |index| {
             if (!indexSupported(body, expression.*, index)) return error.InvalidExpression;
+            const slice_scalar = if (index.kind == .slice)
+                scalarMemoryInfo(expression.result_ty) orelse return error.UnsupportedType
+            else
+                null;
+            if (slice_scalar) |scalar| try out.print(allocator, "(({s})mc_race_load_{s}(&(", .{ scalar.c_type, scalar.helper_suffix });
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, index.base, depth + 1);
             try out.appendSlice(allocator, switch (index.kind) {
@@ -454,6 +459,7 @@ fn emitExpressionOperation(
                 try out.append(allocator, ')');
             }
             try out.append(allocator, ']');
+            if (slice_scalar != null) try out.appendSlice(allocator, ")))");
         },
         .slice_length => |base| {
             try emitExpression(allocator, out, body, base, depth + 1);
@@ -607,7 +613,8 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         if (place.storage == .atomic) {
             if (!atomicPlaceSupported(body, place)) return false;
         } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place) and
-            mir.executableFixedArrayIndexPlace(body, place) == null) return false;
+            mir.executableFixedArrayIndexPlace(body, place) == null and
+            mir.executableSliceIndexPlace(body, place) == null) return false;
         switch (place.root) {
             .local => |local| if (localById(body, local) == null) return false,
             .symbol => |symbol| {
@@ -889,11 +896,12 @@ fn indexSupported(
     operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
 ) bool {
     const global_base = globalAggregateIndexBase(body, operation.base);
-    if (global_base) {
-        if (operation.kind != .fixed_array or !indexFeedsDirectAggregateLocalStore(body, expression)) return false;
-    } else if (!directImmutableLocalArrayIndexReturn(body, expression, operation) and
-        (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression) or
-            (operation.kind == .slice and !projectionPathHasMember(body, operation.base)))) return false;
+    if (operation.kind == .fixed_array) {
+        if (global_base) {
+            if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
+        } else if (!directImmutableLocalArrayIndexReturn(body, expression, operation) and
+            (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression))) return false;
+    }
     const base = expressionById(body, operation.base) orelse return false;
     const index = expressionById(body, operation.index) orelse return false;
     if (!base.block_id.eql(expression.block_id) or !index.block_id.eql(expression.block_id) or
@@ -1012,20 +1020,6 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
         current = switch (expression.operation) {
             .direct_call => return true,
             .member => |member| member.base,
-            .representation_check => |check| check.operand,
-            else => return false,
-        };
-    }
-    return false;
-}
-
-fn projectionPathHasMember(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
-    var current = start;
-    var depth: usize = 0;
-    while (depth <= mir.max_executable_operands) : (depth += 1) {
-        const expression = expressionById(body, current) orelse return false;
-        current = switch (expression.operation) {
-            .member => return true,
             .representation_check => |check| check.operand,
             else => return false,
         };
@@ -1960,6 +1954,16 @@ fn memoryStoreSupported(
                 else
                     ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
+        if (mir.executableSliceIndexPlace(body, place.*) != null) {
+            const mutable_slice = switch (place.root_ty) {
+                .pointer => |shape| shape.kind == .slice and shape.mutability == .mut,
+                else => false,
+            };
+            return mutable_slice and place.root == .local and store.access.kind == .race_unordered and
+                store.representation_source == null and !store.representation_span_id.isValid() and
+                statementBoundsTrapEdge(body, statement) != null and
+                ownedStatementTrapEdgeCount(body, statement.id) == 1;
+        }
         if (mir.executableDirectAggregateFieldPlace(
             body.locals,
             body.statements,
@@ -2179,12 +2183,13 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
         else => return null,
     };
     const place = placeById(body, place_id) orelse return null;
-    _ = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
-    const expected = mir.executableFixedArrayCheckedProjectionCount(place.*);
+    if (mir.executableFixedArrayIndexPlace(body, place.*) == null and
+        mir.executableSliceIndexPlace(body, place.*) == null) return null;
+    const expected = mir.executableCheckedIndexProjectionCount(place.*);
     if (expected == 0 or ownedTrapEdgeCount(body, expression.id) != expected) return null;
     var found: ?mir.ExecutableTrapEdge = null;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-        .index => |index| if (index.kind == .fixed_array and index.checked) {
+        .index => |index| if (index.checked) {
             var matching_span: usize = 0;
             for (body.trap_edges) |edge| if (edgeOwnedByExpression(edge, expression.id) and edge.span_id.eql(index.span_id)) {
                 matching_span += 1;
@@ -2315,11 +2320,12 @@ fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.Execu
         else => return null,
     };
     const place = placeById(body, store.place) orelse return null;
-    _ = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
-    const expected = mir.executableFixedArrayCheckedProjectionCount(place.*);
+    if (mir.executableFixedArrayIndexPlace(body, place.*) == null and
+        mir.executableSliceIndexPlace(body, place.*) == null) return null;
+    const expected = mir.executableCheckedIndexProjectionCount(place.*);
     if (expected == 0 or ownedStatementTrapEdgeCount(body, statement.id) != expected) return null;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-        .index => |index| if (index.kind == .fixed_array and index.checked) {
+        .index => |index| if (index.checked) {
             var matching_span: usize = 0;
             for (body.trap_edges) |edge| if (edgeOwnedByStatement(edge, statement.id) and edge.span_id.eql(index.span_id)) {
                 matching_span += 1;
@@ -2682,6 +2688,16 @@ fn emitPlace(
         };
         return;
     }
+    if (mir.executableSliceIndexPlace(body, place.*)) |index| {
+        try out.append(allocator, '(');
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").ptr[mc_check_index_usize(");
+        try emitExpression(allocator, out, body, index.value, 0);
+        try out.appendSlice(allocator, ", (");
+        try emitPlaceRootValue(allocator, out, body, place.*);
+        try out.appendSlice(allocator, ").len)]");
+        return;
+    }
     if (mir.executableDirectAggregateFieldPlace(
         body.locals,
         body.statements,
@@ -2715,6 +2731,12 @@ fn emitPlaceAddress(
     const place = placeById(body, id) orelse return error.InvalidPlace;
     if (place.storage != .ordinary) return error.UnsupportedOperation;
     if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
+        try out.appendSlice(allocator, "&(");
+        try emitPlace(allocator, out, body, id);
+        try out.append(allocator, ')');
+        return;
+    }
+    if (mir.executableSliceIndexPlace(body, place.*) != null) {
         try out.appendSlice(allocator, "&(");
         try emitPlace(allocator, out, body, id);
         try out.append(allocator, ')');

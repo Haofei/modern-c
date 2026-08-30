@@ -878,10 +878,16 @@ test "lower-c emits access slice plans without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_access_slice.mc", .{}, false, null);
-    try expectContains(try cFunctionBody(output.items, "static uint32_t read_slice("), "mc_check_index_usize(i, xs.len)");
-    try expectContains(try cFunctionBody(output.items, "static uint32_t read_literal("), "mc_check_index_usize(0, xs.len)");
+    const read_slice = try cFunctionBody(output.items, "static uint32_t read_slice(");
+    try expectContains(read_slice, "/* canonical executable MIR */");
+    try expectContains(read_slice, "mc_race_load_u32");
+    try expectContains(read_slice, "mc_check_index_usize(");
+    const read_literal = try cFunctionBody(output.items, "static uint32_t read_literal(");
+    try expectContains(read_literal, "/* canonical executable MIR */");
+    try expectContains(read_literal, "mc_race_load_u32");
+    try expectContains(read_literal, "mc_check_index_usize(");
     try expectContains(try cFunctionBody(output.items, "static void write_slice("), "mc_race_store_u32");
-    try expectContains(try cFunctionBody(output.items, "static void write_slice("), "(uint32_t)value");
+    try expectContains(try cFunctionBody(output.items, "static void write_slice("), "(uint32_t)");
     try expectContains(try cFunctionBody(output.items, "static uint32_t direct_call_slice("), "= make_slice();");
     var temp = std.testing.tmpDir(.{});
     defer temp.cleanup();
@@ -9640,7 +9646,10 @@ test "lower-c inferred local array and slice calls require MIR types" {
     const array_caller = try cFunctionBody(complete_output.items, "static uint32_t array_caller(void)");
     try std.testing.expect(isCanonicalExecutableCBody(array_caller));
     try expectContains(array_caller, "make_array(");
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_slice_const_u32 values = make_slice()") != null);
+    const slice_caller = try cFunctionBody(complete_output.items, "static uint32_t slice_caller(void)");
+    try std.testing.expect(isCanonicalExecutableCBody(slice_caller));
+    try expectContains(slice_caller, "make_slice(");
+    try expectContains(slice_caller, "values = ");
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "direct_slice_index") != null);
 
     var missing_array = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -19800,19 +19809,33 @@ test "lower-c emits slice typedefs and indexing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 make_u8_slice(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 make_u32_slice(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_slice(mc_slice_const_u8 xs, uintptr_t i)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint8_t)mc_race_load_u8(&(xs.ptr[mc_check_index_usize(i, xs.len)])));") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint8_t)mc_race_load_u8(&(xs.ptr[mc_check_index_usize(0, xs.len)])));") != null);
+    const read_slice_body = try cFunctionBody(output.items, "static uint8_t read_slice(");
+    try std.testing.expect(isCanonicalExecutableCBody(read_slice_body));
+    try expectContains(read_slice_body, "mc_race_load_u8");
+    try expectContains(read_slice_body, "mc_check_index_usize(");
+    const read_literal_body = try cFunctionBody(output.items, "static uint8_t read_literal(");
+    try std.testing.expect(isCanonicalExecutableCBody(read_literal_body));
+    try expectContains(read_literal_body, "mc_race_load_u8");
+    try expectContains(read_literal_body, "mc_check_index_usize(");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void write_slice(mc_slice_mut_u32 xs, uintptr_t i, uint32_t value)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&(xs.ptr[mc_check_index_usize(") != null);
+    const write_slice_body = try cFunctionBody(output.items, "static void write_slice(");
+    try std.testing.expect(isCanonicalExecutableCBody(write_slice_body));
+    try expectContains(write_slice_body, "mc_race_store_u32");
+    try expectContains(write_slice_body, "mc_check_index_usize(");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_slice_const_u8 same_slice(mc_slice_const_u8 xs)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = make_u8_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = (uint8_t)mc_race_load_u8(&mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".ptr[mc_check_index_usize(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = make_u32_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = (uint32_t)mc_race_load_u32(&mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_u32_slice();\n    return ((uint32_t)mc_race_load_u32(&(xs.ptr[mc_check_index_usize(i, xs.len)])));") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t x = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp") != null);
+    inline for (.{
+        .{ "static uint8_t read_direct_literal(", "make_u8_slice(" },
+        .{ "static uint32_t read_direct_index(", "make_u32_slice(" },
+        .{ "static uint32_t read_inferred_slice(", "make_u32_slice(" },
+        .{ "static uint8_t local_direct_literal(", "make_u8_slice(" },
+        .{ "static uint32_t local_direct_index(", "make_u32_slice(" },
+    }) |case| {
+        const body = try cFunctionBody(output.items, case[0]);
+        try std.testing.expect(isCanonicalExecutableCBody(body));
+        try expectContains(body, case[1]);
+        try expectContains(body, "mc_race_load_");
+        try expectContains(body, "mc_check_index_usize(");
+    }
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 xs = ({ mc_slice_mut_u8 mc_scv") != null);
 }
 
