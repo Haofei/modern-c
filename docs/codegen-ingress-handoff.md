@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1431/1827 C functions and 1447/1879 LLVM functions.
-  The remaining 396 C and 432 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1439/1827 C functions and 1455/1879 LLVM functions.
+  The remaining 388 C and 424 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.

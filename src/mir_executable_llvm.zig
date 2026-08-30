@@ -170,7 +170,9 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     },
                     .address_of => |address| {
                         if (!placeValid(body, address.place)) return false;
-                        if (mir.executableFixedArrayIndexPlace(body, body.places[address.place.index()]) != null) {
+                        if (mir.executableFixedArrayIndexPlace(body, body.places[address.place.index()]) != null or
+                            mir.executableSliceIndexPlace(body, body.places[address.place.index()]) != null)
+                        {
                             if (!fixedArrayLoadBoundsTrapEdgeIsExact(body, owner)) return false;
                         } else if (!representationTrapEdgeIsExact(body, owner)) return false;
                     },
@@ -425,6 +427,15 @@ const Renderer = struct {
             },
             else => {},
         };
+        for (self.body.places) |place| {
+            if (mir.executableFixedArrayIndexPlace(self.body, place) == null or
+                !mir.executableFixedArrayCallResultRoot(self.body, place)) continue;
+            try self.output.print(
+                self.allocator,
+                "  %mc_place_tmp_{d} = alloca {s}\n",
+                .{ place.id.raw, try self.typeText(place.root_ty) },
+            );
+        }
         try self.output.print(self.allocator, "  br label %mc_block_{d}\n", .{self.body.terminators[0].block_id.raw});
         for (self.body.terminators) |terminator| {
             // Expression IDs identify source occurrences, not SSA definitions.
@@ -457,7 +468,7 @@ const Renderer = struct {
             .store => |store| {
                 const place = self.body.places[store.place.index()];
                 const indexed_pointer = if (mir.executableSliceIndexPlace(self.body, place) != null)
-                    try self.emitSliceIndexPlacePointer(place, statement.id)
+                    try self.emitSliceIndexPlacePointer(place, .{ .statement = statement.id })
                 else if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
                     try self.emitFixedArrayIndexPlacePointer(place, .{ .statement = statement.id })
                 else
@@ -2188,6 +2199,12 @@ const Renderer = struct {
                 .spelling = try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id }),
             };
         }
+        if (addressOfSliceIndexSupported(self.body, expression, address)) {
+            return .{
+                .ty = "ptr",
+                .spelling = try self.emitSliceIndexPlacePointer(place, .{ .expression = expression.id }),
+            };
+        }
         if (addressOfAggregateFieldSupported(self.body, expression, address)) {
             return .{ .ty = "ptr", .spelling = try self.emitPlace(address.place, "ptr") };
         }
@@ -2275,7 +2292,15 @@ const Renderer = struct {
                 "@{s}",
                 .{symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody},
             ),
-            .value => return error.InvalidBody,
+            .value => |id| blk: {
+                if (!mir.executableFixedArrayCallResultRoot(self.body, place)) return error.InvalidBody;
+                const value = try self.emitExpression(id);
+                const root_ty = try self.typeText(place.root_ty);
+                if (!std.mem.eql(u8, value.ty, root_ty)) return error.InvalidBody;
+                const slot = try std.fmt.allocPrint(self.allocator, "%mc_place_tmp_{d}", .{place.id.raw});
+                try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ root_ty, value.spelling, slot });
+                break :blk slot;
+            },
         };
         var current_ty = place.root_ty;
         var current_type_id = place.root_type_id;
@@ -2367,28 +2392,38 @@ const Renderer = struct {
     fn emitSliceIndexPlacePointer(
         self: *Renderer,
         place: mir.ExecutablePlace,
-        owner: mir.InstId,
+        owner: FixedArrayBoundsOwner,
     ) RenderError![]const u8 {
         const projection = mir.executableSliceIndexPlace(self.body, place) orelse return error.InvalidBody;
-        const local_id = switch (place.root) {
-            .local => |id| id,
-            .symbol, .value => return error.InvalidBody,
+        const slice_value: Value = switch (place.root) {
+            .local => |id| blk: {
+                const local = self.locals.get(id.raw) orelse return error.InvalidBody;
+                if (!std.mem.eql(u8, local.ty, "{ ptr, i64 }")) return error.InvalidBody;
+                if (!local.addressable) break :blk .{ .ty = local.ty, .spelling = local.storage };
+                const loaded = try self.temp();
+                try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ loaded, local.ty, local.storage });
+                break :blk .{ .ty = local.ty, .spelling = loaded };
+            },
+            .value => |id| try self.emitExpression(id),
+            .symbol => return error.InvalidBody,
         };
-        const slice = self.locals.get(local_id.raw) orelse return error.InvalidBody;
-        if (!std.mem.eql(u8, slice.ty, "{ ptr, i64 }")) return error.InvalidBody;
+        if (!std.mem.eql(u8, slice_value.ty, "{ ptr, i64 }")) return error.InvalidBody;
         const pointer = try self.temp();
         const length = try self.temp();
         try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n", .{
             pointer,
-            slice.storage,
+            slice_value.spelling,
             length,
-            slice.storage,
+            slice_value.spelling,
         });
         const index = try self.emitExpression(projection.value);
         if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
-        const edge = self.fixedArrayBoundsTrapEdge(.{ .statement = owner }, projection.span_id) orelse return error.InvalidBody;
+        const edge = self.fixedArrayBoundsTrapEdge(owner, projection.span_id) orelse return error.InvalidBody;
         const invalid = try self.temp();
-        const continuation = try std.fmt.allocPrint(self.allocator, "mc_slice_store_ready_{d}", .{owner.raw});
+        const continuation = switch (owner) {
+            .statement => |id| try std.fmt.allocPrint(self.allocator, "mc_slice_store_ready_{d}", .{id.raw}),
+            .expression => |id| try std.fmt.allocPrint(self.allocator, "mc_slice_address_ready_{d}", .{id.raw}),
+        };
         try self.output.print(
             self.allocator,
             "  {s} = icmp uge i64 {s}, {s}\n" ++
@@ -2828,6 +2863,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .indirect_call => |call| indirectCallSupported(body, expression, call),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfFixedArrayIndexSupported(body, expression, address) or
+            addressOfSliceIndexSupported(body, expression, address) or
             addressOfAggregateFieldSupported(body, expression, address) or
             addressOfParameterFieldSupported(body, expression, address) or
             addressOfParameterDerefSupported(body, expression, address) or
@@ -3747,7 +3783,7 @@ fn placeRootValid(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) b
     return switch (place.root) {
         .local => |id| localAddressable(body, id),
         .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
-        .value => false,
+        .value => mir.executableFixedArrayCallResultRoot(body, place),
     };
 }
 
@@ -3926,13 +3962,22 @@ fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression
     const root_addressable = indexed.parameter_pointee or switch (place.root) {
         .local => |id| localAddressable(body, id),
         .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
-        .value => false,
+        .value => mir.executableFixedArrayCallResultRoot(body, place),
     };
     if (!root_addressable) return false;
     return if (mir.executableFixedArrayCheckedProjectionCount(place) != 0)
         fixedArrayLoadBoundsTrapEdge(body, expression) != null
     else
         ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn addressOfSliceIndexSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    return mir.executableSliceIndexPlace(body, place) != null and
+        addressResultMatchesPlace(expression.result_ty, place.ty) and expression.type_id.isValid() and
+        address.representation_source == null and !address.representation_span_id.isValid() and
+        fixedArrayLoadBoundsTrapEdgeIsExact(body, expression);
 }
 
 fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
@@ -4166,7 +4211,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             .pointer => |shape| shape.kind == .slice and shape.mutability == .mut,
             else => false,
         };
-        return mutable_slice and place.root == .local and store.access.kind == .race_unordered and
+        return mutable_slice and mir.executableCheckedSliceValueRoot(body, place) and
+            store.access.kind == .race_unordered and
             store.representation_source == null and !store.representation_span_id.isValid() and
             statementBoundsTrapEdge(body, statement) != null and
             ownedStatementTrapEdgeCount(body, statement.id) == 1;
@@ -4220,13 +4266,15 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             return sameValueType(place.ty, ty) and access.kind == expected_kind;
         }
         if (mir.executableSliceIndexPlace(body, place) != null) {
-            const local_id = switch (place.root) {
-                .local => |id| id,
-                .symbol, .value => return false,
+            const root_valid = switch (place.root) {
+                .local => |local_id| if (parameterIdentity(body, local_id)) |parameter|
+                    sameValueType(parameter.ty, place.root_ty) and parameter.type_id.eql(place.root_type_id)
+                else
+                    false,
+                .value => mir.executableCheckedSliceValueRoot(body, place),
+                .symbol => false,
             };
-            const parameter = parameterIdentity(body, local_id) orelse return false;
-            return sameValueType(parameter.ty, place.root_ty) and parameter.type_id.eql(place.root_type_id) and
-                sameValueType(place.ty, ty) and access.kind == .race_unordered;
+            return root_valid and sameValueType(place.ty, ty) and access.kind == .race_unordered;
         }
         if (mir.executableAggregateFieldPlace(
             body.locals,

@@ -2094,6 +2094,21 @@ pub fn executableFixedArrayCheckedProjectionCount(place: ExecutablePlace) usize 
     return count;
 }
 
+/// A fixed-array place may take the address of an element in a direct-call
+/// result. The call value is materialized once by each renderer before the
+/// projection is addressed; arbitrary computed aggregate roots remain closed.
+pub fn executableFixedArrayCallResultRoot(body: *const ExecutableBody, place: ExecutablePlace) bool {
+    const root_id = switch (place.root) {
+        .value => |id| id,
+        .local, .symbol => return false,
+    };
+    if (!root_id.isValid() or root_id.index() >= body.expressions.len) return false;
+    const root = body.expressions[root_id.index()];
+    if (!root.id.eql(root_id) or !root.type_id.eql(place.root_type_id) or
+        !ValueType.eql(root.result_ty, place.root_ty)) return false;
+    return root.operation == .direct_call and std.meta.activeTag(root.result_ty) == .array;
+}
+
 pub fn executableCheckedIndexProjectionCount(place: ExecutablePlace) usize {
     var count: usize = 0;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
@@ -2138,6 +2153,30 @@ pub fn executableSliceIndexPlace(
     };
     if (!std.mem.eql(u8, child, place.ty.name())) return null;
     return projection;
+}
+
+/// Return whether a slice-index place is rooted in the canonical checked
+/// slice value. The representation-check expression owns the slice validity
+/// trap; the load/store/address operation rooted here owns only its bounds
+/// edge.
+pub fn executableCheckedSliceValueRoot(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+) bool {
+    _ = executableSliceIndexPlace(body, place) orelse return false;
+    const id = switch (place.root) {
+        .value => |value| value,
+        .local, .symbol => return false,
+    };
+    if (!id.isValid() or id.index() >= body.expressions.len) return false;
+    const value = body.expressions[id.index()];
+    if (!value.id.eql(id) or !ValueType.eql(value.result_ty, place.root_ty) or
+        !value.type_id.eql(place.root_type_id)) return false;
+    const check = switch (value.operation) {
+        .representation_check => |operation| operation,
+        else => return false,
+    };
+    return check.kind == .valid_slice;
 }
 
 pub const Terminator = union(enum) {

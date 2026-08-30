@@ -484,7 +484,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (target.root == .value) try verifyOperand(body, value, target.root.value);
             if (body.complete) {
                 if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
-                if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
+                if (mir.executableSliceIndexPlace(body, target.*) != null) {
+                    if (address.representation_source != null or address.representation_span_id.isValid() or
+                        !indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*, 0))
+                        return error.InvalidMemoryAccessTrap;
+                } else if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
                     const indexed = mir.executableFixedArrayIndexPlace(body, target.*).?;
                     if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidMemoryAccessTrap;
                     const representation_count: usize = @intFromBool(indexed.parameter_pointee);
@@ -629,7 +633,7 @@ fn fixedArrayAddressableRoot(body: *const mir.ExecutableBody, target: mir.Execut
             body.symbols[id.index()].id.eql(id) and body.symbols[id.index()].kind == .global
         else
             false,
-        .value => false,
+        .value => mir.executableFixedArrayCallResultRoot(body, target),
     };
 }
 
@@ -1059,7 +1063,6 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                     return error.InvalidMemoryAccessTrap;
                 }
                 if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != expected_traps) {
-                    std.debug.print("store count fail id={d} guard={} checked={d} expected={d} all={d}\n", .{ statement_value.id.raw, guarded, checked_indices, expected_traps, ownedTrapCountAll(body, .{ .statement = statement_value.id }) });
                     return error.InvalidMemoryAccessTrap;
                 }
             }
@@ -1689,18 +1692,19 @@ fn verifyMemoryAccess(
             return;
         }
         if (mir.executableSliceIndexPlace(body, target.*) != null) {
-            const local_id = switch (target.root) {
-                .local => |id| id,
-                .symbol, .value => return error.InvalidPlaceType,
+            const root_valid = switch (target.root) {
+                .local => |local_id| local: {
+                    for (body.parameters) |parameter| if (parameter.local.eql(local_id)) {
+                        break :local sameValueType(parameter.ty, target.root_ty) and
+                            parameter.type_id.eql(target.root_type_id);
+                    };
+                    break :local false;
+                },
+                .value => mir.executableCheckedSliceValueRoot(body, target.*),
+                .symbol => false,
             };
-            var parameter: ?mir.ExecutableParameter = null;
-            for (body.parameters) |candidate| if (candidate.local.eql(local_id)) {
-                parameter = candidate;
-                break;
-            };
-            const root = parameter orelse return error.InvalidPlaceType;
-            if (!sameValueType(root.ty, target.root_ty) or !root.type_id.eql(target.root_type_id) or
-                access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
+            if (!root_valid) return error.InvalidPlaceType;
+            if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
             return;
         }
         if (mir.executableAggregateFieldPlace(

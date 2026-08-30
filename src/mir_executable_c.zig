@@ -2123,6 +2123,10 @@ fn addressOfSupported(
             return false;
         return fixedArrayLoadBoundsTrapEdge(body, expression) != null;
     }
+    if (mir.executableSliceIndexPlace(body, place.*) != null) {
+        return address.representation_source == null and !address.representation_span_id.isValid() and
+            fixedArrayLoadBoundsTrapEdge(body, expression) != null;
+    }
     if (mir.executableAggregateFieldPlace(
         body.locals,
         body.statements,
@@ -2162,7 +2166,7 @@ fn fixedArrayAddressablePlaceSupported(body: *const mir.ExecutableBody, place: m
             break :local false;
         },
         .symbol => |id| if (symbolById(body, id)) |identity| identity.kind == .global else false,
-        .value => false,
+        .value => mir.executableFixedArrayCallResultRoot(body, place),
     };
 }
 
@@ -2324,7 +2328,8 @@ fn memoryStoreSupported(
                 .pointer => |shape| shape.kind == .slice and shape.mutability == .mut,
                 else => false,
             };
-            return mutable_slice and place.root == .local and store.access.kind == .race_unordered and
+            return mutable_slice and mir.executableCheckedSliceValueRoot(body, place.*) and
+                store.access.kind == .race_unordered and
                 store.representation_source == null and !store.representation_span_id.isValid() and
                 statementBoundsTrapEdge(body, statement) != null and
                 ownedStatementTrapEdgeCount(body, statement.id) == 1;
@@ -2527,14 +2532,16 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
         .unary => checkedIntegerUnaryHasExactTrapEdges(body, expression),
         .binary => checkedIntegerBinaryHasExactTrapEdges(body, expression),
         .load => |load| if (placeById(body, load.place)) |place|
-            if (mir.executableFixedArrayIndexPlace(body, place.*) != null)
+            if (mir.executableFixedArrayIndexPlace(body, place.*) != null or
+                mir.executableSliceIndexPlace(body, place.*) != null)
                 fixedArrayLoadBoundsTrapEdge(body, expression) != null
             else
                 representationOperationHasExactTrapEdge(body, expression)
         else
             false,
         .address_of => |address| if (placeById(body, address.place)) |place|
-            if (mir.executableFixedArrayIndexPlace(body, place.*) != null)
+            if (mir.executableFixedArrayIndexPlace(body, place.*) != null or
+                mir.executableSliceIndexPlace(body, place.*) != null)
                 fixedArrayLoadBoundsTrapEdge(body, expression) != null
             else
                 representationOperationHasExactTrapEdge(body, expression)

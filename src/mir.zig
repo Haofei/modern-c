@@ -7689,6 +7689,7 @@ const FunctionBuilder = struct {
         if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| {
             if (indexed.parameter_pointee) return true;
         }
+        if (self.executableSliceIndexPlaceComplete(place)) return true;
         if (!self.executablePlaceComplete(place)) return false;
         if (self.executableFixedArrayIndexPlaceComplete(place)) {
             const indexed = mir_model.executableFixedArrayIndexPlace(&transient_body, place) orelse return false;
@@ -7704,7 +7705,7 @@ const FunctionBuilder = struct {
                 },
                 .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
                     self.executable_symbols.items[id.index()].kind == .global,
-                .value => false,
+                .value => mir_model.executableFixedArrayCallResultRoot(&transient_body, place),
             };
         }
         if (mir_model.executableAggregateFieldPlace(
@@ -7780,6 +7781,22 @@ const FunctionBuilder = struct {
                 } else false,
                 .value => false,
             };
+            if (self.executableSliceIndexPlaceComplete(place)) {
+                const transient_body: mir_model.ExecutableBody = .{
+                    .parameters = self.executable_parameters.items,
+                    .locals = self.executable_locals.items,
+                    .statements = self.executable_statements.items,
+                    .expressions = self.executable_expressions.items,
+                    .places = self.executable_places.items,
+                    .aggregate_types = self.executable_aggregate_types.items,
+                };
+                return switch (place.root) {
+                    .local => access.kind == .race_unordered,
+                    .value => mir_model.executableCheckedSliceValueRoot(&transient_body, place) and
+                        access.kind == .race_unordered,
+                    .symbol => false,
+                };
+            }
             if (mir_model.executableAggregateFieldPlace(
                 self.executable_locals.items,
                 self.executable_statements.items,
@@ -10286,7 +10303,21 @@ const FunctionBuilder = struct {
                     const base_type_expr = self.typeExprForExpr(node.base.*) orelse break :projection false;
                     if (!try self.internExecutableTypeExpr(base_ty, base_type_expr)) break :projection false;
                 }
-                if (!try self.fillExecutablePlace(place, node.base.*) or place.projection_count >= mir_model.max_executable_projections) break :projection false;
+                var base_expr = node.base.*;
+                while (base_expr.kind == .grouped or base_expr.kind == .move_expr) base_expr = switch (base_expr.kind) {
+                    .grouped => |inner| inner.*,
+                    .move_expr => |inner| inner.*,
+                    else => unreachable,
+                };
+                if (kind == .slice or (kind == .fixed_array and base_expr.kind == .call)) {
+                    const base = try self.ensureExecutableExprAs(node.base.*, base_ty);
+                    place.root = .{ .value = base };
+                    place.root_ty = base_ty;
+                    place.root_type_id = try self.internTypeId(base_ty);
+                } else if (!try self.fillExecutablePlace(place, node.base.*)) {
+                    break :projection false;
+                }
+                if (place.projection_count >= mir_model.max_executable_projections) break :projection false;
                 place.projections[place.projection_count] = .{ .index = .{
                     .value = try self.ensureExecutableExprAs(node.index.*, .{ .integer = "usize" }),
                     .kind = kind,
@@ -12302,11 +12333,6 @@ const FunctionBuilder = struct {
             .ident => {
                 const ty = self.exprType(expr);
                 if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
-                    if (self.assignment_target_expr_depth != null and switch (ty) {
-                        .pointer => |shape| shape.kind == .slice,
-                        .slice => true,
-                        else => false,
-                    }) _ = try self.ensureExecutableExpr(expr);
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     const ident = switch (expr.kind) {
                         .ident => |value| value,
