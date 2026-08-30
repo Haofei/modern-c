@@ -1949,8 +1949,8 @@ const Renderer = struct {
         place: mir.ExecutablePlace,
         owner: FixedArrayBoundsOwner,
     ) RenderError![]const u8 {
-        const projection = mir.executableFixedArrayIndexPlace(self.body, place) orelse return error.InvalidBody;
-        const root_pointer: []const u8 = switch (place.root) {
+        _ = mir.executableFixedArrayIndexPlace(self.body, place) orelse return error.InvalidBody;
+        var pointer: []const u8 = switch (place.root) {
             .local => |local_id| blk: {
                 const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
                 if (!local.addressable) return error.InvalidBody;
@@ -1963,55 +1963,75 @@ const Renderer = struct {
             ),
             .value => return error.InvalidBody,
         };
-        const index = try self.emitExpression(projection.value);
-        if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
-        if (projection.checked) {
-            const edge = switch (owner) {
-                .statement => |id| statementBoundsTrapEdge(
-                    self.body,
-                    statementIdentity(self.body, id) orelse return error.InvalidBody,
-                ),
-                .expression => |id| fixedArrayLoadBoundsTrapEdge(
-                    self.body,
-                    if (expressionValid(self.body, id)) self.body.expressions[id.index()] else return error.InvalidBody,
-                ),
-            } orelse return error.InvalidBody;
-            const in_bounds = try self.temp();
-            const continuation = switch (owner) {
-                .statement => |id| try std.fmt.allocPrint(self.allocator, "mc_index_store_ready_{d}", .{id.raw}),
-                .expression => |id| try std.fmt.allocPrint(self.allocator, "mc_index_load_ready_{d}", .{id.raw}),
-            };
-            try self.output.print(
-                self.allocator,
-                "  {s} = icmp ult i64 {s}, {d}\n" ++
-                    "  br i1 {s}, label %{s}, label %mc_block_{d}\n" ++
-                    "{s}:\n",
-                .{ in_bounds, index.spelling, projection.bound.?, in_bounds, continuation, edge.trap_block.raw, continuation },
-            );
-        }
-        const array_ty = try self.typeText(place.root_ty);
-        const pointer = try self.temp();
-        try self.output.print(
-            self.allocator,
-            "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n",
-            .{ pointer, array_ty, root_pointer, index.spelling },
-        );
-        if (place.projection_count == 1) return pointer;
-        const field_index = switch (place.projections[1]) {
-            .field => |value| value,
-            .deref, .index => return error.InvalidBody,
+        var current_ty = place.root_ty;
+        var current_type_id = place.root_type_id;
+        for (place.projections[0..place.projection_count], 0..) |item, projection_ordinal| switch (item) {
+            .index => |projection| {
+                const aggregate = aggregateType(self.body, current_type_id) orelse return error.InvalidBody;
+                if (aggregate.field_count == 0) return error.InvalidBody;
+                const index = try self.emitExpression(projection.value);
+                if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
+                if (projection.checked) {
+                    const edge = self.fixedArrayBoundsTrapEdge(owner, projection.span_id) orelse return error.InvalidBody;
+                    const in_bounds = try self.temp();
+                    const continuation = switch (owner) {
+                        .statement => |id| try std.fmt.allocPrint(self.allocator, "mc_index_store_ready_{d}_{d}", .{ id.raw, projection_ordinal }),
+                        .expression => |id| try std.fmt.allocPrint(self.allocator, "mc_index_load_ready_{d}_{d}", .{ id.raw, projection_ordinal }),
+                    };
+                    try self.output.print(
+                        self.allocator,
+                        "  {s} = icmp ult i64 {s}, {d}\n" ++
+                            "  br i1 {s}, label %{s}, label %mc_block_{d}\n" ++
+                            "{s}:\n",
+                        .{ in_bounds, index.spelling, projection.bound.?, in_bounds, continuation, edge.trap_block.raw, continuation },
+                    );
+                }
+                const aggregate_ty = try self.typeText(current_ty);
+                const next_pointer = try self.temp();
+                try self.output.print(
+                    self.allocator,
+                    "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n",
+                    .{ next_pointer, aggregate_ty, pointer, index.spelling },
+                );
+                pointer = next_pointer;
+                current_ty = aggregate.field_types[0];
+                current_type_id = aggregate.field_type_ids[0];
+            },
+            .field => |field_index| {
+                const aggregate = aggregateType(self.body, current_type_id) orelse return error.InvalidBody;
+                if (field_index >= aggregate.field_count) return error.InvalidBody;
+                const aggregate_ty = try self.typeText(current_ty);
+                const next_pointer = try self.temp();
+                try self.output.print(
+                    self.allocator,
+                    "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                    .{ next_pointer, aggregate_ty, pointer, field_index },
+                );
+                pointer = next_pointer;
+                current_ty = aggregate.field_types[field_index];
+                current_type_id = aggregate.field_type_ids[field_index];
+            },
+            .deref => return error.InvalidBody,
         };
-        const array = aggregateType(self.body, place.root_type_id) orelse return error.InvalidBody;
-        const element = aggregateType(self.body, array.field_type_ids[0]) orelse return error.InvalidBody;
-        if (field_index >= element.field_count) return error.InvalidBody;
-        const element_ty = try self.typeText(element.ty);
-        const field_pointer = try self.temp();
-        try self.output.print(
-            self.allocator,
-            "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
-            .{ field_pointer, element_ty, pointer, field_index },
-        );
-        return field_pointer;
+        return pointer;
+    }
+
+    fn fixedArrayBoundsTrapEdge(
+        self: *Renderer,
+        owner: FixedArrayBoundsOwner,
+        span_id: mir.SpanId,
+    ) ?mir.ExecutableTrapEdge {
+        var found: ?mir.ExecutableTrapEdge = null;
+        for (self.body.trap_edges) |edge| {
+            const owns = switch (owner) {
+                .statement => |id| if (edge.owner.statementId()) |edge_id| edge_id.eql(id) else false,
+                .expression => |id| if (edge.owner.expressionId()) |edge_id| edge_id.eql(id) else false,
+            };
+            if (!owns or !edge.span_id.eql(span_id)) continue;
+            if (found != null or edge.kind != .Bounds or edge.source != .bounds_check) return null;
+            found = edge;
+        }
+        return found;
     }
 
     fn emitGuardedParameterDerefPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
@@ -3269,10 +3289,11 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         return load.representation_source == null and !load.representation_span_id.isValid();
     }
     if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return false;
-    if (mir.executableFixedArrayIndexPlace(body, place)) |index| {
+    if (mir.executableFixedArrayIndexPlace(body, place) != null) {
         return load.representation_source == null and !load.representation_span_id.isValid() and
-            if (index.checked)
-                fixedArrayLoadBoundsTrapEdge(body, expression) != null and ownedExpressionTrapCount(body, expression.id) == 1
+            if (mir.executableFixedArrayCheckedProjectionCount(place) != 0)
+                fixedArrayLoadBoundsTrapEdge(body, expression) != null and
+                    ownedExpressionTrapCount(body, expression.id) == mir.executableFixedArrayCheckedProjectionCount(place)
             else
                 ownedExpressionTrapCount(body, expression.id) == 0;
     }
@@ -3295,7 +3316,7 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
 fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
-    const projection = mir.executableFixedArrayIndexPlace(body, place) orelse return false;
+    _ = mir.executableFixedArrayIndexPlace(body, place) orelse return false;
     if (!addressResultMatchesPlace(expression.result_ty, place.ty) or
         address.representation_source != null or address.representation_span_id.isValid())
         return false;
@@ -3305,8 +3326,9 @@ fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression
         .value => false,
     };
     if (!root_addressable) return false;
-    return if (projection.checked)
-        fixedArrayLoadBoundsTrapEdge(body, expression) != null and ownedExpressionTrapCount(body, expression.id) == 1
+    return if (mir.executableFixedArrayCheckedProjectionCount(place) != 0)
+        fixedArrayLoadBoundsTrapEdge(body, expression) != null and
+            ownedExpressionTrapCount(body, expression.id) == mir.executableFixedArrayCheckedProjectionCount(place)
     else
         ownedExpressionTrapCount(body, expression.id) == 0;
 }
@@ -3506,10 +3528,11 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     }
     if (!store.type_id.isValid() or !store.type_id.eql(place.type_id) or
         !value.type_id.isValid() or !value.type_id.eql(store.type_id)) return false;
-    if (mir.executableFixedArrayIndexPlace(body, place)) |index| {
+    if (mir.executableFixedArrayIndexPlace(body, place) != null) {
         return store.representation_source == null and !store.representation_span_id.isValid() and
-            if (index.checked)
-                statementBoundsTrapEdge(body, statement) != null and ownedStatementTrapEdgeCount(body, statement.id) == 1
+            if (mir.executableFixedArrayCheckedProjectionCount(place) != 0)
+                statementBoundsTrapEdge(body, statement) != null and
+                    ownedStatementTrapEdgeCount(body, statement.id) == mir.executableFixedArrayCheckedProjectionCount(place)
             else
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
     }
@@ -3644,20 +3667,33 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
         else => return null,
     };
     if (!placeValid(body, place_id)) return null;
-    const projection = mir.executableFixedArrayIndexPlace(body, body.places[place_id.index()]) orelse return null;
-    if (!projection.checked or ownedExpressionTrapCount(body, expression.id) != 1) return null;
+    const place = body.places[place_id.index()];
+    _ = mir.executableFixedArrayIndexPlace(body, place) orelse return null;
+    const expected = mir.executableFixedArrayCheckedProjectionCount(place);
+    if (expected == 0 or ownedExpressionTrapCount(body, expression.id) != expected) return null;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| if (index.kind == .fixed_array and index.checked) {
+            var matching_span: usize = 0;
+            for (body.trap_edges) |edge| {
+                const owner = edge.owner.expressionId() orelse continue;
+                if (owner.eql(expression.id) and edge.span_id.eql(index.span_id)) matching_span += 1;
+            }
+            if (matching_span != 1) return null;
+        },
+        .field, .deref => {},
+    };
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {
         const owner = edge.owner.expressionId() orelse continue;
         if (!owner.eql(expression.id)) continue;
-        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check)
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check)
             return null;
         const trap = terminatorForBlock(body, edge.trap_block) orelse return null;
         switch (trap.operation) {
             .trap_ => |kind| if (kind != .Bounds) return null,
             else => return null,
         }
-        found = edge;
+        if (found == null) found = edge;
     }
     return found;
 }
@@ -3792,18 +3828,38 @@ fn statementRepresentationTrapEdge(body: *const mir.ExecutableBody, statement: m
 }
 
 fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) ?mir.ExecutableTrapEdge {
+    const store = switch (statement.operation) {
+        .store => |value| value,
+        else => return null,
+    };
+    if (!placeValid(body, store.place)) return null;
+    const place = body.places[store.place.index()];
+    _ = mir.executableFixedArrayIndexPlace(body, place) orelse return null;
+    const expected = mir.executableFixedArrayCheckedProjectionCount(place);
+    if (expected == 0 or ownedStatementTrapEdgeCount(body, statement.id) != expected) return null;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| if (index.kind == .fixed_array and index.checked) {
+            var matching_span: usize = 0;
+            for (body.trap_edges) |edge| {
+                const owner = edge.owner.statementId() orelse continue;
+                if (owner.eql(statement.id) and edge.span_id.eql(index.span_id)) matching_span += 1;
+            }
+            if (matching_span != 1) return null;
+        },
+        .field, .deref => {},
+    };
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {
         const owner = edge.owner.statementId() orelse continue;
         if (!owner.eql(statement.id)) continue;
-        if (found != null or !edge.from_block.eql(statement.block_id) or
+        if (!edge.from_block.eql(statement.block_id) or
             edge.kind != .Bounds or edge.source != .bounds_check) return null;
         const trap_terminator = terminatorForBlock(body, edge.trap_block) orelse return null;
         switch (trap_terminator.operation) {
             .trap_ => |kind| if (kind != .Bounds) return null,
             else => return null,
         }
-        found = edge;
+        if (found == null) found = edge;
     }
     return found;
 }

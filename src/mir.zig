@@ -6745,7 +6745,7 @@ const FunctionBuilder = struct {
         legacy_blocks: []const Block,
     ) !ExecutableBody {
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
-        if (!self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
+        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
             parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
@@ -7379,56 +7379,58 @@ const FunctionBuilder = struct {
     }
 
     fn executableFixedArrayIndexPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
-        if (place.storage != .ordinary or (place.projection_count != 1 and place.projection_count != 2) or
+        if (place.storage != .ordinary or place.projection_count == 0 or
             !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
-        const projection = switch (place.projections[0]) {
-            .index => |value| value,
-            .field, .deref => return false,
-        };
-        if (projection.kind != .fixed_array or projection.bound == null or
-            !projection.span_id.isValid() or !projection.value.isValid() or
-            projection.value.index() >= self.executable_expressions.items.len) return false;
-        const array = switch (place.root_ty) {
-            .array => |shape| shape,
-            else => return false,
-        };
-        const bound = projection.bound.?;
-        if (array.length == null or array.length.? != bound or bound == 0) return false;
-        const index = self.executable_expressions.items[projection.value.index()];
-        if (!sameValueType(index.result_ty, .{ .integer = "usize" })) return false;
-        var aggregate: ?mir_model.ExecutableAggregateType = null;
-        for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(place.root_type_id)) {
-            aggregate = candidate;
-            break;
-        };
-        const shape = aggregate orelse return false;
-        if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
-            !sameValueType(shape.ty, place.root_ty)) return false;
-        if (place.projection_count == 1) {
-            if (!sameValueType(shape.field_types[0], place.ty) or !shape.field_type_ids[0].eql(place.type_id)) return false;
-        } else {
-            const field_index = switch (place.projections[1]) {
-                .field => |value| value,
-                .deref, .index => return false,
-            };
-            var element: ?mir_model.ExecutableAggregateType = null;
-            for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(shape.field_type_ids[0])) {
-                element = candidate;
-                break;
-            };
-            const element_shape = element orelse return false;
-            if (!sameValueType(element_shape.ty, shape.field_types[0]) or field_index >= element_shape.field_count or
-                !sameValueType(element_shape.field_types[field_index], place.ty) or
-                !element_shape.field_type_ids[field_index].eql(place.type_id)) return false;
-        }
-        if (projection.checked) return true;
-        return switch (index.operation) {
-            .literal => |literal| switch (literal) {
-                .integer => |value| value < bound,
-                else => false,
+        var current_ty = place.root_ty;
+        var current_type_id = place.root_type_id;
+        var saw_index = false;
+        for (place.projections[0..place.projection_count], 0..) |item, projection_index| switch (item) {
+            .index => |projection| {
+                if (projection.kind != .fixed_array or projection.bound == null or
+                    !projection.span_id.isValid() or !projection.value.isValid() or
+                    projection.value.index() >= self.executable_expressions.items.len) return false;
+                const index = self.executable_expressions.items[projection.value.index()];
+                if (!sameValueType(index.result_ty, .{ .integer = "usize" })) return false;
+                const array = switch (current_ty) {
+                    .array => |shape| shape,
+                    else => return false,
+                };
+                const bound = projection.bound.?;
+                if (array.length == null or array.length.? != bound or bound == 0) return false;
+                var aggregate: ?mir_model.ExecutableAggregateType = null;
+                for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(current_type_id)) {
+                    aggregate = candidate;
+                    break;
+                };
+                const shape = aggregate orelse return false;
+                if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
+                    !sameValueType(shape.ty, current_ty)) return false;
+                if (!projection.checked) switch (index.operation) {
+                    .literal => |literal| switch (literal) {
+                        .integer => |value| if (value >= bound) return false,
+                        else => return false,
+                    },
+                    else => return false,
+                };
+                saw_index = true;
+                current_ty = shape.field_types[0];
+                current_type_id = shape.field_type_ids[0];
             },
-            else => false,
+            .field => |field_index| {
+                if (!saw_index or projection_index + 1 != place.projection_count) return false;
+                var aggregate: ?mir_model.ExecutableAggregateType = null;
+                for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(current_type_id)) {
+                    aggregate = candidate;
+                    break;
+                };
+                const shape = aggregate orelse return false;
+                if (!sameValueType(shape.ty, current_ty) or field_index >= shape.field_count) return false;
+                current_ty = shape.field_types[field_index];
+                current_type_id = shape.field_type_ids[field_index];
+            },
+            .deref => return false,
         };
+        return saw_index and sameValueType(current_ty, place.ty) and current_type_id.eql(place.type_id);
     }
 
     fn executableAtomicPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -7728,81 +7730,86 @@ const FunctionBuilder = struct {
         legacy_edges: []const TrapEdge,
         call_target_facts: []const CallTargetFact,
         legacy_blocks: []const Block,
-    ) bool {
-        var executable_index: usize = 0;
+    ) !bool {
+        // Legacy trap facts are collected while walking the source-shaped AST,
+        // whereas executable expressions are materialized in evaluation order.
+        // Nested checked projections therefore legitimately enumerate the same
+        // edges in opposite orders. Match the two sets bijectively instead of
+        // treating list position as semantic identity.
+        const matched = try self.allocator.alloc(bool, self.executable_trap_edges.items.len);
+        defer self.allocator.free(matched);
+        @memset(matched, false);
         for (legacy_edges) |legacy| {
-            if (executable_index >= self.executable_trap_edges.items.len) {
-                if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) return false;
-                continue;
+            var found = false;
+            for (self.executable_trap_edges.items, 0..) |edge, executable_index| {
+                if (matched[executable_index] or !self.executableTrapEdgeMatchesLegacy(edge, legacy)) continue;
+                matched[executable_index] = true;
+                found = true;
+                break;
             }
-            const edge = self.executable_trap_edges.items[executable_index];
-            if (!edge.from_block.eql(BlockId.fromIndex(legacy.from_block)) or
-                !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
-                edge.kind != legacy.kind or edge.source != legacy.source)
-            {
+            if (!found) {
                 if (!self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) return false;
-                continue;
-            }
-            executable_index += 1;
-            const OwnerIdentity = struct { block_id: BlockId, span_id: SpanId };
-            const owner_identity: OwnerIdentity = switch (edge.owner) {
-                .expression => |id| expression: {
-                    if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return false;
-                    const owner = self.executable_expressions.items[id.index()];
-                    const owner_span_id = switch (owner.operation) {
-                        .load => |load| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
-                            if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len) return false;
-                            const place = self.executable_places.items[load.place.index()];
-                            if (!self.executableFixedArrayIndexPlaceComplete(place)) return false;
-                            const projection = switch (place.projections[0]) {
-                                .index => |value| value,
-                                .field, .deref => return false,
-                            };
-                            if (!projection.checked or projection.kind != .fixed_array) return false;
-                            break :bounds projection.span_id;
-                        } else load.representation_span_id,
-                        .atomic_load => |load| load.representation_span_id,
-                        .atomic_update => |update| update.representation_span_id,
-                        .address_of => |address| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
-                            if (!address.place.isValid() or address.place.index() >= self.executable_places.items.len) return false;
-                            const place = self.executable_places.items[address.place.index()];
-                            if (!self.executableFixedArrayIndexPlaceComplete(place)) return false;
-                            const projection = switch (place.projections[0]) {
-                                .index => |value| value,
-                                .field, .deref => return false,
-                            };
-                            if (!projection.checked or projection.kind != .fixed_array) return false;
-                            break :bounds projection.span_id;
-                        } else address.representation_span_id,
-                        .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
-                        else => owner.span_id,
-                    };
-                    break :expression .{ .block_id = owner.block_id, .span_id = owner_span_id };
-                },
-                .statement => |id| statement: {
-                    if (!id.isValid() or id.index() >= self.executable_statements.items.len) return false;
-                    const owner = self.executable_statements.items[id.index()];
-                    const owner_span_id = switch (owner.operation) {
-                        .store => |store| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
-                            if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len) return false;
-                            const place = self.executable_places.items[store.place.index()];
-                            for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-                                .index => |value| if (value.checked and value.kind == .fixed_array) break :bounds value.span_id,
-                                .field, .deref => {},
-                            };
-                            return false;
-                        } else store.representation_span_id,
-                        .guard => |guard| if (guard.kind == .assert_) owner.span_id else return false,
-                        else => return false,
-                    };
-                    break :statement .{ .block_id = owner.block_id, .span_id = owner_span_id };
-                },
-            };
-            if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) {
-                return false;
             }
         }
-        return executable_index == self.executable_trap_edges.items.len;
+        for (matched) |present| if (!present) return false;
+        return true;
+    }
+
+    fn executableTrapEdgeMatchesLegacy(
+        self: *const FunctionBuilder,
+        edge: mir_model.ExecutableTrapEdge,
+        legacy: TrapEdge,
+    ) bool {
+        if (!edge.from_block.eql(BlockId.fromIndex(legacy.from_block)) or
+            !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
+            edge.kind != legacy.kind or edge.source != legacy.source or
+            !edge.span_id.eql(legacy.typed_span_id)) return false;
+        const OwnerIdentity = struct { block_id: BlockId, span_id: SpanId };
+        const owner_identity: OwnerIdentity = switch (edge.owner) {
+            .expression => |id| expression: {
+                if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return false;
+                const owner = self.executable_expressions.items[id.index()];
+                const owner_span_id = switch (owner.operation) {
+                    .load => |load| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
+                        if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len) return false;
+                        const place = self.executable_places.items[load.place.index()];
+                        const projection = self.executableFixedArrayProjectionForSpan(place, legacy.typed_span_id) orelse return false;
+                        break :bounds projection.span_id;
+                    } else load.representation_span_id,
+                    .atomic_load => |load| load.representation_span_id,
+                    .atomic_update => |update| update.representation_span_id,
+                    .address_of => |address| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
+                        if (!address.place.isValid() or address.place.index() >= self.executable_places.items.len) return false;
+                        const place = self.executable_places.items[address.place.index()];
+                        const projection = self.executableFixedArrayProjectionForSpan(place, legacy.typed_span_id) orelse return false;
+                        break :bounds projection.span_id;
+                    } else address.representation_span_id,
+                    .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
+                    else => owner.span_id,
+                };
+                break :expression .{ .block_id = owner.block_id, .span_id = owner_span_id };
+            },
+            .statement => |id| statement: {
+                if (!id.isValid() or id.index() >= self.executable_statements.items.len) return false;
+                const owner = self.executable_statements.items[id.index()];
+                const owner_span_id = switch (owner.operation) {
+                    .store => |store| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
+                        if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len) return false;
+                        const place = self.executable_places.items[store.place.index()];
+                        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+                            .index => |value| if (value.checked and value.kind == .fixed_array and value.span_id.eql(legacy.typed_span_id))
+                                break :bounds value.span_id,
+                            .field, .deref => {},
+                        };
+                        return false;
+                    } else store.representation_span_id,
+                    .guard => |guard| if (guard.kind == .assert_) owner.span_id else return false,
+                    else => return false,
+                };
+                break :statement .{ .block_id = owner.block_id, .span_id = owner_span_id };
+            },
+        };
+        return owner_identity.block_id.eql(edge.from_block) and owner_identity.span_id.eql(legacy.typed_span_id);
     }
 
     fn executableTerminalTrapProjectionComplete(
@@ -13407,11 +13414,7 @@ const FunctionBuilder = struct {
                         !load.place.isValid() or load.place.index() >= self.executable_places.items.len) break :load_bounds;
                     const place = self.executable_places.items[load.place.index()];
                     if (!self.executableFixedArrayIndexPlaceComplete(place)) break :load_bounds;
-                    const projection = switch (place.projections[0]) {
-                        .index => |value| value,
-                        .field, .deref => break :load_bounds,
-                    };
-                    if (projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id)) {
+                    if (self.executableFixedArrayProjectionForSpan(place, span_id) != null) {
                         owner = expression.id;
                         break;
                     }
@@ -13421,11 +13424,7 @@ const FunctionBuilder = struct {
                         !address.place.isValid() or address.place.index() >= self.executable_places.items.len) break :address_bounds;
                     const place = self.executable_places.items[address.place.index()];
                     if (!self.executableFixedArrayIndexPlaceComplete(place)) break :address_bounds;
-                    const projection = switch (place.projections[0]) {
-                        .index => |value| value,
-                        .field, .deref => break :address_bounds,
-                    };
-                    if (projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id)) {
+                    if (self.executableFixedArrayProjectionForSpan(place, span_id) != null) {
                         owner = expression.id;
                         break;
                     }
@@ -13472,17 +13471,26 @@ const FunctionBuilder = struct {
             .trap_block = BlockId.fromIndex(legacy.trap_block),
             .kind = kind,
             .source = source,
+            .span_id = span_id,
         });
     }
 
     fn executableFixedArrayProjectionSpanMatches(self: *const FunctionBuilder, place_id: PlaceId, span_id: SpanId) bool {
         if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return false;
-        const place = self.executable_places.items[place_id.index()];
-        if (!self.executableFixedArrayIndexPlaceComplete(place)) return false;
-        return switch (place.projections[0]) {
-            .index => |projection| projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id),
-            .field, .deref => false,
+        return self.executableFixedArrayProjectionForSpan(self.executable_places.items[place_id.index()], span_id) != null;
+    }
+
+    fn executableFixedArrayProjectionForSpan(
+        self: *const FunctionBuilder,
+        place: ExecutablePlace,
+        span_id: SpanId,
+    ) ?@FieldType(ExecutablePlace.Projection, "index") {
+        if (!self.executableFixedArrayIndexPlaceComplete(place)) return null;
+        for (place.projections[0..place.projection_count]) |item| switch (item) {
+            .index => |projection| if (projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id)) return projection,
+            .field, .deref => {},
         };
+        return null;
     }
 
     fn attachExecutableAssertTrapEdge(self: *FunctionBuilder, statement_id: InstId, span: ast.Span) !void {
@@ -13515,6 +13523,7 @@ const FunctionBuilder = struct {
             .trap_block = BlockId.fromIndex(legacy.trap_block),
             .kind = .Assert,
             .source = .assert_stmt,
+            .span_id = span_id,
         });
     }
 
@@ -13561,6 +13570,7 @@ const FunctionBuilder = struct {
             .trap_block = BlockId.fromIndex(legacy.trap_block),
             .kind = kind,
             .source = source,
+            .span_id = span_id,
         });
     }
 
@@ -14648,6 +14658,7 @@ const FunctionBuilder = struct {
                     .trap_block = BlockId.fromIndex(legacy.trap_block),
                     .kind = legacy.kind,
                     .source = legacy.source,
+                    .span_id = span_id,
                 });
                 return;
             }
@@ -14663,6 +14674,7 @@ const FunctionBuilder = struct {
                     .trap_block = BlockId.fromIndex(legacy.trap_block),
                     .kind = legacy.kind,
                     .source = legacy.source,
+                    .span_id = span_id,
                 });
                 return;
             }
@@ -14688,6 +14700,7 @@ const FunctionBuilder = struct {
                 .trap_block = BlockId.fromIndex(legacy.trap_block),
                 .kind = legacy.kind,
                 .source = legacy.source,
+                .span_id = span_id,
             });
             return;
         }
@@ -14714,6 +14727,7 @@ const FunctionBuilder = struct {
                 .trap_block = BlockId.fromIndex(legacy.trap_block),
                 .kind = legacy.kind,
                 .source = legacy.source,
+                .span_id = span_id,
             });
             return;
         }

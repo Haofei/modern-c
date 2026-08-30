@@ -1541,7 +1541,7 @@ fn memoryLoadSupported(
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
-        if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
+        if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
                 .local => .plain,
                 .symbol => |id| if (symbolById(body, id)) |symbol|
@@ -1555,8 +1555,9 @@ fn memoryLoadSupported(
             };
             return load.access.kind == expected_kind and
                 load.representation_source == null and !load.representation_span_id.isValid() and
-                if (index.checked)
-                    fixedArrayLoadBoundsTrapEdge(body, expression) != null and ownedTrapEdgeCount(body, expression.id) == 1
+                if (mir.executableFixedArrayCheckedProjectionCount(place.*) != 0)
+                    fixedArrayLoadBoundsTrapEdge(body, expression) != null and
+                        ownedTrapEdgeCount(body, expression.id) == mir.executableFixedArrayCheckedProjectionCount(place.*)
                 else
                     ownedTrapEdgeCount(body, expression.id) == 0;
         }
@@ -1765,10 +1766,10 @@ fn addressOfSupported(
     const place = placeById(body, address.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (!addressResultMatchesPlace(expression.result_ty, place.ty)) return false;
-    if (mir.executableFixedArrayIndexPlace(body, place.*)) |projection| {
+    if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
         if (!fixedArrayAddressablePlaceSupported(body, place.*) or address.representation_source != null or
             address.representation_span_id.isValid()) return false;
-        return if (projection.checked)
+        return if (mir.executableFixedArrayCheckedProjectionCount(place.*) != 0)
             fixedArrayLoadBoundsTrapEdge(body, expression) != null
         else
             ownedTrapEdgeCount(body, expression.id) == 0;
@@ -1943,7 +1944,7 @@ fn memoryStoreSupported(
     if (place.projection_count != 0) {
         if (scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
             mir.executableCallablePlace(body.aggregate_types, place.*) == null) return false;
-        if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
+        if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
             const access_ok = switch (place.root) {
                 .local => store.access.kind == .plain,
                 .symbol => |id| if (symbolById(body, id)) |symbol|
@@ -1953,8 +1954,9 @@ fn memoryStoreSupported(
                 .value => false,
             };
             return access_ok and store.representation_source == null and !store.representation_span_id.isValid() and
-                if (index.checked)
-                    statementBoundsTrapEdge(body, statement) != null and ownedStatementTrapEdgeCount(body, statement.id) == 1
+                if (mir.executableFixedArrayCheckedProjectionCount(place.*) != 0)
+                    statementBoundsTrapEdge(body, statement) != null and
+                        ownedStatementTrapEdgeCount(body, statement.id) == mir.executableFixedArrayCheckedProjectionCount(place.*)
                 else
                     ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
@@ -2177,18 +2179,31 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
         else => return null,
     };
     const place = placeById(body, place_id) orelse return null;
-    const projection = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
-    if (!projection.checked or ownedTrapEdgeCount(body, expression.id) != 1) return null;
+    _ = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
+    const expected = mir.executableFixedArrayCheckedProjectionCount(place.*);
+    if (expected == 0 or ownedTrapEdgeCount(body, expression.id) != expected) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| if (index.kind == .fixed_array and index.checked) {
+            var matching_span: usize = 0;
+            for (body.trap_edges) |edge| if (edgeOwnedByExpression(edge, expression.id) and edge.span_id.eql(index.span_id)) {
+                matching_span += 1;
+            };
+            if (matching_span != 1) return null;
+        },
+        .field, .deref => {},
+    };
     for (body.trap_edges) |edge| {
         if (!edgeOwnedByExpression(edge, expression.id)) continue;
         if (!edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check) return null;
         const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
-        return switch (trap.operation) {
-            .trap_ => |kind| if (kind == .Bounds) edge else null,
-            else => null,
-        };
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Bounds) return null,
+            else => return null,
+        }
+        if (found == null) found = edge;
     }
-    return null;
+    return found;
 }
 
 fn tryUnwrapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
@@ -2295,17 +2310,35 @@ fn statementRepresentationOperationHasExactTrapEdge(
 }
 
 fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.ExecutableStatement) ?mir.ExecutableTrapEdge {
+    const store = switch (statement.operation) {
+        .store => |value| value,
+        else => return null,
+    };
+    const place = placeById(body, store.place) orelse return null;
+    _ = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
+    const expected = mir.executableFixedArrayCheckedProjectionCount(place.*);
+    if (expected == 0 or ownedStatementTrapEdgeCount(body, statement.id) != expected) return null;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| if (index.kind == .fixed_array and index.checked) {
+            var matching_span: usize = 0;
+            for (body.trap_edges) |edge| if (edgeOwnedByStatement(edge, statement.id) and edge.span_id.eql(index.span_id)) {
+                matching_span += 1;
+            };
+            if (matching_span != 1) return null;
+        },
+        .field, .deref => {},
+    };
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {
         if (!edgeOwnedByStatement(edge, statement.id)) continue;
-        if (found != null or !edge.from_block.eql(statement.block_id) or
+        if (!edge.from_block.eql(statement.block_id) or
             edge.kind != .Bounds or edge.source != .bounds_check) return null;
         const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
         switch (trap.operation) {
             .trap_ => |kind| if (kind != .Bounds) return null,
             else => return null,
         }
-        found = edge;
+        if (found == null) found = edge;
     }
     return found;
 }
@@ -2622,25 +2655,31 @@ fn emitPlace(
 ) (RenderError || std.mem.Allocator.Error)!void {
     const place = placeById(body, id) orelse return error.InvalidPlace;
     if (place.storage != .ordinary) return error.UnsupportedOperation;
-    if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
+    if (mir.executableFixedArrayIndexPlace(body, place.*) != null) {
         try out.append(allocator, '(');
         try emitPlaceRootValue(allocator, out, body, place.*);
-        try out.appendSlice(allocator, ").elems[");
-        if (index.checked) try out.appendSlice(allocator, "mc_check_index_usize(");
-        try emitExpression(allocator, out, body, index.value, 0);
-        if (index.checked) try out.print(allocator, ", {d})", .{index.bound.?});
-        try out.append(allocator, ']');
-        if (place.projection_count == 2) {
-            const field_index = switch (place.projections[1]) {
-                .field => |value| value,
-                .deref, .index => return error.InvalidPlace,
-            };
-            const array = aggregateType(body, place.root_type_id) orelse return error.InvalidPlace;
-            const element = aggregateType(body, array.field_type_ids[0]) orelse return error.InvalidPlace;
-            if (field_index >= element.field_count) return error.InvalidPlace;
-            try out.append(allocator, '.');
-            try appendIdent(allocator, out, element.field_spellings[field_index]);
-        }
+        try out.append(allocator, ')');
+        var current_type_id = place.root_type_id;
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .index => |index| {
+                const array = aggregateType(body, current_type_id) orelse return error.InvalidPlace;
+                if (array.field_count == 0) return error.InvalidPlace;
+                try out.appendSlice(allocator, ".elems[");
+                if (index.checked) try out.appendSlice(allocator, "mc_check_index_usize(");
+                try emitExpression(allocator, out, body, index.value, 0);
+                if (index.checked) try out.print(allocator, ", {d})", .{index.bound.?});
+                try out.append(allocator, ']');
+                current_type_id = array.field_type_ids[0];
+            },
+            .field => |field_index| {
+                const aggregate = aggregateType(body, current_type_id) orelse return error.InvalidPlace;
+                if (field_index >= aggregate.field_count) return error.InvalidPlace;
+                try out.append(allocator, '.');
+                try appendIdent(allocator, out, aggregate.field_spellings[field_index]);
+                current_type_id = aggregate.field_type_ids[field_index];
+            },
+            .deref => return error.InvalidPlace,
+        };
         return;
     }
     if (mir.executableDirectAggregateFieldPlace(

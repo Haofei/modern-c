@@ -1120,6 +1120,10 @@ pub const ExecutableTrapEdge = struct {
     trap_block: BlockId,
     kind: TrapKind,
     source: TrapSource,
+    /// Exact source operation that owns this exceptional edge. This remains
+    /// distinct from the owner's span because one indexed place may contain
+    /// several checked projections owned by the same load/store expression.
+    span_id: SpanId = .invalid,
 };
 
 /// Prove that eagerly evaluating a boolean expression tree preserves source
@@ -1640,64 +1644,89 @@ pub fn executableLocalAddressDerefPlace(
         std.mem.eql(u8, pointer.child, place.ty.name());
 }
 
-/// Validate the complete typed shape of the deliberately bounded first
-/// indexed-place slice. Producer completion remains responsible for creating
-/// it; verifier and both renderers share this predicate so bounds and element
-/// identity cannot drift between consumers.
+/// Validate a typed fixed-array projection chain. Every index advances through
+/// the canonical aggregate table; an optional final field selects storage in
+/// the indexed element. Producer, verifier and both renderers share this
+/// predicate so nested bounds and element identity cannot drift.
 pub fn executableFixedArrayIndexPlace(
     body: *const ExecutableBody,
     place: ExecutablePlace,
 ) ?@FieldType(ExecutablePlace.Projection, "index") {
-    if (place.storage != .ordinary or (place.projection_count != 1 and place.projection_count != 2) or
+    if (place.storage != .ordinary or place.projection_count == 0 or
         !place.root_type_id.isValid() or !place.type_id.isValid()) return null;
-    const projection = switch (place.projections[0]) {
-        .index => |value| value,
-        .field, .deref => return null,
-    };
-    if (projection.kind != .fixed_array or projection.bound == null or
-        !projection.span_id.isValid() or !projection.value.isValid() or
-        projection.value.index() >= body.expressions.len) return null;
-    const index = body.expressions[projection.value.index()];
-    if (!index.id.eql(projection.value) or !ValueType.eql(index.result_ty, .{ .integer = "usize" })) return null;
-    const array = switch (place.root_ty) {
-        .array => |shape| shape,
-        else => return null,
-    };
-    const bound = projection.bound.?;
-    if (array.length == null or array.length.? != bound or bound == 0) return null;
-    var aggregate: ?ExecutableAggregateType = null;
-    for (body.aggregate_types) |candidate| if (candidate.type_id.eql(place.root_type_id)) {
-        aggregate = candidate;
-        break;
-    };
-    const shape = aggregate orelse return null;
-    if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
-        !ValueType.eql(shape.ty, place.root_ty)) return null;
-    if (place.projection_count == 1) {
-        if (!ValueType.eql(shape.field_types[0], place.ty) or !shape.field_type_ids[0].eql(place.type_id)) return null;
-    } else {
-        const field_index = switch (place.projections[1]) {
-            .field => |value| value,
-            .deref, .index => return null,
-        };
-        var element: ?ExecutableAggregateType = null;
-        for (body.aggregate_types) |candidate| if (candidate.type_id.eql(shape.field_type_ids[0])) {
-            element = candidate;
-            break;
-        };
-        const element_shape = element orelse return null;
-        if (!ValueType.eql(element_shape.ty, shape.field_types[0]) or field_index >= element_shape.field_count or
-            !ValueType.eql(element_shape.field_types[field_index], place.ty) or
-            !element_shape.field_type_ids[field_index].eql(place.type_id)) return null;
-    }
-    if (!projection.checked) switch (index.operation) {
-        .literal => |literal| switch (literal) {
-            .integer => |value| if (value >= bound) return null,
-            else => return null,
+    var current_ty = place.root_ty;
+    var current_type_id = place.root_type_id;
+    var first_index: ?@FieldType(ExecutablePlace.Projection, "index") = null;
+    for (place.projections[0..place.projection_count], 0..) |item, projection_index| switch (item) {
+        .index => |projection| {
+            if (projection.kind != .fixed_array or projection.bound == null or
+                !projection.span_id.isValid() or !projection.value.isValid() or
+                projection.value.index() >= body.expressions.len) return null;
+            const index = body.expressions[projection.value.index()];
+            if (!index.id.eql(projection.value) or !ValueType.eql(index.result_ty, .{ .integer = "usize" })) return null;
+            const array = switch (current_ty) {
+                .array => |shape| shape,
+                else => return null,
+            };
+            const bound = projection.bound.?;
+            if (array.length == null or array.length.? != bound or bound == 0) return null;
+            var aggregate: ?ExecutableAggregateType = null;
+            for (body.aggregate_types) |candidate| if (candidate.type_id.eql(current_type_id)) {
+                aggregate = candidate;
+                break;
+            };
+            const shape = aggregate orelse return null;
+            if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
+                !ValueType.eql(shape.ty, current_ty)) return null;
+            if (!projection.checked) switch (index.operation) {
+                .literal => |literal| switch (literal) {
+                    .integer => |value| if (value >= bound) return null,
+                    else => return null,
+                },
+                else => return null,
+            };
+            if (first_index == null) first_index = projection;
+            current_ty = shape.field_types[0];
+            current_type_id = shape.field_type_ids[0];
         },
-        else => return null,
+        .field => |field_index| {
+            if (first_index == null or projection_index + 1 != place.projection_count) return null;
+            var aggregate: ?ExecutableAggregateType = null;
+            for (body.aggregate_types) |candidate| if (candidate.type_id.eql(current_type_id)) {
+                aggregate = candidate;
+                break;
+            };
+            const shape = aggregate orelse return null;
+            if (!ValueType.eql(shape.ty, current_ty) or field_index >= shape.field_count) return null;
+            current_ty = shape.field_types[field_index];
+            current_type_id = shape.field_type_ids[field_index];
+        },
+        .deref => return null,
     };
-    return projection;
+    if (!ValueType.eql(current_ty, place.ty) or !current_type_id.eql(place.type_id)) return null;
+    return first_index;
+}
+
+pub fn executableFixedArrayCheckedProjectionCount(place: ExecutablePlace) usize {
+    var count: usize = 0;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| count += @intFromBool(index.kind == .fixed_array and index.checked),
+        .field, .deref => {},
+    };
+    return count;
+}
+
+pub fn executableFixedArrayProjectionForSpan(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    span_id: SpanId,
+) ?@FieldType(ExecutablePlace.Projection, "index") {
+    _ = executableFixedArrayIndexPlace(body, place) orelse return null;
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| if (index.kind == .fixed_array and index.checked and index.span_id.eql(span_id)) return index,
+        .field, .deref => {},
+    };
+    return null;
 }
 
 pub const Terminator = union(enum) {

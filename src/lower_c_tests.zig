@@ -2425,8 +2425,10 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     try expectContains(local, "mc_array_u32_2 copy = mc_exec_tmp_");
     try expectContains(local, ".elems[mc_check_index_usize(mc_exec_tmp_");
     const nested = try cFunctionBody(output.items, "static uint32_t nested_global(void)");
-    try expectContains(nested, "mc_race_store_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(0, 2)], (uint32_t)mc_tmp");
-    try expectContains(nested, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(0, 2)])");
+    try std.testing.expect(isCanonicalExecutableCBody(nested));
+    try expectContains(nested, "mc_race_store_u32(&((matrix).elems[mc_check_index_usize(");
+    try expectContains(nested, ", 2)].elems[mc_check_index_usize(");
+    try expectContains(nested, "mc_race_load_u32(&((matrix).elems[mc_check_index_usize(");
     const replace = try cFunctionBody(output.items, "static uint32_t replace_row(void)");
     try expectContains(replace, "(mc_array_u32_2){ .elems = { 31, 32 } }");
     try expectContains(replace, "matrix.elems[mc_check_index_usize(1, 2)]");

@@ -192,12 +192,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (target.root == .value) try verifyOperand(body, value, target.root.value);
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
-                if (mir.executableFixedArrayIndexPlace(body, target.*)) |projection| {
+                if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
                     if (operation.representation_source != null or operation.representation_span_id.isValid())
                         return error.InvalidMemoryAccessTrap;
-                    const expected_traps: usize = @intFromBool(projection.checked);
-                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != expected_traps or
-                        (projection.checked and ownedTrapCount(body, .{ .expression = value.id }, .Bounds, .bounds_check) != 1))
+                    if (!fixedArrayBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*))
                         return error.InvalidMemoryAccessTrap;
                     return;
                 }
@@ -464,12 +462,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (target.root == .value) try verifyOperand(body, value, target.root.value);
             if (body.complete) {
                 if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
-                if (mir.executableFixedArrayIndexPlace(body, target.*)) |projection| {
+                if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
                     if (!fixedArrayAddressableRoot(body, target.*) or address.representation_source != null or
                         address.representation_span_id.isValid()) return error.InvalidMemoryAccessTrap;
-                    const expected_traps: usize = @intFromBool(projection.checked);
-                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != expected_traps or
-                        (projection.checked and ownedTrapCount(body, .{ .expression = value.id }, .Bounds, .bounds_check) != 1))
+                    if (!fixedArrayBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*))
                         return error.InvalidMemoryAccessTrap;
                 } else if (target.projection_count == 0) {
                     if (!directAddressablePlace(body, target.*) or address.representation_source != null or
@@ -665,6 +661,7 @@ fn verifyVariantOperation(
 fn verifyTrapEdges(function: *const mir.Function) !void {
     const body = &function.executable_body;
     for (body.trap_edges, 0..) |edge, edge_index| {
+        try verifySpanId(function, edge.span_id);
         const OwnerInfo = struct { block_id: mir.BlockId, span_id: mir.SpanId };
         const owner_info: OwnerInfo = switch (edge.owner) {
             .expression => |id| expression_owner: {
@@ -676,8 +673,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .load => |load| {
                         const target = place(body, load.place) orelse return error.InvalidTrapEdge;
                         if (edge.kind == .Bounds and edge.source == .bounds_check) {
-                            const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
-                            if (!projection.checked) return error.InvalidTrapEdge;
+                            _ = mir.executableFixedArrayProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                         } else if (target.storage != .ordinary or
                             !(isParameterScalarAccessPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
                             edge.kind != .InvalidRepresentation or
@@ -698,8 +694,8 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .address_of => |address| {
                         const target = place(body, address.place) orelse return error.InvalidTrapEdge;
                         if (edge.kind == .Bounds and edge.source == .bounds_check) {
-                            const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
-                            if (!projection.checked or !fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
+                            _ = mir.executableFixedArrayProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
+                            if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
                         } else if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
@@ -735,16 +731,14 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                 const span_id = switch (owner.operation) {
                     .load => |load| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
                         const target = place(body, load.place) orelse return error.InvalidTrapEdge;
-                        const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
-                        if (!projection.checked) return error.InvalidTrapEdge;
+                        const projection = mir.executableFixedArrayProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                         break :bounds projection.span_id;
                     } else load.representation_span_id,
                     .atomic_load => |load| load.representation_span_id,
                     .atomic_update => |update| update.representation_span_id,
                     .address_of => |address| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
                         const target = place(body, address.place) orelse return error.InvalidTrapEdge;
-                        const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
-                        if (!projection.checked) return error.InvalidTrapEdge;
+                        const projection = mir.executableFixedArrayProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                         break :bounds projection.span_id;
                     } else address.representation_span_id,
                     .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
@@ -758,8 +752,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .store => |store| {
                         const target = place(body, store.place) orelse return error.InvalidTrapEdge;
                         if (edge.kind == .Bounds and edge.source == .bounds_check) {
-                            const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
-                            if (!projection.checked) return error.InvalidTrapEdge;
+                            const projection = mir.executableFixedArrayProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                             break :statement_owner .{ .block_id = owner.block_id, .span_id = projection.span_id };
                         }
                         if (!(isParameterScalarAccessPlace(body, target.*, true) or mir.executableLocalAddressDerefPlace(body, target.*, true)) or
@@ -783,7 +776,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                 }
             },
         };
-        if (!owner_info.block_id.eql(edge.from_block)) return error.InvalidTrapEdge;
+        if (!owner_info.block_id.eql(edge.from_block) or !owner_info.span_id.eql(edge.span_id)) return error.InvalidTrapEdge;
         const source_block = blockById(function, edge.from_block) orelse return error.InvalidTrapEdge;
         var has_successor = false;
         for (source_block.typed_successors) |successor| if (successor.eql(edge.trap_block)) {
@@ -804,7 +797,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
         if (legacy_matches != 1) return error.InvalidTrapEdge;
         for (body.trap_edges[0..edge_index]) |previous| {
             if (previous.owner.eql(edge.owner) and previous.trap_block.eql(edge.trap_block) and
-                previous.kind == edge.kind and previous.source == edge.source) return error.InvalidTrapEdge;
+                previous.kind == edge.kind and previous.source == edge.source and previous.span_id.eql(edge.span_id)) return error.InvalidTrapEdge;
         }
     }
     if (body.complete) {
@@ -813,7 +806,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
             var matches: usize = 0;
             for (body.trap_edges) |edge| {
                 if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
-                    legacy.kind == edge.kind and legacy.source == edge.source) matches += 1;
+                    legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(edge.span_id)) matches += 1;
             }
             if (matches == 0 and terminalTrapProjectionMatches(function, legacy)) {
                 terminal_projections += 1;
@@ -864,6 +857,36 @@ fn ownedTrapCount(body: *const mir.ExecutableBody, owner: mir.ExecutableTrapOwne
         count += 1;
     };
     return count;
+}
+
+fn fixedArrayBoundsEdgesExact(
+    body: *const mir.ExecutableBody,
+    owner: mir.ExecutableTrapOwner,
+    block_id: mir.BlockId,
+    target: mir.ExecutablePlace,
+) bool {
+    if (mir.executableFixedArrayIndexPlace(body, target) == null) return false;
+    const expected = mir.executableFixedArrayCheckedProjectionCount(target);
+    if (ownedTrapCountAll(body, owner) != expected or
+        ownedTrapCount(body, owner, .Bounds, .bounds_check) != expected) return false;
+    for (target.projections[0..target.projection_count]) |projection| switch (projection) {
+        .index => |index| if (index.kind == .fixed_array and index.checked) {
+            var matches: usize = 0;
+            for (body.trap_edges) |edge| {
+                if (!edge.owner.eql(owner) or !edge.span_id.eql(index.span_id)) continue;
+                if (!edge.from_block.eql(block_id) or edge.kind != .Bounds or edge.source != .bounds_check) return false;
+                const trap = executableTerminator(body, edge.trap_block) orelse return false;
+                switch (trap.operation) {
+                    .trap_ => |kind| if (kind != .Bounds) return false,
+                    else => return false,
+                }
+                matches += 1;
+            }
+            if (matches != 1) return false;
+        },
+        .field, .deref => {},
+    };
+    return true;
 }
 
 fn ownedTrapCountAll(body: *const mir.ExecutableBody, owner: mir.ExecutableTrapOwner) usize {
@@ -942,9 +965,9 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             if (body.complete) {
                 try verifyMemoryAccess(function, operation.place, operation.ty, operation.access, true);
                 const guarded = placeNeedsRepresentationGuard(target.*);
-                const indexed = mir.executableFixedArrayIndexPlace(body, target.*);
-                const checked_index = indexed != null and indexed.?.checked;
-                const expected_traps = @as(usize, @intFromBool(guarded)) + @as(usize, @intFromBool(checked_index));
+                const indexed = mir.executableFixedArrayIndexPlace(body, target.*) != null;
+                const checked_indices = if (indexed) mir.executableFixedArrayCheckedProjectionCount(target.*) else 0;
+                const expected_traps = @as(usize, @intFromBool(guarded)) + checked_indices;
                 if (guarded) {
                     const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, operation.representation_span_id, source);
@@ -953,7 +976,7 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                 } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
-                if (checked_index and ownedTrapCount(body, .{ .statement = statement_value.id }, .Bounds, .bounds_check) != 1)
+                if (indexed and !fixedArrayBoundsEdgesExact(body, .{ .statement = statement_value.id }, statement_value.block_id, target.*))
                     return error.InvalidMemoryAccessTrap;
                 if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != expected_traps)
                     return error.InvalidMemoryAccessTrap;
