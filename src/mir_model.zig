@@ -1644,10 +1644,10 @@ pub fn executableLocalAddressDerefPlace(
         std.mem.eql(u8, pointer.child, place.ty.name());
 }
 
-/// Validate a typed fixed-array projection chain. Every index advances through
-/// the canonical aggregate table; an optional final field selects storage in
-/// the indexed element. Producer, verifier and both renderers share this
-/// predicate so nested bounds and element identity cannot drift.
+/// Validate a typed projection chain containing at least one fixed-array
+/// index. Every index and field advances through the canonical aggregate
+/// table. Producer, verifier and both renderers share this predicate so nested
+/// bounds, interleaved fields and element identity cannot drift.
 pub fn executableFixedArrayIndexPlace(
     body: *const ExecutableBody,
     place: ExecutablePlace,
@@ -1690,7 +1690,7 @@ pub fn executableFixedArrayIndexPlace(
             current_type_id = shape.field_type_ids[0];
         },
         .field => |field_index| {
-            if (first_index == null or projection_index + 1 != place.projection_count) return null;
+            _ = projection_index;
             var aggregate: ?ExecutableAggregateType = null;
             for (body.aggregate_types) |candidate| if (candidate.type_id.eql(current_type_id)) {
                 aggregate = candidate;

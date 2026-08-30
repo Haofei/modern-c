@@ -7417,7 +7417,7 @@ const FunctionBuilder = struct {
                 current_type_id = shape.field_type_ids[0];
             },
             .field => |field_index| {
-                if (!saw_index or projection_index + 1 != place.projection_count) return false;
+                _ = projection_index;
                 var aggregate: ?mir_model.ExecutableAggregateType = null;
                 for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(current_type_id)) {
                     aggregate = candidate;
