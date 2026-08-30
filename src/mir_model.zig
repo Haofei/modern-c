@@ -2904,6 +2904,10 @@ pub const Function = struct {
     typed_symbol_id: SymbolId = .invalid,
     typed_source_id: SourceId = .invalid,
     return_ty: ValueType,
+    /// Exact callable representation for an otherwise opaque `.value`
+    /// return. A closure is a two-pointer value; a plain function pointer is
+    /// one pointer. Backends must not recover this distinction from syntax.
+    return_callable_signature: ?ExecutableCallSignature = null,
     // Signature obligations are produced once as typed MIR facts. Consumers
     // must not reconstruct them by rescanning source declarations.
     param_count: usize = 0,

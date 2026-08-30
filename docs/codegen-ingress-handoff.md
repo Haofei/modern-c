@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1440/1827 C functions and 1472/1879 LLVM functions.
-  The remaining 387 C and 407 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1440/1827 C functions and 1476/1879 LLVM functions.
+  The remaining 387 C and 403 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -40,6 +40,12 @@ field loads, preserving the prior race-tolerant behavior.
 Executable `LocalId` values are declaration-generation identities. Reusing a
 name in a later disjoint lexical scope no longer aliases the earlier LLVM
 alloca; 16 LLVM-only fallback bodies moved to canonical emission.
+
+Function MIR also owns callable return signatures. LLVM applies that fact to
+the declaration, call result, local slot, and aggregate field representation,
+which retires the final four bodies that were renderer-ready but rejected by
+the integration ingress. The remaining LLVM fallback set has no
+`canonical=ready` tail.
 
 The producer no longer carries a one-off slice-store completion recognizer.
 The executable-body verifier promotes every valid body without an explicit

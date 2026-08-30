@@ -1815,6 +1815,7 @@ const LlvmEmitter = struct {
                     .callee = call.callee,
                     .fixed_arity = call.argument_count,
                     .c_abi = signature.c_abi,
+                    .result_callable_signature = signature.return_callable_signature,
                     .result_extension = if (signature.c_abi) mir_executable_llvm.abiExtension(target, expression.result_ty) else .none,
                 };
                 for (call.arguments[0..call.argument_count], signature.param_types, 0..) |argument_id, parameter_ty, index| {
@@ -1829,7 +1830,11 @@ const LlvmEmitter = struct {
             },
             else => {},
         };
-        return .{ .target = target, .direct_calls = entries };
+        return .{
+            .target = target,
+            .function_return_callable_signature = fn_mir.return_callable_signature,
+            .direct_calls = entries,
+        };
     }
 
     fn simpleMirEntryBlockFoldsLocal(fn_mir: mir.Function) bool {

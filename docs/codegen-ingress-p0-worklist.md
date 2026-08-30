@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1440/1827 admitted | 1472/1879 admitted |
-| AST fallback | 387 | 407 |
+| broad sweep | 1440/1827 admitted | 1476/1879 admitted |
+| AST fallback | 387 | 403 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -43,6 +43,12 @@ copy. `inferred_call_slice_element` is canonical in both backends.
 spelling. Disjoint lexical scopes can reuse a name without collapsing LLVM
 allocas or types; this retired 16 LLVM-only fallbacks while leaving the C
 canonical path unchanged.
+
+Callable return representation is now a verified function fact. LLVM uses the
+same fact for function signatures, direct-call results, local storage, and
+aggregate callable fields, so closure values are consistently represented as
+`{ ptr, ptr }`. The last four `canonical=ready` LLVM fallbacks are retired;
+every remaining LLVM fallback is either producer-incomplete or renderer-owned.
 
 The parameter-pointee fixed-array/address family is also closed. A leading
 typed parameter dereference is part of the shared fixed-array place metadata;

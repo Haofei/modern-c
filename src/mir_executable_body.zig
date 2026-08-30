@@ -109,6 +109,10 @@ pub fn verify(function: *const mir.Function) !void {
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
     try verifyType(function, body.return_type_id, function.return_ty, body.complete);
+    if (function.return_callable_signature) |signature| {
+        if (function.return_ty != .value) return error.InvalidFunctionSignature;
+        try verifyCallableSignature(function, signature, body.complete);
+    }
     for (body.aggregate_types, 0..) |aggregate, index| {
         try verifyAggregateType(function, aggregate, index);
     }

@@ -6147,6 +6147,7 @@ const FunctionBuilder = struct {
     mutable_globals: *const std.StringHashMap(void),
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
     aggregate_return_pointer_facts: []const AggregateReturnPointerFact,
+    return_callable_signature: ?mir_model.ExecutableCallSignature = null,
     blocks: std.ArrayList(MutableBlock),
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
@@ -6355,6 +6356,7 @@ const FunctionBuilder = struct {
         if (fn_decl.return_type) |return_type| {
             if (!try builder.internExecutableTypeExpr(builder.return_ty, return_type))
                 builder.executable_supported = false;
+            builder.return_callable_signature = try builder.executableCallableSignature(return_type);
         }
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
@@ -6725,6 +6727,7 @@ const FunctionBuilder = struct {
         var result: Function = .{
             .name = self.name,
             .return_ty = self.return_ty,
+            .return_callable_signature = self.return_callable_signature,
             .param_count = self.param_count,
             .param_types = param_types,
             .c_abi = self.c_abi,

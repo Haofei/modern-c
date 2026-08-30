@@ -44,12 +44,14 @@ pub const DirectCallAbi = struct {
     callee: mir.SymbolId,
     fixed_arity: usize,
     c_abi: bool,
+    result_callable_signature: ?mir.ExecutableCallSignature = null,
     result_extension: AbiExtension = .none,
     parameter_extensions: [mir.max_executable_operands]AbiExtension = [_]AbiExtension{.none} ** mir.max_executable_operands,
 };
 
 pub const CallAbiPlan = struct {
     target: TargetAbi,
+    function_return_callable_signature: ?mir.ExecutableCallSignature = null,
     direct_calls: []const DirectCallAbi,
 };
 
@@ -116,6 +118,7 @@ fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
             if (entry.c_abi and !cAbiDirectCallTypeSupported(expression.result_ty)) return false;
             const expected_result = if (entry.c_abi) abiExtension(plan.target, expression.result_ty) else .none;
             if (entry.result_extension != expected_result) return false;
+            if (entry.result_callable_signature != null and expression.result_ty != .value) return false;
             for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
                 if (!expressionValid(body, argument_id)) return false;
                 const argument_ty = body.expressions[argument_id.index()].result_ty;
@@ -354,8 +357,16 @@ const Renderer = struct {
             .returns = std.AutoHashMap(u32, ?Value).init(allocator),
             .call_abi_plan = call_abi_plan,
         };
-        result.return_ty = try result.typeText(return_ty);
+        result.return_ty = try result.callableStorageType(return_ty, if (call_abi_plan) |plan| plan.function_return_callable_signature else null);
         return result;
+    }
+
+    fn callableStorageType(self: *Renderer, ty: mir.ValueType, signature: ?mir.ExecutableCallSignature) RenderError![]const u8 {
+        if (signature) |callable| {
+            if (ty != .value) return error.InvalidBody;
+            return if (callable.has_environment) "{ ptr, ptr }" else "ptr";
+        }
+        return self.typeText(ty);
     }
 
     fn typeText(self: *Renderer, ty: mir.ValueType) RenderError![]const u8 {
@@ -383,9 +394,9 @@ const Renderer = struct {
         }
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.allocator, "{ ");
-        for (aggregate.field_types[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count], 0..) |field_ty, dyn_trait, index| {
+        for (aggregate.field_types[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count], 0..) |field_ty, callable, dyn_trait, index| {
             if (index != 0) try text.appendSlice(self.allocator, ", ");
-            try text.appendSlice(self.allocator, if (dyn_trait) "{ ptr, ptr }" else try self.typeTextDepth(field_ty, depth + 1));
+            try text.appendSlice(self.allocator, if (dyn_trait or (callable != null and callable.?.has_environment)) "{ ptr, ptr }" else try self.typeTextDepth(field_ty, depth + 1));
         }
         try text.appendSlice(self.allocator, " }");
         return text.toOwnedSlice(self.allocator);
@@ -399,9 +410,17 @@ const Renderer = struct {
     }
 
     fn localStorageType(self: *Renderer, local: @FieldType(mir.ExecutableStatement.Operation, "local_init")) RenderError![]const u8 {
-        if (local.value) |initializer| if (expressionValid(self.body, initializer) and
-            self.body.expressions[initializer.index()].operation == .closure_bind)
-            return "{ ptr, ptr }";
+        if (local.value) |initializer| if (expressionValid(self.body, initializer)) {
+            const expression = self.body.expressions[initializer.index()];
+            switch (expression.operation) {
+                .closure_bind => return "{ ptr, ptr }",
+                .direct_call => if (self.call_abi_plan) |plan| {
+                    const abi = directCallAbiFor(plan.*, expression.id) orelse return error.InvalidBody;
+                    return self.callableStorageType(local.ty, abi.result_callable_signature);
+                },
+                else => {},
+            }
+        };
         return self.typeText(local.ty);
     }
 
@@ -850,7 +869,7 @@ const Renderer = struct {
         var current: []const u8 = "zeroinitializer";
         for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
             const operand = try self.emitExpression(operand_id);
-            const field_ty = try self.typeText(shape.field_types[field_index]);
+            const field_ty = try self.callableStorageType(shape.field_types[field_index], shape.field_callable_signatures[field_index]);
             if (!std.mem.eql(u8, operand.ty, field_ty)) return error.InvalidBody;
             const result = try self.temp();
             try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
@@ -1611,7 +1630,8 @@ const Renderer = struct {
     fn emitDirectCall(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, call: anytype) RenderError!Value {
         const symbol = symbolSpelling(self.body, call.callee) orelse return error.InvalidBody;
         const abi = if (self.call_abi_plan) |plan| directCallAbiFor(plan.*, expression.id) orelse return error.InvalidBody else null;
-        return self.emitCall(ty, try std.fmt.allocPrint(self.allocator, "@{s}", .{symbol}), call.arguments[0..call.argument_count], abi);
+        const result_ty = if (abi) |entry| try self.callableStorageType(expression.result_ty, entry.result_callable_signature) else ty;
+        return self.emitCall(result_ty, try std.fmt.allocPrint(self.allocator, "@{s}", .{symbol}), call.arguments[0..call.argument_count], abi);
     }
 
     fn emitClosureBind(self: *Renderer, bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind")) RenderError!Value {
