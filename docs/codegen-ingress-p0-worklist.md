@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1397/1809 admitted | 1419/1861 admitted |
-| AST fallback | 412 | 442 |
+| broad sweep | 1414/1809 admitted | 1433/1861 admitted |
+| AST fallback | 395 | 428 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -28,6 +28,11 @@ foreach plan emitters, and all selected-path enum variants were deleted.
 The verifier now promotes every structurally valid body that has no explicit
 producer-owned incomplete reason. Compile-time statements carry an explicit
 reason and remain fail-closed instead of being emitted as runtime work.
+
+The fixed-array index renderer slice is closed for `arrays_slices.mc`: all 29
+functions are canonical in both backends, and four source-consumer-specific
+admission helpers were deleted. Canonical `uninit` now means uninitialized
+local storage rather than a runtime value.
 
 ## Rules
 

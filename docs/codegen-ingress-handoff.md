@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1397/1809 C functions and 1419/1861 LLVM functions.
-  The remaining 412 C and 442 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1414/1809 C functions and 1433/1861 LLVM functions.
+  The remaining 395 C and 428 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -38,6 +38,12 @@ The executable-body verifier promotes every valid body without an explicit
 incomplete reason; compile-time statements are explicitly classified and stay
 outside runtime MIR. Parameter-field addresses now own their representation
 trap at construction time and are rendered mechanically by both backends.
+Fixed-array indexing is now admitted by typed base identity rather than by its
+source consumer shape. The direct-return-only helpers were deleted; parameters,
+locals, nested projections, and direct-call array values share one path. The
+`arrays_slices.mc` root is 29/29 canonical in both backends. `uninit` is also
+modeled as a local storage policy, so C no longer claims it is an ordinary
+renderable value and LLVM no longer emits a fake initializer store.
 
 Each slice must:
 

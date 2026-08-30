@@ -893,6 +893,27 @@ pub const ExecutableLiteral = union(enum) {
     enum_value: []const u8,
 };
 
+/// `uninit` is a local-storage policy, never a runtime value. One typed local
+/// declaration must be the literal's sole consumer.
+pub fn executableUninitLocalInitializer(body: *const ExecutableBody, expression: ExecutableExpression) bool {
+    switch (expression.operation) {
+        .literal => |literal| switch (literal) {
+            .uninit => {},
+            else => return false,
+        },
+        else => return false,
+    }
+    var owner_count: usize = 0;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| if (local.value != null and local.value.?.eql(expression.id)) {
+            if (!ValueType.eql(local.ty, expression.result_ty) or !local.type_id.eql(expression.type_id)) return false;
+            owner_count += 1;
+        },
+        else => {},
+    };
+    return owner_count == 1;
+}
+
 /// Canonical IEEE payload selected at the literal's checked semantic width.
 /// Raw spelling remains syntax/source-map data and never reaches codegen.
 pub const ExecutableFloatLiteral = union(enum) {

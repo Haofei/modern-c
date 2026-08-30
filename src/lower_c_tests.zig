@@ -20010,7 +20010,9 @@ test "lower-c casts indexed bool switch subjects and marks ignored locals unused
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _seq_ignore =") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "tick();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "tick2(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(flags.elems[mc_check_index_usize(i, 2)])) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".elems[mc_check_index_usize(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_exec_tmp_") != null);
 }
 
 test "lower-c emits target-typed enum literals" {

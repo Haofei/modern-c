@@ -446,9 +446,12 @@ const Renderer = struct {
                 const ty = try self.localStorageType(local);
                 const slot = (self.locals.get(local.local.raw) orelse return error.InvalidBody).storage;
                 if (local.value) |initializer| {
-                    const value = try self.emitExpression(initializer);
-                    if (!std.mem.eql(u8, ty, value.ty)) return error.InvalidBody;
-                    try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ ty, value.spelling, slot });
+                    const expression = if (expressionValid(self.body, initializer)) self.body.expressions[initializer.index()] else return error.InvalidBody;
+                    if (!mir.executableUninitLocalInitializer(self.body, expression)) {
+                        const value = try self.emitExpression(initializer);
+                        if (!std.mem.eql(u8, ty, value.ty)) return error.InvalidBody;
+                        try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ ty, value.spelling, slot });
+                    }
                 }
             },
             .store => |store| {
@@ -2790,6 +2793,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .literal => |literal| switch (literal) {
             .integer, .signed_integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
+            .uninit => mir.executableUninitLocalInitializer(body, expression),
             else => false,
         },
         .unary => |unary| unarySupported(body, expression, unary),
@@ -3075,9 +3079,8 @@ fn indexSupported(
             if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
         } else if (!localArrayIndexBase(body, operation.base) and
             !(expression.block_id.raw == 0 and projectionRootIsLocalArray(body, operation.base)) and
-            !directParameterArrayIndexReturn(body, expression, operation) and
-            !directImmutableLocalArrayIndexReturn(body, expression, operation) and
-            (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression))) return false;
+            !(expression.block_id.raw == 0 and parameterArrayIndexBase(body, operation.base)) and
+            !(expression.block_id.raw == 0 and projectionRootIsDirectCall(body, operation.base))) return false;
     }
     if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
     const base = body.expressions[operation.base.index()];
@@ -3125,6 +3128,19 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn parameterArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    if (!expressionValid(body, id)) return false;
+    const expression = body.expressions[id.index()];
+    const local_id = switch (expression.operation) {
+        .local => |local| local,
+        else => return false,
+    };
+    if (expression.result_ty != .array) return false;
+    for (body.parameters) |parameter| if (parameter.local.eql(local_id))
+        return sameValueType(parameter.ty, expression.result_ty) and parameter.type_id.eql(expression.type_id);
+    return false;
 }
 
 fn rangeSliceSupported(
@@ -3226,49 +3242,6 @@ fn localArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     return false;
 }
 
-fn directParameterArrayIndexReturn(
-    body: *const mir.ExecutableBody,
-    expression: mir.ExecutableExpression,
-    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
-) bool {
-    if (operation.kind != .fixed_array or !indexIsDirectReturn(body, expression) or !expressionValid(body, operation.base)) return false;
-    const base = body.expressions[operation.base.index()];
-    const local_id = switch (base.operation) {
-        .local => |id| id,
-        else => return false,
-    };
-    for (body.parameters) |parameter| if (parameter.local.eql(local_id))
-        return sameValueType(parameter.ty, base.result_ty) and parameter.type_id.eql(base.type_id);
-    return false;
-}
-
-fn directImmutableLocalArrayIndexReturn(
-    body: *const mir.ExecutableBody,
-    expression: mir.ExecutableExpression,
-    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
-) bool {
-    if (operation.kind != .fixed_array or !indexIsDirectReturn(body, expression) or !expressionValid(body, operation.base)) return false;
-    const base = body.expressions[operation.base.index()];
-    const local_id = switch (base.operation) {
-        .local => |id| id,
-        else => return false,
-    };
-    var initialized = false;
-    for (body.statements) |statement| switch (statement.operation) {
-        .local_init => |local| if (local.local.eql(local_id)) {
-            if (local.mutable or local.value == null or !sameValueType(local.ty, base.result_ty)) return false;
-            initialized = true;
-        },
-        .store => |store| {
-            if (!placeValid(body, store.place)) return false;
-            const place = body.places[store.place.index()];
-            if (place.root == .local and place.root.local.eql(local_id)) return false;
-        },
-        else => {},
-    };
-    return initialized;
-}
-
 fn globalAggregateIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     if (!expressionValid(body, id)) return false;
     const expression = body.expressions[id.index()];
@@ -3302,15 +3275,6 @@ fn indexFeedsDirectAggregateLocalStore(body: *const mir.ExecutableBody, expressi
     return place.projection_count == 0 and place.root == .local and
         (expression.result_ty == .array or expression.result_ty == .struct_) and
         sameValueType(place.ty, expression.result_ty);
-}
-
-fn indexIsDirectReturn(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
-    if (!expression.owner_statement.isValid() or expression.owner_statement.index() >= body.statements.len) return false;
-    const owner = body.statements[expression.owner_statement.index()];
-    return switch (owner.operation) {
-        .return_ => |value| if (value) |id| id.eql(expression.id) else false,
-        else => false,
-    };
 }
 
 fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId) bool {

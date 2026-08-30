@@ -126,10 +126,10 @@ fn emitStatement(
                 try out.append(allocator, ' ');
             }
             try appendLocal(allocator, out, body, local.local);
-            if (local.value) |value| {
+            if (local.value) |value| if (!mir.executableUninitLocalInitializer(body, (expressionById(body, value) orelse return error.InvalidExpression).*)) {
                 try out.appendSlice(allocator, " = ");
                 try emitExpression(allocator, out, body, value, 0);
-            }
+            };
             try out.appendSlice(allocator, ";\n");
         },
         .store => |store| {
@@ -802,6 +802,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
             // Raw source string spelling is not a canonical byte payload and
             // must not cross the syntax-free boundary. Character literals
             // have already become canonical integer magnitudes in MIR.
+            .uninit => mir.executableUninitLocalInitializer(body, expression),
             .string, .enum_value => false,
             else => true,
         },
@@ -1089,9 +1090,8 @@ fn indexSupported(
             if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
         } else if (!localArrayIndexBase(body, operation.base) and
             !projectionRootIsLocalArray(body, operation.base) and
-            !directParameterArrayIndexReturn(body, expression, operation) and
-            !directImmutableLocalArrayIndexReturn(body, expression, operation) and
-            (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression))) return false;
+            !parameterArrayIndexBase(body, operation.base) and
+            !projectionRootIsDirectCall(body, operation.base)) return false;
     }
     const base = expressionById(body, operation.base) orelse return false;
     const index = expressionById(body, operation.index) orelse return false;
@@ -1138,6 +1138,18 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn parameterArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    const expression = expressionById(body, id) orelse return false;
+    const local_id = switch (expression.operation) {
+        .local => |local| local,
+        else => return false,
+    };
+    if (expression.result_ty != .array) return false;
+    for (body.parameters) |parameter| if (parameter.local.eql(local_id))
+        return sameValueType(parameter.ty, expression.result_ty) and parameter.type_id.eql(expression.type_id);
+    return false;
 }
 
 fn rangeSliceSupported(
@@ -1288,48 +1300,6 @@ fn localArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     return false;
 }
 
-fn directParameterArrayIndexReturn(
-    body: *const mir.ExecutableBody,
-    expression: mir.ExecutableExpression,
-    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
-) bool {
-    if (operation.kind != .fixed_array or !indexIsDirectReturn(body, expression)) return false;
-    const base = expressionById(body, operation.base) orelse return false;
-    const local_id = switch (base.operation) {
-        .local => |id| id,
-        else => return false,
-    };
-    for (body.parameters) |parameter| if (parameter.local.eql(local_id))
-        return sameValueType(parameter.ty, base.result_ty) and parameter.type_id.eql(base.type_id);
-    return false;
-}
-
-fn directImmutableLocalArrayIndexReturn(
-    body: *const mir.ExecutableBody,
-    expression: mir.ExecutableExpression,
-    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
-) bool {
-    if (operation.kind != .fixed_array or !indexIsDirectReturn(body, expression)) return false;
-    const base = expressionById(body, operation.base) orelse return false;
-    const local_id = switch (base.operation) {
-        .local => |id| id,
-        else => return false,
-    };
-    var initialized = false;
-    for (body.statements) |statement| switch (statement.operation) {
-        .local_init => |local| if (local.local.eql(local_id)) {
-            if (local.mutable or local.value == null or !sameValueType(local.ty, base.result_ty)) return false;
-            initialized = true;
-        },
-        .store => |store| {
-            const place = placeById(body, store.place) orelse return false;
-            if (place.root == .local and place.root.local.eql(local_id)) return false;
-        },
-        else => {},
-    };
-    return initialized;
-}
-
 fn globalAggregateIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     const expression = expressionById(body, id) orelse return false;
     const symbol_id = switch (expression.operation) {
@@ -1361,14 +1331,6 @@ fn indexFeedsDirectAggregateLocalStore(body: *const mir.ExecutableBody, expressi
     return place.projection_count == 0 and place.root == .local and
         (expression.result_ty == .array or expression.result_ty == .struct_) and
         sameValueType(place.ty, expression.result_ty);
-}
-
-fn indexIsDirectReturn(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
-    const owner = statementById(body, expression.owner_statement) orelse return false;
-    return switch (owner.operation) {
-        .return_ => |value| if (value) |id| id.eql(expression.id) else false,
-        else => false,
-    };
 }
 
 fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
@@ -2915,6 +2877,9 @@ fn prepareStatementExpressions(
     // call or store cannot change what an earlier operand observes.
     for (body.expressions) |expression| {
         if (!expression.owner_statement.eql(statement.id)) continue;
+        // `uninit` is a storage policy, not a runtime value. The local
+        // declaration intentionally has no initializer expression.
+        if (mir.executableUninitLocalInitializer(body, expression)) continue;
         // A function identity is a pure leaf and is emitted directly at its
         // use site. Emitting it here as a discarded expression would add no
         // ordering guarantee and would produce an avoidable C warning.
