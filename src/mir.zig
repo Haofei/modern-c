@@ -8657,7 +8657,7 @@ const FunctionBuilder = struct {
                             if (!try self.internExecutableResultType(result_ty, result_type))
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
                         }
-                    } else if (kind == .forget_unchecked or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
+                    } else if (kind == .forget_unchecked or kind == .cpu_pause or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
                         if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store) result_ty = target.result_ty;
@@ -8707,6 +8707,8 @@ const FunctionBuilder = struct {
                             const payload_ty = valueTypeFromTypeAlias(payload_type, self.enums, self.structs, self.packed_bits, self.aliases);
                             break :result_arg try self.ensureExecutableExprAsType(argument, payload_ty, payload_type);
                         } else if (kind == .raw_many_offset)
+                            try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
+                        else if (kind == .phys)
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
                         else if (raw_target) |target|
                             if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store)

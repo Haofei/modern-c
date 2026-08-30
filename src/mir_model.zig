@@ -645,7 +645,7 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         // still carries the operand so both mechanical renderers must evaluate
         // it exactly once before discarding the resulting value.
         .forget_unchecked => operands.len == 1 and result == .void,
-        .fence_full, .fence_release, .fence_acquire => operands.len == 0 and result == .void,
+        .cpu_pause, .fence_full, .fence_release, .fence_acquire => operands.len == 0 and result == .void,
         else => false,
     };
 }
@@ -664,7 +664,7 @@ fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
 
 pub fn executableBuiltinRequiresUnsafe(kind: CallTargetKind) bool {
     return switch (kind) {
-        .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked => true,
+        .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .cpu_pause => true,
         else => false,
     };
 }

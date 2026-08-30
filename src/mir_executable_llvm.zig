@@ -1460,6 +1460,11 @@ const Renderer = struct {
                 if (!std.mem.eql(u8, result_ty, "void") or call.argument_count != 1) return error.InvalidBody;
                 return .{ .ty = "void", .spelling = "" };
             },
+            .cpu_pause => {
+                if (!std.mem.eql(u8, result_ty, "void") or call.argument_count != 0) return error.InvalidBody;
+                try self.output.appendSlice(self.allocator, "  call void asm sideeffect \"pause\", \"~{memory}\"()\n");
+                return .{ .ty = "void", .spelling = "" };
+            },
             .fence_full, .fence_release, .fence_acquire => {
                 if (!std.mem.eql(u8, result_ty, "void")) return error.InvalidBody;
                 const ordering: []const u8 = switch (call.kind) {
@@ -2642,7 +2647,7 @@ fn projectionPathHasMember(body: *const mir.ExecutableBody, start: mir.ExprId) b
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
