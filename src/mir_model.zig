@@ -1369,29 +1369,57 @@ pub const ExecutableAggregateType = struct {
     field_count: usize = 0,
 };
 
-pub fn executableCallableAggregateField(
+/// Return the exact callable contract for an addressable aggregate place.
+/// A callable can live in a named field or in a fixed-array element; both are
+/// represented as opaque `.value` storage and must be disambiguated by the
+/// aggregate metadata rather than by backend source-shape inference.
+pub fn executableCallablePlace(
     aggregate_types: []const ExecutableAggregateType,
     place: ExecutablePlace,
 ) ?ExecutableCallSignature {
     if (!place.root_type_id.isValid() or !place.type_id.isValid() or place.ty != .value) return null;
-    const field_index: usize = if (place.projection_count == 1) switch (place.projections[0]) {
-        .field => |index| index,
-        .deref, .index => return null,
-    } else if (place.projection_count == 2 and place.projections[0] == .deref) switch (place.projections[1]) {
-        .field => |index| index,
-        .deref, .index => return null,
+    const Selection = struct { aggregate_ty: ValueType, field_index: usize };
+    const selection: Selection = if (place.projection_count == 1) switch (place.projections[0]) {
+        .field => |index| .{ .aggregate_ty = place.root_ty, .field_index = index },
+        .index => |index| if (index.kind == .fixed_array and index.bound != null)
+            .{ .aggregate_ty = place.root_ty, .field_index = 0 }
+        else
+            return null,
+        .deref => return null,
+    } else if (place.projection_count == 2) switch (place.projections[0]) {
+        .deref => switch (place.projections[1]) {
+            .field => |index| .{
+                .aggregate_ty = switch (place.root_ty) {
+                    .pointer => |shape| if (shape.kind == .single) .{ .struct_ = shape.child } else return null,
+                    else => return null,
+                },
+                .field_index = index,
+            },
+            .deref, .index => return null,
+        },
+        .index => |array_index| array_field: {
+            if (array_index.kind != .fixed_array or array_index.bound == null) return null;
+            const field_index = switch (place.projections[1]) {
+                .field => |index| index,
+                .deref, .index => return null,
+            };
+            for (aggregate_types) |array_shape| {
+                if (!array_shape.type_id.eql(place.root_type_id) or !ValueType.eql(array_shape.ty, place.root_ty) or
+                    array_shape.array_length == null or array_shape.array_length.? != array_index.bound.? or
+                    array_shape.field_count == 0) continue;
+                for (aggregate_types) |element_shape| if (element_shape.type_id.eql(array_shape.field_type_ids[0])) {
+                    break :array_field .{ .aggregate_ty = element_shape.ty, .field_index = field_index };
+                };
+            }
+            return null;
+        },
+        .field => return null,
     } else return null;
-    const aggregate_ty: ValueType = if (place.projection_count == 1)
-        place.root_ty
-    else switch (place.root_ty) {
-        .pointer => |shape| if (shape.kind == .single) .{ .struct_ = shape.child } else return null,
-        else => return null,
-    };
     for (aggregate_types) |aggregate| {
-        if (!ValueType.eql(aggregate.ty, aggregate_ty) or field_index >= aggregate.field_count or
-            aggregate.field_types[field_index] != .value or
-            !aggregate.field_type_ids[field_index].eql(place.type_id)) continue;
-        return aggregate.field_callable_signatures[field_index];
+        if (!ValueType.eql(aggregate.ty, selection.aggregate_ty) or selection.field_index >= aggregate.field_count or
+            aggregate.field_types[selection.field_index] != .value or
+            !aggregate.field_type_ids[selection.field_index].eql(place.type_id)) continue;
+        return aggregate.field_callable_signatures[selection.field_index];
     }
     return null;
 }
@@ -1546,16 +1574,20 @@ pub fn executableDirectAggregateFieldPlace(
         .field => |index| index,
         .deref, .index => return null,
     };
-    const local_id = switch (place.root) {
+    const local_id: ?LocalId = switch (place.root) {
         .local => |id| id,
-        .symbol, .value => return null,
+        // Symbol kind and mutability live in the owning executable body.  The
+        // shared shape predicate admits a read projection here; verifier and
+        // renderers still require an exact global SymbolIdentity before use.
+        .symbol => if (require_mutable) return null else null,
+        .value => return null,
     };
-    if (!local_id.isValid() or local_id.index() >= locals.len or !locals[local_id.index()].id.eql(local_id)) return null;
+    if (local_id) |id| if (!id.isValid() or id.index() >= locals.len or !locals[id.index()].id.eql(id)) return null;
 
     if (require_mutable) {
         var mutable = false;
         for (statements) |statement| switch (statement.operation) {
-            .local_init => |init| if (init.local.eql(local_id)) {
+            .local_init => |init| if (init.local.eql(local_id.?)) {
                 mutable = init.mutable;
                 break;
             },
@@ -1616,7 +1648,7 @@ pub fn executableFixedArrayIndexPlace(
     body: *const ExecutableBody,
     place: ExecutablePlace,
 ) ?@FieldType(ExecutablePlace.Projection, "index") {
-    if (place.storage != .ordinary or place.projection_count != 1 or
+    if (place.storage != .ordinary or (place.projection_count != 1 and place.projection_count != 2) or
         !place.root_type_id.isValid() or !place.type_id.isValid()) return null;
     const projection = switch (place.projections[0]) {
         .index => |value| value,
@@ -1640,8 +1672,24 @@ pub fn executableFixedArrayIndexPlace(
     };
     const shape = aggregate orelse return null;
     if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
-        !ValueType.eql(shape.ty, place.root_ty) or !ValueType.eql(shape.field_types[0], place.ty) or
-        !shape.field_type_ids[0].eql(place.type_id)) return null;
+        !ValueType.eql(shape.ty, place.root_ty)) return null;
+    if (place.projection_count == 1) {
+        if (!ValueType.eql(shape.field_types[0], place.ty) or !shape.field_type_ids[0].eql(place.type_id)) return null;
+    } else {
+        const field_index = switch (place.projections[1]) {
+            .field => |value| value,
+            .deref, .index => return null,
+        };
+        var element: ?ExecutableAggregateType = null;
+        for (body.aggregate_types) |candidate| if (candidate.type_id.eql(shape.field_type_ids[0])) {
+            element = candidate;
+            break;
+        };
+        const element_shape = element orelse return null;
+        if (!ValueType.eql(element_shape.ty, shape.field_types[0]) or field_index >= element_shape.field_count or
+            !ValueType.eql(element_shape.field_types[field_index], place.ty) or
+            !element_shape.field_type_ids[field_index].eql(place.type_id)) return null;
+    }
     if (!projection.checked) switch (index.operation) {
         .literal => |literal| switch (literal) {
             .integer => |value| if (value >= bound) return null,

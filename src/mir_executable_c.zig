@@ -140,7 +140,7 @@ fn emitStatement(
                     try out.appendSlice(allocator, ";\n");
                 },
                 .race_unordered => {
-                    if ((store.ty == .value and mir.executableCallableAggregateField(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) or
+                    if ((store.ty == .value and mir.executableCallablePlace(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) or
                         store.ty == .closed_enum or store.ty == .open_enum)
                     {
                         try out.appendSlice(allocator, "__atomic_store_n(");
@@ -795,7 +795,7 @@ fn callableLoadTargetSupported(
     if (expression.result_ty != .value or !expressionUsedAsIndirectCallee(body, expression.id)) return false;
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
-    if (mir.executableCallableAggregateField(body.aggregate_types, place.*) != null) return true;
+    if (mir.executableCallablePlace(body.aggregate_types, place.*) != null) return true;
     if (place.projection_count != 0) return false;
     return switch (place.root) {
         .symbol => |id| if (symbolById(body, id)) |symbol| symbol.kind == .global else false,
@@ -1566,9 +1566,22 @@ fn memoryLoadSupported(
             body.aggregate_types,
             place.*,
             false,
-        ) != null) return load.access.kind == .plain and
-            load.representation_source == null and !load.representation_span_id.isValid() and
-            ownedTrapEdgeCount(body, expression.id) == 0;
+        ) != null) {
+            const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
+                .local => .plain,
+                .symbol => |id| if (symbolById(body, id)) |symbol|
+                    if (symbol.kind == .global)
+                        if (symbol.mutable) .race_unordered else .plain
+                    else
+                        return false
+                else
+                    return false,
+                .value => return false,
+            };
+            return load.access.kind == expected_kind and
+                load.representation_source == null and !load.representation_span_id.isValid() and
+                ownedTrapEdgeCount(body, expression.id) == 0;
+        }
         if (!scalarAccessPlaceSupported(body, place.*)) return false;
         const local_alias = mir.executableLocalAddressDerefPlace(body, place.*, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
@@ -1929,7 +1942,7 @@ fn memoryStoreSupported(
     if (store.access.alignment != alignment) return false;
     if (place.projection_count != 0) {
         if (scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
-            mir.executableCallableAggregateField(body.aggregate_types, place.*) == null) return false;
+            mir.executableCallablePlace(body.aggregate_types, place.*) == null) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |index| {
             const access_ok = switch (place.root) {
                 .local => store.access.kind == .plain,
@@ -2617,6 +2630,17 @@ fn emitPlace(
         try emitExpression(allocator, out, body, index.value, 0);
         if (index.checked) try out.print(allocator, ", {d})", .{index.bound.?});
         try out.append(allocator, ']');
+        if (place.projection_count == 2) {
+            const field_index = switch (place.projections[1]) {
+                .field => |value| value,
+                .deref, .index => return error.InvalidPlace,
+            };
+            const array = aggregateType(body, place.root_type_id) orelse return error.InvalidPlace;
+            const element = aggregateType(body, array.field_type_ids[0]) orelse return error.InvalidPlace;
+            if (field_index >= element.field_count) return error.InvalidPlace;
+            try out.append(allocator, '.');
+            try appendIdent(allocator, out, element.field_spellings[field_index]);
+        }
         return;
     }
     if (mir.executableDirectAggregateFieldPlace(

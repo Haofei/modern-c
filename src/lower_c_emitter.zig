@@ -1531,13 +1531,6 @@ pub const CEmitter = struct {
             }
             break :blk null;
         };
-        const indirect_call_return_plan = if (local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null)
-            if (mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)) |plan|
-                if (self.mirIndirectCallReturnPlanSupported(plan)) plan else null
-            else
-                null
-        else
-            null;
         const specialized_plans = [_]bool{
             workflow_plan != null,
             alloca_hoist_plan != null,
@@ -1548,7 +1541,6 @@ pub const CEmitter = struct {
             local_aggregate_place_update_return_plan != null,
             simple_return != null,
             place_return_plan != null,
-            indirect_call_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
 
@@ -1586,9 +1578,6 @@ pub const CEmitter = struct {
         } else if (place_return_plan) |plan| {
             selected_path.* = .place_return;
             try self.emitMirPlaceReturnPlan(plan);
-        } else if (indirect_call_return_plan) |plan| {
-            selected_path.* = .indirect_call_return;
-            try self.emitMirIndirectCallReturnPlan(plan);
         } else if (simple_return) |ret| {
             selected_path.* = .simple_return;
             if (simple_return_prefix_calls) |calls| {
@@ -3758,56 +3747,6 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitMirIndirectCallReturnPlan(self: *CEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) !void {
-        switch (plan.callee) {
-            .local_function => |local| {
-                try self.writeLineDirective(spanFromMirSourcePoint(local.local_location.source));
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = {s};\n", .{
-                    try self.cTypeFor(plan.callee_fact.target_ty, .typedef_name),
-                    try self.cIdent(local.local_name),
-                    try self.cIdent(local.function_name),
-                });
-            },
-            else => {},
-        }
-        try self.writeLineDirective(spanFromMirSourcePoint(plan.location.source));
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "return ");
-        try self.emitMirIndirectCallee(plan.callee);
-        try self.out.append(self.allocator, '(');
-        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
-            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
-        }
-        try self.out.appendSlice(self.allocator, ");\n");
-    }
-
-    fn mirIndirectCallReturnPlanSupported(self: *CEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) bool {
-        return switch (plan.callee) {
-            .local_function => |local| blk: {
-                if (!local.local_id.isValid() or !local.function_id.isValid()) break :blk false;
-                const target = self.functions.get(local.function_name) orelse break :blk false;
-                const signature = switch (plan.callee_fact.target_ty.kind) {
-                    .fn_pointer => |signature| signature,
-                    else => break :blk false,
-                };
-                const return_ty = target.return_type orelse break :blk false;
-                if (target.is_variadic or target.params.len != signature.params.len or
-                    !type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(signature.ret.*))) break :blk false;
-                for (target.params, signature.params) |actual, expected| {
-                    if (!type_bridge.sameTypeSyntax(self.resolveAliasType(actual.ty), self.resolveAliasType(expected))) break :blk false;
-                }
-                break :blk true;
-            },
-            .projected_place => |place| blk: {
-                const place_ty = self.mirPlaceType(place, spanFromMirSourcePoint(plan.location.source)) catch break :blk false;
-                break :blk type_bridge.sameTypeSyntax(self.resolveAliasType(place_ty), self.resolveAliasType(plan.callee_fact.target_ty));
-            },
-            else => true,
-        };
-    }
-
     fn mirDirectCallArgumentSupported(self: *CEmitter, function: anytype, argument: mir_statement_plan.DirectCallArgument) bool {
         return switch (argument.value) {
             .parameter => |parameter| parameter.value_id.isValid() and
@@ -4402,31 +4341,6 @@ pub const CEmitter = struct {
         if (plan.local_init) |local| _ = self.mirPlaceType(local.value, span) catch return false;
         if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
         return true;
-    }
-
-    fn emitMirIndirectCallee(self: *CEmitter, callee: mir_statement_plan.IndirectCallee) !void {
-        switch (callee) {
-            .parameter => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
-            .global => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
-            .local_function => |local| try self.out.appendSlice(self.allocator, try self.cIdent(local.local_name)),
-            .projected_place => |place| {
-                const access = try self.mirPlaceAccess(place);
-                const ty = try self.mirPlaceType(place, spanFromMirSourcePoint(place.root_location.source));
-                try appendGlobalLoadExpr(self.allocator, self.out, access, try self.globalInfoFromType(ty));
-            },
-            .global_field => |field| {
-                const struct_name = self.structTypeNameFromType(field.root_type_fact.target_ty) orelse return error.UnsupportedCEmission;
-                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
-                if (field.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
-                const declared_field = struct_decl.fields[field.field_index];
-                if (!std.mem.eql(u8, declared_field.name.text, field.field_name)) return error.UnsupportedCEmission;
-                const access_name = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{
-                    try self.cIdent(field.root_name),
-                    try self.cIdent(field.field_name),
-                });
-                try appendGlobalLoadExpr(self.allocator, self.out, access_name, try self.globalInfoFromType(declared_field.ty));
-            },
-        }
     }
 
     fn simpleMirReturnAllowsTrapBlocks(self: *const CEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {

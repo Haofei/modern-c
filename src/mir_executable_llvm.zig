@@ -1996,7 +1996,22 @@ const Renderer = struct {
             "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n",
             .{ pointer, array_ty, root_pointer, index.spelling },
         );
-        return pointer;
+        if (place.projection_count == 1) return pointer;
+        const field_index = switch (place.projections[1]) {
+            .field => |value| value,
+            .deref, .index => return error.InvalidBody,
+        };
+        const array = aggregateType(self.body, place.root_type_id) orelse return error.InvalidBody;
+        const element = aggregateType(self.body, array.field_type_ids[0]) orelse return error.InvalidBody;
+        if (field_index >= element.field_count) return error.InvalidBody;
+        const element_ty = try self.typeText(element.ty);
+        const field_pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+            .{ field_pointer, element_ty, pointer, field_index },
+        );
+        return field_pointer;
     }
 
     fn emitGuardedParameterDerefPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
@@ -2449,7 +2464,7 @@ fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.
     if (expression.result_ty != .value or !expressionUsedAsIndirectCallee(body, expression.id) or !placeValid(body, load.place)) return false;
     const place = body.places[load.place.index()];
     if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
-    if (mir.executableCallableAggregateField(body.aggregate_types, place) != null) return true;
+    if (mir.executableCallablePlace(body.aggregate_types, place) != null) return true;
     if (place.projection_count != 0) return false;
     return switch (place.root) {
         .symbol => |id| if (symbolIdentity(body, id)) |symbol| symbol.kind == .global else false,
@@ -3558,7 +3573,20 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             body.aggregate_types,
             place,
             is_store,
-        ) != null) return sameValueType(place.ty, ty) and access.kind == .plain;
+        ) != null) {
+            const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
+                .local => .plain,
+                .symbol => |id| if (symbolIdentity(body, id)) |identity|
+                    if (identity.kind == .global and (!is_store or identity.mutable))
+                        if (identity.mutable) .race_unordered else .plain
+                    else
+                        return false
+                else
+                    return false,
+                .value => return false,
+            };
+            return sameValueType(place.ty, ty) and access.kind == expected_kind;
+        }
         const local_alias = mir.executableLocalAddressDerefPlace(body, place, false);
         const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
         return sameValueType(place.ty, ty) and access.kind == expected_kind and

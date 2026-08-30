@@ -1496,7 +1496,16 @@ fn verifyMemoryAccess(
             target.*,
             is_store,
         ) != null) {
-            if (access.kind != .plain) return error.InvalidMemoryAccessKind;
+            const expected_kind: mir.ExecutableMemoryAccessKind = switch (target.root) {
+                .local => .plain,
+                .symbol => |id| global: {
+                    const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
+                    if (identity.kind != .global or (is_store and !identity.mutable)) return error.InvalidMemoryAccessType;
+                    break :global if (identity.mutable) .race_unordered else .plain;
+                },
+                .value => return error.InvalidPlaceType,
+            };
+            if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
             return;
         }
         if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;

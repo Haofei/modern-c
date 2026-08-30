@@ -1817,10 +1817,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn structNameFromCandidate(": 1,
         "self.structNameFromCandidate(": 2,
         "fn structTypeNameFromType(": 1,
-        # Aggregate-place MIR lowering added two existing bridge consumers in
-        # b20a31f5/e0763447. Capture that master state; future changes may only
-        # reduce it.
-        "self.structTypeNameFromType(": 7,
+        # Aggregate-place MIR lowering added existing bridge consumers, while
+        # retiring the indirect-call return plan removed one. Capture the
+        # reduced state; future changes may only reduce it further.
+        "self.structTypeNameFromType(": 6,
         "const enum_ty = self.enumReturnTypeForExpr(initializer) orelse return false;": 0,
         "const enum_ty = self.directCallResultTypeForInferredLocal(initializer, isEnumDirectCallResultType) orelse return false;": 0,
         "const enum_ty = self.directCallResultTypeForExpr(initializer, isEnumDirectCallResultType) orelse return false;": 0,

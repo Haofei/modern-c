@@ -7379,7 +7379,7 @@ const FunctionBuilder = struct {
     }
 
     fn executableFixedArrayIndexPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
-        if (place.storage != .ordinary or place.projection_count != 1 or
+        if (place.storage != .ordinary or (place.projection_count != 1 and place.projection_count != 2) or
             !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
         const projection = switch (place.projections[0]) {
             .index => |value| value,
@@ -7403,8 +7403,24 @@ const FunctionBuilder = struct {
         };
         const shape = aggregate orelse return false;
         if (shape.array_length == null or shape.array_length.? != bound or shape.field_count == 0 or
-            !sameValueType(shape.ty, place.root_ty) or !sameValueType(shape.field_types[0], place.ty) or
-            !shape.field_type_ids[0].eql(place.type_id)) return false;
+            !sameValueType(shape.ty, place.root_ty)) return false;
+        if (place.projection_count == 1) {
+            if (!sameValueType(shape.field_types[0], place.ty) or !shape.field_type_ids[0].eql(place.type_id)) return false;
+        } else {
+            const field_index = switch (place.projections[1]) {
+                .field => |value| value,
+                .deref, .index => return false,
+            };
+            var element: ?mir_model.ExecutableAggregateType = null;
+            for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(shape.field_type_ids[0])) {
+                element = candidate;
+                break;
+            };
+            const element_shape = element orelse return false;
+            if (!sameValueType(element_shape.ty, shape.field_types[0]) or field_index >= element_shape.field_count or
+                !sameValueType(element_shape.field_types[field_index], place.ty) or
+                !element_shape.field_type_ids[field_index].eql(place.type_id)) return false;
+        }
         if (projection.checked) return true;
         return switch (index.operation) {
             .literal => |literal| switch (literal) {
@@ -7602,7 +7618,16 @@ const FunctionBuilder = struct {
                 self.executable_aggregate_types.items,
                 place,
                 is_store,
-            ) != null) return access.kind == .plain;
+            ) != null) return switch (place.root) {
+                .local => access.kind == .plain,
+                .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
+                    const identity = self.executable_symbols.items[id.index()];
+                    if (identity.kind != .global or (is_store and !identity.mutable)) break :symbol false;
+                    const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+                    break :symbol access.kind == expected_kind;
+                } else false,
+                .value => false,
+            };
             const local_alias = switch (place.root) {
                 .local => |id| mir_model.executableLocalAddressAlias(
                     self.executable_statements.items,
@@ -7728,7 +7753,7 @@ const FunctionBuilder = struct {
                         .load => |load| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
                             if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len) return false;
                             const place = self.executable_places.items[load.place.index()];
-                            if (place.projection_count != 1) return false;
+                            if (!self.executableFixedArrayIndexPlaceComplete(place)) return false;
                             const projection = switch (place.projections[0]) {
                                 .index => |value| value,
                                 .field, .deref => return false,
@@ -7741,7 +7766,7 @@ const FunctionBuilder = struct {
                         .address_of => |address| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
                             if (!address.place.isValid() or address.place.index() >= self.executable_places.items.len) return false;
                             const place = self.executable_places.items[address.place.index()];
-                            if (place.projection_count != 1) return false;
+                            if (!self.executableFixedArrayIndexPlaceComplete(place)) return false;
                             const projection = switch (place.projections[0]) {
                                 .index => |value| value,
                                 .field, .deref => return false,
@@ -8419,7 +8444,10 @@ const FunctionBuilder = struct {
                 } };
             },
             .index => |node| index: {
-                const base_ty = self.exprType(node.base.*);
+                var base_ty = self.exprType(node.base.*);
+                if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(node.base.*)) |resolved_base| {
+                    base_ty = valueTypeFromTypeAlias(resolved_base, self.enums, self.structs, self.packed_bits, self.aliases);
+                };
                 const index_kind: mir_model.ExecutableIndexKind = switch (base_ty) {
                     .array => .fixed_array,
                     .pointer => |shape| if (shape.kind == .slice)
@@ -8437,6 +8465,10 @@ const FunctionBuilder = struct {
                     break :index self.unsupportedExecutableExpression(.unsupported_index);
                 const direct_global_storage = switch (node.base.*.kind) {
                     .ident => |ident| self.globals.contains(ident.text),
+                    .index => |index| switch (index.base.*.kind) {
+                        .ident => |ident| self.globals.contains(ident.text),
+                        else => false,
+                    },
                     else => false,
                 };
                 if (direct_global_storage and index_kind == .fixed_array and
@@ -8501,7 +8533,10 @@ const FunctionBuilder = struct {
             } else member: {
                 const field_index = self.memberFieldIndex(node) orelse
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
-                const base_ty = self.exprType(node.base.*);
+                var base_ty = self.exprType(node.base.*);
+                if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(node.base.*)) |resolved_base| {
+                    base_ty = valueTypeFromTypeAlias(resolved_base, self.enums, self.structs, self.packed_bits, self.aliases);
+                };
                 const pointer_shape = switch (base_ty) {
                     .pointer => |shape| shape,
                     else => null,
@@ -8531,6 +8566,22 @@ const FunctionBuilder = struct {
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
+                const direct_global_storage = switch (node.base.*.kind) {
+                    .ident => |ident| self.globals.contains(ident.text),
+                    .index => |index| switch (index.base.*.kind) {
+                        .ident => |ident| self.globals.contains(ident.text),
+                        else => false,
+                    },
+                    else => false,
+                };
+                if (direct_global_storage and
+                    mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
+                {
+                    break :member .{ .load = .{
+                        .place = try self.appendExecutablePlace(expr),
+                        .access = self.executableMemoryAccess(expr, result_ty),
+                    } };
+                }
                 if (pointer_shape) |shape| {
                     // Pointer member access is a memory operation, not a pure
                     // aggregate projection.  This first slice admits a direct
@@ -8912,7 +8963,11 @@ const FunctionBuilder = struct {
                 if (length != items.len or length == 0)
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 const element_ty = valueTypeFromTypeAlias(target.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
-                if (!try self.internExecutableArrayType(result_ty, element_ty, length))
+                const callable_element = if (aggregateTargetTypeAlias(target.child.*, self.aliases).kind == .fn_pointer)
+                    try self.executableCallableSignature(target.child.*)
+                else
+                    null;
+                if (!try self.internExecutableArrayType(result_ty, element_ty, length, callable_element))
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 var aggregate: @FieldType(ExecutableExpression.Operation, "array") = .{ .operand_count = items.len };
                 for (items, 0..) |item, index| {
@@ -9082,8 +9137,15 @@ const FunctionBuilder = struct {
         return self.internExecutableAggregateTypeDepth(ty, construction, fields, 0);
     }
 
-    fn internExecutableArrayType(self: *FunctionBuilder, ty: ValueType, element_ty: ValueType, length: usize) !bool {
-        if (std.meta.activeTag(ty) != .array or element_ty == .unknown or element_ty == .value or length == 0) return false;
+    fn internExecutableArrayType(
+        self: *FunctionBuilder,
+        ty: ValueType,
+        element_ty: ValueType,
+        length: usize,
+        callable_element: ?mir_model.ExecutableCallSignature,
+    ) !bool {
+        if (std.meta.activeTag(ty) != .array or element_ty == .unknown or
+            (element_ty == .value) != (callable_element != null) or length == 0) return false;
         if (ty.array.length == null or ty.array.length.? != length) return false;
         const type_id = try self.internTypeId(ty);
         const element_type_id = try self.internTypeId(element_ty);
@@ -9109,6 +9171,7 @@ const FunctionBuilder = struct {
         for (0..stored_field_count) |index| {
             aggregate.field_types[index] = element_ty;
             aggregate.field_type_ids[index] = element_type_id;
+            aggregate.field_callable_signatures[index] = callable_element;
         }
         try self.executable_aggregate_types.append(self.allocator, aggregate);
         if (!try self.internExecutableEnumType(element_ty)) return false;
@@ -9146,7 +9209,11 @@ const FunctionBuilder = struct {
             .array => |array| {
                 const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
                 const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
-                return self.internExecutableArrayType(ty, element_ty, length);
+                const callable_element = if (aggregateTargetTypeAlias(array.child.*, self.aliases).kind == .fn_pointer)
+                    try self.executableCallableSignature(array.child.*)
+                else
+                    null;
+                return self.internExecutableArrayType(ty, element_ty, length, callable_element);
             },
             .generic => |generic| if (std.mem.eql(u8, generic.base.text, "Result"))
                 return self.internExecutableResultType(ty, resolved),
@@ -9861,7 +9928,10 @@ const FunctionBuilder = struct {
                 break :root true;
             },
             .member => |node| projection: {
-                const base_ty = self.exprType(node.base.*);
+                var base_ty = self.exprType(node.base.*);
+                if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(node.base.*)) |resolved_base| {
+                    base_ty = valueTypeFromTypeAlias(resolved_base, self.enums, self.structs, self.packed_bits, self.aliases);
+                };
                 const implicit_deref = switch (base_ty) {
                     .pointer, .nullable_pointer => true,
                     else => false,
@@ -13336,7 +13406,7 @@ const FunctionBuilder = struct {
                     if (kind != .Bounds or source != .bounds_check or
                         !load.place.isValid() or load.place.index() >= self.executable_places.items.len) break :load_bounds;
                     const place = self.executable_places.items[load.place.index()];
-                    if (place.projection_count != 1) break :load_bounds;
+                    if (!self.executableFixedArrayIndexPlaceComplete(place)) break :load_bounds;
                     const projection = switch (place.projections[0]) {
                         .index => |value| value,
                         .field, .deref => break :load_bounds,
@@ -13350,7 +13420,7 @@ const FunctionBuilder = struct {
                     if (kind != .Bounds or source != .bounds_check or
                         !address.place.isValid() or address.place.index() >= self.executable_places.items.len) break :address_bounds;
                     const place = self.executable_places.items[address.place.index()];
-                    if (place.projection_count != 1) break :address_bounds;
+                    if (!self.executableFixedArrayIndexPlaceComplete(place)) break :address_bounds;
                     const projection = switch (place.projections[0]) {
                         .index => |value| value,
                         .field, .deref => break :address_bounds,
@@ -13408,7 +13478,7 @@ const FunctionBuilder = struct {
     fn executableFixedArrayProjectionSpanMatches(self: *const FunctionBuilder, place_id: PlaceId, span_id: SpanId) bool {
         if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return false;
         const place = self.executable_places.items[place_id.index()];
-        if (place.projection_count != 1) return false;
+        if (!self.executableFixedArrayIndexPlaceComplete(place)) return false;
         return switch (place.projections[0]) {
             .index => |projection| projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id),
             .field, .deref => false,

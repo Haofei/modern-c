@@ -1,19 +1,19 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-29 after moving checked fixed-array stores and direct global scalar
-reads onto typed executable places and the canonical memory-access model.
+2026-08-30 after retiring the indirect-call return plan and moving callable
+global/array/aggregate loads onto canonical executable places.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
-  unsupported bodies. The ratchet is locked at 100%. This is a qualification
-  checkpoint, not the deletion boundary: the current 522-root broad census
-  finds **571/1760 C** and **605/1831 LLVM** distinct functions using the AST
-  body (C admits 67.6%, LLVM 67.0%). Of the admitted bodies, C now has **1080
-  canonical / 109 specialized** and LLVM has **1107 canonical / 119
-  specialized**. Report mode intentionally preserves
+  unsupported bodies: C uses **124 canonical / 36 specialized**, LLVM uses
+  **125 canonical / 35 specialized**. The ratchet is locked at 100%. This is a
+  qualification checkpoint, not the deletion boundary: the current 522-root
+  broad census finds **485/1769 C** and **517/1840 LLVM** distinct functions
+  using the AST body. Of the admitted bodies, C now has **1201 canonical / 83
+  specialized** and LLVM has **1235 canonical / 88 specialized**. Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -31,6 +31,15 @@ reads onto typed executable places and the canonical memory-access model.
 
 Two of the three goals are complete. Only P0 remains; do not report it complete
 until the AST body artifact and fallback branch are deleted.
+
+Callable parameters, locals, globals, fixed-array elements, aggregate fields,
+and fields inside fixed-array aggregate elements now all lower through typed
+executable-MIR places and loads. The last nested case uses a checked two-step
+array-index/field projection, with one exact Bounds edge shared by C and LLVM.
+The old `IndirectCallReturnPlan`, callee/argument model, builder, two backend
+emitters, tests and census category were physically deleted. This leaves nine
+specialized plan definitions; `indirect_call_return` no longer appears in
+either strict or broad specialized-path counts.
 
 Direct calls followed by declared-struct member projections and checked
 fixed-array/slice indexing now use canonical executable-MIR `member` and

@@ -16,40 +16,6 @@ pub const Location = struct {
     source: mir.SourcePoint,
 };
 
-pub const IndirectArgument = struct {
-    index: usize,
-    value_id: mir.ValueId,
-    name: []const u8,
-    type_fact: mir.TargetTypeFact,
-};
-
-pub const IndirectCallee = union(enum) {
-    parameter: []const u8,
-    global: []const u8,
-    projected_place: Place,
-    local_function: struct {
-        local_name: []const u8,
-        local_id: mir.ValueId,
-        function_name: []const u8,
-        function_id: mir.ValueId,
-        local_location: Location,
-    },
-    global_field: struct {
-        root_name: []const u8,
-        field_name: []const u8,
-        field_index: usize,
-        root_type_fact: mir.TargetTypeFact,
-    },
-};
-
-pub const IndirectCallReturnPlan = struct {
-    location: Location,
-    callee: IndirectCallee,
-    callee_fact: mir.TargetTypeFact,
-    arguments: [max_arguments]IndirectArgument = undefined,
-    argument_count: usize = 0,
-};
-
 pub const PlaceRootKind = enum { parameter, local, global };
 
 pub const PlaceProjection = union(enum) {
@@ -1428,78 +1394,6 @@ fn appendCheckedIndexLocations(place: Place, indexes: []CheckedIndexIdentity, co
     return {};
 }
 
-/// Admit a single value-producing function-pointer call whose result is
-/// returned immediately. Arguments are typed/indexed MIR facts and, in this
-/// first slice, must be direct parameter values. The callee may be a parameter,
-/// a global function-pointer object, or one field of a global struct object.
-pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallReturnPlan {
-    if (function.return_ty == .void or function.blocks.len == 0) return null;
-    if (function.pointer_provenance_facts.len != 0) return null;
-    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
-    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
-
-    const block = function.blocks[0];
-    if (block.terminator != .return_) return null;
-
-    var call_instruction: ?mir.Instruction = null;
-    var return_instruction: ?mir.Instruction = null;
-    for (block.instructions) |instruction| switch (instruction.kind) {
-        .param, .local, .target_type, .expr, .cmp_bounds, .index, .integer_literal_conversion, .typed_load, .representation_check => {},
-        .indirect_call => {
-            if (call_instruction != null) return null;
-            call_instruction = instruction;
-        },
-        .return_value => {
-            if (return_instruction != null) return null;
-            return_instruction = instruction;
-        },
-        else => return null,
-    };
-
-    const call = call_instruction orelse return null;
-    const returned = return_instruction orelse return null;
-    if (!call.typed_callee_span_id.isValid()) return null;
-    if (call.target_owner == null or call.typed_target_owner_id == null) return null;
-    if (call.result_ty == .void or !sameRepresentationType(call.result_ty, returned.result_ty) or !sameRepresentationType(call.result_ty, function.return_ty)) return null;
-    const returned_value_id = returned.typed_value_id orelse return null;
-    const call_value_id = call.typed_value_id orelse return null;
-    if (!returned_value_id.eql(call_value_id)) return null;
-
-    const location = locationFromInstruction(call);
-    const callee_fact = targetFactAt(function, .indirect_call_callee, location, null) orelse return null;
-    const signature = switch (callee_fact.target_ty.kind) {
-        .fn_pointer => |signature| signature,
-        else => return null,
-    };
-    if (typeNameIsVoid(signature.ret.*) or signature.params.len > max_arguments or signature.params.len == 0) return null;
-    if (!sameRepresentationType(callee_fact.result_ty, .value)) return null;
-
-    var plan: IndirectCallReturnPlan = .{
-        .location = location,
-        .callee = undefined,
-        .callee_fact = callee_fact,
-    };
-    if (!collectIndirectArguments(function, call, signature.params, &plan)) return null;
-    plan.callee = indirectCalleePlan(function, call, callee_fact) orelse return null;
-    switch (plan.callee) {
-        .projected_place => |place| {
-            if ((place.root_kind != .global and !place.root_indirect) or place.projection_count == 0 or
-                place.resultType() != .value or !placeHasAggregateIntermediates(place)) return null;
-            var indexes: [max_place_projections]CheckedIndexIdentity = undefined;
-            var index_count: usize = 0;
-            appendCheckedIndexLocations(place, &indexes, &index_count) orelse return null;
-            if (place.root_indirect) {
-                if (index_count != 0 or !placeRootRepresentationMatches(function, place)) return null;
-            } else if (!boundsTrapLocationsMatch(function, indexes[0..index_count]) or
-                !placeRootRepresentationMatches(function, place)) return null;
-        },
-        else => if (function.blocks.len != 1 or block.successors.len != 0 or
-            function.trap_edges.len != 0 or function.bounds_facts.len != 0 or
-            function.representation_facts.len != 0) return null,
-    }
-    return plan;
-}
-
 fn buildPlace(function: mir.Function, block: mir.Block, span_id: mir.SpanId) ?Place {
     var place: Place = .{};
     var root_set = false;
@@ -1656,71 +1550,6 @@ fn targetFactAt(function: mir.Function, kind: mir.TargetTypeKind, location: Loca
         return fact;
     }
     return null;
-}
-
-fn collectIndirectArguments(function: mir.Function, call: mir.Instruction, params: []const ast.TypeExpr, plan: *IndirectCallReturnPlan) bool {
-    var seen = [_]bool{false} ** max_arguments;
-    const owner = call.target_owner orelse return false;
-    const owner_id = call.typed_target_owner_id orelse return false;
-    for (function.target_type_facts) |fact| {
-        if (fact.kind != .indirect_call_argument) continue;
-        if (!fact.typed_callee_span_id.eql(call.typed_callee_span_id)) continue;
-        if (!std.mem.eql(u8, fact.target_owner orelse "", owner) or !fact.typed_target_owner_id.eql(owner_id)) continue;
-        const index = fact.target_index orelse return false;
-        if (index >= params.len or index >= max_arguments or seen[index]) return false;
-        if (!type_syntax.sameTypeSyntax(fact.target_ty, params[index])) return false;
-        const operand_name = valueIdentityName(function, fact.typed_operand_value_id) orelse return false;
-        const param_ty = parameterType(function, operand_name) orelse return false;
-        if (!sameRepresentationType(param_ty, fact.result_ty)) return false;
-        if (!hasOperandInstruction(function, fact)) return false;
-        plan.arguments[index] = .{
-            .index = index,
-            .value_id = fact.typed_operand_value_id,
-            .name = operand_name,
-            .type_fact = fact,
-        };
-        seen[index] = true;
-        plan.argument_count += 1;
-    }
-    if (plan.argument_count != params.len) return false;
-    for (seen[0..params.len]) |present| if (!present) return false;
-    return true;
-}
-
-fn indirectCalleePlan(function: mir.Function, call: mir.Instruction, callee_fact: mir.TargetTypeFact) ?IndirectCallee {
-    if (buildPlace(function, function.blocks[0], callee_fact.typed_span_id)) |place| {
-        return .{ .projected_place = place };
-    }
-    if (!call.typed_callee_root_value_id.isValid() or !call.typed_callee_root_span_id.isValid()) return null;
-    const root_name = valueIdentityName(function, call.typed_callee_root_value_id) orelse return null;
-    const root_is_parameter = parameterType(function, root_name) != null;
-    if (call.callee_field_index) |field_index| {
-        if (root_is_parameter) return null;
-        const root_type_fact = targetFactBySpan(function, .expression_result, call.typed_callee_root_span_id) orelse return null;
-        return .{ .global_field = .{
-            .root_name = root_name,
-            .field_name = call.detail,
-            .field_index = field_index,
-            .root_type_fact = root_type_fact,
-        } };
-    }
-    if (root_is_parameter) return .{ .parameter = root_name };
-    if (localInstruction(function, root_name)) |local| {
-        const local_id = local.typed_value_id orelse return null;
-        if (!local_id.eql(call.typed_callee_root_value_id) or !local.typed_value_operand_span_id.isValid()) return null;
-        const initializer = expressionAtSpan(function.blocks[0], local.typed_value_operand_span_id) orelse return null;
-        const function_id = initializer.typed_value_id orelse return null;
-        const function_name = valueIdentityName(function, function_id) orelse return null;
-        if (!std.mem.eql(u8, initializer.detail, function_name)) return null;
-        return .{ .local_function = .{
-            .local_name = root_name,
-            .local_id = local_id,
-            .function_name = function_name,
-            .function_id = function_id,
-            .local_location = locationFromInstruction(local),
-        } };
-    }
-    return .{ .global = root_name };
 }
 
 fn targetFactBySpan(function: mir.Function, kind: mir.TargetTypeKind, span_id: mir.SpanId) ?mir.TargetTypeFact {

@@ -4712,17 +4712,21 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
     try expectNotContains(global_body, "mc_tmp");
 
     const field_body = try cFunctionBody(output.items, "static uint32_t global_box_call(");
-    try expectContains(field_body, "__atomic_load_n(&default_box.combine, __ATOMIC_RELAXED))(x, y)");
+    try expectContains(field_body, "/* canonical executable MIR */");
+    try expectContains(field_body, "__atomic_load_n(&((default_box).combine), __ATOMIC_RELAXED)");
+    try expectContains(field_body, ")(mc_exec_tmp_");
     try expectNotContains(field_body, "mc_tmp");
 
     const array_body = try cFunctionBody(output.items, "static uint32_t global_op_array_call(");
-    try expectContains(array_body, "default_ops.elems[mc_check_index_usize(1, 2)]");
-    try expectContains(array_body, ")(x, y)");
+    try expectContains(array_body, "/* canonical executable MIR */");
+    try expectContains(array_body, "default_ops).elems[mc_check_index_usize(mc_exec_tmp_0, 2)]");
+    try expectContains(array_body, ")(mc_exec_tmp_");
     try expectNotContains(array_body, "mc_tmp");
 
     const array_field_body = try cFunctionBody(output.items, "static uint32_t global_box_array_call(");
-    try expectContains(array_field_body, "default_boxes.elems[mc_check_index_usize(1, 2)].combine");
-    try expectContains(array_field_body, ")(x, y)");
+    try expectContains(array_field_body, "/* canonical executable MIR */");
+    try expectContains(array_field_body, "default_boxes).elems[mc_check_index_usize(mc_exec_tmp_0, 2)].combine");
+    try expectContains(array_field_body, ")(mc_exec_tmp_");
     try expectNotContains(array_field_body, "mc_tmp");
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_fn_pointer_call(");

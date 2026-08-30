@@ -4748,7 +4748,7 @@ test "MIR plans nullable pointer local promotions with typed identities" {
     try std.testing.expect(saw_call and saw_guard);
 }
 
-test "MIR plans typed indirect call arguments and canonical callee roots" {
+test "executable MIR owns typed indirect calls and canonical callee roots" {
     const source =
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
         \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
@@ -4774,36 +4774,20 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
     for ([_][]const u8{ "apply", "global_op_call", "global_op_array_call", "global_box_call", "global_box_array_call", "local_fn_pointer_call" }) |name| {
         const function = functionByName(typed_mir, name).?;
         try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .indirect_call_argument));
-        const plan = mir_statement_plan.buildSingleBlockIndirectCallReturn(function) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(@as(usize, 2), plan.argument_count);
-        try std.testing.expectEqual(@as(usize, 0), plan.arguments[0].index);
-        try std.testing.expectEqual(@as(usize, 1), plan.arguments[1].index);
-        try std.testing.expectEqualStrings("x", plan.arguments[0].name);
-        try std.testing.expectEqualStrings("y", plan.arguments[1].name);
-        if (std.mem.eql(u8, name, "local_fn_pointer_call")) switch (plan.callee) {
-            .local_function => |local| {
-                try std.testing.expectEqualStrings("op", local.local_name);
-                try std.testing.expectEqualStrings("mul", local.function_name);
-                try std.testing.expect(local.local_id.isValid());
-                try std.testing.expect(local.function_id.isValid());
+        try std.testing.expect(function.executable_body.complete);
+        var indirect_calls: usize = 0;
+        for (function.executable_body.expressions) |expression| switch (expression.operation) {
+            .indirect_call => |call| {
+                try std.testing.expectEqual(@as(usize, 2), call.argument_count);
+                try std.testing.expectEqual(@as(usize, 2), call.signature.parameter_count);
+                try std.testing.expect(call.callee.isValid());
+                try std.testing.expect(call.arguments[0].isValid());
+                try std.testing.expect(call.arguments[1].isValid());
+                indirect_calls += 1;
             },
-            else => return error.TestUnexpectedResult,
-        } else if (std.mem.eql(u8, name, "global_op_array_call")) switch (plan.callee) {
-            .projected_place => |place| {
-                try std.testing.expectEqualStrings("default_ops", place.root_name);
-                try std.testing.expectEqual(@as(usize, 1), place.projection_count);
-                try std.testing.expectEqual(@as(usize, 1), place.projections[0].constant_index.index);
-            },
-            else => return error.TestUnexpectedResult,
-        } else if (std.mem.eql(u8, name, "global_box_array_call")) switch (plan.callee) {
-            .projected_place => |place| {
-                try std.testing.expectEqualStrings("default_boxes", place.root_name);
-                try std.testing.expectEqual(@as(usize, 2), place.projection_count);
-                try std.testing.expectEqual(@as(usize, 1), place.projections[0].constant_index.index);
-                try std.testing.expectEqualStrings("combine", place.projections[1].field.field_name);
-            },
-            else => return error.TestUnexpectedResult,
+            else => {},
         };
+        try std.testing.expectEqual(@as(usize, 1), indirect_calls);
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 

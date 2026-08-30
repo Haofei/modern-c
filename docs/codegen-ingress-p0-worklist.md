@@ -5,7 +5,7 @@ ordinary function body is emitted from verified executable MIR. Passing tests
 or reaching a percentage threshold does not complete this goal; deleting the
 AST ingress does.
 
-## Current measurement (2026-08-29)
+## Current measurement (2026-08-30)
 
 Run:
 
@@ -16,10 +16,10 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
-| strict ratchet | 160/160 admitted, 0 fallback (118 canonical) | 160/160 admitted, 0 fallback (119 canonical) |
-| broad repository sweep | 1280/1769 admitted, 489 fallback | 1320/1840 admitted, 520 fallback |
-| canonical bodies | 1189 | 1221 |
-| transitional specialized bodies | 91 | 99 |
+| strict ratchet | 160/160 admitted, 0 fallback (124 canonical) | 160/160 admitted, 0 fallback (125 canonical) |
+| broad repository sweep | 1284/1769 admitted, 485 fallback | 1323/1840 admitted, 517 fallback |
+| canonical bodies | 1201 | 1235 |
+| transitional specialized bodies | 83 | 88 |
 
 The strict ratchet is a regression gate, not the completion definition. The
 broad sweep includes partial records from unsupported/reject roots and is the
@@ -48,19 +48,26 @@ worklist snapshot.
   parameter and local function pointers with arguments and return values; the
   strict corpus moved two more bodies per backend from specialized plans to the
   canonical emitter.
-- Since the preceding snapshot, broad fallback fell by 9 C and 10 LLVM bodies,
-  while canonical bodies rose by 12 in each backend and specialized bodies
-  fell by 3 C / 2 LLVM. MIR/cleanup is 358/358; the backend shard is 1036/1036.
+- Callable values loaded from global objects, fixed arrays, aggregate fields,
+  and fixed-array elements of aggregate objects now share the canonical typed
+  place/load model. The fixed-array element field case is a two-projection
+  `PlaceId`, and checked indexing retains its exact Bounds edge.
+- The transitional `IndirectCallReturnPlan`, its source-shaped callee model,
+  both backend emitters and its census category were deleted. The specialized
+  plan-definition count is now 9. Relative to the preceding broad snapshot,
+  C canonical bodies rose by 12 and specialized bodies fell by 8; LLVM
+  canonical bodies rose by 14 and specialized bodies fell by 11. Broad AST
+  fallback fell by 4 C and 3 LLVM bodies. MIR/cleanup and backend shards pass.
 
 ## Remaining producer blockers
 
 Ranked by broad frequency (C / LLVM where different):
 
-1. `trap_projection`: 108 / 115
+1. `trap_projection`: 107 / 114
 2. `unsupported_member`: 63 / 63
 3. `unsupported_statement`: 27 / 27
 4. `producer_invariant`: 27 / 27
-5. `unlowered_array`: 25 / 27
+5. `unlowered_array`: 25 / 26
 6. `unsupported_call`: 22 / 22
 7. `general_switch`: 21 / 23
 8. `unsupported_struct_literal`: 19 / 19
@@ -69,7 +76,7 @@ Ranked by broad frequency (C / LLVM where different):
 11. `unlowered_member`: 14 / 14
 12. `InvalidBuiltinCall`: 10 / 10
 
-Renderer-only rejection remains 50 C / 65 LLVM bodies. It must be reduced by
+Renderer-only rejection remains 47 C / 64 LLVM bodies. It must be reduced by
 typed, verifier-checked slices; renderer admission must not infer source
 semantics.
 

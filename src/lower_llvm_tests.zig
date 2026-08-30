@@ -4834,22 +4834,25 @@ test "LLVM typed indirect call returns lower from MIR without body fallback" {
     try expectNotContains(global_body, "alloca");
 
     const field_body = try llvmFunctionBody(output.items, "define internal i32 @global_box_call");
-    try expectContains(field_body, "getelementptr { ptr }, ptr @default_box, i64 0, i32 0");
+    try expectContains(field_body, "; canonical executable MIR");
+    try expectContains(field_body, "getelementptr inbounds { ptr }, ptr @default_box, i32 0, i32 0");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field_body, "load atomic ptr"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field_body, "call i32 %"));
     try expectContains(field_body, "ret i32");
     try expectNotContains(field_body, "alloca");
 
     const array_body = try llvmFunctionBody(output.items, "define internal i32 @global_op_array_call");
+    try expectContains(array_body, "; canonical executable MIR");
     try expectContains(array_body, "mc_trap_Bounds");
-    try expectContains(array_body, "getelementptr [2 x ptr], ptr @default_ops");
+    try expectContains(array_body, "getelementptr inbounds [2 x ptr], ptr @default_ops");
     try expectContains(array_body, "load atomic ptr");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, array_body, "call i32 %"));
 
     const array_field_body = try llvmFunctionBody(output.items, "define internal i32 @global_box_array_call");
+    try expectContains(array_field_body, "; canonical executable MIR");
     try expectContains(array_field_body, "mc_trap_Bounds");
-    try expectContains(array_field_body, "getelementptr [2 x { ptr }], ptr @default_boxes");
-    try expectContains(array_field_body, "getelementptr { ptr }");
+    try expectContains(array_field_body, "getelementptr inbounds [2 x { ptr }], ptr @default_boxes");
+    try expectContains(array_field_body, "getelementptr inbounds { ptr }");
     try expectContains(array_field_body, "load atomic ptr");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, array_field_body, "call i32 %"));
 
