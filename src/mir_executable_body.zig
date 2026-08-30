@@ -1124,6 +1124,34 @@ fn verifyTerminator(function: *const mir.Function, terminator: mir.ExecutableTer
             if (body.complete and (return_count > 1 or (function.return_ty != .void and return_count != 1))) return error.InvalidReturnStatement;
         },
         .jump => |target| if (!blockExists(function, target)) return error.InvalidBlockReference,
+        .for_each => |loop| {
+            if (!blockExists(function, loop.body_block) or !blockExists(function, loop.after_block) or
+                local(body, loop.iterable_local) == null or local(body, loop.index_local) == null or
+                local(body, loop.binding_local) == null or !loop.iterable_type_id.isValid() or
+                !loop.index_type_id.isValid() or !loop.element_type_id.isValid())
+                return error.InvalidBlockReference;
+            const child = switch (loop.iterable_ty) {
+                .array => |shape| blk: {
+                    if (loop.kind != .fixed_array or loop.bound == null or shape.length == null or
+                        loop.bound.? != shape.length.?) return error.InvalidTerminatorCondition;
+                    break :blk shape.child;
+                },
+                .pointer => |shape| blk: {
+                    if (loop.kind != .slice or loop.bound != null or shape.kind != .slice) return error.InvalidTerminatorCondition;
+                    break :blk shape.child;
+                },
+                .slice => |child| blk: {
+                    if (loop.kind != .slice or loop.bound != null) return error.InvalidTerminatorCondition;
+                    break :blk child;
+                },
+                else => return error.InvalidTerminatorCondition,
+            };
+            if (!std.mem.eql(u8, child, loop.element_ty.name())) return error.InvalidTerminatorCondition;
+        },
+        .for_step => |step| {
+            if (!blockExists(function, step.header_block) or local(body, step.index_local) == null or
+                !step.index_type_id.isValid()) return error.InvalidBlockReference;
+        },
         .branch => |branch| {
             const condition = expression(body, branch.condition) orelse return error.InvalidExpressionReference;
             if (!condition.block_id.eql(terminator.block_id) or !blockExists(function, branch.true_block) or !blockExists(function, branch.false_block)) return error.InvalidBlockReference;
@@ -1517,11 +1545,17 @@ fn verifyRangeSlice(
     }
     if (ownedTrapCountAll(body, owner) != 0 or bound == null) return error.InvalidMemoryAccessTrap;
     const start_value = switch (start.operation) {
-        .literal => |literal| switch (literal) { .integer => |magnitude| magnitude, else => return error.InvalidMemoryAccessTrap },
+        .literal => |literal| switch (literal) {
+            .integer => |magnitude| magnitude,
+            else => return error.InvalidMemoryAccessTrap,
+        },
         else => return error.InvalidMemoryAccessTrap,
     };
     const end_value = switch (end.operation) {
-        .literal => |literal| switch (literal) { .integer => |magnitude| magnitude, else => return error.InvalidMemoryAccessTrap },
+        .literal => |literal| switch (literal) {
+            .integer => |magnitude| magnitude,
+            else => return error.InvalidMemoryAccessTrap,
+        },
         else => return error.InvalidMemoryAccessTrap,
     };
     if (start_value > end_value or end_value > bound.?) return error.InvalidMemoryAccessTrap;

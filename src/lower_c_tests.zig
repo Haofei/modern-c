@@ -8119,24 +8119,24 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_sequence_foreach_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_canonical_foreach_return.mc", source, &output);
 
     const direct = try cFunctionBody(output.items, "static uint32_t first_value(uint32_t seed)");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "make_values(seed)"));
-    try expectContains(direct, "if (4 != 0)");
-    try expectContains(direct, ".elems[0]");
-    try expectContains(direct, "return value;");
-    try expectContains(direct, "return 0;");
+    try expectContains(direct, "/* canonical executable MIR */");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "make_values("));
+    try expectContains(direct, " < 4");
+    try expectContains(direct, ".elems[__mc_for_index_");
+    try expectContains(direct, "return mc_exec_tmp_");
 
     const field = try cFunctionBody(output.items, "static uint32_t first_field(uint32_t seed)");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field, "make_bag(seed)"));
+    try expectContains(field, "/* canonical executable MIR */");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field, "make_bag("));
     try expectContains(field, ".values;");
-    try expectContains(field, ".elems[0]");
-    try expectContains(field, "return value;");
-    try expectContains(field, "return 0;");
+    try expectContains(field, ".elems[__mc_for_index_");
+    try expectContains(field, "return mc_exec_tmp_");
 
     const parameter = try cFunctionBody(output.items, "first_parameter(");
-    try expectContains(parameter, "values.elems[0]");
+    try expectContains(parameter, ".elems[__mc_for_index_");
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, parameter, "make_values"));
 
     const nested = try cFunctionBody(output.items, "first_nested_call(");
@@ -8147,14 +8147,14 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "make_values("));
 
     const slice = try cFunctionBody(output.items, "first_slice(");
-    try expectContains(slice, "values.ptr == NULL && values.len != 0");
-    try expectContains(slice, "if (values.len != 0)");
-    try expectContains(slice, "values.ptr[0]");
+    try expectContains(slice, ".ptr == NULL &&");
+    try expectContains(slice, ".len != 0");
+    try expectContains(slice, ".ptr[__mc_for_index_");
 
     const slice_call = try cFunctionBody(output.items, "first_slice_call(");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, slice_call, "make_slice()"));
     try expectContains(slice_call, ".ptr == NULL");
-    try expectContains(slice_call, ".ptr[0]");
+    try expectContains(slice_call, ".ptr[__mc_for_index_");
 }
 
 test "lower-c emits break and continue while CFG from MIR without body fallback" {
@@ -8195,17 +8195,21 @@ test "lower-c emits slice foreach local updates from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_sequence_foreach_update.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_canonical_foreach_update.mc", source, &output);
 
     const sum = try cFunctionBody(output.items, "static uint32_t sum(");
-    try expectContains(sum, "values.ptr == NULL && values.len != 0");
-    try expectContains(sum, "mc_checked_add_u32(total, value)");
-    try expectContains(sum, "continue;");
-    try expectContains(sum, "return total;");
+    try expectContains(sum, "/* canonical executable MIR */");
+    try expectContains(sum, ".ptr == NULL &&");
+    try expectContains(sum, ".len != 0");
+    try expectContains(sum, "mc_checked_add_u32(");
+    try expectContains(sum, "__mc_for_index_");
+    try expectContains(sum, " += 1;");
+    try expectContains(sum, "return mc_exec_tmp_");
     const first = try cFunctionBody(output.items, "static uint32_t first(");
-    try expectContains(first, "seen = value;");
-    try expectContains(first, "break;");
-    try expectContains(first, "return seen;");
+    try expectContains(first, "/* canonical executable MIR */");
+    try expectContains(first, "seen = mc_exec_tmp_");
+    try expectContains(first, "goto mc_bb_");
+    try expectContains(first, "return mc_exec_tmp_");
 }
 
 test "lower-c nested array member and index results require MIR expression facts" {
@@ -19717,20 +19721,19 @@ test "lower-c emits array and slice for loops" {
     try appendCTest("emit_c_for_loops.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_slice(mc_slice_const_u32 xs)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "for (uintptr_t mc_i0 = 0; mc_i0 < xs.len; mc_i0 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i0];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__mc_for_index_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".ptr[__mc_for_index_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_array_u32_4 {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_array(mc_array_u32_4 xs)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " < 4; mc_i") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.elems[mc_i") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".len; mc_i") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".ptr[mc_i") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 xs = make_array();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " < 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".elems[__mc_for_index_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_slice()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".len") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_array()") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
 }
 
 test "lower-c emits fixed array indexing with bounds checks" {

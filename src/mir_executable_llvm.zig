@@ -243,6 +243,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .fallthrough => return false,
             .jump => |target| if (!blockExists(body, target)) return false,
             .branch => |branch| if (!expressionValid(body, branch.condition) or !blockExists(body, branch.true_block) or !blockExists(body, branch.false_block)) return false,
+            .for_each => |loop| if (!forEachSupported(body, loop)) return false,
+            .for_step => |step| if (!forStepSupported(body, step)) return false,
             .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
             .trap_ => |kind| if (trapHelper(kind) == null) return false,
             .return_ => if (!hasReturnStatement(body, terminator.block_id) and return_ty != .void) return false,
@@ -250,6 +252,46 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         }
     }
     return true;
+}
+
+fn localInit(body: *const mir.ExecutableBody, id: mir.LocalId) ?@FieldType(mir.ExecutableStatement.Operation, "local_init") {
+    var found: ?@FieldType(mir.ExecutableStatement.Operation, "local_init") = null;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(id)) {
+            if (found != null) return null;
+            found = init;
+        },
+        else => {},
+    };
+    return found;
+}
+
+fn forEachSupported(body: *const mir.ExecutableBody, loop: mir.ExecutableForEachTerminator) bool {
+    if (!blockExists(body, loop.body_block) or !blockExists(body, loop.after_block)) return false;
+    const iterable = localInit(body, loop.iterable_local) orelse return false;
+    const index = localInit(body, loop.index_local) orelse return false;
+    const binding = localInit(body, loop.binding_local) orelse return false;
+    if (!sameValueType(iterable.ty, loop.iterable_ty) or !iterable.type_id.eql(loop.iterable_type_id) or
+        !sameValueType(index.ty, .{ .integer = "usize" }) or !index.type_id.eql(loop.index_type_id) or
+        !sameValueType(binding.ty, loop.element_ty) or !binding.type_id.eql(loop.element_type_id) or
+        binding.value != null or !llvmTypeSupported(body, loop.element_ty)) return false;
+    return switch (loop.kind) {
+        .fixed_array => loop.bound != null and switch (loop.iterable_ty) {
+            .array => |shape| shape.length != null and shape.length.? == loop.bound.? and std.mem.eql(u8, shape.child, loop.element_ty.name()),
+            else => false,
+        },
+        .slice => loop.bound == null and switch (loop.iterable_ty) {
+            .pointer => |shape| shape.kind == .slice and std.mem.eql(u8, shape.child, loop.element_ty.name()),
+            .slice => |child| std.mem.eql(u8, child, loop.element_ty.name()),
+            else => false,
+        },
+    };
+}
+
+fn forStepSupported(body: *const mir.ExecutableBody, step: mir.ExecutableForStepTerminator) bool {
+    if (!blockExists(body, step.header_block)) return false;
+    const index = localInit(body, step.index_local) orelse return false;
+    return sameValueType(index.ty, .{ .integer = "usize" }) and index.type_id.eql(step.index_type_id) and index.mutable;
 }
 
 fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.ExecutableSwitchTerminator) bool {
@@ -476,6 +518,8 @@ const Renderer = struct {
                 if (!std.mem.eql(u8, condition.ty, "i1")) return error.InvalidBody;
                 try self.output.print(self.allocator, "  br i1 {s}, label %mc_block_{d}, label %mc_block_{d}\n", .{ condition.spelling, branch.true_block.raw, branch.false_block.raw });
             },
+            .for_each => |loop| try self.emitForEachTerminator(terminator.block_id, loop),
+            .for_step => |step| try self.emitForStepTerminator(step),
             .return_ => {
                 const value = self.returns.get(terminator.block_id.raw) orelse null;
                 if (std.mem.eql(u8, self.return_ty, "void")) {
@@ -504,6 +548,53 @@ const Renderer = struct {
             },
             .fallthrough => return error.Unsupported,
         }
+    }
+
+    fn emitForEachTerminator(self: *Renderer, block_id: mir.BlockId, loop: mir.ExecutableForEachTerminator) RenderError!void {
+        if (!forEachSupported(self.body, loop)) return error.InvalidBody;
+        const iterable = self.locals.get(loop.iterable_local.raw) orelse return error.InvalidBody;
+        const index = self.locals.get(loop.index_local.raw) orelse return error.InvalidBody;
+        const binding = self.locals.get(loop.binding_local.raw) orelse return error.InvalidBody;
+        if (!iterable.addressable or !index.addressable or !binding.addressable) return error.InvalidBody;
+        const index_value = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index_value, index.storage });
+        var data_pointer = iterable.storage;
+        var length: []const u8 = undefined;
+        switch (loop.kind) {
+            .fixed_array => length = try std.fmt.allocPrint(self.allocator, "{d}", .{loop.bound.?}),
+            .slice => {
+                const slice_ty = try self.typeText(loop.iterable_ty);
+                const slice_value = try self.temp();
+                data_pointer = try self.temp();
+                const len_value = try self.temp();
+                try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n  {s} = extractvalue {s} {s}, 0\n  {s} = extractvalue {s} {s}, 1\n", .{ slice_value, slice_ty, iterable.storage, data_pointer, slice_ty, slice_value, len_value, slice_ty, slice_value });
+                length = len_value;
+            },
+        }
+        const condition = try self.temp();
+        const bind_label = try std.fmt.allocPrint(self.allocator, "mc_for_bind_{d}", .{block_id.raw});
+        try self.output.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n  br i1 {s}, label %{s}, label %mc_block_{d}\n{s}:\n", .{ condition, index_value, length, condition, bind_label, loop.after_block.raw, bind_label });
+        const element_ty = try self.typeText(loop.element_ty);
+        const element_pointer = try self.temp();
+        switch (loop.kind) {
+            .fixed_array => try self.output.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{
+                element_pointer, try self.typeText(loop.iterable_ty), iterable.storage, index_value,
+            }),
+            .slice => try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{
+                element_pointer, element_ty, data_pointer, index_value,
+            }),
+        }
+        const element = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n  store {s} {s}, ptr {s}\n  br label %mc_block_{d}\n", .{ element, element_ty, element_pointer, element_ty, element, binding.storage, loop.body_block.raw });
+    }
+
+    fn emitForStepTerminator(self: *Renderer, step: mir.ExecutableForStepTerminator) RenderError!void {
+        if (!forStepSupported(self.body, step)) return error.InvalidBody;
+        const index = self.locals.get(step.index_local.raw) orelse return error.InvalidBody;
+        if (!index.addressable) return error.InvalidBody;
+        const current = try self.temp();
+        const next = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load i64, ptr {s}\n  {s} = add i64 {s}, 1\n  store i64 {s}, ptr {s}\n  br label %mc_block_{d}\n", .{ current, index.storage, next, current, next, index.storage, step.header_block.raw });
     }
 
     fn emitExpression(self: *Renderer, id: mir.ExprId) RenderError!Value {

@@ -88,6 +88,8 @@ fn blockNeedsLabel(body: *const mir.ExecutableBody, block_id: mir.BlockId) bool 
     for (body.terminators) |terminator| switch (terminator.operation) {
         .jump => |target| if (target.eql(block_id)) return true,
         .branch => |branch| if (branch.true_block.eql(block_id) or branch.false_block.eql(block_id)) return true,
+        .for_each => |loop| if (loop.body_block.eql(block_id) or loop.after_block.eql(block_id)) return true,
+        .for_step => |step| if (step.header_block.eql(block_id)) return true,
         .switch_ => |switch_| {
             if (switch_.default_block.eql(block_id)) return true;
             for (switch_.cases[0..switch_.case_count]) |case| if (case.target.eql(block_id)) return true;
@@ -221,6 +223,38 @@ fn emitTerminator(
             try out.appendSlice(allocator, "if (");
             try emitExpression(allocator, out, body, branch.condition, 0);
             try out.print(allocator, ") goto mc_bb_{d}; else goto mc_bb_{d};\n", .{ branch.true_block.raw, branch.false_block.raw });
+        },
+        .for_each => |loop| {
+            if (!forEachSupported(body, loop)) return error.InvalidBlock;
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "if (");
+            try appendLocal(allocator, out, body, loop.index_local);
+            try out.appendSlice(allocator, " < ");
+            switch (loop.kind) {
+                .fixed_array => try out.print(allocator, "{d}", .{loop.bound.?}),
+                .slice => {
+                    try appendLocal(allocator, out, body, loop.iterable_local);
+                    try out.appendSlice(allocator, ".len");
+                },
+            }
+            try out.appendSlice(allocator, ") { ");
+            try appendLocal(allocator, out, body, loop.binding_local);
+            try out.appendSlice(allocator, " = ");
+            try appendLocal(allocator, out, body, loop.iterable_local);
+            try out.appendSlice(allocator, switch (loop.kind) {
+                .fixed_array => ".elems[",
+                .slice => ".ptr[",
+            });
+            try appendLocal(allocator, out, body, loop.index_local);
+            try out.print(allocator, "]; goto mc_bb_{d}; }} else goto mc_bb_{d};\n", .{ loop.body_block.raw, loop.after_block.raw });
+        },
+        .for_step => |step| {
+            if (!forStepSupported(body, step)) return error.InvalidBlock;
+            try writeIndent(allocator, out, indent);
+            try appendLocal(allocator, out, body, step.index_local);
+            try out.appendSlice(allocator, " += 1;\n");
+            try writeIndent(allocator, out, indent);
+            try out.print(allocator, "goto mc_bb_{d};\n", .{step.header_block.raw});
         },
         // The value-bearing return is an executable statement.  A bare return
         // terminator only closes paths whose statement stream has no explicit
@@ -687,9 +721,51 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         .trap_ => |kind| if (trapHelper(kind) == null) return false,
         .jump => |target| if (!hasBlock(body, target)) return false,
         .branch => |branch| if (expressionById(body, branch.condition) == null or !hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block)) return false,
+        .for_each => |loop| if (!forEachSupported(body, loop)) return false,
+        .for_step => |step| if (!forStepSupported(body, step)) return false,
         .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
     };
     return true;
+}
+
+fn localInit(body: *const mir.ExecutableBody, id: mir.LocalId) ?@FieldType(mir.ExecutableStatement.Operation, "local_init") {
+    var found: ?@FieldType(mir.ExecutableStatement.Operation, "local_init") = null;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(id)) {
+            if (found != null) return null;
+            found = init;
+        },
+        else => {},
+    };
+    return found;
+}
+
+fn forEachSupported(body: *const mir.ExecutableBody, loop: mir.ExecutableForEachTerminator) bool {
+    if (!hasBlock(body, loop.body_block) or !hasBlock(body, loop.after_block)) return false;
+    const iterable = localInit(body, loop.iterable_local) orelse return false;
+    const index = localInit(body, loop.index_local) orelse return false;
+    const binding = localInit(body, loop.binding_local) orelse return false;
+    if (!mir.ValueType.eql(iterable.ty, loop.iterable_ty) or !iterable.type_id.eql(loop.iterable_type_id) or
+        !mir.ValueType.eql(index.ty, .{ .integer = "usize" }) or !index.type_id.eql(loop.index_type_id) or
+        !mir.ValueType.eql(binding.ty, loop.element_ty) or !binding.type_id.eql(loop.element_type_id) or
+        binding.value != null) return false;
+    return switch (loop.kind) {
+        .fixed_array => loop.bound != null and switch (loop.iterable_ty) {
+            .array => |shape| shape.length != null and shape.length.? == loop.bound.? and std.mem.eql(u8, shape.child, loop.element_ty.name()),
+            else => false,
+        },
+        .slice => loop.bound == null and switch (loop.iterable_ty) {
+            .pointer => |shape| shape.kind == .slice and std.mem.eql(u8, shape.child, loop.element_ty.name()),
+            .slice => |child| std.mem.eql(u8, child, loop.element_ty.name()),
+            else => false,
+        },
+    };
+}
+
+fn forStepSupported(body: *const mir.ExecutableBody, step: mir.ExecutableForStepTerminator) bool {
+    if (!hasBlock(body, step.header_block)) return false;
+    const index = localInit(body, step.index_local) orelse return false;
+    return mir.ValueType.eql(index.ty, .{ .integer = "usize" }) and index.type_id.eql(step.index_type_id) and index.mutable;
 }
 
 fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.ExecutableSwitchTerminator) bool {
@@ -3402,8 +3478,8 @@ fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType,
 
 fn appendLocal(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, id: mir.LocalId) (RenderError || std.mem.Allocator.Error)!void {
     const local = localById(body, id) orelse return error.InvalidLocal;
-    if (std.mem.eql(u8, local.spelling, "__mc_iflet_subject"))
-        return out.print(allocator, "__mc_iflet_subject_{d}", .{id.raw});
+    if (std.mem.startsWith(u8, local.spelling, "__mc_"))
+        return out.print(allocator, "{s}_{d}", .{ local.spelling, id.raw });
     return appendIdent(allocator, out, local.spelling);
 }
 

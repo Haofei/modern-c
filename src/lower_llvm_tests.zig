@@ -605,35 +605,38 @@ test "LLVM returns first fixed-array element from MIR CFG without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_sequence_foreach_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_canonical_foreach_return.mc", source, &output);
 
     const direct = try llvmFunctionBody(output.items, "define internal i32 @first_value");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "call [4 x i32] @make_values(i32 %seed)"));
-    try expectContains(direct, "icmp ult i64 0, 4");
-    try expectContains(direct, "getelementptr [4 x i32]");
+    try expectContains(direct, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, direct, "call [4 x i32] @make_values("));
+    try expectContains(direct, "icmp ult i64");
+    try expectContains(direct, ", 4");
+    try expectContains(direct, "getelementptr inbounds [4 x i32]");
     try expectContains(direct, "ret i32 0");
 
     const field = try llvmFunctionBody(output.items, "define internal i32 @first_field");
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field, "call { [4 x i32] } @make_bag(i32 %seed)"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field, "call { [4 x i32] } @make_bag("));
     try expectContains(field, "extractvalue { [4 x i32] }");
-    try expectContains(field, "icmp ult i64 0, 4");
+    try expectContains(field, "icmp ult i64");
+    try expectContains(field, ", 4");
     try expectContains(field, "ret i32 0");
 
     const parameter = try llvmFunctionBody(output.items, "define internal i32 @first_parameter");
-    try expectContains(parameter, "extractvalue [4 x i32] %values, 0");
-    try expectContains(parameter, "getelementptr [4 x i32]");
+    try expectContains(parameter, "; canonical executable MIR");
+    try expectContains(parameter, "getelementptr inbounds [4 x i32]");
     try expectNotContains(parameter, "@make_values");
 
     const nested = try llvmFunctionBody(output.items, "define internal i32 @first_nested_call");
     const nested_call = std.mem.indexOf(u8, nested, "call i32 @next_seed()") orelse return error.TestUnexpectedResult;
-    const outer_call = std.mem.indexOf(u8, nested, "call [4 x i32] @make_values(i32 %t") orelse return error.TestUnexpectedResult;
+    const outer_call = std.mem.indexOf(u8, nested, "call [4 x i32] @make_values(") orelse return error.TestUnexpectedResult;
     try std.testing.expect(nested_call < outer_call);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "call i32 @next_seed()"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, nested, "call [4 x i32] @make_values("));
 
     const slice = try llvmFunctionBody(output.items, "define internal i32 @first_slice");
     try expectContains(slice, "call void @mc_trap_InvalidRepresentation()");
-    try expectContains(slice, "extractvalue { ptr, i64 } %values, 1");
+    try expectContains(slice, "extractvalue { ptr, i64 }");
     try expectContains(slice, "getelementptr i32");
 
     const slice_call = try llvmFunctionBody(output.items, "define internal i32 @first_slice_call");
@@ -714,16 +717,20 @@ test "LLVM emits slice foreach local updates from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_sequence_foreach_update.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_canonical_foreach_update.mc", source, &output);
 
     const sum = try llvmFunctionBody(output.items, "define internal i32 @sum");
+    try expectContains(sum, "; canonical executable MIR");
     try expectContains(sum, "call void @mc_trap_InvalidRepresentation()");
     try expectContains(sum, "@llvm.uadd.with.overflow.i32");
-    try expectContains(sum, "for_step");
+    try expectContains(sum, "mc_for_bind_");
+    try expectContains(sum, "add i64");
     try expectContains(sum, "ret i32");
     const first = try llvmFunctionBody(output.items, "define internal i32 @first");
+    try expectContains(first, "; canonical executable MIR");
     try expectContains(first, "call void @mc_trap_InvalidRepresentation()");
-    try expectContains(first, "for_after");
+    try expectContains(first, "mc_for_bind_");
+    try expectContains(first, "ret i32");
     try expectNotContains(first, "@llvm.uadd.with.overflow.i32");
 }
 

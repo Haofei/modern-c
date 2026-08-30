@@ -213,11 +213,6 @@
       "mirScalarLocalCheckedBinaryReturnPlanSupported(": 0,
       "mirSliceLengthReturnPlanSupported(": 0,
       "mirPlaceStorePlanSupported(": 0
-    },
-    "src/mir_statement_plan.zig": {
-      "buildScalarLocalCheckedBinaryReturn(": 0,
-      "buildSliceLengthReturn(": 0,
-      "buildSingleBlockPlaceStore(": 0
     }
   }
 }

@@ -42,25 +42,21 @@ def load_architecture_inventory():
 
 
 def assert_syntax_free_mir_plan_import_policy(module) -> None:
-    if not set(module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS).issubset({"mir_statement_plan.zig"}):
+    if module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS:
         fail(f"legacy MIR plan exceptions changed: {module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS!r}")
     with tempfile.TemporaryDirectory() as temp:
         root = pathlib.Path(temp)
         (root / "mir_leaf_plan.zig").write_text('const std = @import("std");\nconst mir = @import("mir_model.zig");\n', encoding="utf-8")
         (root / "mir_parent_plan.zig").write_text('const leaf = @import("mir_leaf_plan.zig");\n', encoding="utf-8")
-        (root / "mir_statement_plan.zig").write_text('const ast = @import("ast.zig");\n', encoding="utf-8")
         if module.validate_syntax_free_mir_plan_imports(module.mir_plan_sources(root)):
-            fail("syntax-free MIR plan policy rejected allowed imports or the one legacy exception")
+            fail("syntax-free MIR plan policy rejected allowed imports")
 
         for index, imported in enumerate(sorted(module.MIR_PLAN_FORBIDDEN_IMPORTS)):
             (root / f"mir_bad_{index}_plan.zig").write_text(f'const forbidden = @import("{imported}");\n', encoding="utf-8")
-        (root / "mir_bad_legacy_plan.zig").write_text('const legacy = @import("mir_statement_plan.zig");\n', encoding="utf-8")
         failures = module.validate_syntax_free_mir_plan_imports(module.mir_plan_sources(root))
         for imported in module.MIR_PLAN_FORBIDDEN_IMPORTS:
             if not any(f"forbidden syntax ingress {imported!r}" in failure for failure in failures):
                 fail(f"syntax-free MIR plan policy accepted {imported!r}: {failures!r}")
-        if not any("non-syntax-free dependency 'mir_statement_plan.zig'" in failure for failure in failures):
-            fail(f"syntax-free MIR plan policy allowed another plan to import the legacy exception: {failures!r}")
 
 
 def assert_gates(module, paths: Sequence[str], expected: Sequence[str]) -> None:

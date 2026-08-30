@@ -53,14 +53,10 @@ pub const CanonicalStatus = enum {
     ready,
 };
 
-/// The exact body-lowering path selected by codegen. The specialized entries
-/// are transitional, syntax-free MIR plans: tracking them separately from the
-/// canonical executable body and the AST fallback makes their retirement
-/// measurable instead of inferred from source shape.
+/// The exact body-lowering path selected by codegen. Specialized MIR plans
+/// have been retired; admitted functions now have one codegen authority.
 pub const SelectedPath = enum {
     canonical,
-    sequence_foreach_update,
-    sequence_foreach_return,
     ast_fallback,
     unsupported,
 };

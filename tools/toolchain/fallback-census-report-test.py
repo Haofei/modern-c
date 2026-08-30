@@ -64,21 +64,20 @@ def main() -> None:
         fail(f"fine ranking omitted call_targets: {text!r}")
 
     canonical = record("canonical", status="admitted", selected_path="canonical")
-    specialized = record("specialized", status="admitted", selected_path="sequence_foreach_return")
-    selected_summary = report.summarize_backend([canonical, specialized])
-    if selected_summary["canonical_admitted"] != 1 or selected_summary["specialized_admitted"] != 1:
+    selected_summary = report.summarize_backend([canonical])
+    if selected_summary["canonical_admitted"] != 1 or selected_summary["specialized_admitted"] != 0:
         fail(f"selected-path split is incorrect: {selected_summary!r}")
 
     output = io.StringIO()
     with redirect_stdout(output):
-        report.report_backend("c", [canonical, specialized])
+        report.report_backend("c", [canonical])
     text = output.getvalue()
-    if "canonical emitter   :     1" not in text or "specialized MIR     :     1" not in text or "sequence_foreach_return" not in text:
+    if "canonical emitter   :     1" not in text or "specialized MIR     :     0" not in text:
         fail(f"selected-path report is incomplete: {text!r}")
 
     print(
         "PASS: fallback-census-report-test - call-target families are stable, "
-        "distinct, selected paths are measured, and old JSONL remains compatible"
+        "distinct, the canonical path is measured, and old JSONL remains compatible"
     )
 
 

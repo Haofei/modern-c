@@ -11,7 +11,6 @@ const mir_executable_llvm = @import("mir_executable_llvm.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
 const mir_body_plan = @import("mir_body_plan.zig");
-const mir_statement_plan = @import("mir_statement_plan.zig");
 const module_parser = @import("module_parser.zig");
 const test_support = @import("test_support.zig");
 
@@ -1408,131 +1407,6 @@ test "executable MIR direct-call aggregate projections own typed member index an
     const tail = functionByName(module_mir, "bag_tail_at") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 2), tail.executable_body.trap_edges.len);
 }
-test "MIR sequence foreach return owns iterable evaluation binding representation and CFG" {
-    const source =
-        \\struct Bag { values: [4]u32 }
-        \\extern fn make_values(seed: u32) -> [4]u32;
-        \\extern fn make_bag(seed: u32) -> Bag;
-        \\extern fn next_seed() -> u32;
-        \\extern fn make_slice() -> []const u32;
-        \\fn first_value(seed: u32) -> u32 {
-        \\    for value in make_values(seed) { return value; }
-        \\    return 0;
-        \\}
-        \\fn first_field(seed: u32) -> u32 {
-        \\    for value in make_bag(seed).values { return value; }
-        \\    return 0;
-        \\}
-        \\fn first_parameter(values: [4]u32) -> u32 {
-        \\    for value in values { return value; }
-        \\    return 0;
-        \\}
-        \\fn first_nested_call() -> u32 {
-        \\    for value in make_values(next_seed()) { return value; }
-        \\    return 0;
-        \\}
-        \\fn first_slice(values: []const u32) -> u32 {
-        \\    for value in values { return value; }
-        \\    return 0;
-        \\}
-        \\fn first_slice_call() -> u32 {
-        \\    for value in make_slice() { return value; }
-        \\    return 0;
-        \\}
-    ;
-    var parsed = try test_support.parseModule("mir_sequence_foreach_return.mc", source);
-    defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer module_mir.deinit();
-
-    const direct = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_value").?) orelse return error.TestUnexpectedResult;
-    const direct_call = switch (direct.iterable) {
-        .direct_call => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqualStrings("make_values", direct_call.callee_name);
-    try std.testing.expectEqual(@as(usize, 1), direct_call.argument_count);
-    try std.testing.expectEqual(@as(usize, 0), direct_call.projection_count);
-    try std.testing.expectEqualStrings("value", direct.binding_name);
-    try std.testing.expect(direct.binding_id.isValid());
-    try std.testing.expect(direct.element_fact.typed_operand_value_id.eql(direct.binding_id));
-    try std.testing.expectEqual(@as(usize, 0), direct.fallback.value);
-
-    const field = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_field").?) orelse return error.TestUnexpectedResult;
-    const field_call = switch (field.iterable) {
-        .direct_call => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqualStrings("make_bag", field_call.callee_name);
-    try std.testing.expectEqual(@as(usize, 1), field_call.projection_count);
-    switch (field_call.projections[0]) {
-        .field => |projection| {
-            try std.testing.expectEqualStrings("values", projection.field_name);
-            try std.testing.expectEqual(@as(usize, 0), projection.field_index);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-
-    const parameter = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_parameter").?) orelse return error.TestUnexpectedResult;
-    switch (parameter.iterable) {
-        .parameter => |root| {
-            try std.testing.expectEqualStrings("values", root.name);
-            try std.testing.expect(root.value_id.isValid());
-        },
-        else => return error.TestUnexpectedResult,
-    }
-
-    const nested = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_nested_call").?) orelse return error.TestUnexpectedResult;
-    const nested_call = switch (nested.iterable) {
-        .direct_call => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
-    switch (nested_call.arguments[0].value) {
-        .zero_arg_call => |call| try std.testing.expectEqualStrings("next_seed", call.callee_name),
-        else => return error.TestUnexpectedResult,
-    }
-
-    const slice = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_slice").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(.slice, std.meta.activeTag(slice.iterable_fact.target_ty.kind));
-    try std.testing.expect(slice.representation_check != null);
-    try std.testing.expect(slice.representation_check.?.value_id.isValid());
-
-    const slice_call = mir_statement_plan.buildSequenceForEachReturn(functionByName(module_mir, "first_slice_call").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(.slice, std.meta.activeTag(slice_call.iterable_fact.target_ty.kind));
-    try std.testing.expect(slice_call.representation_check != null);
-    switch (slice_call.iterable) {
-        .direct_call => |call| try std.testing.expectEqualStrings("make_slice", call.callee_name),
-        else => return error.TestUnexpectedResult,
-    }
-
-    var optimized_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
-    defer optimized_mir.deinit();
-    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(functionByName(optimized_mir, "first_slice").?) != null);
-    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(functionByName(optimized_mir, "first_slice_call").?) != null);
-
-    var binding_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer binding_mir.deinit();
-    const binding_function = functionByNameMut(&binding_mir, "first_value") orelse return error.TestUnexpectedResult;
-    for (binding_function.target_type_facts) |*fact| {
-        if (fact.kind == .for_element) {
-            fact.typed_operand_value_id = .invalid;
-            break;
-        }
-    }
-    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(binding_function.*) == null);
-
-    var field_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer field_mir.deinit();
-    const field_function = functionByNameMut(&field_mir, "first_field") orelse return error.TestUnexpectedResult;
-    for (field_function.blocks[0].instructions) |*instruction| {
-        if (instruction.member_field_index != null) {
-            instruction.member_field_index = std.math.maxInt(usize);
-            break;
-        }
-    }
-    try std.testing.expect(mir_statement_plan.buildSequenceForEachReturn(field_function.*) == null);
-}
-
 test "MIR executable body owns resolved function symbol return" {
     const source =
         \\fn tick() -> void {}
@@ -1549,45 +1423,6 @@ test "MIR executable body owns resolved function symbol return" {
     try std.testing.expectEqual(@as(usize, 1), function.executable_body.symbols.len);
     try std.testing.expectEqualStrings("tick", function.executable_body.symbols[0].spelling);
     try std.testing.expectEqual(.function, function.executable_body.symbols[0].kind);
-}
-
-test "MIR sequence foreach update plan owns local generation update traps and control" {
-    const source =
-        \\fn sum(values: []const u32) -> u32 {
-        \\    var total: u32 = 0;
-        \\    for value in values { total = total + value; continue; }
-        \\    return total;
-        \\}
-        \\fn first(values: []const u32) -> u32 {
-        \\    var seen: u32 = 0;
-        \\    for value in values { seen = value; break; }
-        \\    return seen;
-        \\}
-    ;
-    var parsed = try test_support.parseModule("mir_sequence_foreach_update.mc", source);
-    defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer module_mir.deinit();
-
-    const sum = mir_statement_plan.buildSequenceForEachUpdate(functionByName(module_mir, "sum").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("total", sum.local_name);
-    try std.testing.expectEqualStrings("value", sum.binding_name);
-    try std.testing.expectEqual(.continue_, sum.control);
-    switch (sum.update) {
-        .checked_add_element => |update| try std.testing.expectEqual(.integer, std.meta.activeTag(update.operation_fact.result_ty)),
-        else => return error.TestUnexpectedResult,
-    }
-    try std.testing.expect(sum.representation_check.value_id.isValid());
-
-    const first = mir_statement_plan.buildSequenceForEachUpdate(functionByName(module_mir, "first").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(.break_, first.control);
-    try std.testing.expectEqual(.replace_with_element, first.update);
-
-    var corrupted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer corrupted.deinit();
-    const corrupted_first = functionByNameMut(&corrupted, "first") orelse return error.TestUnexpectedResult;
-    corrupted_first.blocks[2].instructions[corrupted_first.blocks[2].instructions.len - 1].detail = "continue";
-    try std.testing.expect(mir_statement_plan.buildSequenceForEachUpdate(corrupted_first.*) == null);
 }
 
 test "MIR target-type owner identities mirror direct calls" {

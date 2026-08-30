@@ -6198,6 +6198,8 @@ const FunctionBuilder = struct {
     executable_places: std.ArrayList(ExecutablePlace),
     executable_statements: std.ArrayList(ExecutableStatement),
     executable_terminators: std.ArrayList(ExecutableTerminator),
+    executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
+    executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
     executable_local_ids: std.StringHashMap(LocalId),
     executable_symbol_ids: std.StringHashMap(SymbolId),
@@ -6337,6 +6339,8 @@ const FunctionBuilder = struct {
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
+            .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
+            .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
             .executable_local_ids = std.StringHashMap(LocalId).init(allocator),
             .executable_symbol_ids = std.StringHashMap(SymbolId).init(allocator),
@@ -6478,6 +6482,8 @@ const FunctionBuilder = struct {
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
+            .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
+            .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
             .executable_local_ids = std.StringHashMap(LocalId).init(allocator),
             .executable_symbol_ids = std.StringHashMap(SymbolId).init(allocator),
@@ -6555,6 +6561,8 @@ const FunctionBuilder = struct {
         self.executable_places.deinit(self.allocator);
         self.executable_statements.deinit(self.allocator);
         self.executable_terminators.deinit(self.allocator);
+        self.executable_for_each_terminators.deinit();
+        self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
         self.executable_local_ids.deinit();
         self.executable_symbol_ids.deinit();
@@ -6890,7 +6898,11 @@ const FunctionBuilder = struct {
             }
         }
         for (self.blocks.items) |block| {
-            const operation: @FieldType(ExecutableTerminator, "operation") = switch (block.terminator) {
+            const operation: @FieldType(ExecutableTerminator, "operation") = if (self.executable_for_each_terminators.get(block.id)) |for_each|
+                .{ .for_each = for_each }
+            else if (self.executable_for_step_terminators.get(block.id)) |for_step|
+                .{ .for_step = for_step }
+            else switch (block.terminator) {
                 .fallthrough => fallthrough: {
                     if (block.successors.items.len == 0 and self.return_ty == .void) break :fallthrough .return_;
                     // Structured conditionals create a synthetic continuation block even
@@ -6954,6 +6966,10 @@ const FunctionBuilder = struct {
         }
         self.executable_boolean_branches.deinit(self.allocator);
         self.executable_boolean_branches = .empty;
+        self.executable_for_each_terminators.deinit();
+        self.executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(self.allocator);
+        self.executable_for_step_terminators.deinit();
+        self.executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(self.allocator);
 
         const parameters = try self.executable_parameters.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(parameters);
@@ -7428,11 +7444,17 @@ const FunctionBuilder = struct {
         if (operation.checked) return owned == 1;
         if (owned != 0 or bound == null) return false;
         const start_value = switch (start.operation) {
-            .literal => |literal| switch (literal) { .integer => |value| value, else => return false },
+            .literal => |literal| switch (literal) {
+                .integer => |value| value,
+                else => return false,
+            },
             else => return false,
         };
         const end_value = switch (end.operation) {
-            .literal => |literal| switch (literal) { .integer => |value| value, else => return false },
+            .literal => |literal| switch (literal) {
+                .integer => |value| value,
+                else => return false,
+            },
             else => return false,
         };
         return start_value <= end_value and end_value <= bound.?;
@@ -8195,6 +8217,33 @@ const FunctionBuilder = struct {
             self.executable_supported = false;
         }
         return entry.value_ptr.*;
+    }
+
+    fn appendSyntheticExecutableLocal(self: *FunctionBuilder, prefix: []const u8) !LocalId {
+        const id = LocalId.fromIndex(self.executable_locals.items.len);
+        const spelling = if (std.mem.eql(u8, prefix, "for_iterable"))
+            "__mc_for_iterable"
+        else if (std.mem.eql(u8, prefix, "for_index"))
+            "__mc_for_index"
+        else
+            return error.InvalidSyntheticLocal;
+        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling });
+        return id;
+    }
+
+    fn appendExecutableIntegerLiteral(self: *FunctionBuilder, source: SourcePoint, ty: ValueType, value: u128) !ExprId {
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = ty,
+            .type_id = try self.internTypeId(ty),
+            .operation = .{ .literal = .{ .integer = value } },
+        });
+        return id;
     }
 
     fn internExecutableSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
@@ -12010,16 +12059,26 @@ const FunctionBuilder = struct {
         // the function entry/preheader that owns local initializers.  Reusing
         // the current block as the header made canonical codegen reinitialize
         // every pre-loop local on each iteration.
-        const header_id = if (node.kind == .@"while") header: {
-            const preheader_id = self.current;
+        const preheader_id = self.current;
+        var header_id: usize = preheader_id;
+        if (node.kind == .@"while") {
             const id = try self.addBlock("loop_header");
             try self.addSuccessor(preheader_id, id);
             self.blocks.items[preheader_id].terminator = .{ .jump = id };
             self.current = id;
-            break :header id;
-        } else self.current;
+            header_id = id;
+        }
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
         var for_binding_ty_expr: ?ast.TypeExpr = null;
+        var for_iterable_local: ?LocalId = null;
+        var for_iterable_ty: ValueType = .unknown;
+        var for_iterable_type_id: TypeId = .invalid;
+        var for_index_local: ?LocalId = null;
+        var for_binding_local: ?LocalId = null;
+        var for_element_ty: ValueType = .unknown;
+        var for_element_type_id: TypeId = .invalid;
+        var for_kind: mir_model.ExecutableIndexKind = .fixed_array;
+        var for_bound: ?usize = null;
         if (node.iterable) |iterable| {
             if (node.kind == .@"while") try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .while_, .condition = try self.ensureExecutableExpr(iterable) } });
             if (node.kind == .@"while") {
@@ -12034,24 +12093,119 @@ const FunctionBuilder = struct {
                             try self.appendForElementTargetTypeFact(element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), iterable.span, binding.text);
                         }
                         for_binding_ty_expr = element_ty;
+                        for_iterable_ty = valueTypeFromTypeAlias(iterable_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                        for_element_ty = valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                        for_iterable_type_id = try self.internTypeId(for_iterable_ty);
+                        for_element_type_id = try self.internTypeId(for_element_ty);
+                        switch (for_iterable_ty) {
+                            .array => |array| {
+                                for_kind = .fixed_array;
+                                for_bound = array.length;
+                            },
+                            .pointer => |pointer| {
+                                if (pointer.kind == .slice) {
+                                    for_kind = .slice;
+                                    for_bound = null;
+                                } else self.executable_supported = false;
+                            },
+                            .slice => {
+                                for_kind = .slice;
+                                for_bound = null;
+                            },
+                            else => self.executable_supported = false,
+                        }
+                        const iterable_value = try self.ensureExecutableExprAsType(iterable, for_iterable_ty, iterable_ty);
+                        const iterable_local = try self.appendSyntheticExecutableLocal("for_iterable");
+                        for_iterable_local = iterable_local;
+                        try self.appendExecutableStatement(self.sourcePoint(iterable.span), .{ .local_init = .{
+                            .local = iterable_local,
+                            .ty = for_iterable_ty,
+                            .type_id = for_iterable_type_id,
+                            .value = iterable_value,
+                            .mutable = false,
+                        } });
+                        const index_local = try self.appendSyntheticExecutableLocal("for_index");
+                        for_index_local = index_local;
+                        const index_source = self.sourcePoint(iterable.span);
+                        const zero = try self.appendExecutableIntegerLiteral(index_source, .{ .integer = "usize" }, 0);
+                        try self.appendExecutableStatement(index_source, .{ .local_init = .{
+                            .local = index_local,
+                            .ty = .{ .integer = "usize" },
+                            .type_id = try self.internTypeId(.{ .integer = "usize" }),
+                            .value = zero,
+                            .mutable = true,
+                        } });
+                        if (node.label) |binding| {
+                            const binding_local = try self.internExecutableLocal(binding.text);
+                            for_binding_local = binding_local;
+                            try self.appendExecutableStatement(self.sourcePoint(binding.span), .{ .local_init = .{
+                                .local = binding_local,
+                                .ty = for_element_ty,
+                                .type_id = for_element_type_id,
+                                .value = null,
+                                .mutable = false,
+                            } });
+                        }
                     }
                 }
                 try self.addForIterableCheck(iterable, iterable.span);
             }
             try self.buildExpr(iterable);
         }
+        if (node.kind == .@"for") {
+            header_id = try self.addBlock("loop_header");
+            try self.addSuccessor(preheader_id, header_id);
+            self.blocks.items[preheader_id].terminator = .{ .jump = header_id };
+            self.current = header_id;
+        }
         const body_id = try self.addBlock("loop_body");
         const after_id = try self.addBlock("loop_after");
+        const step_id = if (node.kind == .@"for") try self.addBlock("loop_step") else header_id;
         try self.addSuccessor(header_id, body_id);
-        if (node.kind == .@"while") try self.addSuccessor(header_id, after_id);
+        try self.addSuccessor(header_id, after_id);
         self.blocks.items[header_id].terminator = if (node.kind == .@"while")
             .{ .branch = .{ .true_block = body_id, .false_block = after_id } }
         else
-            .{ .jump = body_id };
+            .{ .branch = .{ .true_block = body_id, .false_block = after_id } };
+        if (node.kind == .@"for") {
+            const iterable_local = for_iterable_local orelse {
+                self.executable_supported = false;
+                return false;
+            };
+            const index_local = for_index_local orelse {
+                self.executable_supported = false;
+                return false;
+            };
+            const binding_local = for_binding_local orelse {
+                self.executable_supported = false;
+                return false;
+            };
+            try self.executable_for_each_terminators.put(header_id, .{
+                .iterable_local = iterable_local,
+                .iterable_ty = for_iterable_ty,
+                .iterable_type_id = for_iterable_type_id,
+                .index_local = index_local,
+                .index_type_id = try self.internTypeId(.{ .integer = "usize" }),
+                .binding_local = binding_local,
+                .element_ty = for_element_ty,
+                .element_type_id = for_element_type_id,
+                .kind = for_kind,
+                .bound = for_bound,
+                .body_block = BlockId.fromIndex(body_id),
+                .after_block = BlockId.fromIndex(after_id),
+            });
+            try self.executable_for_step_terminators.put(step_id, .{
+                .index_local = index_local,
+                .index_type_id = try self.internTypeId(.{ .integer = "usize" }),
+                .header_block = BlockId.fromIndex(header_id),
+            });
+            try self.addSuccessor(step_id, header_id);
+            self.blocks.items[step_id].terminator = .{ .jump = header_id };
+        }
 
         self.current = body_id;
         try self.break_targets.append(self.allocator, after_id);
-        try self.continue_targets.append(self.allocator, header_id);
+        try self.continue_targets.append(self.allocator, step_id);
         var had_previous_type = false;
         var previous_type: ValueType = .unknown;
         var had_previous_type_expr = false;
@@ -12109,6 +12263,7 @@ const FunctionBuilder = struct {
             } else {
                 _ = self.local_mutability.remove(binding.text);
             }
+            _ = self.executable_local_ids.remove(binding.text);
         }
         _ = self.break_targets.pop();
         _ = self.continue_targets.pop();
@@ -12117,8 +12272,8 @@ const FunctionBuilder = struct {
             // observable reads used to compute it) is evaluated on every
             // iteration. Jumping directly to body_id would turn `while` into
             // a one-shot condition followed by an infinite body loop.
-            try self.addSuccessor(self.current, header_id);
-            self.setTerminator(.{ .jump = header_id });
+            try self.addSuccessor(self.current, step_id);
+            self.setTerminator(.{ .jump = step_id });
         }
         self.current = after_id;
         return false;

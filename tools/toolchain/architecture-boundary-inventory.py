@@ -25,13 +25,10 @@ BACKEND_EXTRA_FILES = {
     "lower_cov.zig",
 }
 
-# Shared MIR plans are backend admission inputs, not another syntax bridge. The
-# one legacy plan below predates this boundary and is an explicitly ratcheted
-# debt: delete it from this tuple when it becomes syntax-free, never add one.
-LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS = (
-    "mir_statement_plan.zig",
-)
-LEGACY_MIR_PLAN_IMPORT_EXCEPTION_CEILING = frozenset({"mir_statement_plan.zig"})
+# No MIR-plan module may depend on syntax. Keep the empty ratchet so a future
+# exception cannot silently recreate the retired statement-plan authority.
+LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS = ()
+LEGACY_MIR_PLAN_IMPORT_EXCEPTION_CEILING = frozenset()
 MIR_PLAN_ALLOWED_IMPORTS = frozenset({"std", "mir_model.zig"})
 MIR_PLAN_FORBIDDEN_IMPORTS = frozenset({
     "ast.zig",
@@ -55,7 +52,7 @@ EXACT_BACKEND_COUNTS = {
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
-    "ast_bridge.": 2820,
+    "ast_bridge.": 2816,
     "declaration_artifacts.": 44,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,

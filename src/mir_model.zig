@@ -1533,6 +1533,31 @@ pub const ExecutableSwitchTerminator = struct {
     default_block: BlockId = .invalid,
 };
 
+/// A fully typed `for` loop header.  The iterable and cursor are initialized
+/// once in the preheader; each visit binds exactly one in-range element before
+/// entering `body_block`.  Keeping this operation in executable MIR prevents
+/// C and LLVM from rebuilding iteration semantics from the source AST.
+pub const ExecutableForEachTerminator = struct {
+    iterable_local: LocalId,
+    iterable_ty: ValueType,
+    iterable_type_id: TypeId,
+    index_local: LocalId,
+    index_type_id: TypeId,
+    binding_local: LocalId,
+    element_ty: ValueType,
+    element_type_id: TypeId,
+    kind: ExecutableIndexKind,
+    bound: ?usize = null,
+    body_block: BlockId,
+    after_block: BlockId,
+};
+
+pub const ExecutableForStepTerminator = struct {
+    index_local: LocalId,
+    index_type_id: TypeId,
+    header_block: BlockId,
+};
+
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
     source: SourcePoint = .{ .line = 0, .column = 0 },
@@ -1541,6 +1566,8 @@ pub const ExecutableTerminator = struct {
         fallthrough,
         jump: BlockId,
         branch: struct { condition: ExprId, true_block: BlockId, false_block: BlockId },
+        for_each: ExecutableForEachTerminator,
+        for_step: ExecutableForStepTerminator,
         switch_: ExecutableSwitchTerminator,
         return_,
         trap_: TrapKind,
