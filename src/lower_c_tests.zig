@@ -137,6 +137,25 @@ test "lower-c fixed-array signatures and direct calls use canonical executable M
     try expectContains(passed, "consume_array(mc_exec_tmp_");
 }
 
+test "lower-c fixed-array element addresses use canonical executable MIR" {
+    const source =
+        \\extern fn consume_pointer(pointer: *mut u8) -> void;
+        \\fn pass_array_element_address() -> void {
+        \\    var buffer: [4]u8 = uninit;
+        \\    consume_pointer(&buffer[0]);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fixed_array_element_address.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static void pass_array_element_address(void)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "mc_check_index_usize(");
+    try expectContains(body, "&((buffer).elems[");
+    try expectContains(body, "consume_pointer(mc_exec_tmp_");
+}
+
 test "lower-c callable parameters forward through canonical executable MIR" {
     const source =
         \\extern fn target(sink: fn(u8) -> void, value: u64, shift: i32) -> void;

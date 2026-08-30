@@ -168,7 +168,13 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                             if (!fixedArrayLoadBoundsTrapEdgeIsExact(body, owner)) return false;
                         } else if (!representationTrapEdgeIsExact(body, owner)) return false;
                     },
-                    .atomic_load, .atomic_update, .address_of, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .address_of => |address| {
+                        if (!placeValid(body, address.place)) return false;
+                        if (mir.executableFixedArrayIndexPlace(body, body.places[address.place.index()]) != null) {
+                            if (!fixedArrayLoadBoundsTrapEdgeIsExact(body, owner)) return false;
+                        } else if (!representationTrapEdgeIsExact(body, owner)) return false;
+                    },
+                    .atomic_load, .atomic_update, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     .try_unwrap => if (!tryUnwrapTrapEdgeIsExact(body, owner)) return false,
                     .index => |operation| if (!operation.checked or !indexTrapEdgeIsExact(body, owner)) return false,
                     .builtin_call => |call| if (call.kind == .conversion_trap_from) {
@@ -1877,6 +1883,12 @@ const Renderer = struct {
             return .{ .ty = "ptr", .spelling = try self.emitPlace(address.place, "ptr") };
         }
         const place = self.body.places[address.place.index()];
+        if (addressOfFixedArrayIndexSupported(self.body, expression, address)) {
+            return .{
+                .ty = "ptr",
+                .spelling = try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id }),
+            };
+        }
         if (computedRawManyDerefPlaceSupported(self.body, place, false)) {
             return .{ .ty = "ptr", .spelling = try self.emitComputedRawManyDerefPointer(place) };
         }
@@ -2299,6 +2311,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
+            addressOfFixedArrayIndexSupported(body, expression, address) or
             addressOfParameterDerefSupported(body, expression, address) or
             addressOfLocalAddressAliasDerefSupported(body, expression, address) or
             addressOfComputedRawManyDerefSupported(body, expression, address),
@@ -3228,6 +3241,25 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    const projection = mir.executableFixedArrayIndexPlace(body, place) orelse return false;
+    if (!addressResultMatchesPlace(expression.result_ty, place.ty) or
+        address.representation_source != null or address.representation_span_id.isValid())
+        return false;
+    const root_addressable = switch (place.root) {
+        .local => |id| localAddressable(body, id),
+        .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
+        .value => false,
+    };
+    if (!root_addressable) return false;
+    return if (projection.checked)
+        fixedArrayLoadBoundsTrapEdge(body, expression) != null and ownedExpressionTrapCount(body, expression.id) == 1
+    else
+        ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
 fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
     if (!load.ordering.validForLoad() or !placeValid(body, load.place)) return false;
     const place = body.places[load.place.index()];
@@ -3541,12 +3573,13 @@ fn fixedArrayLoadBoundsTrapEdgeIsExact(body: *const mir.ExecutableBody, expressi
 }
 
 fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
-    const load = switch (expression.operation) {
-        .load => |value| value,
+    const place_id = switch (expression.operation) {
+        .load => |value| value.place,
+        .address_of => |value| value.place,
         else => return null,
     };
-    if (!placeValid(body, load.place)) return null;
-    const projection = mir.executableFixedArrayIndexPlace(body, body.places[load.place.index()]) orelse return null;
+    if (!placeValid(body, place_id)) return null;
+    const projection = mir.executableFixedArrayIndexPlace(body, body.places[place_id.index()]) orelse return null;
     if (!projection.checked or ownedExpressionTrapCount(body, expression.id) != 1) return null;
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {

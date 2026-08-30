@@ -101,6 +101,25 @@ test "LLVM fixed-array signatures and direct calls use canonical executable MIR"
     try expectContains(passed, "call void @consume_array([2 x i32]");
 }
 
+test "LLVM fixed-array element addresses use canonical executable MIR" {
+    const source =
+        \\extern fn consume_pointer(pointer: *mut u8) -> void;
+        \\fn pass_array_element_address() -> void {
+        \\    var buffer: [4]u8 = uninit;
+        \\    consume_pointer(&buffer[0]);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_fixed_array_element_address.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal void @pass_array_element_address");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "icmp ult i64 0, 4");
+    try expectContains(body, "getelementptr inbounds [4 x i8]");
+    try expectContains(body, "call void @consume_pointer(ptr %mc_expr_tmp_");
+}
+
 test "LLVM callable parameters forward through canonical executable MIR" {
     const source =
         \\extern fn target(sink: fn(u8) -> void, value: u64, shift: i32) -> void;

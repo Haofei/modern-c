@@ -464,7 +464,14 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (target.root == .value) try verifyOperand(body, value, target.root.value);
             if (body.complete) {
                 if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
-                if (target.projection_count == 0) {
+                if (mir.executableFixedArrayIndexPlace(body, target.*)) |projection| {
+                    if (!fixedArrayAddressableRoot(body, target.*) or address.representation_source != null or
+                        address.representation_span_id.isValid()) return error.InvalidMemoryAccessTrap;
+                    const expected_traps: usize = @intFromBool(projection.checked);
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != expected_traps or
+                        (projection.checked and ownedTrapCount(body, .{ .expression = value.id }, .Bounds, .bounds_check) != 1))
+                        return error.InvalidMemoryAccessTrap;
+                } else if (target.projection_count == 0) {
                     if (!directAddressablePlace(body, target.*) or address.representation_source != null or
                         address.representation_span_id.isValid() or ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
@@ -560,6 +567,25 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) try verifyStructConstruction(function, value, operation);
         },
     }
+}
+
+fn fixedArrayAddressableRoot(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
+    if (mir.executableFixedArrayIndexPlace(body, target) == null) return false;
+    return switch (target.root) {
+        .local => |id| local: {
+            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
+            for (body.statements) |entry| switch (entry.operation) {
+                .local_init => |value| if (value.local.eql(id)) break :local true,
+                else => {},
+            };
+            break :local false;
+        },
+        .symbol => |id| if (id.isValid() and id.index() < body.symbols.len)
+            body.symbols[id.index()].id.eql(id) and body.symbols[id.index()].kind == .global
+        else
+            false,
+        .value => false,
+    };
 }
 
 fn uncheckedBinaryHasExactProof(
@@ -671,7 +697,10 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     },
                     .address_of => |address| {
                         const target = place(body, address.place) orelse return error.InvalidTrapEdge;
-                        if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
+                        if (edge.kind == .Bounds and edge.source == .bounds_check) {
+                            const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
+                            if (!projection.checked or !fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
+                        } else if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
@@ -712,7 +741,12 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     } else load.representation_span_id,
                     .atomic_load => |load| load.representation_span_id,
                     .atomic_update => |update| update.representation_span_id,
-                    .address_of => |address| address.representation_span_id,
+                    .address_of => |address| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
+                        const target = place(body, address.place) orelse return error.InvalidTrapEdge;
+                        const projection = mir.executableFixedArrayIndexPlace(body, target.*) orelse return error.InvalidTrapEdge;
+                        if (!projection.checked) return error.InvalidTrapEdge;
+                        break :bounds projection.span_id;
+                    } else address.representation_span_id,
                     .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
                     else => owner.span_id,
                 };

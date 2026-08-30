@@ -7522,6 +7522,19 @@ const FunctionBuilder = struct {
 
     fn executableAddressOfComplete(self: *const FunctionBuilder, result_ty: ValueType, place: ExecutablePlace) bool {
         if (!self.executablePlaceComplete(place) or !executableAddressResultMatchesPlace(result_ty, place.ty)) return false;
+        if (self.executableFixedArrayIndexPlaceComplete(place)) return switch (place.root) {
+            .local => |id| local: {
+                for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local false;
+                for (self.executable_statements.items) |statement| switch (statement.operation) {
+                    .local_init => |value| if (value.local.eql(id)) break :local true,
+                    else => {},
+                };
+                break :local false;
+            },
+            .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
+                self.executable_symbols.items[id.index()].kind == .global,
+            .value => false,
+        };
         if (place.projection_count == 1) return switch (place.root) {
             .value => true,
             .local, .symbol => sameValueType(result_ty, place.root_ty),
@@ -7724,7 +7737,17 @@ const FunctionBuilder = struct {
                         } else load.representation_span_id,
                         .atomic_load => |load| load.representation_span_id,
                         .atomic_update => |update| update.representation_span_id,
-                        .address_of => |address| address.representation_span_id,
+                        .address_of => |address| if (edge.kind == .Bounds and edge.source == .bounds_check) bounds: {
+                            if (!address.place.isValid() or address.place.index() >= self.executable_places.items.len) return false;
+                            const place = self.executable_places.items[address.place.index()];
+                            if (place.projection_count != 1) return false;
+                            const projection = switch (place.projections[0]) {
+                                .index => |value| value,
+                                .field, .deref => return false,
+                            };
+                            if (!projection.checked or projection.kind != .fixed_array) return false;
+                            break :bounds projection.span_id;
+                        } else address.representation_span_id,
                         .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
                         else => owner.span_id,
                     };
@@ -7750,7 +7773,6 @@ const FunctionBuilder = struct {
                 },
             };
             if (!owner_identity.block_id.eql(edge.from_block) or !owner_identity.span_id.eql(legacy.typed_span_id)) {
-                if (std.mem.eql(u8, self.name, "counter_differs")) std.debug.print(" owner block={} span={} expected block={} span={}\n", .{ owner_identity.block_id.raw, owner_identity.span_id.raw, edge.from_block.raw, legacy.typed_span_id.raw });
                 return false;
             }
         }
@@ -13282,7 +13304,15 @@ const FunctionBuilder = struct {
         while (index > 0) {
             index -= 1;
             const expression = self.executable_expressions.items[index];
-            if (!expression.block_id.eql(BlockId.fromIndex(self.current)) or !expression.span_id.eql(span_id)) continue;
+            if (!expression.block_id.eql(BlockId.fromIndex(self.current))) continue;
+            if (!expression.span_id.eql(span_id)) {
+                const projection_span_matches = switch (expression.operation) {
+                    .load => |load| self.executableFixedArrayProjectionSpanMatches(load.place, span_id),
+                    .address_of => |address| self.executableFixedArrayProjectionSpanMatches(address.place, span_id),
+                    else => false,
+                };
+                if (!projection_span_matches) continue;
+            }
             switch (expression.operation) {
                 .unary => |unary| if (mir_model.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty) != null) {
                     owner = expression.id;
@@ -13314,6 +13344,20 @@ const FunctionBuilder = struct {
                     const projection = switch (place.projections[0]) {
                         .index => |value| value,
                         .field, .deref => break :load_bounds,
+                    };
+                    if (projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id)) {
+                        owner = expression.id;
+                        break;
+                    }
+                },
+                .address_of => |address| address_bounds: {
+                    if (kind != .Bounds or source != .bounds_check or
+                        !address.place.isValid() or address.place.index() >= self.executable_places.items.len) break :address_bounds;
+                    const place = self.executable_places.items[address.place.index()];
+                    if (place.projection_count != 1) break :address_bounds;
+                    const projection = switch (place.projections[0]) {
+                        .index => |value| value,
+                        .field, .deref => break :address_bounds,
                     };
                     if (projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id)) {
                         owner = expression.id;
@@ -13363,6 +13407,16 @@ const FunctionBuilder = struct {
             .kind = kind,
             .source = source,
         });
+    }
+
+    fn executableFixedArrayProjectionSpanMatches(self: *const FunctionBuilder, place_id: PlaceId, span_id: SpanId) bool {
+        if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return false;
+        const place = self.executable_places.items[place_id.index()];
+        if (place.projection_count != 1) return false;
+        return switch (place.projections[0]) {
+            .index => |projection| projection.checked and projection.kind == .fixed_array and projection.span_id.eql(span_id),
+            .field, .deref => false,
+        };
     }
 
     fn attachExecutableAssertTrapEdge(self: *FunctionBuilder, statement_id: InstId, span: ast.Span) !void {

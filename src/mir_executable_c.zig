@@ -1725,6 +1725,14 @@ fn addressOfSupported(
     const place = placeById(body, address.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (!addressResultMatchesPlace(expression.result_ty, place.ty)) return false;
+    if (mir.executableFixedArrayIndexPlace(body, place.*)) |projection| {
+        if (!fixedArrayAddressablePlaceSupported(body, place.*) or address.representation_source != null or
+            address.representation_span_id.isValid()) return false;
+        return if (projection.checked)
+            fixedArrayLoadBoundsTrapEdge(body, expression) != null
+        else
+            ownedTrapEdgeCount(body, expression.id) == 0;
+    }
     if (place.projection_count == 0) {
         return directAddressablePlaceSupported(body, place.*) and address.representation_source == null and
             !address.representation_span_id.isValid() and ownedTrapEdgeCount(body, expression.id) == 0;
@@ -1737,6 +1745,22 @@ fn addressOfSupported(
         mir.executableLocalAddressDerefPlace(body, place.*, false)) and
         sameValueType(expression.result_ty, place.root_ty) and
         representationOperationHasExactTrapEdge(body, expression);
+}
+
+fn fixedArrayAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (mir.executableFixedArrayIndexPlace(body, place) == null) return false;
+    return switch (place.root) {
+        .local => |id| local: {
+            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
+            for (body.statements) |statement| switch (statement.operation) {
+                .local_init => |value| if (value.local.eql(id)) break :local true,
+                else => {},
+            };
+            break :local false;
+        },
+        .symbol => |id| if (symbolById(body, id)) |identity| identity.kind == .global else false,
+        .value => false,
+    };
 }
 
 fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) bool {
@@ -2073,7 +2097,14 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
                 representationOperationHasExactTrapEdge(body, expression)
         else
             false,
-        .atomic_load, .atomic_update, .address_of, .representation_check => representationOperationHasExactTrapEdge(body, expression),
+        .address_of => |address| if (placeById(body, address.place)) |place|
+            if (mir.executableFixedArrayIndexPlace(body, place.*) != null)
+                fixedArrayLoadBoundsTrapEdge(body, expression) != null
+            else
+                representationOperationHasExactTrapEdge(body, expression)
+        else
+            false,
+        .atomic_load, .atomic_update, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         .builtin_call => |call| if (call.kind == .conversion_trap_from)
             builtinTrapConversionHasExactEdge(body, expression)
         else
@@ -2100,11 +2131,12 @@ fn indexTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
 }
 
 fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
-    const load = switch (expression.operation) {
-        .load => |value| value,
+    const place_id = switch (expression.operation) {
+        .load => |value| value.place,
+        .address_of => |value| value.place,
         else => return null,
     };
-    const place = placeById(body, load.place) orelse return null;
+    const place = placeById(body, place_id) orelse return null;
     const projection = mir.executableFixedArrayIndexPlace(body, place.*) orelse return null;
     if (!projection.checked or ownedTrapEdgeCount(body, expression.id) != 1) return null;
     for (body.trap_edges) |edge| {
