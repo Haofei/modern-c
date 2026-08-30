@@ -11,7 +11,6 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
-const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const parser = @import("parser.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
@@ -733,7 +732,7 @@ test "lower-c emits aggregate assignment sequences from canonical MIR" {
     try expectContains(bag, "return mc_exec_tmp_");
 }
 
-test "lower-c emits local workflow plans without body fallback" {
+test "lower-c emits canonical local workflows without body fallback" {
     const source =
         \\struct BinOp { combine: fn(u32, u32) -> u32 }
         \\struct Env { value: u32 }
@@ -761,9 +760,6 @@ test "lower-c emits local workflow plans without body fallback" {
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try std.testing.expect(mir_workflow_plan.build(&module_mir.functions[5]) != null);
-    try std.testing.expect(mir_workflow_plan.build(&module_mir.functions[6]) != null);
-    try std.testing.expect(mir_workflow_plan.build(&module_mir.functions[7]) != null);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_workflow.mc", .{}, false, null);
@@ -772,22 +768,16 @@ test "lower-c emits local workflow plans without body fallback" {
     try expectContains(vtable, "(BinOp){ mul }");
     try expectContains(vtable, "dispatch(");
     const scoped = try cFunctionBody(output.items, "static uint32_t scoped_block(uint32_t value)");
-    if (isCanonicalExecutableCBody(scoped)) {
-        try expectContains(scoped, "combine(");
-        try expectContains(scoped, "consume_u32(");
-        try expectContains(scoped, "return mc_exec_tmp_");
-    } else {
-        try expectContains(scoped, "uint32_t out = value;");
-        try expectContains(scoped, "{\n");
-        try expectContains(scoped, "uint32_t inner = combine(value, 1);");
-        try expectContains(scoped, "consume_u32(inner);");
-        try expectContains(scoped, "return out;");
-    }
+    try std.testing.expect(isCanonicalExecutableCBody(scoped));
+    try expectContains(scoped, "combine(");
+    try expectContains(scoped, "consume_u32(");
+    try expectContains(scoped, "return mc_exec_tmp_");
     const closure = try cFunctionBody(output.items, "static void call_closure(uint32_t value)");
-    try expectContains(closure, "Env env = (Env){ .value = 0 };");
-    try expectContains(closure, ".code = (void (*)(void *, uint32_t))store_value");
-    try expectContains(closure, ".env = (void *)(&env)");
-    try expectContains(closure, ".code(mc_tmp");
+    try std.testing.expect(isCanonicalExecutableCBody(closure));
+    try expectContains(closure, "Env env =");
+    try expectContains(closure, ".code = (");
+    try expectContains(closure, "store_value, .env = (void *)");
+    try expectContains(closure, ").code((");
 
     var temp = std.testing.tmpDir(.{});
     defer temp.cleanup();
@@ -13403,7 +13393,9 @@ test "lower-c closure callees materialize once" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    const callee = "g_table.elems[mc_check_index_usize(i, 4)].run";
+    const body = try cFunctionBody(output.items, "static uint32_t call_direct(");
+    try std.testing.expect(isCanonicalExecutableCBody(body));
+    const callee = "(g_table).elems[";
     var count: usize = 0;
     var search_from: usize = 0;
     while (std.mem.indexOfPos(u8, output.items, search_from, callee)) |index| {
@@ -13411,8 +13403,9 @@ test "lower-c closure callees materialize once" {
         search_from = index + callee.len;
     }
     try std.testing.expectEqual(@as(usize, 1), count);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".code(mc_tmp") != null);
+    try expectContains(body, "mc_closure_ptr_");
+    try expectContains(body, ").code((mc_exec_tmp_");
+    try expectContains(body, ").env");
 }
 
 test "lower-c casts bool closure-call switch subjects" {
@@ -13440,8 +13433,11 @@ test "lower-c casts bool closure-call switch subjects" {
     defer output.deinit(std.testing.allocator);
     try appendCDeclsTest(std.testing.allocator, module.decls, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(({ mc_closure_4_bool_3_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".code(mc_tmp") != null);
+    const body = try cFunctionBody(output.items, "static uint32_t classify(");
+    try std.testing.expect(isCanonicalExecutableCBody(body));
+    try expectContains(body, ").code((mc_exec_tmp_");
+    try expectContains(body, ").env");
+    try expectContains(body, "if (mc_exec_tmp_");
 }
 
 test "lower-c emits simple MMIO register access" {

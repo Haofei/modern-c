@@ -64,9 +64,11 @@ worklist snapshot.
   `access_operation` models, builders and both backend emitters were deleted.
   The strict split is now C 130 canonical / 30 specialized and LLVM 131 / 29;
   only eight specialized plan definitions remain.
-- C canonical aggregate construction now accepts a verifier-identified function
-  symbol in a callable struct field. `local_vtable_call` therefore shares the
-  same executable MIR path already used by LLVM instead of the workflow plan.
+- Callable struct fields and closure `{code, env}` values now lower through the
+  canonical executable body in both backends. The entire workflow plan, its
+  two backend emitters, tests, import surface and census category were deleted.
+  The strict split is now 132 canonical / 28 specialized for both backends;
+  seven specialized plan definitions remain.
 
 ## Remaining producer blockers
 

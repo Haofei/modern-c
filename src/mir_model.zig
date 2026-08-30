@@ -985,6 +985,15 @@ pub const ExecutableExpression = struct {
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
+        /// Construct a closure fat value from a checked function target and
+        /// one captured environment pointer. The public call signature omits
+        /// the erased environment parameter; codegen represents the value as
+        /// `{ code, env }` and an indirect call supplies `env` first.
+        closure_bind: struct {
+            target: SymbolId,
+            capture: ExprId,
+            signature: ExecutableCallSignature,
+        },
         builtin_call: struct {
             kind: CallTargetKind,
             /// Source-level unsafe authority carried by operations whose
@@ -1082,6 +1091,9 @@ pub const ExecutableCallSignature = struct {
     parameter_count: usize = 0,
     return_ty: ValueType = .unknown,
     return_type_id: TypeId = .invalid,
+    /// Closures carry an erased environment pointer before the public
+    /// parameters; plain function pointers do not.
+    has_environment: bool = false,
 };
 
 /// Typed exceptional control-flow owned by one executable operation.  The

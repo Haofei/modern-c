@@ -2763,7 +2763,19 @@ fn bindThunkFactIdentitiesValid(function: Function, fact: BindThunkFact) bool {
     if (!spanIdMatchesSource(function, fact.closure_span_id, fact.source) or !spanIdValid(function, fact.target_span_id) or !spanIdValid(function, fact.capture_span_id) or !spanIdValid(function, fact.capture_operand_span_id)) return false;
     if (!valueIdValid(function, fact.capture_value_id) or !valueIdValid(function, fact.closure_value_id)) return false;
     if (!typeIdValid(function, fact.target_return_ty) or !typeIdValid(function, fact.capture_ty) or !typeIdValid(function, fact.target_capture_ty) or !typeIdValid(function, fact.closure_ty) or !typeIdValid(function, fact.closure_return_ty)) return false;
-    return fact.capture_ty.eql(fact.target_capture_ty);
+    const capture_ty = typeForId(function, fact.capture_ty) orelse return false;
+    const target_capture_ty = typeForId(function, fact.target_capture_ty) orelse return false;
+    if (sameValueType(capture_ty, target_capture_ty)) return true;
+    return switch (capture_ty) {
+        .pointer => |capture| switch (target_capture_ty) {
+            .pointer => |target| capture.kind == target.kind and
+                std.mem.eql(u8, capture.child, target.child) and
+                capture.mutability == .mut and
+                (target.mutability == .none or target.mutability == .@"const"),
+            else => false,
+        },
+        else => false,
+    };
 }
 
 fn bindFactHasTargetType(function: Function, fact: BindThunkFact) bool {
@@ -8947,6 +8959,41 @@ const FunctionBuilder = struct {
                     }
                     break :call .{ .builtin_call = call_value };
                 }
+                if (isBindCallNode(node)) {
+                    const closure_type = expected_type_expr orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const signature = (try self.executableCallableSignature(closure_type)) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (node.type_args.len != 0 or node.args.len != 2)
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const target_name = calleeIdentName(node.args[1]) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const target = self.summaries.get(target_name) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (target.params.len != signature.parameter_count + 1 or
+                        !sameValueType(target.return_ty, signature.return_ty))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    for (signature.parameter_types[0..signature.parameter_count], target.params[1..]) |parameter_ty, target_parameter| {
+                        const target_ty = valueTypeFromTypeAlias(target_parameter.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                        if (!sameValueType(parameter_ty, target_ty))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    }
+                    const capture_ty = valueTypeFromTypeAlias(target.params[0].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                    // The canonical closure representation stores an erased
+                    // environment pointer. Scalar captures still require the
+                    // legacy boxing path and must leave this body incomplete
+                    // instead of constructing unverifiable executable MIR.
+                    if (std.meta.activeTag(capture_ty) != .pointer) {
+                        _ = try self.ensureExecutableExprAsType(node.args[0], capture_ty, target.params[0].ty);
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    }
+                    result_ty = .value;
+                    break :call .{ .closure_bind = .{
+                        .target = try self.internExecutableFunctionSymbol(target_name),
+                        .capture = try self.ensureExecutableExprAsType(node.args[0], capture_ty, target.params[0].ty),
+                        .signature = signature,
+                    } };
+                }
                 if (directCalleeName(node.callee.*)) |callee_name| if (self.isKnownDirectCall(node.callee.*, callee_name)) {
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     var call_value: @FieldType(ExecutableExpression.Operation, "direct_call") = .{
@@ -8998,6 +9045,7 @@ const FunctionBuilder = struct {
                     .parameter_count = indirect_target.params.len,
                     .return_ty = indirect_target.result_ty,
                     .return_type_id = try self.internTypeId(indirect_target.result_ty),
+                    .has_environment = indirect_target.has_environment,
                 };
                 for (indirect_target.params, 0..) |parameter, index| {
                     const parameter_ty = valueTypeFromTypeAlias(parameter, self.enums, self.structs, self.packed_bits, self.aliases);
@@ -9334,28 +9382,37 @@ const FunctionBuilder = struct {
     }
 
     fn executableCallableSignature(self: *FunctionBuilder, type_expr: ast.TypeExpr) !?mir_model.ExecutableCallSignature {
-        const function = switch (aggregateTargetTypeAlias(type_expr, self.aliases).kind) {
-            .fn_pointer => |value| value,
+        const resolved = aggregateTargetTypeAlias(type_expr, self.aliases);
+        const has_environment = resolved.kind == .closure_type;
+        const params: []const ast.TypeExpr = switch (resolved.kind) {
+            .fn_pointer => |value| value.params,
+            .closure_type => |value| value.params,
             else => return null,
         };
-        if (function.params.len > mir_model.max_executable_operands) {
+        const ret: *ast.TypeExpr = switch (resolved.kind) {
+            .fn_pointer => |value| value.ret,
+            .closure_type => |value| value.ret,
+            else => unreachable,
+        };
+        if (params.len > mir_model.max_executable_operands) {
             self.executable_supported = false;
             return null;
         }
         var signature: mir_model.ExecutableCallSignature = .{
-            .parameter_count = function.params.len,
-            .return_ty = valueTypeFromTypeAlias(function.ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+            .parameter_count = params.len,
+            .return_ty = valueTypeFromTypeAlias(ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+            .has_environment = has_environment,
         };
         if (signature.return_ty == .unknown or signature.return_ty == .value) {
             self.executable_supported = false;
             return null;
         }
         signature.return_type_id = try self.internTypeId(signature.return_ty);
-        if (!try self.internExecutableTypeExpr(signature.return_ty, function.ret.*)) {
+        if (!try self.internExecutableTypeExpr(signature.return_ty, ret.*)) {
             self.executable_supported = false;
             return null;
         }
-        for (function.params, 0..) |parameter, index| {
+        for (params, 0..) |parameter, index| {
             const parameter_ty = valueTypeFromTypeAlias(parameter, self.enums, self.structs, self.packed_bits, self.aliases);
             if (parameter_ty == .unknown or parameter_ty == .value) {
                 self.executable_supported = false;
@@ -17168,6 +17225,7 @@ const FunctionBuilder = struct {
         params: []const ast.TypeExpr,
         result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
+        has_environment: bool,
     };
 
     fn indirectCallTarget(self: *FunctionBuilder, call: anytype) ?IndirectCallTarget {
@@ -17182,6 +17240,7 @@ const FunctionBuilder = struct {
                 .params = signature.params,
                 .result_type_expr = signature.ret.*,
                 .result_ty = valueTypeFromTypeAlias(signature.ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+                .has_environment = false,
             },
             .closure_type => |signature| .{
                 .callee_type_expr = callee_type_expr,
@@ -17189,6 +17248,7 @@ const FunctionBuilder = struct {
                 .params = signature.params,
                 .result_type_expr = signature.ret.*,
                 .result_ty = valueTypeFromTypeAlias(signature.ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+                .has_environment = true,
             },
             else => null,
         };

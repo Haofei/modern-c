@@ -422,6 +422,19 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifySpan(function, call.callee_span_id, call.callee_source);
             try verifyArguments(body, value, call.arguments, call.argument_count);
         },
+        .closure_bind => |bind| {
+            try verifyOperand(body, value, bind.capture);
+            try verifySymbol(body, bind.target);
+            try verifyCallableSignature(function, bind.signature, body.complete);
+            if (body.complete) {
+                const target = symbol(body, bind.target) orelse return error.InvalidSymbolReference;
+                const capture = expression(body, bind.capture) orelse return error.InvalidExpressionReference;
+                if (value.result_ty != .value or !bind.signature.has_environment or target.kind != .function or
+                    std.meta.activeTag(capture.result_ty) != .pointer or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                    return error.InvalidFunctionSignature;
+            }
+        },
         .builtin_call => |call| {
             try verifySpan(function, call.callee_span_id, call.callee_source);
             if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return error.InvalidUnsafeAuthorization;
@@ -1175,7 +1188,7 @@ fn verifyCallSignature(
 }
 
 fn callableSignaturesEqual(a: mir.ExecutableCallSignature, b: mir.ExecutableCallSignature) bool {
-    if (a.parameter_count != b.parameter_count or
+    if (a.parameter_count != b.parameter_count or a.has_environment != b.has_environment or
         !sameValueType(a.return_ty, b.return_ty) or
         !a.return_type_id.eql(b.return_type_id)) return false;
     for (a.parameter_types[0..a.parameter_count], b.parameter_types[0..b.parameter_count]) |a_ty, b_ty|

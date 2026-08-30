@@ -10676,6 +10676,28 @@ test "LLVM indirect calls require MIR callee signature facts" {
     }
 }
 
+test "LLVM direct global closure calls use canonical fat-value loads" {
+    const source =
+        \\struct Slot { run: closure(u32) -> u32 }
+        \\global slot: Slot;
+        \\global table: [4]Slot;
+        \\fn invoke(value: u32) -> u32 { return slot.run(value); }
+        \\fn invoke_at(index: usize, value: u32) -> u32 { return table[index].run(value); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_direct_global_closure.mc", source, &output);
+
+    for ([_][]const u8{ "@invoke", "@invoke_at" }) |name| {
+        const body = try llvmFunctionBody(output.items, name);
+        try expectContains(body, "; canonical executable MIR");
+        try expectContains(body, "load atomic ptr");
+        try expectContains(body, "insertvalue { ptr, ptr }");
+        try expectContains(body, "extractvalue { ptr, ptr }");
+        try expectContains(body, "call i32 %");
+    }
+}
+
 test "LLVM rejects prebuilt MIR with missing cpu pause call target facts" {
     const source =
         \\fn cpu_pause_call_target_fact_gate() -> void {

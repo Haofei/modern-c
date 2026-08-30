@@ -294,9 +294,21 @@ fn emitExpressionOperation(
         .load => |load| switch (load.access.kind) {
             .plain => try emitPlace(allocator, out, body, load.place),
             .race_unordered => {
-                if ((expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load)) or
-                    expression.result_ty == .closed_enum or expression.result_ty == .open_enum)
+                if (expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load) and
+                    expressionUsedAsClosureIndirectCallee(body, expression.id))
                 {
+                    try out.print(allocator, "({{ __auto_type mc_closure_ptr_{d} = ", .{expression.id.raw});
+                    try emitPlaceAddress(allocator, out, body, load.place);
+                    try out.print(allocator, "; __typeof__(*mc_closure_ptr_{d}) mc_closure_tmp_{d}; __atomic_load(mc_closure_ptr_{d}, &mc_closure_tmp_{d}, __ATOMIC_RELAXED); mc_closure_tmp_{d}; }})", .{ expression.id.raw, expression.id.raw, expression.id.raw, expression.id.raw, expression.id.raw });
+                    return;
+                }
+                if (expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load)) {
+                    try out.appendSlice(allocator, "__atomic_load_n(");
+                    try emitPlaceAddress(allocator, out, body, load.place);
+                    try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
+                    return;
+                }
+                if (expression.result_ty == .closed_enum or expression.result_ty == .open_enum) {
                     try out.appendSlice(allocator, "__atomic_load_n(");
                     try emitPlaceAddress(allocator, out, body, load.place);
                     try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
@@ -417,11 +429,25 @@ fn emitExpressionOperation(
             try appendSymbol(allocator, out, body, call.callee);
             try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
         },
+        .closure_bind => |bind| try emitClosureBind(allocator, out, body, bind, depth),
         .indirect_call => |call| {
-            try out.append(allocator, '(');
-            try emitExpression(allocator, out, body, call.callee, depth + 1);
-            try out.append(allocator, ')');
-            try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
+            if (call.signature.has_environment) {
+                try out.append(allocator, '(');
+                try emitExpression(allocator, out, body, call.callee, depth + 1);
+                try out.appendSlice(allocator, ").code((");
+                try emitExpression(allocator, out, body, call.callee, depth + 1);
+                try out.appendSlice(allocator, ").env");
+                for (call.arguments[0..call.argument_count]) |argument| {
+                    try out.appendSlice(allocator, ", ");
+                    try emitExpression(allocator, out, body, argument, 0);
+                }
+                try out.append(allocator, ')');
+            } else {
+                try out.append(allocator, '(');
+                try emitExpression(allocator, out, body, call.callee, depth + 1);
+                try out.append(allocator, ')');
+                try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
+            }
         },
         .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression.result_ty, call, depth),
         .representation_check => |check| try emitExpression(allocator, out, body, check.operand, depth + 1),
@@ -710,6 +736,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .cast => |cast| castSupported(body, expression, cast),
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
+        .closure_bind => |bind| closureBindSupported(body, expression, bind),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call => |call| builtinCallSupported(body, expression, call),
@@ -782,6 +809,8 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
+        .closure_bind => |bind| closureBindSupported(body, expression, bind) and
+            callableProducerInitializesUsedLocal(body, expression.id),
         else => false,
     };
 }
@@ -789,6 +818,14 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
 fn expressionUsedAsIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     for (body.expressions) |candidate| switch (candidate.operation) {
         .indirect_call => |call| if (call.callee.eql(id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn expressionUsedAsClosureIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .indirect_call => |call| if (call.callee.eql(id)) return call.signature.has_environment,
         else => {},
     };
     return false;
@@ -838,6 +875,59 @@ fn callableProducerInitializesUsedLocal(body: *const mir.ExecutableBody, produce
         else => {},
     };
     return false;
+}
+
+fn closureBindSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind"),
+) bool {
+    if (expression.result_ty != .value or !bind.signature.has_environment or
+        bind.signature.parameter_count > mir.max_executable_operands) return false;
+    const target = symbolById(body, bind.target) orelse return false;
+    const capture = expressionById(body, bind.capture) orelse return false;
+    if (target.kind != .function or std.meta.activeTag(capture.result_ty) != .pointer or
+        !supportsType(body, bind.signature.return_ty)) return false;
+    for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| if (!supportsType(body, ty)) return false;
+    return true;
+}
+
+fn appendClosureCodePointerType(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    signature: mir.ExecutableCallSignature,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try appendCType(allocator, out, body, signature.return_ty);
+    try out.appendSlice(allocator, " (*)(void *");
+    for (signature.parameter_types[0..signature.parameter_count]) |ty| {
+        try out.appendSlice(allocator, ", ");
+        try appendCType(allocator, out, body, ty);
+    }
+    try out.append(allocator, ')');
+}
+
+fn emitClosureBind(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind"),
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.appendSlice(allocator, "((struct { ");
+    try appendCType(allocator, out, body, bind.signature.return_ty);
+    try out.appendSlice(allocator, " (*code)(void *");
+    for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| {
+        try out.appendSlice(allocator, ", ");
+        try appendCType(allocator, out, body, ty);
+    }
+    try out.appendSlice(allocator, "); void *env; }){ .code = (");
+    try appendClosureCodePointerType(allocator, out, body, bind.signature);
+    try out.append(allocator, ')');
+    try appendSymbol(allocator, out, body, bind.target);
+    try out.appendSlice(allocator, ", .env = (void *)");
+    try emitExpression(allocator, out, body, bind.capture, depth + 1);
+    try out.appendSlice(allocator, " })");
 }
 
 fn indirectCallSupported(

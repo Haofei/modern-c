@@ -11,7 +11,6 @@ const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyAr
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
-const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
@@ -1569,20 +1568,13 @@ const LlvmEmitter = struct {
         // wrapper or the full legacy emitter, but not a specialized plan that
         // cannot preserve declaration mechanics.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
-        const workflow_plan = if (mir_workflow_plan.build(&fn_mir)) |plan|
-            if (self.mirWorkflowPlanSupported(function, plan)) plan else null
-        else
-            null;
-        const alloca_hoist_plan = if (workflow_plan == null)
-            if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
-                if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
-            else
-                null
+        const alloca_hoist_plan = if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
+            if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
         else
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        if (workflow_plan == null and alloca_hoist_plan == null) {
+        if (alloca_hoist_plan == null) {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
         }
         const sequence_foreach_update_plan = if (mir_statement_plan.buildSequenceForEachUpdate(fn_mir)) |plan|
@@ -1610,7 +1602,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (alloca_hoist_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1621,12 +1613,11 @@ const LlvmEmitter = struct {
             }
             break :blk null;
         };
-        const llvm_structural_access_operation = if (workflow_plan == null and alloca_hoist_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (alloca_hoist_plan == null and sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and simple_return == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
         const specialized_plans = [_]bool{
-            workflow_plan != null,
             alloca_hoist_plan != null,
             llvm_structural_access_operation != null,
             sequence_foreach_update_plan != null,
@@ -1687,10 +1678,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
         }
 
-        if (workflow_plan) |plan| {
-            selected_path.* = .workflow;
-            try self.emitMirWorkflowPlan(plan, ret_ty);
-        } else if (alloca_hoist_plan) |plan| {
+        if (alloca_hoist_plan) |plan| {
             selected_path.* = .alloca_hoist;
             try self.emitMirAllocaHoistPlan(plan, ret_ty);
         } else if (llvm_structural_access_operation) |operation| {
@@ -2583,111 +2571,6 @@ const LlvmEmitter = struct {
             },
             else => false,
         };
-    }
-
-    fn mirWorkflowDirectCallSupported(self: *LlvmEmitter, call: mir_workflow_plan.DirectCall) bool {
-        const sig = self.fn_sigs.get(call.callee.name) orelse return false;
-        if (sig.is_variadic or sig.params.len != call.arg_count or !self.mirPlanSourceTypeMatches(call.result.value_ty, sig.ret)) return false;
-        for (call.args[0..call.arg_count], 0..) |argument, index| {
-            if (argument.index != index or !argument.type_ref.id.isValid() or !self.mirPlanSourceTypeMatches(argument.type_ref.value_ty, sig.params[index].ty)) return false;
-        }
-        return true;
-    }
-
-    fn mirWorkflowPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_workflow_plan.Plan) bool {
-        return switch (plan) {
-            .local_vtable_call => |workflow| blk: {
-                const struct_name = switch (workflow.local.type_ref.value_ty) {
-                    .struct_ => |name| name,
-                    else => break :blk false,
-                };
-                const decl = self.struct_types.get(struct_name) orelse break :blk false;
-                if (decl.fields.len != 1 or workflow.function_field_index != 0 or function.signature.params.len != 2 or workflow.dispatch.arg_count != 3) break :blk false;
-                if (!self.mirPlanSourceTypeMatches(workflow.dispatch.result.value_ty, function.signature.transitionalReturnType() orelse break :blk false)) break :blk false;
-                const address = switch (workflow.dispatch.args[0].value) {
-                    .address_of => |value| value,
-                    else => break :blk false,
-                };
-                const x = switch (workflow.dispatch.args[1].value) {
-                    .value => |value| value,
-                    else => break :blk false,
-                };
-                const y = switch (workflow.dispatch.args[2].value) {
-                    .value => |value| value,
-                    else => break :blk false,
-                };
-                if (!address.operand.id.eql(workflow.local.value.id) or !std.mem.eql(u8, x.name, function.signature.params[0].name.text) or !std.mem.eql(u8, y.name, function.signature.params[1].name.text)) break :blk false;
-                break :blk self.fn_sigs.contains(workflow.function_symbol.name) and self.mirWorkflowDirectCallSupported(workflow.dispatch);
-            },
-            .scoped_block => |workflow| blk: {
-                if (function.signature.params.len != 1 or workflow.inner_call.arg_count != 2 or workflow.consume_call.arg_count != 1) break :blk false;
-                if (!self.mirPlanSourceTypeMatches(workflow.outer.type_ref.value_ty, function.signature.params[0].ty) or !self.mirPlanSourceTypeMatches(workflow.outer.type_ref.value_ty, function.signature.transitionalReturnType() orelse break :blk false)) break :blk false;
-                break :blk self.mirWorkflowDirectCallSupported(workflow.inner_call) and self.mirWorkflowDirectCallSupported(workflow.consume_call);
-            },
-            .call_closure => |workflow| blk: {
-                const environment_name = switch (workflow.environment.type_ref.value_ty) {
-                    .struct_ => |name| name,
-                    else => break :blk false,
-                };
-                const environment = self.struct_types.get(environment_name) orelse break :blk false;
-                const target = self.fn_sigs.get(workflow.bind.target.name) orelse break :blk false;
-                if (environment.fields.len != 1 or function.signature.params.len != 1 or !typeNameEql(function.signature.transitionalReturnType() orelse break :blk false, "void")) break :blk false;
-                if (target.is_variadic or target.params.len != 2 or !typeNameEql(target.ret, "void") or workflow.bind.target_param_count != 2 or workflow.bind.closure_param_count != 1 or workflow.call.result.value_ty != .void) break :blk false;
-                break :blk workflow.bind.capture.operand.id.eql(workflow.environment.value.id) and workflow.call.closure.id.eql(workflow.bind.closure.id);
-            },
-        };
-    }
-
-    fn emitMirWorkflowCall(self: *LlvmEmitter, call: mir_workflow_plan.DirectCall, values: []const []const u8) !?[]const u8 {
-        const sig = self.fn_sigs.get(call.callee.name) orelse return error.UnsupportedLlvmEmission;
-        const is_void = typeNameEql(sig.ret, "void");
-        const result = if (is_void) null else try self.nextTemp();
-        if (result) |temporary| try self.out.print(self.allocator, "  {s} = call {s} @{s}(", .{ temporary, try self.llvmType(sig.ret), call.callee.name }) else try self.out.print(self.allocator, "  call void @{s}(", .{call.callee.name});
-        for (values, 0..) |value, index| {
-            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(sig.params[index].ty), value });
-        }
-        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
-        return result;
-    }
-
-    fn emitMirWorkflowPlan(self: *LlvmEmitter, plan: mir_workflow_plan.Plan, ret_ty: TransitionalTypeExpr) !void {
-        switch (plan) {
-            .local_vtable_call => |workflow| {
-                const struct_ty = simpleType(spanFromMirSourcePoint(workflow.local.declaration.source), workflow.local.type_ref.value_ty.name());
-                const struct_llvm = try self.llvmType(struct_ty);
-                const slot = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.mir.addr", .{workflow.local.value.name});
-                try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ slot, struct_llvm });
-                const field = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n  store ptr @{s}, ptr {s}\n", .{ field, struct_llvm, slot, workflow.function_field_index, workflow.function_symbol.name, field });
-                const x = workflow.dispatch.args[1].value.value;
-                const y = workflow.dispatch.args[2].value.value;
-                const result = (try self.emitMirWorkflowCall(workflow.dispatch, &.{ slot, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{x.name}), try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{y.name}) })) orelse return error.UnsupportedLlvmEmission;
-                try self.emitReturnValue(ret_ty, result, spanFromMirSourcePoint(workflow.return_location.source));
-            },
-            .scoped_block => |workflow| {
-                const outer = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{workflow.outer_initializer.name});
-                const inner = (try self.emitMirWorkflowCall(workflow.inner_call, &.{ outer, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{workflow.inner_call.args[1].value.integer_literal.value}) })) orelse return error.UnsupportedLlvmEmission;
-                _ = try self.emitMirWorkflowCall(workflow.consume_call, &.{inner});
-                try self.emitReturnValue(ret_ty, outer, spanFromMirSourcePoint(workflow.return_location.source));
-            },
-            .call_closure => |workflow| {
-                const env_ty = simpleType(spanFromMirSourcePoint(workflow.environment.declaration.source), workflow.environment.type_ref.value_ty.name());
-                const env_llvm = try self.llvmType(env_ty);
-                const env_slot = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.mir.addr", .{workflow.environment.value.name});
-                try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ env_slot, env_llvm });
-                const field = try self.nextTemp();
-                const field_ty = (self.struct_types.get(workflow.environment.type_ref.value_ty.name()) orelse return error.UnsupportedLlvmEmission).fields[0].ty;
-                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n  store {s} 0, ptr {s}\n", .{ field, env_llvm, env_slot, try self.llvmType(field_ty), field });
-                const closure0 = try self.nextTemp();
-                const closure1 = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = insertvalue {{ ptr, ptr }} zeroinitializer, ptr @{s}, 0\n  {s} = insertvalue {{ ptr, ptr }} {s}, ptr {s}, 1\n", .{ closure0, workflow.bind.target.name, closure1, closure0, env_slot });
-                const code = try self.nextTemp();
-                const environment = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = extractvalue {{ ptr, ptr }} {s}, 0\n  {s} = extractvalue {{ ptr, ptr }} {s}, 1\n  call void {s}(ptr {s}, i32 %{s}){s}\n", .{ code, closure1, environment, closure1, code, environment, workflow.call.argument.name, try self.debugCallSuffix() });
-                try self.emitReturnVoid(spanFromMirSourcePoint(workflow.call.location.source));
-            },
-        }
     }
 
     fn mirAllocaHoistPlanSupported(self: *LlvmEmitter, function: anytype, plan: mir_alloca_hoist_plan.Plan) bool {

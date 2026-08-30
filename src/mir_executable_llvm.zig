@@ -352,10 +352,20 @@ const Renderer = struct {
         self.returns.deinit();
     }
 
+    fn localStorageType(self: *Renderer, local: @FieldType(mir.ExecutableStatement.Operation, "local_init")) RenderError![]const u8 {
+        if (local.value) |initializer| if (expressionValid(self.body, initializer) and
+            self.body.expressions[initializer.index()].operation == .closure_bind)
+            return "{ ptr, ptr }";
+        return self.typeText(local.ty);
+    }
+
     fn emit(self: *Renderer) RenderError!void {
         if (self.values.len != self.body.expressions.len) return error.OutOfMemory;
         for (self.body.parameters) |parameter| {
-            const ty = try self.typeText(parameter.ty);
+            const ty = if (parameter.callable_signature) |signature|
+                if (signature.has_environment) "{ ptr, ptr }" else try self.typeText(parameter.ty)
+            else
+                try self.typeText(parameter.ty);
             try self.locals.put(parameter.local.raw, .{ .ty = ty, .storage = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw}), .addressable = false });
         }
         try self.output.appendSlice(self.allocator, "  ; canonical executable MIR\n");
@@ -364,7 +374,7 @@ const Renderer = struct {
         for (self.body.statements) |statement| switch (statement.operation) {
             .local_init => |local| {
                 if (self.locals.contains(local.local.raw)) return error.InvalidBody;
-                const ty = try self.typeText(local.ty);
+                const ty = try self.localStorageType(local);
                 const slot = try std.fmt.allocPrint(self.allocator, "%mc_local_{d}", .{local.local.raw});
                 try self.output.print(self.allocator, "  {s} = alloca {s}\n", .{ slot, ty });
                 try self.locals.put(local.local.raw, .{ .ty = ty, .storage = slot, .addressable = true });
@@ -389,7 +399,7 @@ const Renderer = struct {
     fn emitStatement(self: *Renderer, statement: mir.ExecutableStatement) RenderError!void {
         switch (statement.operation) {
             .local_init => |local| {
-                const ty = try self.typeText(local.ty);
+                const ty = try self.localStorageType(local);
                 const slot = (self.locals.get(local.local.raw) orelse return error.InvalidBody).storage;
                 if (local.value) |initializer| {
                     const value = try self.emitExpression(initializer);
@@ -497,7 +507,18 @@ const Renderer = struct {
         if (!expressionValid(self.body, id)) return error.InvalidBody;
         if (self.values[id.index()]) |cached| return cached;
         const expression = self.body.expressions[id.index()];
-        const ty = try self.typeText(expression.result_ty);
+        const ty = switch (expression.operation) {
+            .local => |local_id| (self.locals.get(local_id.raw) orelse return error.InvalidBody).ty,
+            .closure_bind => "{ ptr, ptr }",
+            .load => blk: {
+                if (expression.result_ty == .value) {
+                    if (callableHasEnvironment(self.body, expression.id)) |has_environment|
+                        break :blk if (has_environment) "{ ptr, ptr }" else "ptr";
+                }
+                break :blk try self.typeText(expression.result_ty);
+            },
+            else => try self.typeText(expression.result_ty),
+        };
         const result: Value = switch (expression.operation) {
             .local => |local_id| blk: {
                 const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
@@ -531,6 +552,7 @@ const Renderer = struct {
             .unary => |unary| try self.emitUnary(expression, ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
             .direct_call => |call| try self.emitDirectCall(expression, ty, call),
+            .closure_bind => |bind| try self.emitClosureBind(bind),
             .builtin_call => |call| try self.emitBuiltinCall(expression, call),
             .representation_check => |check| try self.emitRepresentationCheck(expression, check),
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
@@ -1372,8 +1394,44 @@ const Renderer = struct {
         return self.emitCall(ty, try std.fmt.allocPrint(self.allocator, "@{s}", .{symbol}), call.arguments[0..call.argument_count], abi);
     }
 
+    fn emitClosureBind(self: *Renderer, bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind")) RenderError!Value {
+        const target = symbolSpelling(self.body, bind.target) orelse return error.InvalidBody;
+        const capture = try self.emitExpression(bind.capture);
+        if (!std.mem.eql(u8, capture.ty, "ptr")) return error.InvalidBody;
+        const with_code = try self.temp();
+        const value = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = insertvalue {{ ptr, ptr }} zeroinitializer, ptr @{s}, 0\n" ++
+                "  {s} = insertvalue {{ ptr, ptr }} {s}, ptr {s}, 1\n",
+            .{ with_code, target, value, with_code, capture.spelling },
+        );
+        return .{ .ty = "{ ptr, ptr }", .spelling = value };
+    }
+
     fn emitIndirectCall(self: *Renderer, ty: []const u8, call: anytype) RenderError!Value {
         const callee = try self.emitExpression(call.callee);
+        if (call.signature.has_environment) {
+            if (!std.mem.eql(u8, callee.ty, "{ ptr, ptr }")) return error.InvalidBody;
+            const code = try self.temp();
+            const environment = try self.temp();
+            try self.output.print(
+                self.allocator,
+                "  {s} = extractvalue {{ ptr, ptr }} {s}, 0\n" ++
+                    "  {s} = extractvalue {{ ptr, ptr }} {s}, 1\n",
+                .{ code, callee.spelling, environment, callee.spelling },
+            );
+            var rendered: [mir.max_executable_operands]Value = undefined;
+            for (call.arguments[0..call.argument_count], 0..) |argument, index|
+                rendered[index] = try self.emitExpression(argument);
+            const result = if (!std.mem.eql(u8, ty, "void")) try self.temp() else "";
+            if (result.len != 0) try self.output.print(self.allocator, "  {s} = ", .{result}) else try self.output.appendSlice(self.allocator, "  ");
+            try self.output.print(self.allocator, "call {s} {s}(ptr {s}", .{ ty, code, environment });
+            for (rendered[0..call.argument_count]) |argument|
+                try self.output.print(self.allocator, ", {s} {s}", .{ argument.ty, argument.spelling });
+            try self.output.appendSlice(self.allocator, ")\n");
+            return .{ .ty = ty, .spelling = result };
+        }
         if (!std.mem.eql(u8, callee.ty, "ptr")) return error.InvalidBody;
         return self.emitCall(ty, callee.spelling, call.arguments[0..call.argument_count], null);
     }
@@ -1731,7 +1789,14 @@ const Renderer = struct {
             false,
             callableLoadTargetSupported(self.body, expression, load),
         )) return error.InvalidBody;
-        const value_ty = try self.typeText(expression.result_ty);
+        const callable_has_environment = if (expression.result_ty == .value)
+            callableHasEnvironment(self.body, expression.id)
+        else
+            null;
+        const value_ty = if (callable_has_environment) |has_environment|
+            if (has_environment) "{ ptr, ptr }" else "ptr"
+        else
+            try self.typeText(expression.result_ty);
         const place = self.body.places[load.place.index()];
         const pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
             try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id })
@@ -1751,6 +1816,29 @@ const Renderer = struct {
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
             try self.emitPlace(load.place, value_ty);
+        if (callable_has_environment orelse false) {
+            const code = try self.temp();
+            const environment_pointer = try self.temp();
+            const environment = try self.temp();
+            const with_code = try self.temp();
+            const result = try self.temp();
+            switch (load.access.kind) {
+                .plain => try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}, align {d}\n", .{ code, pointer, load.access.alignment }),
+                .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic ptr, ptr {s} unordered, align {d}\n", .{ code, pointer, load.access.alignment }),
+            }
+            try self.output.print(self.allocator, "  {s} = getelementptr {{ ptr, ptr }}, ptr {s}, i32 0, i32 1\n", .{ environment_pointer, pointer });
+            switch (load.access.kind) {
+                .plain => try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}, align {d}\n", .{ environment, environment_pointer, load.access.alignment }),
+                .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic ptr, ptr {s} unordered, align {d}\n", .{ environment, environment_pointer, load.access.alignment }),
+            }
+            try self.output.print(
+                self.allocator,
+                "  {s} = insertvalue {{ ptr, ptr }} zeroinitializer, ptr {s}, 0\n" ++
+                    "  {s} = insertvalue {{ ptr, ptr }} {s}, ptr {s}, 1\n",
+                .{ with_code, code, result, with_code, environment },
+            );
+            return .{ .ty = "{ ptr, ptr }", .spelling = result };
+        }
         const byte_sized_bool = expression.result_ty == .bool and
             (placeIsGlobal(self.body, load.place) or load.access.kind == .race_unordered);
         const storage_ty: []const u8 = if (byte_sized_bool) "i8" else value_ty;
@@ -2401,6 +2489,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .unary => |unary| unarySupported(body, expression, unary),
         .binary => |binary| binarySupported(body, expression, binary),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]),
+        .closure_bind => |bind| closureBindSupported(body, expression, bind),
         .builtin_call => |call| builtinSupported(body, expression, call),
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
@@ -2520,6 +2609,8 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and
             symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
+        .closure_bind => |bind| closureBindSupported(body, expression, bind) and
+            callableProducerInitializesUsedLocal(body, expression.id),
         else => false,
     };
 }
@@ -2530,6 +2621,21 @@ fn expressionUsedAsIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprI
         else => {},
     };
     return false;
+}
+
+fn callableHasEnvironment(body: *const mir.ExecutableBody, id: mir.ExprId) ?bool {
+    var result: ?bool = null;
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .indirect_call => |call| if (call.callee.eql(id)) {
+            if (result) |existing| {
+                if (existing != call.signature.has_environment) return null;
+            } else {
+                result = call.signature.has_environment;
+            }
+        },
+        else => {},
+    };
+    return result;
 }
 
 fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
@@ -2572,6 +2678,20 @@ fn callableProducerInitializesUsedLocal(body: *const mir.ExecutableBody, produce
         else => {},
     };
     return false;
+}
+
+fn closureBindSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind"),
+) bool {
+    if (expression.result_ty != .value or !bind.signature.has_environment or
+        bind.signature.parameter_count > mir.max_executable_operands or
+        symbolSpelling(body, bind.target) == null or !expressionValid(body, bind.capture)) return false;
+    const capture = body.expressions[bind.capture.index()];
+    if (std.meta.activeTag(capture.result_ty) != .pointer or !llvmTypeSupported(body, bind.signature.return_ty)) return false;
+    for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| if (!llvmTypeSupported(body, ty)) return false;
+    return true;
 }
 
 fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {

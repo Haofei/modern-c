@@ -10,7 +10,6 @@ const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
-const mir_workflow_plan = @import("mir_workflow_plan.zig");
 const mir_alloca_hoist_plan = @import("mir_alloca_hoist_plan.zig");
 const mir_access_plan = @import("mir_access_plan.zig");
 const mir_statement_plan = @import("mir_statement_plan.zig");
@@ -1469,20 +1468,13 @@ pub const CEmitter = struct {
         // the legacy definition emitter, which still renders every attribute.
         if (!plainFunctionRenderAttrs(render_attrs)) return false;
 
-        const workflow_plan = if (mir_workflow_plan.build(&fn_mir)) |plan|
-            if (self.mirWorkflowPlanSupported(function, plan)) plan else null
-        else
-            null;
-        const alloca_hoist_plan = if (workflow_plan == null)
-            if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
-                if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
-            else
-                null
+        const alloca_hoist_plan = if (mir_alloca_hoist_plan.build(&fn_mir)) |plan|
+            if (self.mirAllocaHoistPlanSupported(function, plan)) plan else null
         else
             null;
         var access_body_plan: ?mir_access_plan.AccessBodyPlan = null;
         defer if (access_body_plan) |*plan| plan.deinit(self.scratch.allocator());
-        if (workflow_plan == null and alloca_hoist_plan == null) {
+        if (alloca_hoist_plan == null) {
             access_body_plan = try mir_access_plan.buildAccessBody(self.scratch.allocator(), &fn_mir);
         }
         const access_structural_operation = if (access_body_plan != null)
@@ -1517,7 +1509,7 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const simple_return = if (workflow_plan == null and alloca_hoist_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
+        const simple_return = if (alloca_hoist_plan == null and sequence_foreach_return_plan == null and local_aggregate_place_update_return_plan == null and place_return_plan == null) self.simpleMirReturn(function, fn_mir) else null;
         const simple_return_prefix_calls = blk: {
             if (simple_return) |ret| {
                 switch (ret) {
@@ -1530,7 +1522,6 @@ pub const CEmitter = struct {
             break :blk null;
         };
         const specialized_plans = [_]bool{
-            workflow_plan != null,
             alloca_hoist_plan != null,
             access_structural_operation != null,
             sequence_foreach_update_plan != null,
@@ -1551,10 +1542,7 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
 
-        if (workflow_plan) |plan| {
-            selected_path.* = .workflow;
-            try self.emitMirWorkflowPlan(plan);
-        } else if (alloca_hoist_plan) |plan| {
+        if (alloca_hoist_plan) |plan| {
             selected_path.* = .alloca_hoist;
             try self.emitMirAllocaHoistPlan(plan);
         } else if (access_structural_priority) {
@@ -1780,197 +1768,6 @@ pub const CEmitter = struct {
     fn mirFunctionByName(self: *const CEmitter, name: []const u8) ?mir.Function {
         for (self.mir_module.functions) |function| if (std.mem.eql(u8, function.name, name)) return function;
         return null;
-    }
-
-    fn mirWorkflowPlanSupported(self: *CEmitter, function: anytype, plan: mir_workflow_plan.Plan) bool {
-        return switch (plan) {
-            .local_vtable_call => |workflow| self.mirLocalVtableCallPlanSupported(function, workflow),
-            .scoped_block => |workflow| self.mirScopedBlockPlanSupported(function, workflow),
-            .call_closure => |workflow| self.mirClosureCallPlanSupported(function, workflow),
-        };
-    }
-
-    fn mirWorkflowValueTypeMatchesSource(self: *CEmitter, value_ty: mir.ValueType, source_ty: TransitionalTypeExpr) bool {
-        const resolved = self.resolveAliasType(source_ty);
-        return switch (value_ty) {
-            .void => isCVoidType(resolved),
-            .bool, .integer, .float, .address, .struct_ => self.mirScalarExpressionSourceTypeIs(resolved, value_ty.name()),
-            .domain_integer => |shape| switch (resolved.kind) {
-                .generic => |generic| generic.args.len == 1 and
-                    std.mem.eql(u8, generic.base.text, @tagName(shape.kind)) and
-                    self.mirScalarExpressionSourceTypeIs(generic.args[0], shape.child),
-                else => false,
-            },
-            .pointer => |pointer| switch (resolved.kind) {
-                .pointer => |source_pointer| pointer.kind == .single and pointer.mutability == source_pointer.mutability and
-                    std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
-                .raw_many_pointer => |source_pointer| pointer.kind == .raw_many and pointer.mutability == source_pointer.mutability and
-                    std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_pointer.child.*)) orelse return false),
-                .slice => |source_slice| pointer.kind == .slice and pointer.mutability == source_slice.mutability and
-                    std.mem.eql(u8, pointer.child, typeName(self.resolveAliasType(source_slice.child.*)) orelse return false),
-                else => false,
-            },
-            .nullable_pointer => |pointer| self.mirNullablePointerShapeMatchesSource(pointer, resolved),
-            else => false,
-        };
-    }
-
-    fn mirNullablePointerShapeMatchesSource(self: *CEmitter, shape: mir.PointerShape, source_ty: TransitionalTypeExpr) bool {
-        const pointer_ty = switch (source_ty.kind) {
-            .nullable => |child| self.resolveAliasType(child.*),
-            else => return false,
-        };
-        const pointer = switch (pointer_ty.kind) {
-            .pointer => |value| value,
-            else => return false,
-        };
-        const child_name = typeName(self.resolveAliasType(pointer.child.*)) orelse return false;
-        return shape.kind == .single and pointer.mutability == shape.mutability and std.mem.eql(u8, child_name, shape.child);
-    }
-
-    fn mirWorkflowFunctionMatches(self: *CEmitter, name: []const u8, result: mir_workflow_plan.TypeRef, args: []const mir_workflow_plan.CallArgument) bool {
-        const signature = self.functions.get(name) orelse return false;
-        const return_ty = signature.return_type orelse return false;
-        if (signature.is_variadic or signature.params.len != args.len or !self.mirWorkflowValueTypeMatchesSource(result.value_ty, return_ty)) return false;
-        for (args, 0..) |arg, index| {
-            if (arg.index != index or !arg.type_ref.id.isValid() or !self.mirWorkflowValueTypeMatchesSource(arg.type_ref.value_ty, signature.params[index].ty)) return false;
-        }
-        return true;
-    }
-
-    fn mirLocalVtableCallPlanSupported(self: *CEmitter, function: anytype, workflow: mir_workflow_plan.LocalVtableCall) bool {
-        if (workflow.function_field_index != 0 or !workflow.local.value.id.isValid() or !workflow.function_symbol.id.isValid()) return false;
-        const local_name = switch (workflow.local.type_ref.value_ty) {
-            .struct_ => |name| name,
-            else => return false,
-        };
-        const local_decl = self.structs.get(local_name) orelse return false;
-        if (local_decl.fields.len != 1 or function.signature.params.len != 2 or !self.mirWorkflowValueTypeMatchesSource(workflow.dispatch.result.value_ty, function.signature.transitionalReturnType() orelse return false)) return false;
-        if (workflow.dispatch.arg_count != 3 or !workflow.dispatch.args[0].type_ref.id.isValid()) return false;
-        const address = switch (workflow.dispatch.args[0].value) {
-            .address_of => |value| value,
-            else => return false,
-        };
-        const x = switch (workflow.dispatch.args[1].value) {
-            .value => |value| value,
-            else => return false,
-        };
-        const y = switch (workflow.dispatch.args[2].value) {
-            .value => |value| value,
-            else => return false,
-        };
-        if (!address.operand.id.eql(workflow.local.value.id) or !x.id.isValid() or !y.id.isValid() or !std.mem.eql(u8, x.name, function.signature.params[0].name.text) or !std.mem.eql(u8, y.name, function.signature.params[1].name.text)) return false;
-        return self.mirWorkflowFunctionMatches(workflow.dispatch.callee.name, workflow.dispatch.result, workflow.dispatch.args[0..workflow.dispatch.arg_count]);
-    }
-
-    fn mirScopedBlockPlanSupported(self: *CEmitter, function: anytype, workflow: mir_workflow_plan.ScopedBlock) bool {
-        if (function.signature.params.len != 1 or !workflow.outer.value.id.isValid() or !workflow.inner.value.id.isValid() or !workflow.outer_initializer.id.isValid()) return false;
-        if (!self.mirWorkflowValueTypeMatchesSource(workflow.outer.type_ref.value_ty, function.signature.transitionalReturnType() orelse return false) or !self.mirWorkflowValueTypeMatchesSource(workflow.outer.type_ref.value_ty, function.signature.params[0].ty) or !std.mem.eql(u8, workflow.inner.type_ref.value_ty.name(), workflow.inner_call.result.value_ty.name())) return false;
-        if (workflow.inner_call.arg_count != 2 or workflow.consume_call.arg_count != 1) return false;
-        const inner_arg = switch (workflow.inner_call.args[0].value) {
-            .value => |value| value,
-            else => return false,
-        };
-        const one = switch (workflow.inner_call.args[1].value) {
-            .integer_literal => |value| value,
-            else => return false,
-        };
-        const consumed = switch (workflow.consume_call.args[0].value) {
-            .value => |value| value,
-            else => return false,
-        };
-        if (!inner_arg.id.eql(workflow.outer_initializer.id) or one.value != 1 or !consumed.id.eql(workflow.inner.value.id)) return false;
-        return self.mirWorkflowFunctionMatches(workflow.inner_call.callee.name, workflow.inner_call.result, workflow.inner_call.args[0..workflow.inner_call.arg_count]) and self.mirWorkflowFunctionMatches(workflow.consume_call.callee.name, workflow.consume_call.result, workflow.consume_call.args[0..workflow.consume_call.arg_count]);
-    }
-
-    fn mirWorkflowClosureTypeName(self: *CEmitter, bind: mir_workflow_plan.ClosureBind) ?[]const u8 {
-        if (bind.closure_param_count != 1 or bind.closure_return.value_ty != .void) return null;
-        var types = self.closure_types.iterator();
-        while (types.next()) |entry| {
-            const closure = entry.value_ptr.kind.closure_type;
-            if (closure.params.len == bind.closure_param_count and isCVoidType(self.resolveAliasType(closure.ret.*)) and self.mirWorkflowValueTypeMatchesSource(bind.closure_type.value_ty, entry.value_ptr.*)) return entry.key_ptr.*;
-            // The closure type itself is represented as `.value` in MIR; its
-            // declaration is therefore checked by the recorded signature.
-            if (closure.params.len == bind.closure_param_count and isCVoidType(self.resolveAliasType(closure.ret.*)) and self.mirScalarExpressionSourceTypeIs(closure.params[0], "u32")) return entry.key_ptr.*;
-        }
-        return null;
-    }
-
-    fn mirWorkflowCType(value_ty: mir.ValueType) ![]const u8 {
-        return primitiveCTypeName(value_ty.name()) orelse switch (value_ty) {
-            .struct_ => |name| name,
-            else => error.UnsupportedCEmission,
-        };
-    }
-
-    fn mirClosureCallPlanSupported(self: *CEmitter, function: anytype, workflow: mir_workflow_plan.ClosureCall) bool {
-        if (function.signature.params.len != 1 or !isCVoidType(function.signature.transitionalReturnType() orelse return false) or !workflow.environment.value.id.isValid() or !workflow.bind.capture.operand.id.eql(workflow.environment.value.id) or workflow.bind.target_param_count != 2 or workflow.bind.closure_param_count != 1 or workflow.bind.target_return.value_ty != .void or workflow.bind.closure_return.value_ty != .void or !workflow.call.closure.id.eql(workflow.bind.closure.id)) return false;
-        const environment_name = switch (workflow.environment.type_ref.value_ty) {
-            .struct_ => |name| name,
-            else => return false,
-        };
-        const environment = self.structs.get(environment_name) orelse return false;
-        if (environment.fields.len != 1 or self.mirWorkflowClosureTypeName(workflow.bind) == null) return false;
-        const target = self.functions.get(workflow.bind.target.name) orelse return false;
-        if (target.is_variadic or target.params.len != workflow.bind.target_param_count or !isCVoidType(target.return_type orelse return false) or !self.mirWorkflowValueTypeMatchesSource(workflow.bind.capture.type_ref.value_ty, target.params[0].ty) or !type_bridge.sameTypeSyntax(self.resolveAliasType(function.signature.params[0].ty), self.resolveAliasType(target.params[1].ty))) return false;
-        return workflow.call.result.value_ty == .void;
-    }
-
-    fn emitMirWorkflowPlan(self: *CEmitter, plan: mir_workflow_plan.Plan) !void {
-        switch (plan) {
-            .local_vtable_call => |workflow| try self.emitMirLocalVtableCallPlan(workflow),
-            .scoped_block => |workflow| try self.emitMirScopedBlockPlan(workflow),
-            .call_closure => |workflow| try self.emitMirClosureCallPlan(workflow),
-        }
-    }
-
-    fn emitMirLocalVtableCallPlan(self: *CEmitter, workflow: mir_workflow_plan.LocalVtableCall) !void {
-        const struct_name = workflow.local.type_ref.value_ty.name();
-        const field_name = (self.structs.get(struct_name) orelse return error.UnsupportedCEmission).fields[workflow.function_field_index].name.text;
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.local.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ({s}){{ .{s} = {s} }};\n", .{ struct_name, try self.cIdent(workflow.local.value.name), struct_name, try self.cIdent(field_name), try self.cIdent(workflow.function_symbol.name) });
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s}(&{s}, {s}, {s});\n", .{ try self.cIdent(workflow.dispatch.callee.name), try self.cIdent(workflow.local.value.name), try self.cIdent(workflow.dispatch.args[1].value.value.name), try self.cIdent(workflow.dispatch.args[2].value.value.name) });
-    }
-
-    fn emitMirScopedBlockPlan(self: *CEmitter, workflow: mir_workflow_plan.ScopedBlock) !void {
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.outer.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try mirWorkflowCType(workflow.outer.type_ref.value_ty), try self.cIdent(workflow.outer.value.name), try self.cIdent(workflow.outer_initializer.name) });
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "{\n");
-        self.indent += 1;
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.inner.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}({s}, {d});\n", .{ try mirWorkflowCType(workflow.inner.type_ref.value_ty), try self.cIdent(workflow.inner.value.name), try self.cIdent(workflow.inner_call.callee.name), try self.cIdent(workflow.inner_call.args[0].value.value.name), workflow.inner_call.args[1].value.integer_literal.value });
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.inner_scope_last_use.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s}({s});\n", .{ try self.cIdent(workflow.consume_call.callee.name), try self.cIdent(workflow.consume_call.args[0].value.value.name) });
-        self.indent -= 1;
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "}\n");
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.return_location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(workflow.outer.value.name)});
-    }
-
-    fn emitMirClosureCallPlan(self: *CEmitter, workflow: mir_workflow_plan.ClosureCall) !void {
-        const environment_name = workflow.environment.type_ref.value_ty.name();
-        const closure_name = self.mirWorkflowClosureTypeName(workflow.bind) orelse return error.UnsupportedCEmission;
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.environment.declaration.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ({s}){{ .value = 0 }};\n", .{ environment_name, try self.cIdent(workflow.environment.value.name), environment_name });
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.bind.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ({s}){{ .code = (void (*)(void *, uint32_t)){s}, .env = (void *)(&{s}) }};\n", .{ closure_name, try self.cIdent(workflow.bind.closure.name), closure_name, try self.cIdent(workflow.bind.target.name), try self.cIdent(workflow.bind.capture.operand.name) });
-        const temporary = try self.nextTempName();
-        try self.writeLineDirective(spanFromMirSourcePoint(workflow.call.location.source));
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ closure_name, temporary, try self.cIdent(workflow.call.closure.name) });
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s}.code({s}.env, {s});\n", .{ temporary, temporary, try self.cIdent(workflow.call.argument.name) });
     }
 
     fn mirAllocaHoistTypeIs(value: mir_alloca_hoist_plan.TypeRef, expected: []const u8) bool {

@@ -1,19 +1,19 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-30 after retiring the slice access plans and moving scalar slice reads
-and writes onto canonical executable places.
+2026-08-30 after retiring the complete workflow plan and moving closure fat
+values onto canonical executable MIR.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
-  unsupported bodies: C uses **131 canonical / 29 specialized**, LLVM uses
-  **131 canonical / 29 specialized**. The ratchet is locked at 100%. This is a
+  unsupported bodies: both backends use **132 canonical / 28 specialized**.
+  The ratchet is locked at 100%. This is a
   qualification checkpoint, not the deletion boundary: the current 522-root
-  broad census finds **466/1771 C** and **485/1822 LLVM** distinct functions
-  using the AST body. Of the admitted bodies, C now has **1234 canonical / 71
-  specialized** and LLVM has **1262 canonical / 75 specialized**. Report mode intentionally preserves
+  broad census finds **458/1771 C** and **479/1822 LLVM** distinct functions
+  using the AST body. Of the admitted bodies, C now has **1244 canonical / 69
+  specialized** and LLVM has **1269 canonical / 74 specialized**. Report mode intentionally preserves
   partial records from reject/unsupported roots, so these figures are the
   current migration snapshot rather than a like-for-like performance metric.
   P0 therefore remains incomplete until the executable MIR body is general
@@ -40,8 +40,10 @@ The old `access_slice` and `access_operation` models, builders, two backend
 emitters, tests and census categories were physically deleted. Scalar slice
 reads/writes now carry exact representation/bounds edges and race-unordered
 memory semantics in executable MIR. Assignment lowering was also corrected so
-the RHS is materialized before a computed slice destination. This leaves eight
-specialized plan definitions.
+the RHS is materialized before a computed slice destination. Closure bind now
+carries a typed call signature plus environment pointer and both backends
+mechanically represent it as `{code, env}`. The workflow plan and both backend
+implementations were deleted. This leaves seven specialized plan definitions.
 
 Direct calls followed by declared-struct member projections and checked
 fixed-array/slice indexing now use canonical executable-MIR `member` and
