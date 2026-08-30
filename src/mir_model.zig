@@ -861,6 +861,21 @@ pub fn executableStorageAlignment(enum_types: []const ExecutableEnumType, ty: Va
     return null;
 }
 
+/// Ordinary aggregate copies are represented as one typed MIR load/store,
+/// not as an atomic scalar access. Alignment 1 is deliberately conservative:
+/// the canonical layout remains in the aggregate type metadata and both
+/// renderers copy the complete value mechanically.
+pub fn executableAggregateCopyAlignment(ty: ValueType) ?u16 {
+    return switch (ty) {
+        .array, .struct_, .nullable_value => 1,
+        else => null,
+    };
+}
+
+pub fn executableMemoryAlignment(enum_types: []const ExecutableEnumType, ty: ValueType) ?u16 {
+    return executableStorageAlignment(enum_types, ty) orelse executableAggregateCopyAlignment(ty);
+}
+
 pub const ExecutableLiteral = union(enum) {
     /// Canonical unsigned magnitude. A negative source expression is a
     /// separate unary operation, so radix, separators and suffix spelling do
@@ -1645,7 +1660,9 @@ pub fn executableAggregateFieldPlace(
         ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
     const local_id: ?LocalId = switch (place.root) {
         .local => |id| id,
-        .symbol => if (require_mutable) return false else null,
+        // The owning body carries global mutability; producer/verifier and
+        // renderer access checks validate it after this shape check.
+        .symbol => null,
         .value => return false,
     };
     if (local_id) |id| {

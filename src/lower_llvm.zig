@@ -1531,11 +1531,7 @@ const LlvmEmitter = struct {
                 null
         else
             null;
-        const place_return_plan = if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
-            if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
-        else
-            null;
-        const llvm_structural_access_operation = if (sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and place_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
+        const llvm_structural_access_operation = if (sequence_foreach_update_plan == null and sequence_foreach_return_plan == null and fn_mir.pointer_provenance_facts.len == 0 and access_body_plan != null) blk: {
             const operation = mir_access_plan.buildStructuralOperation(access_body_plan.?) orelse break :blk null;
             break :blk if (self.mirStructuralAccessPlanSupported(function, access_body_plan.?, operation)) operation else null;
         } else null;
@@ -1543,7 +1539,6 @@ const LlvmEmitter = struct {
             llvm_structural_access_operation != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
-            place_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
 
@@ -1606,9 +1601,6 @@ const LlvmEmitter = struct {
         } else if (sequence_foreach_return_plan) |plan| {
             selected_path.* = .sequence_foreach_return;
             try self.emitMirSequenceForEachReturnPlan(plan, ret_ty);
-        } else if (place_return_plan) |plan| {
-            selected_path.* = .place_return;
-            try self.emitMirPlaceReturnPlan(plan, ret_ty);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
@@ -2793,211 +2785,6 @@ const LlvmEmitter = struct {
         const trap = try self.nextLabel("repr_trap");
         const cont = try self.nextLabel("repr_ok");
         try self.emitTrapBranch(valid, cont, trap, trap, cont, "InvalidRepresentation");
-    }
-
-    const MirPlacePointer = struct {
-        pointer: []const u8,
-        ty: ast_bridge.TypeExpr,
-    };
-
-    fn emitMirPlaceReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.PlaceReturnPlan, ret_ty: ast_bridge.TypeExpr) !void {
-        if (plan.store) |store| {
-            const target = try self.emitMirGlobalPlacePointer(store.target, spanFromMirSourcePoint(store.location.source));
-            const value = switch (store.value) {
-                .parameter => |parameter| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{parameter.name}),
-                .integer_literal => |literal| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{literal.value}),
-                .array_literal => |literal| blk: {
-                    const array = switch (self.resolveAliasType(target.ty).kind) {
-                        .array => |array| array,
-                        else => return error.UnsupportedLlvmEmission,
-                    };
-                    const declared_bound = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
-                    if (declared_bound != literal.element_count) return error.UnsupportedLlvmEmission;
-                    var rendered: std.ArrayList(u8) = .empty;
-                    try rendered.append(self.scratch.allocator(), '[');
-                    for (literal.elements[0..literal.element_count], 0..) |element, index| {
-                        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) return error.UnsupportedLlvmEmission;
-                        if (index != 0) try rendered.appendSlice(self.scratch.allocator(), ", ");
-                        try rendered.print(self.scratch.allocator(), "{s} {d}", .{ try self.llvmType(array.child.*), element.value });
-                    }
-                    try rendered.append(self.scratch.allocator(), ']');
-                    break :blk try rendered.toOwnedSlice(self.scratch.allocator());
-                },
-                .struct_literal => |literal| blk: {
-                    const struct_decl = self.structDeclForType(target.ty) orelse return error.UnsupportedLlvmEmission;
-                    if (literal.field_count != struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                    const struct_llvm_ty = try self.llvmType(target.ty);
-                    var aggregate: []const u8 = "zeroinitializer";
-                    for (literal.fields[0..literal.field_count], 0..) |field, index| {
-                        if (field.field_index >= struct_decl.fields.len or field.value.type_fact.result_ty != .integer) return error.UnsupportedLlvmEmission;
-                        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(field.value.type_fact.target_ty), self.resolveAliasType(struct_decl.fields[field.field_index].ty))) return error.UnsupportedLlvmEmission;
-                        for (literal.fields[0..index]) |earlier| if (earlier.field_index == field.field_index) return error.UnsupportedLlvmEmission;
-                        const next = try self.nextTemp();
-                        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {d}, {d}{s}\n", .{
-                            next,
-                            struct_llvm_ty,
-                            aggregate,
-                            try self.llvmType(struct_decl.fields[field.field_index].ty),
-                            field.value.value,
-                            field.field_index,
-                            try self.debugCallSuffix(),
-                        });
-                        aggregate = next;
-                    }
-                    break :blk aggregate;
-                },
-            };
-            try self.emitOrdinaryStore(target.ty, try self.llvmType(target.ty), value, target.pointer, true);
-        }
-
-        const span = spanFromMirSourcePoint(plan.return_location.source);
-        const value = switch (plan.returned.root_kind) {
-            .parameter => try self.emitMirParameterPlaceValue(plan.returned, span),
-            .local => blk: {
-                const local = plan.local_init orelse return error.UnsupportedLlvmEmission;
-                const initialized = try self.emitMirNonLocalPlaceValue(local.value, span);
-                break :blk try self.emitMirProjectedValue(plan.returned, initialized, span);
-            },
-            .global => blk: {
-                const place = try self.emitMirGlobalPlacePointer(plan.returned, span);
-                break :blk try self.emitOrdinaryLoad(place.ty, place.pointer, !(self.global_is_const.get(plan.returned.root_name) orelse false));
-            },
-        };
-        try self.emitReturnValue(ret_ty, value, span);
-    }
-
-    fn emitMirParameterPlaceValue(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) ![]const u8 {
-        const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{place.root_name});
-        return self.emitMirProjectedValue(place, value, span);
-    }
-
-    fn emitMirNonLocalPlaceValue(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) ![]const u8 {
-        return switch (place.root_kind) {
-            .parameter => self.emitMirParameterPlaceValue(place, span),
-            .global => blk: {
-                const pointer = try self.emitMirGlobalPlacePointer(place, span);
-                break :blk try self.emitOrdinaryLoad(pointer.ty, pointer.pointer, !(self.global_is_const.get(place.root_name) orelse false));
-            },
-            .local => error.UnsupportedLlvmEmission,
-        };
-    }
-
-    fn emitMirProjectedValue(self: *LlvmEmitter, place: mir_statement_plan.Place, root_value: []const u8, span: diagnostics.Span) ![]const u8 {
-        var ty = place.root_type_fact.target_ty;
-        var value = root_value;
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .field => |field_projection| {
-                const old_debug_span = self.current_debug_span;
-                self.current_debug_span = spanFromMirSourcePoint(field_projection.location.source);
-                defer self.current_debug_span = old_debug_span;
-                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                const field = struct_decl.fields[field_projection.field_index];
-                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedLlvmEmission;
-                const next = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, field_projection.field_index, try self.debugCallSuffix() });
-                value = next;
-                ty = field.ty;
-            },
-            .constant_index => |index| {
-                const old_debug_span = self.current_debug_span;
-                self.current_debug_span = spanFromMirSourcePoint(index.location.source);
-                defer self.current_debug_span = old_debug_span;
-                const array = switch (self.resolveAliasType(ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                if (index.index >= index.bound) return error.UnsupportedLlvmEmission;
-                if (index.checked) try self.emitBoundsCheck(try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{index.index}), index.bound);
-                const next = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ next, try self.llvmType(ty), value, index.index, try self.debugCallSuffix() });
-                value = next;
-                ty = array.child.*;
-            },
-        };
-        _ = span;
-        return value;
-    }
-
-    fn emitMirGlobalPlacePointer(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !MirPlacePointer {
-        var ty = place.root_type_fact.target_ty;
-        var pointer: []const u8 = undefined;
-        if (place.root_kind == .global and !place.root_indirect) {
-            ty = self.global_types.get(place.root_name) orelse return error.UnsupportedLlvmEmission;
-            pointer = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{place.root_name});
-        } else if (place.root_kind == .parameter and place.root_indirect) {
-            ty = switch (self.resolveAliasType(place.root_type_fact.target_ty).kind) {
-                .pointer => |root_pointer| root_pointer.child.*,
-                else => return error.UnsupportedLlvmEmission,
-            };
-            pointer = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{place.root_name});
-        } else return error.UnsupportedLlvmEmission;
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .field => |field_projection| {
-                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                const field = struct_decl.fields[field_projection.field_index];
-                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedLlvmEmission;
-                const next = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}{s}\n", .{ next, try self.llvmType(ty), pointer, field_projection.field_index, try self.debugCallSuffix() });
-                pointer = next;
-                ty = field.ty;
-            },
-            .constant_index => |index| {
-                const array = switch (self.resolveAliasType(ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                if (index.index >= index.bound) return error.UnsupportedLlvmEmission;
-                if (index.checked) try self.emitBoundsCheck(try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{index.index}), index.bound);
-                const next = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}{s}\n", .{ next, try self.llvmType(ty), pointer, index.index, try self.debugCallSuffix() });
-                pointer = next;
-                ty = array.child.*;
-            },
-        };
-        _ = span;
-        return .{ .pointer = pointer, .ty = ty };
-    }
-
-    fn mirPlacePlanSupported(self: *LlvmEmitter, plan: mir_statement_plan.PlaceReturnPlan, span: diagnostics.Span) bool {
-        _ = self.mirPlaceType(plan.returned, span) catch return false;
-        if (plan.local_init) |local| _ = self.mirPlaceType(local.value, span) catch return false;
-        if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
-        return true;
-    }
-
-    fn mirPlaceType(self: *LlvmEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !ast_bridge.TypeExpr {
-        var ty = if (place.root_kind == .global)
-            self.global_types.get(place.root_name) orelse return error.UnsupportedLlvmEmission
-        else
-            place.root_type_fact.target_ty;
-        if (place.root_indirect) {
-            ty = switch (self.resolveAliasType(ty).kind) {
-                .pointer => |pointer| pointer.child.*,
-                else => return error.UnsupportedLlvmEmission,
-            };
-        }
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .field => |field_projection| {
-                const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
-                const field = struct_decl.fields[field_projection.field_index];
-                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedLlvmEmission;
-                ty = field.ty;
-            },
-            .constant_index => |index| {
-                const array = switch (self.resolveAliasType(ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                const declared_bound = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
-                if (declared_bound != index.bound or index.index >= index.bound) return error.UnsupportedLlvmEmission;
-                ty = array.child.*;
-            },
-        };
-        _ = span;
-        return ty;
     }
 
     fn noFunctionBodyFallbacksAvailable(self: *const LlvmEmitter) bool {

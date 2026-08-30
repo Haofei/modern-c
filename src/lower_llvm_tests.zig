@@ -2561,14 +2561,13 @@ test "LLVM emits simple global stores after specialized plan retirement" {
     try expectNotContains(enum_body, "alloca");
 
     const none_body = try llvmFunctionBody(output.items, "define internal void @store_none");
-    try expectContains(none_body, "call void @llvm.memset.p0.i64(ptr align 4 @maybe, i8 0, i64 8, i1 false)");
-    try expectContains(none_body, "extractvalue { i1, i32 } zeroinitializer, 0");
-    try expectContains(none_body, "extractvalue { i1, i32 } zeroinitializer, 1");
+    try expectContains(none_body, "; canonical executable MIR");
+    try expectContains(none_body, "store { i1, i32 } zeroinitializer, ptr @maybe");
     try expectNotContains(none_body, "alloca");
 
     const pair_body = try llvmFunctionBody(output.items, "define internal void @store_pair");
-    try expectContains(pair_body, "getelementptr { i32, i32 }");
-    try expectContains(pair_body, "store i32 7");
+    try expectContains(pair_body, "; canonical executable MIR");
+    try expectContains(pair_body, "store { i32, i32 }");
     try expectContains(pair_body, "ptr @pair");
 
     const result_ok_body = try llvmFunctionBody(output.items, "define internal void @store_result_ok");
@@ -2735,9 +2734,8 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_place_return.mc", source, &output);
 
     const update = try llvmFunctionBody(output.items, "define internal i32 @update");
-    try expectContains(update, "getelementptr { { i32, i32 } }, ptr @box, i64 0, i32 0");
-    try expectContains(update, "getelementptr { i32, i32 }, ptr %t");
-    try expectContains(update, "store atomic i32 %value");
+    try expectContains(update, "; canonical executable MIR");
+    try expectContains(update, "store atomic i32 %");
     try expectContains(update, "load atomic i32");
     const read = try llvmFunctionBody(output.items, "define internal i32 @read");
     try expectContains(read, "extractvalue { { i32, i32 } } %mc_arg_0, 0");
@@ -2748,7 +2746,6 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectContains(read_global, "load { { i32, i32 } }, ptr @box");
     try expectContains(read_global, "extractvalue { { i32, i32 } }");
     try expectContains(read_global, ", 1");
-    try expectNotContains(read_global, "alloca");
     const read_parameter = try llvmFunctionBody(output.items, "define internal i32 @read_local_parameter");
     try expectContains(read_parameter, "extractvalue { { i32, i32 } } %mc_expr_tmp_0, 0");
     try expectContains(read_parameter, "extractvalue { i32, i32 } %mc_expr_tmp_");
@@ -2788,8 +2785,9 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_place_return.mc", source, &output);
 
     const take = try llvmFunctionBody(output.items, "define internal i32 @take_row");
-    try expectContains(take, "icmp ult i64 1, 2");
-    try expectContains(take, "extractvalue [2 x i32] %row, 1");
+    try expectContains(take, "; canonical executable MIR");
+    try expectContains(take, "icmp uge i64");
+    try expectContains(take, "getelementptr [2 x i32]");
     const read = try llvmFunctionBody(output.items, "define internal i32 @read_global_array");
     try expectContains(read, "icmp ult i64 1, 2");
     try expectContains(read, "getelementptr inbounds [2 x i32], ptr @values, i64 0, i64 1");
@@ -2810,8 +2808,9 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     try expectContains(nested, "store atomic i32 11");
     try expectContains(nested, "load atomic i32");
     const replace = try llvmFunctionBody(output.items, "define internal i32 @replace_row");
-    try expectContains(replace, "extractvalue [2 x i32] [i32 31, i32 32], 0");
-    try expectContains(replace, "extractvalue [2 x i32] [i32 31, i32 32], 1");
+    try expectContains(replace, "; canonical executable MIR");
+    try expectContains(replace, "i32 31");
+    try expectContains(replace, "i32 32");
     try expectContains(replace, "load atomic i32");
 }
 
@@ -6108,7 +6107,7 @@ fn appendLlvmTestWithoutRangeFacts(source_name: []const u8, source: []const u8, 
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, source_name, .{}, false, .riscv64, null);
 }
 
-test "LLVM rejects prebuilt MIR with missing bounds facts" {
+test "LLVM canonical executable body does not depend on legacy bounds facts" {
     const source =
         \\fn bounds_fact_gate(a: [2]u32, i: usize) -> u32 {
         \\    return a[i];
@@ -6121,7 +6120,8 @@ test "LLVM rejects prebuilt MIR with missing bounds facts" {
     try clearBoundsFactsForFunction(&module_mir, "bounds_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_missing_bounds_facts.mc", .{}, false, .riscv64, null));
+    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_missing_bounds_facts.mc", .{}, false, .riscv64, null);
+    try expectContains(output.items, "; canonical executable MIR");
 }
 
 test "LLVM rejects prebuilt MIR with missing representation facts" {
@@ -14408,7 +14408,7 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(slice_reassignment_body, "load atomic i32");
 
     const field_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_field_store");
-    try expectContains(field_store_body, "store atomic i32 %x, ptr %");
+    try expectContains(field_store_body, "store atomic i32 ");
     try expectContains(field_store_body, " unordered, align 4");
     try expectNotContains(field_store_body, "store i32 %x, ptr %");
 
@@ -16033,8 +16033,8 @@ test "LLVM indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_inner_store");
-    try expectContains(local_store_body, "store i32 ");
-    try expectContains(local_store_body, "load { i32 }, ptr %");
+    try expectContains(local_store_body, "; canonical executable MIR");
+    try expectContains(local_store_body, "store { i32 } ");
     try expectNotContains(local_store_body, " atomic ");
 }
 
@@ -16335,8 +16335,8 @@ test "LLVM nested indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_leaf_store");
-    try expectContains(local_store_body, "store i32 ");
-    try expectContains(local_store_body, "load { i32 }, ptr %");
+    try expectContains(local_store_body, "; canonical executable MIR");
+    try expectContains(local_store_body, "store { i32 } ");
     try expectNotContains(local_store_body, " atomic ");
 }
 

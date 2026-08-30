@@ -983,101 +983,6 @@ test "CheckedProgram is a syntax-free callable and body table" {
     try std.testing.expect(!checked.matchesMir(module_mir));
 }
 
-test "MIR statement plan owns fixed-array constant index and bounds trap" {
-    const source =
-        \\global matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
-        \\fn take_row(row: [2]u32) -> u32 {
-        \\    return row[1];
-        \\}
-        \\fn nested_global() -> u32 {
-        \\    matrix[1][0] = 11;
-        \\    return matrix[1][0];
-        \\}
-        \\fn replace_row() -> u32 {
-        \\    matrix[1] = .{ 31, 32 };
-        \\    return matrix[1][1];
-        \\}
-    ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer module_mir.deinit();
-    const function = functionByName(module_mir, "take_row") orelse return error.TestUnexpectedResult;
-    const plan = mir_statement_plan.buildSingleBlockPlaceReturn(function) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 1), plan.returned.projection_count);
-    switch (plan.returned.projections[0]) {
-        .constant_index => |index| {
-            try std.testing.expectEqual(@as(usize, 1), index.index);
-            try std.testing.expectEqual(@as(usize, 2), index.bound);
-            try std.testing.expect(index.checked);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-
-    const nested = functionByName(module_mir, "nested_global") orelse return error.TestUnexpectedResult;
-    const nested_plan = mir_statement_plan.buildSingleBlockPlaceReturn(nested) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), nested_plan.returned.projection_count);
-    const store = nested_plan.store orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), store.target.projection_count);
-    switch (store.value) {
-        .integer_literal => |literal| try std.testing.expectEqual(@as(usize, 11), literal.value),
-        else => return error.TestUnexpectedResult,
-    }
-    try std.testing.expectEqual(@as(usize, 4), nested.trap_edges.len);
-
-    const replace = functionByName(module_mir, "replace_row") orelse return error.TestUnexpectedResult;
-    const replace_plan = mir_statement_plan.buildSingleBlockPlaceReturn(replace) orelse return error.TestUnexpectedResult;
-    const replace_store = replace_plan.store orelse return error.TestUnexpectedResult;
-    switch (replace_store.value) {
-        .array_literal => |literal| {
-            try std.testing.expectEqual(@as(usize, 2), literal.element_count);
-            try std.testing.expectEqual(@as(usize, 31), literal.elements[0].value);
-            try std.testing.expectEqual(@as(usize, 32), literal.elements[1].value);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-
-    const mutable_replace = functionByNameMut(&module_mir, "replace_row") orelse return error.TestUnexpectedResult;
-    var aggregate_instruction: ?*mir.Instruction = null;
-    for (mutable_replace.blocks) |*block| for (block.instructions) |*instruction| {
-        if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "array_literal")) {
-            aggregate_instruction = instruction;
-            break;
-        }
-    };
-    const aggregate = aggregate_instruction orelse return error.TestUnexpectedResult;
-    const saved_operand = aggregate.typed_aggregate_operand_span_ids[0];
-    aggregate.typed_aggregate_operand_span_ids[0] = .invalid;
-    var aggregate_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
-    defer aggregate_reporter.deinit();
-    try mir.verifyBuiltMir(module_mir, &aggregate_reporter);
-    try std.testing.expect(aggregate_reporter.has_errors);
-    try std.testing.expect(std.mem.indexOf(u8, aggregate_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
-    aggregate.typed_aggregate_operand_span_ids[0] = saved_operand;
-
-    const mutable_function = functionByNameMut(&module_mir, "take_row") orelse return error.TestUnexpectedResult;
-    var mutated = false;
-    for (mutable_function.blocks) |*block| for (block.instructions) |*instruction| {
-        if (instruction.kind != .index) continue;
-        instruction.constant_index_value = 0;
-        mutated = true;
-        break;
-    };
-    try std.testing.expect(mutated);
-    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_array_place_plan.mc", source);
-    defer verifier_reporter.deinit();
-    try mir.verifyBuiltMir(module_mir, &verifier_reporter);
-    try std.testing.expect(verifier_reporter.has_errors);
-    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
-}
-
 test "MIR verifier rejects per-file source identity drift" {
     // DIAGNOSTIC_UNIT: E_MIR_SOURCE_ID
     const source = "fn main() -> u32 { return 1; }\n";
@@ -1372,36 +1277,6 @@ test "MIR owns member, assignment, and return operand identities" {
     try mir.verifyBuiltMir(module_mir, &invalid_reporter);
     try std.testing.expect(invalid_reporter.has_errors);
     try std.testing.expect(std.mem.indexOf(u8, invalid_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
-}
-
-test "MIR statement plan traces a local aggregate copy to its initializer" {
-    const source =
-        \\struct Pair { left: u32, right: u32 }
-        \\global default_pair: Pair = .{ .left = 1, .right = 2 };
-        \\fn read() -> u32 {
-        \\    let pair: Pair = default_pair;
-        \\    return pair.right;
-        \\}
-    ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_place_plan.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer module_mir.deinit();
-
-    const plan = mir_statement_plan.buildSingleBlockPlaceReturn(functionByName(module_mir, "read").?) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(mir_statement_plan.PlaceRootKind.local, plan.returned.root_kind);
-    try std.testing.expectEqualStrings("pair", plan.returned.root_name);
-    try std.testing.expectEqual(@as(usize, 1), plan.returned.projection_count);
-    const local = plan.local_init orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("pair", local.name);
-    try std.testing.expectEqual(mir_statement_plan.PlaceRootKind.global, local.value.root_kind);
-    try std.testing.expectEqualStrings("default_pair", local.value.root_name);
 }
 
 test "MIR executable local aggregate assignments retain literal identities" {

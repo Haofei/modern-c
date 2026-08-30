@@ -7669,20 +7669,20 @@ const FunctionBuilder = struct {
         is_store: bool,
     ) bool {
         if (!sameValueType(place.ty, ty)) return false;
-        const expected_alignment = mir_model.executableStorageAlignment(self.executable_enum_types.items, ty) orelse aggregate_local: {
-            if (place.projection_count != 0 or access.kind != .plain) return false;
-            switch (place.root) {
-                .local => {},
-                .symbol, .value => return false,
-            }
-            switch (ty) {
-                .array, .struct_, .nullable_value => break :aggregate_local 1,
-                else => return false,
-            }
-        };
+        const aggregate_copy = mir_model.executableAggregateCopyAlignment(ty) != null;
+        const expected_alignment = mir_model.executableMemoryAlignment(self.executable_enum_types.items, ty) orelse return false;
         if (access.alignment != expected_alignment) return false;
+        if (aggregate_copy and access.kind != .plain) return false;
         if (place.projection_count != 0) {
             if (!self.executablePlaceComplete(place)) return false;
+            if (aggregate_copy) return switch (place.root) {
+                .local => true,
+                .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
+                    const identity = self.executable_symbols.items[id.index()];
+                    break :symbol identity.kind == .global and (!is_store or identity.mutable);
+                } else false,
+                .value => false,
+            };
             if (self.executableFixedArrayIndexPlaceComplete(place)) return switch (place.root) {
                 .local => access.kind == .plain,
                 .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
@@ -7736,6 +7736,7 @@ const FunctionBuilder = struct {
             .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
                 const identity = self.executable_symbols.items[id.index()];
                 if (identity.kind != .global or (is_store and !identity.mutable)) break :symbol false;
+                if (aggregate_copy) break :symbol access.kind == .plain;
                 const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
                 break :symbol access.kind == expected_kind;
             } else false,
@@ -8547,16 +8548,10 @@ const FunctionBuilder = struct {
                 };
                 if (index_kind == .fixed_array and bound == null)
                     break :index self.unsupportedExecutableExpression(.unsupported_index);
-                const direct_global_storage = switch (node.base.*.kind) {
-                    .ident => |ident| self.globals.contains(ident.text),
-                    .index => |index| switch (index.base.*.kind) {
-                        .ident => |ident| self.globals.contains(ident.text),
-                        else => false,
-                    },
-                    else => false,
-                };
+                const direct_global_storage = self.executablePlaceRootIsGlobal(node.base.*);
                 if (direct_global_storage and index_kind == .fixed_array and
-                    mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
+                    (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null or
+                        (!self.executable_assignment_rhs and mir_model.executableAggregateCopyAlignment(result_ty) != null)))
                 {
                     break :index .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
@@ -8650,14 +8645,7 @@ const FunctionBuilder = struct {
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
-                const direct_global_storage = switch (node.base.*.kind) {
-                    .ident => |ident| self.globals.contains(ident.text),
-                    .index => |index| switch (index.base.*.kind) {
-                        .ident => |ident| self.globals.contains(ident.text),
-                        else => false,
-                    },
-                    else => false,
-                };
+                const direct_global_storage = self.executablePlaceRootIsGlobal(node.base.*);
                 if (direct_global_storage and
                     mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
                 {
@@ -9346,7 +9334,12 @@ const FunctionBuilder = struct {
                     try self.executableCallableSignature(array.child.*)
                 else
                     null;
-                return self.internExecutableArrayType(ty, element_ty, length, callable_element);
+                if (!try self.internExecutableArrayType(ty, element_ty, length, callable_element)) return false;
+                if (element_ty == .array) {
+                    if (!try self.internExecutableTypeExpr(element_ty, array.child.*)) return false;
+                    self.markExecutableArrayElementLayoutComplete(ty, element_ty);
+                }
+                return true;
             },
             .generic => |generic| if (std.mem.eql(u8, generic.base.text, "Result"))
                 return self.internExecutableResultType(ty, resolved),
@@ -9733,14 +9726,8 @@ const FunctionBuilder = struct {
 
     fn executableMemoryAccess(self: *FunctionBuilder, place_expr: ast.Expr, ty: ValueType) mir_model.ExecutableMemoryAccess {
         const root = executablePlaceRootIdent(place_expr);
-        const aggregate_local = !self.executablePlaceHasDeref(place_expr) and if (root) |name|
-            self.executable_local_ids.contains(name) and switch (ty) {
-                .array, .struct_, .nullable_value => true,
-                else => false,
-            }
-        else
-            false;
-        const alignment = mir_model.executableStorageAlignment(self.executable_enum_types.items, ty) orelse if (aggregate_local) @as(u16, 1) else 0;
+        const aggregate_copy = mir_model.executableAggregateCopyAlignment(ty) != null;
+        const alignment = mir_model.executableMemoryAlignment(self.executable_enum_types.items, ty) orelse 0;
         if (alignment == 0) self.executable_supported = false;
         const slice_index = switch (place_expr.kind) {
             .index => |node| switch (self.exprType(node.base.*)) {
@@ -9750,7 +9737,9 @@ const FunctionBuilder = struct {
             },
             else => false,
         };
-        const kind: mir_model.ExecutableMemoryAccessKind = if (slice_index)
+        const kind: mir_model.ExecutableMemoryAccessKind = if (aggregate_copy)
+            .plain
+        else if (slice_index)
             .race_unordered
         else if (self.executablePlaceHasDeref(place_expr))
             if (root) |name| local_alias: {
@@ -10077,6 +10066,16 @@ const FunctionBuilder = struct {
         return switch (place.root_ty) {
             .pointer => |shape| shape.kind == .single,
             .nullable_pointer => true,
+            else => false,
+        };
+    }
+
+    fn executablePlaceRootIsGlobal(self: *const FunctionBuilder, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |ident| self.globals.contains(ident.text),
+            .member => |node| self.executablePlaceRootIsGlobal(node.base.*),
+            .index => |node| self.executablePlaceRootIsGlobal(node.base.*),
+            .grouped => |inner| self.executablePlaceRootIsGlobal(inner.*),
             else => false,
         };
     }

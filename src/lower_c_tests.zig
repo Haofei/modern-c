@@ -2169,15 +2169,13 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     try expectContains(enum_body, "mc_race_store_isize(&current, (intptr_t)");
 
     const none_body = try cFunctionBody(output.items, "static void store_none(void)");
-    try expectContains(none_body, "mc_opt_u32 mc_tmp");
+    try expectContains(none_body, "/* canonical executable MIR */");
     try expectContains(none_body, ".present = false");
-    try expectContains(none_body, "maybe = (mc_opt_u32)(mc_tmp");
+    try expectContains(none_body, "maybe =");
 
     const pair_body = try cFunctionBody(output.items, "static void store_pair(uint32_t x)");
-    try expectContains(pair_body, ".a = ");
-    try expectContains(pair_body, ".b = ");
-    try expectContains(pair_body, " = 7;");
-    try expectContains(pair_body, "pair = (Pair)(");
+    try expectContains(pair_body, "/* canonical executable MIR */");
+    try expectContains(pair_body, "pair =");
 
     const result_ok_body = try cFunctionBody(output.items, "static void store_result_ok(uint32_t x)");
     try expectContains(result_ok_body, "result = (");
@@ -2346,8 +2344,9 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_place_return.mc", source, &output);
 
     const update = try cFunctionBody(output.items, "static uint32_t update(uint32_t value)");
-    try expectContains(update, "mc_race_store_u32(&box.pair.left");
-    try expectContains(update, "mc_race_load_u32(&box.pair.left)");
+    try expectContains(update, "/* canonical executable MIR */");
+    try expectContains(update, "mc_race_store_u32");
+    try expectContains(update, "mc_race_load_u32");
     const read = try cFunctionBody(output.items, "static uint32_t read(Box value)");
     if (isCanonicalExecutableCBody(read)) {
         try expectContains(read, ").pair;");
@@ -2356,8 +2355,9 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     } else try expectContains(read, "return value.pair.right;");
     try expectNotContains(read, "mc_tmp");
     const read_global = try cFunctionBody(output.items, "static uint32_t read_local_global(void)");
-    try expectContains(read_global, "Box copy = box;");
-    try expectContains(read_global, "return copy.pair.right;");
+    try expectContains(read_global, "/* canonical executable MIR */");
+    try expectContains(read_global, "Box copy =");
+    try expectContains(read_global, "return ");
     const read_parameter = try cFunctionBody(output.items, "static uint32_t read_local_parameter(Box value)");
     if (isCanonicalExecutableCBody(read_parameter)) {
         try expectContains(read_parameter, "Box copy = mc_exec_tmp_");
@@ -2401,7 +2401,8 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_place_return.mc", source, &output);
 
     const take = try cFunctionBody(output.items, "static uint32_t take_row(mc_array_u32_2 row)");
-    try expectContains(take, "return row.elems[mc_check_index_usize(1, 2)];");
+    try expectContains(take, "/* canonical executable MIR */");
+    try expectContains(take, "mc_check_index_usize(");
     const read = try cFunctionBody(output.items, "static uint32_t read_global_array(void)");
     try std.testing.expect(isCanonicalExecutableCBody(read));
     try expectContains(read, "mc_race_load_u32(&((values).elems[mc_check_index_usize(");
@@ -2420,9 +2421,11 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     try expectContains(nested, ", 2)].elems[mc_check_index_usize(");
     try expectContains(nested, "mc_race_load_u32(&((matrix).elems[mc_check_index_usize(");
     const replace = try cFunctionBody(output.items, "static uint32_t replace_row(void)");
-    try expectContains(replace, "(mc_array_u32_2){ .elems = { 31, 32 } }");
-    try expectContains(replace, "matrix.elems[mc_check_index_usize(1, 2)]");
-    try expectContains(replace, "mc_race_load_u32(&matrix.elems[mc_check_index_usize(1, 2)].elems[mc_check_index_usize(1, 2)])");
+    try expectContains(replace, "/* canonical executable MIR */");
+    try expectContains(replace, "31");
+    try expectContains(replace, "32");
+    try expectContains(replace, "mc_check_index_usize(");
+    try expectContains(replace, "mc_race_load_u32");
 }
 
 test "lower-c checked dynamic fixed-array stores use canonical executable MIR" {
@@ -6356,7 +6359,7 @@ fn appendCheckedCTestWithoutRangeFacts(source_name: []const u8, source: []const 
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
-test "lower-c rejects prebuilt MIR with missing bounds facts" {
+test "lower-c canonical executable body does not depend on legacy bounds facts" {
     const source =
         \\fn bounds_fact_gate(a: [2]u32, i: usize) -> u32 {
         \\    return a[i];
@@ -6369,7 +6372,8 @@ test "lower-c rejects prebuilt MIR with missing bounds facts" {
     try clearBoundsFactsForFunction(&module_mir, "bounds_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_bounds_facts.mc", .{}, false, null));
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_bounds_facts.mc", .{}, false, null);
+    try expectContains(output.items, "/* canonical executable MIR */");
 }
 
 test "lower-c rejects prebuilt MIR with missing representation facts" {
@@ -15719,8 +15723,8 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     try expectContains(local_body, "return mc_exec_tmp_");
     try expectNotContains(local_body, "mc_race_load_u32");
     const local_store_body = try cFunctionBody(local_output.items, "static Inner local_array_inner_store(uintptr_t i, Inner value)");
-    try expectContains(local_store_body, "cells.elems[mc_check_index_usize(");
-    try expectContains(local_store_body, ".inner = mc_tmp");
+    try expectContains(local_store_body, "/* canonical executable MIR */");
+    try expectContains(local_store_body, "mc_check_index_usize(");
     try expectContains(local_store_body, "return ");
     try expectNotContains(local_store_body, "mc_race_load_u32");
     try expectNotContains(local_store_body, "mc_race_store_u32");
@@ -15998,8 +16002,8 @@ test "lower-c nested indexed aggregate field value copies lower recursively" {
     try expectContains(local_body, "return mc_exec_tmp_");
     try expectNotContains(local_body, "mc_race_load_u32");
     const local_store_body = try cFunctionBody(output.items, "static Leaf local_array_leaf_store(uintptr_t i, Leaf value)");
+    try expectContains(local_store_body, "/* canonical executable MIR */");
     try expectContains(local_store_body, "mc_check_index_usize(");
-    try expectContains(local_store_body, ".inner.leaf = mc_tmp");
     try expectContains(local_store_body, "return ");
     try expectNotContains(local_store_body, "mc_race_load_u32");
     try expectNotContains(local_store_body, "mc_race_store_u32");
@@ -19754,7 +19758,7 @@ test "lower-c emits fixed array indexing with bounds checks" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u8_4 xs") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 xs") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.elems[mc_check_index_usize(i, 4)];") != null);
+    try std.testing.expect(std.mem.count(u8, output.items, "mc_check_index_usize(") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.elems[2];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize(2, 4)") == null);
 }

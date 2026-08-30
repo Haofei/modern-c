@@ -1520,19 +1520,23 @@ fn verifyMemoryAccess(
     const target = place(body, place_id) orelse return error.InvalidPlaceReference;
     if (target.storage != .ordinary) return error.InvalidMemoryAccessType;
     if (!sameValueType(target.ty, ty)) return error.InvalidPlaceType;
-    const expected_alignment = mir.executableStorageAlignment(body.enum_types, ty) orelse aggregate_local: {
-        if (target.projection_count != 0 or access.kind != .plain) return error.InvalidMemoryAccessType;
-        switch (target.root) {
-            .local => {},
-            .symbol, .value => return error.InvalidMemoryAccessType,
-        }
-        switch (ty) {
-            .array, .struct_, .nullable_value => break :aggregate_local 1,
-            else => return error.InvalidMemoryAccessType,
-        }
-    };
+    const aggregate_copy = mir.executableAggregateCopyAlignment(ty) != null;
+    const expected_alignment = mir.executableMemoryAlignment(body.enum_types, ty) orelse return error.InvalidMemoryAccessType;
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
+    if (aggregate_copy and access.kind != .plain) return error.InvalidMemoryAccessKind;
     if (target.projection_count != 0) {
+        if (aggregate_copy) {
+            try verifyCompletePlace(body, target.*);
+            switch (target.root) {
+                .local => {},
+                .symbol => |id| {
+                    const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
+                    if (identity.kind != .global or (is_store and !identity.mutable)) return error.InvalidMemoryAccessType;
+                },
+                .value => return error.InvalidPlaceType,
+            }
+            return;
+        }
         if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
             switch (target.root) {
                 .local => if (access.kind != .plain) return error.InvalidMemoryAccessKind,
@@ -1594,7 +1598,7 @@ fn verifyMemoryAccess(
             const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
             if (identity.kind != .global) return error.InvalidGlobalSymbol;
             if (is_store and !identity.mutable) return error.ImmutableGlobalStore;
-            const expected_kind: mir.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+            const expected_kind: mir.ExecutableMemoryAccessKind = if (aggregate_copy) .plain else if (identity.mutable) .race_unordered else .plain;
             if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
         },
         .value => return error.InvalidPlaceType,
@@ -1606,7 +1610,7 @@ fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePl
         if (!atomicPlaceSupported(body, target)) return error.InvalidAtomicLoad;
         return;
     }
-    if (target.projection_count == 0) return;
+    if (target.projection_count == 0 or mir.executableAggregateCopyAlignment(target.ty) != null) return;
     if (mir.executableFixedArrayIndexPlace(body, target) != null) return;
     if (mir.executableSliceIndexPlace(body, target) != null) return;
     if (!isScalarAccessPlace(body, target, false)) return error.InvalidPlaceType;

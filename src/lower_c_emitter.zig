@@ -1446,15 +1446,10 @@ pub const CEmitter = struct {
                 null
         else
             null;
-        const place_return_plan = if (mir_statement_plan.buildSingleBlockPlaceReturn(fn_mir)) |plan|
-            if (self.mirPlacePlanSupported(plan, function.signature.name.span)) plan else null
-        else
-            null;
         const specialized_plans = [_]bool{
             access_structural_operation != null,
             sequence_foreach_update_plan != null,
             sequence_foreach_return_plan != null,
-            place_return_plan != null,
         };
         if (std.mem.indexOfScalar(bool, &specialized_plans, true) == null) return false;
 
@@ -1477,9 +1472,6 @@ pub const CEmitter = struct {
         } else if (sequence_foreach_return_plan) |plan| {
             selected_path.* = .sequence_foreach_return;
             try self.emitMirSequenceForEachReturnPlan(plan);
-        } else if (place_return_plan) |plan| {
-            selected_path.* = .place_return;
-            try self.emitMirPlaceReturnPlan(plan);
         } else if (access_structural_operation) |operation| {
             selected_path.* = .access_structural;
             try self.emitMirAccessStructuralPlan(access_body_plan.?, operation);
@@ -2809,152 +2801,6 @@ pub const CEmitter = struct {
             found = true;
         }
         return found;
-    }
-
-    fn emitMirAggregateAssignmentValue(self: *CEmitter, local_ty: anytype, value: mir_statement_plan.PlaceStoreValue) !void {
-        switch (value) {
-            .array_literal => |literal| {
-                try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(local_ty, .typedef_name)});
-                for (literal.elements[0..literal.element_count], 0..) |element, index| {
-                    if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-                    try self.out.print(self.allocator, "{d}", .{element.value});
-                }
-                try self.out.appendSlice(self.allocator, " } }");
-            },
-            .struct_literal => |literal| {
-                const struct_name = switch (literal.type_fact.result_ty) {
-                    .struct_ => |name| name,
-                    else => return error.UnsupportedCEmission,
-                };
-                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
-                try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(local_ty, .typedef_name)});
-                for (literal.fields[0..literal.field_count], 0..) |field, index| {
-                    if (field.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
-                    if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-                    const declared_field = struct_decl.fields[field.field_index];
-                    try self.out.print(self.allocator, ".{s} = {d}", .{ try self.cIdent(declared_field.name.text), field.value.value });
-                }
-                try self.out.appendSlice(self.allocator, " }");
-            },
-            else => return error.UnsupportedCEmission,
-        }
-    }
-
-    fn emitMirPlaceReturnPlan(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan) !void {
-        if (plan.local_init) |local| {
-            const span = spanFromMirSourcePoint(local.location.source);
-            const local_ty = try self.mirPlaceType(local.value, span);
-            const initializer = try self.mirPlaceAccess(local.value);
-            try self.writeLineDirective(span);
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(local_ty, .typedef_name), try self.cIdent(local.name), initializer });
-        }
-        if (plan.store) |store| {
-            const span = spanFromMirSourcePoint(store.location.source);
-            const target_ty = try self.mirPlaceType(store.target, span);
-            const access = try self.mirPlaceAccess(store.target);
-            try self.writeLineDirective(span);
-            try self.writeIndent();
-            const temp = try self.nextTempName();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp });
-            switch (store.value) {
-                .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
-                .integer_literal => |literal| try self.out.print(self.allocator, "{d}", .{literal.value}),
-                .array_literal => |literal| {
-                    const array = switch (self.resolveAliasType(target_ty).kind) {
-                        .array => |array| array,
-                        else => return error.UnsupportedCEmission,
-                    };
-                    const declared_bound = self.arrayLenTextForExpr(array.len) catch return error.UnsupportedCEmission;
-                    const element_count = std.fmt.parseUnsigned(usize, declared_bound, 10) catch return error.UnsupportedCEmission;
-                    if (element_count != literal.element_count) return error.UnsupportedCEmission;
-                    for (literal.elements[0..literal.element_count]) |element| {
-                        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(element.type_fact.target_ty), self.resolveAliasType(array.child.*))) return error.UnsupportedCEmission;
-                    }
-                    try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(target_ty, .typedef_name)});
-                    for (literal.elements[0..literal.element_count], 0..) |element, index| {
-                        if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-                        try self.out.print(self.allocator, "{d}", .{element.value});
-                    }
-                    try self.out.appendSlice(self.allocator, " } }");
-                },
-                .struct_literal => |literal| try self.emitMirAggregateAssignmentValue(target_ty, .{ .struct_literal = literal }),
-            }
-            try self.out.appendSlice(self.allocator, ";\n");
-            try self.writeIndent();
-            try appendGlobalStorePrefix(self.allocator, self.out, .{ .name = access, .info = try self.globalInfoFromType(target_ty) });
-            try self.out.appendSlice(self.allocator, temp);
-            try appendGlobalStoreSuffix(self.allocator, self.out, .{ .name = access, .info = try self.globalInfoFromType(target_ty) });
-        }
-
-        const return_span = spanFromMirSourcePoint(plan.return_location.source);
-        const return_ty = try self.mirPlaceType(plan.returned, return_span);
-        const access = try self.mirPlaceAccess(plan.returned);
-        try self.writeLineDirective(return_span);
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "return ");
-        switch (plan.returned.root_kind) {
-            .parameter, .local => try self.out.appendSlice(self.allocator, access),
-            .global => try appendGlobalLoadExpr(self.allocator, self.out, access, try self.globalInfoFromType(return_ty)),
-        }
-        try self.out.appendSlice(self.allocator, ";\n");
-    }
-
-    fn mirPlaceAccess(self: *CEmitter, place: mir_statement_plan.Place) ![]const u8 {
-        var access = try std.fmt.allocPrint(self.scratch.allocator(), "{s}", .{try self.cIdent(place.root_name)});
-        for (place.projections[0..place.projection_count], 0..) |projection, projection_index| switch (projection) {
-            .field => |field| access = if (place.root_indirect and projection_index == 0)
-                try std.fmt.allocPrint(self.scratch.allocator(), "{s}->{s}", .{ access, try self.cIdent(field.field_name) })
-            else
-                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ access, try self.cIdent(field.field_name) }),
-            .constant_index => |index| access = if (index.checked)
-                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.elems[mc_check_index_usize({d}, {d})]", .{ access, index.index, index.bound })
-            else
-                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.elems[{d}]", .{ access, index.index }),
-        };
-        return access;
-    }
-
-    fn mirPlaceType(self: *CEmitter, place: mir_statement_plan.Place, span: diagnostics.Span) !ast_bridge.TypeExpr {
-        var ty = if (place.root_kind == .global)
-            (self.globals.get(place.root_name) orelse return error.UnsupportedCEmission).source_ty orelse return error.UnsupportedCEmission
-        else
-            place.root_type_fact.target_ty;
-        if (place.root_indirect) {
-            ty = switch (self.resolveAliasType(ty).kind) {
-                .pointer => |pointer| pointer.child.*,
-                else => return error.UnsupportedCEmission,
-            };
-        }
-        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
-            .field => |field_projection| {
-                const struct_name = self.structTypeNameFromType(ty) orelse return error.UnsupportedCEmission;
-                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
-                if (field_projection.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
-                const field = struct_decl.fields[field_projection.field_index];
-                if (!std.mem.eql(u8, field.name.text, field_projection.field_name)) return error.UnsupportedCEmission;
-                ty = field.ty;
-            },
-            .constant_index => |index| {
-                const array = switch (self.resolveAliasType(ty).kind) {
-                    .array => |array| array,
-                    else => return error.UnsupportedCEmission,
-                };
-                const declared_bound = self.arrayLenTextForExpr(array.len) catch return error.UnsupportedCEmission;
-                const parsed_bound = std.fmt.parseUnsigned(usize, declared_bound, 10) catch return error.UnsupportedCEmission;
-                if (parsed_bound != index.bound or index.index >= index.bound) return error.UnsupportedCEmission;
-                ty = array.child.*;
-            },
-        };
-        _ = span;
-        return ty;
-    }
-
-    fn mirPlacePlanSupported(self: *CEmitter, plan: mir_statement_plan.PlaceReturnPlan, span: diagnostics.Span) bool {
-        _ = self.mirPlaceType(plan.returned, span) catch return false;
-        if (plan.local_init) |local| _ = self.mirPlaceType(local.value, span) catch return false;
-        if (plan.store) |store| _ = self.mirPlaceType(store.target, span) catch return false;
-        return true;
     }
 
     fn noFunctionBodyFallbacksAvailable(self: *const CEmitter) bool {

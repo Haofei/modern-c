@@ -140,7 +140,7 @@ fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
 
 pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
     if (!body.isComplete() or body.terminators.len == 0 or
-        (!llvmTypeSupported(body, return_ty) and !functionSymbolReturnSupported(body, return_ty)))
+        (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty)))
         return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
@@ -1799,15 +1799,16 @@ const Renderer = struct {
             false,
             callableLoadTargetSupported(self.body, expression, load),
         )) return error.InvalidBody;
+        const place = self.body.places[load.place.index()];
         const callable_has_environment = if (expression.result_ty == .value)
-            callableHasEnvironment(self.body, expression.id)
+            callableHasEnvironment(self.body, expression.id) orelse
+                if (mir.executableCallablePlace(self.body.aggregate_types, place)) |signature| signature.has_environment else null
         else
             null;
         const value_ty = if (callable_has_environment) |has_environment|
             if (has_environment) "{ ptr, ptr }" else "ptr"
         else
             try self.typeText(expression.result_ty);
-        const place = self.body.places[load.place.index()];
         const pointer = if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
             try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id })
         else if (computedRawManyDerefPlaceSupported(self.body, place, false))
@@ -2659,7 +2660,7 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .local => |local| localExists(body, local) and
             (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
-        .load => |load| expressionUsedAsIndirectCallee(body, expression.id) and
+        .load => |load| (expressionUsedAsIndirectCallee(body, expression.id) or expressionReturned(body, expression.id)) and
             memoryLoadSupported(body, expression, load),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and
             symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]) and
@@ -2673,6 +2674,14 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
 fn expressionUsedAsIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     for (body.expressions) |candidate| switch (candidate.operation) {
         .indirect_call => |call| if (call.callee.eql(id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn expressionReturned(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    for (body.statements) |statement| switch (statement.operation) {
+        .return_ => |value| if (value != null and value.?.eql(id)) return true,
         else => {},
     };
     return false;
@@ -2694,7 +2703,9 @@ fn callableHasEnvironment(body: *const mir.ExecutableBody, id: mir.ExprId) ?bool
 }
 
 fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
-    if (expression.result_ty != .value or !expressionUsedAsIndirectCallee(body, expression.id) or !placeValid(body, load.place)) return false;
+    if (expression.result_ty != .value or
+        (!expressionUsedAsIndirectCallee(body, expression.id) and !expressionReturned(body, expression.id)) or
+        !placeValid(body, load.place)) return false;
     const place = body.places[load.place.index()];
     if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
     if (mir.executableCallablePlace(body.aggregate_types, place) != null) return true;
@@ -2759,14 +2770,16 @@ fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression
     return identity.kind == .function;
 }
 
-fn functionSymbolReturnSupported(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
+fn callableReturnSupported(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
     if (return_ty != .value) return false;
     var saw_return = false;
     for (body.statements) |statement| switch (statement.operation) {
         .return_ => |value| {
             const id = value orelse return false;
-            if (!expressionValid(body, id) or
-                !functionSymbolExpressionSupported(body, body.expressions[id.index()])) return false;
+            if (!expressionValid(body, id)) return false;
+            const expression = body.expressions[id.index()];
+            if (!functionSymbolExpressionSupported(body, expression) and
+                !callableValueExpressionSupported(body, expression)) return false;
             saw_return = true;
         },
         else => {},
@@ -2809,6 +2822,7 @@ fn indexSupported(
             if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
         } else if (!localArrayIndexBase(body, operation.base) and
             !(expression.block_id.raw == 0 and projectionRootIsLocalArray(body, operation.base)) and
+            !directParameterArrayIndexReturn(body, expression, operation) and
             !directImmutableLocalArrayIndexReturn(body, expression, operation) and
             (!projectionRootIsDirectCall(body, operation.base) or !indexIsDirectReturn(body, expression))) return false;
     }
@@ -2893,6 +2907,22 @@ fn localArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
             return sameValueType(local.ty, expression.result_ty),
         else => {},
     };
+    return false;
+}
+
+fn directParameterArrayIndexReturn(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) bool {
+    if (operation.kind != .fixed_array or !indexIsDirectReturn(body, expression) or !expressionValid(body, operation.base)) return false;
+    const base = body.expressions[operation.base.index()];
+    const local_id = switch (base.operation) {
+        .local => |id| id,
+        else => return false,
+    };
+    for (body.parameters) |parameter| if (parameter.local.eql(local_id))
+        return sameValueType(parameter.ty, base.result_ty) and parameter.type_id.eql(base.type_id);
     return false;
 }
 
@@ -3565,6 +3595,23 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         representationTrapEdgeIsExact(body, expression);
 }
 
+fn completeAggregateCopyPlace(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, is_store: bool) bool {
+    if (mir.executableAggregateCopyAlignment(place.ty) == null) return false;
+    const root_ok = switch (place.root) {
+        .local => |id| localExists(body, id),
+        .symbol => |id| if (symbolIdentity(body, id)) |identity|
+            identity.kind == .global and (!is_store or identity.mutable)
+        else
+            false,
+        .value => false,
+    };
+    if (!root_ok) return false;
+    if (place.projection_count == 0) return true;
+    if (mir.executableFixedArrayIndexPlace(body, place) != null) return true;
+    return place.type_id.isValid() and place.root_type_id.isValid() and
+        place.projection_count <= mir.max_executable_projections;
+}
+
 fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
@@ -3820,24 +3867,17 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     if (!placeValid(body, place_id)) return false;
     const place = body.places[place_id.index()];
     if (place.storage != .ordinary) return false;
-    const expected_alignment = mir.executableStorageAlignment(body.enum_types, ty) orelse aggregate_local: {
-        if (place.projection_count != 0 or access.kind != .plain) return false;
-        switch (place.root) {
-            .local => {},
-            .symbol, .value => return false,
-        }
-        switch (ty) {
-            .array, .struct_, .nullable_value => break :aggregate_local 1,
-            else => return false,
-        }
-    };
+    const aggregate_copy = mir.executableAggregateCopyAlignment(ty) != null;
+    const expected_alignment = mir.executableMemoryAlignment(body.enum_types, ty) orelse return false;
     if (access.alignment != expected_alignment) return false;
+    if (aggregate_copy and access.kind != .plain) return false;
     // LLVM atomic load/store does not accept aggregate values. Aggregate
     // accesses through shared pointer/global storage must remain on the
     // legacy leaf-wise path until executable MIR carries a leaf access plan.
     if (access.kind == .race_unordered and !unorderedMemoryTypeSupported(body, ty) and
         !(allow_unordered_value and ty == .value)) return false;
     if (place.projection_count != 0) {
+        if (aggregate_copy) return sameValueType(place.ty, ty) and completeAggregateCopyPlace(body, place, is_store);
         if (mir.executableFixedArrayIndexPlace(body, place) != null) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
                 .local => .plain,
@@ -3895,7 +3935,9 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
         .local => |id| localAddressable(body, id) and access.kind == .plain,
         .symbol => |id| if (symbolIdentity(body, id)) |identity|
             identity.kind == .global and
-                if (identity.mutable)
+                if (aggregate_copy)
+                    (!is_store or identity.mutable) and access.kind == .plain
+                else if (identity.mutable)
                     access.kind == .race_unordered
                 else
                     !is_store and access.kind == .plain

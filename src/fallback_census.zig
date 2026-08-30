@@ -62,7 +62,6 @@ pub const SelectedPath = enum {
     access_structural,
     sequence_foreach_update,
     sequence_foreach_return,
-    place_return,
     ast_fallback,
     unsupported,
 };
