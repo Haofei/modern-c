@@ -697,8 +697,8 @@ fn unsignedIntegerAtLeast(ty: ValueType, minimum_bits: u16) bool {
 fn valuePreservingIntegerConversion(source: ValueType, target: ValueType) bool {
     if (ValueType.eql(source, target)) return true;
     if (target == .domain_integer and source == .integer and std.mem.eql(u8, target.domain_integer.child, source.integer)) return true;
-    const source_info = ExecutableCastKind.integerInfo(source) orelse return false;
-    const target_info = ExecutableCastKind.integerInfo(target) orelse return false;
+    const source_info = executableIntegerStorageInfo(source) orelse return false;
+    const target_info = executableIntegerStorageInfo(target) orelse return false;
     return source_info.signed == target_info.signed and target_info.bits >= source_info.bits;
 }
 

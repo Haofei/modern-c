@@ -8260,9 +8260,10 @@ const FunctionBuilder = struct {
                 else
                     try self.ensureExecutableExprAs(node.right.*, operand_ty);
                 const optimized_safe_div_mod = (node.op == .div or node.op == .mod) and self.optimize and self.divModProvablySafe(node);
-                const arithmetic: mir_model.ExecutableArithmeticSemantics = if (isWrapPreservingBinary(node.op) and self.exprIsWrap(node.left.*) and self.exprIsWrap(node.right.*))
+                const arithmetic_domain = self.binaryArithmeticDomain(node);
+                const arithmetic: mir_model.ExecutableArithmeticSemantics = if (arithmetic_domain == .wrap)
                     .wrapping
-                else if (isSatPreservingBinary(node.op) and self.exprIsSat(node.left.*) and self.exprIsSat(node.right.*))
+                else if (arithmetic_domain == .sat)
                     .saturating
                 else if (binaryMayOverflow(node.op) and
                     std.meta.activeTag(result_ty) == .integer and !self.binaryIsNoTrapArithmeticDomain(node) and
@@ -11473,7 +11474,19 @@ const FunctionBuilder = struct {
 
     fn exprArithmeticDomain(self: *FunctionBuilder, expr: ast.Expr) ?ArithmeticDomain {
         return switch (expr.kind) {
-            .ident, .member, .deref, .index, .call => if (self.typeExprForExpr(expr)) |ty| arithmeticDomainTypeAlias(ty, self.aliases) else null,
+            .ident => |ident| if (self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text)) |ty|
+                arithmeticDomainTypeAlias(ty, self.aliases)
+            else if (self.typeExprForExpr(expr)) |ty|
+                arithmeticDomainTypeAlias(ty, self.aliases)
+            else
+                null,
+            .call => |call| if (self.conversionCallFactInfo(call)) |conversion|
+                arithmeticDomainTypeAlias(conversion.target_ty, self.aliases)
+            else if (self.typeExprForExpr(expr)) |ty|
+                arithmeticDomainTypeAlias(ty, self.aliases)
+            else
+                null,
+            .member, .deref, .index => if (self.typeExprForExpr(expr)) |ty| arithmeticDomainTypeAlias(ty, self.aliases) else null,
             .grouped => |inner| self.exprArithmeticDomain(inner.*),
             .cast => |node| arithmeticDomainTypeAlias(node.ty.*, self.aliases),
             .binary => |node| self.binaryArithmeticDomain(node),
@@ -16503,9 +16516,10 @@ const FunctionBuilder = struct {
     }
 
     fn binaryIsNoTrapArithmeticDomain(self: *FunctionBuilder, node: anytype) bool {
-        if (isWrapPreservingBinary(node.op) and self.exprIsWrap(node.left.*) and self.exprIsWrap(node.right.*)) return true;
-        if (isSatPreservingBinary(node.op) and self.exprIsSat(node.left.*) and self.exprIsSat(node.right.*)) return true;
-        return false;
+        return switch (self.binaryArithmeticDomain(node) orelse return false) {
+            .wrap, .sat => true,
+            .serial, .counter => false,
+        };
     }
 
     // IEEE floating-point arithmetic never raises a language trap (overflow and
