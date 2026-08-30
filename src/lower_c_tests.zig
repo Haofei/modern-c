@@ -768,8 +768,9 @@ test "lower-c emits local workflow plans without body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_workflow.mc", .{}, false, null);
     const vtable = try cFunctionBody(output.items, "static uint32_t local_vtable_call(uint32_t x, uint32_t y)");
-    try expectContains(vtable, "BinOp op = (BinOp){ .combine = mul };");
-    try expectContains(vtable, "return dispatch(&op, x, y);");
+    try std.testing.expect(isCanonicalExecutableCBody(vtable));
+    try expectContains(vtable, "(BinOp){ mul }");
+    try expectContains(vtable, "dispatch(");
     const scoped = try cFunctionBody(output.items, "static uint32_t scoped_block(uint32_t value)");
     if (isCanonicalExecutableCBody(scoped)) {
         try expectContains(scoped, "combine(");

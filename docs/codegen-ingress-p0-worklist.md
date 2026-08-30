@@ -16,7 +16,7 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
-| strict ratchet | 160/160 admitted, 0 fallback (130 canonical) | 160/160 admitted, 0 fallback (131 canonical) |
+| strict ratchet | 160/160 admitted, 0 fallback (131 canonical) | 160/160 admitted, 0 fallback (131 canonical) |
 | broad repository sweep | 1305/1771 admitted, 466 fallback | 1337/1822 admitted, 485 fallback |
 | canonical bodies | 1234 | 1262 |
 | transitional specialized bodies | 71 | 75 |
@@ -64,6 +64,9 @@ worklist snapshot.
   `access_operation` models, builders and both backend emitters were deleted.
   The strict split is now C 130 canonical / 30 specialized and LLVM 131 / 29;
   only eight specialized plan definitions remain.
+- C canonical aggregate construction now accepts a verifier-identified function
+  symbol in a callable struct field. `local_vtable_call` therefore shares the
+  same executable MIR path already used by LLVM instead of the workflow plan.
 
 ## Remaining producer blockers
 

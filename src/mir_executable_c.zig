@@ -1042,7 +1042,8 @@ fn structConstructionSupported(
         seen[field_index] = true;
         const operand = expressionById(body, operand_id) orelse return false;
         if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
-            !operand.type_id.eql(shape.field_type_ids[field_index]) or !supportsType(body, operand.result_ty)) return false;
+            !operand.type_id.eql(shape.field_type_ids[field_index]) or
+            !(supportsType(body, operand.result_ty) or functionSymbolExpressionSupported(body, operand.*))) return false;
     }
     for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;

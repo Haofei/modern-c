@@ -8,7 +8,7 @@ and writes onto canonical executable places.
 
 - **P0 `function-body-fallback`** — active. The strict ratchet corpus now admits
   **160/160 C** and **160/160 LLVM** functions with zero fallback and zero
-  unsupported bodies: C uses **130 canonical / 30 specialized**, LLVM uses
+  unsupported bodies: C uses **131 canonical / 29 specialized**, LLVM uses
   **131 canonical / 29 specialized**. The ratchet is locked at 100%. This is a
   qualification checkpoint, not the deletion boundary: the current 522-root
   broad census finds **466/1771 C** and **485/1822 LLVM** distinct functions
