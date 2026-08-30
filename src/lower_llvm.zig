@@ -1446,9 +1446,6 @@ const LlvmEmitter = struct {
             break :cleanup_edges true;
         };
         if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(fn_mir)) return false;
-        if (!self.noFunctionBodyFallbacksAvailable()) for (fn_mir.executable_body.places) |place| {
-            if (mir.executableAggregatePointerFieldDerefPlace(&fn_mir.executable_body, place, false) != null) return false;
-        };
 
         const call_abi_plan = (try self.buildExecutableDirectCallAbiPlan(fn_mir)) orelse return false;
         const rendered = mir_executable_llvm.renderWithCallAbi(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty, call_abi_plan) catch |err| switch (err) {
@@ -1496,9 +1493,56 @@ const LlvmEmitter = struct {
         for (fn_mir.pointer_provenance_facts) |fact| {
             try self.emitMirPointerProvenanceConsumedComment(fact);
         }
+        try self.emitExecutableAggregateReturnPointerFacts(&fn_mir.executable_body);
         try self.out.appendSlice(self.allocator, rendered);
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
+    }
+
+    fn emitExecutableAggregateReturnPointerFacts(
+        self: *LlvmEmitter,
+        body: *const mir.ExecutableBody,
+    ) !void {
+        for (body.places) |place| {
+            const deref = mir.executableAggregatePointerFieldDerefPlace(body, place, false) orelse continue;
+            const local_id = switch (place.root) {
+                .local => |id| id,
+                .symbol, .value => continue,
+            };
+            var initializer: ?mir.ExprId = null;
+            for (body.statements) |statement| switch (statement.operation) {
+                .local_init => |init| if (init.local.eql(local_id)) {
+                    if (initializer != null or init.value == null) {
+                        initializer = null;
+                        break;
+                    }
+                    initializer = init.value;
+                },
+                else => {},
+            };
+            const value_id = initializer orelse continue;
+            if (!value_id.isValid() or value_id.index() >= body.expressions.len) continue;
+            const value = body.expressions[value_id.index()];
+            const call = switch (value.operation) {
+                .direct_call => |operation| operation,
+                else => continue,
+            };
+            if (!call.callee.isValid() or call.callee.index() >= body.symbols.len) continue;
+            const callee = body.symbols[call.callee.index()];
+            var aggregate_index: ?usize = null;
+            for (body.aggregate_types, 0..) |candidate, index| if (candidate.type_id.eql(place.root_type_id)) {
+                aggregate_index = index;
+                break;
+            };
+            const shape = body.aggregate_types[aggregate_index orelse continue];
+            if (deref.field_index >= shape.field_count) continue;
+            const field_path = shape.field_spellings[deref.field_index];
+            for (self.mir_module.aggregate_return_pointer_facts) |fact| {
+                if (!std.mem.eql(u8, fact.callee, callee.spelling) or
+                    !std.mem.eql(u8, fact.field_path, field_path)) continue;
+                try self.emitMirAggregateReturnPointerFactConsumedComment(fact);
+            }
+        }
     }
 
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
@@ -1786,10 +1830,6 @@ const LlvmEmitter = struct {
             else => {},
         };
         return .{ .target = target, .direct_calls = entries };
-    }
-
-    fn noFunctionBodyFallbacksAvailable(self: *const LlvmEmitter) bool {
-        return self.function_bodies.function_body_fallbacks.len == 0;
     }
 
     fn simpleMirEntryBlockFoldsLocal(fn_mir: mir.Function) bool {

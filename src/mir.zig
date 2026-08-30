@@ -1050,7 +1050,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             .no_lang_trap = false,
                             .irq_context = false,
                         };
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -1082,7 +1082,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -6146,6 +6146,7 @@ const FunctionBuilder = struct {
     global_type_exprs: *const std.StringHashMap(ast.TypeExpr),
     mutable_globals: *const std.StringHashMap(void),
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
+    aggregate_return_pointer_facts: []const AggregateReturnPointerFact,
     blocks: std.ArrayList(MutableBlock),
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
@@ -6251,7 +6252,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -6286,6 +6287,7 @@ const FunctionBuilder = struct {
             .global_type_exprs = global_type_exprs,
             .mutable_globals = mutable_globals,
             .pointer_return_summaries = pointer_return_summaries,
+            .aggregate_return_pointer_facts = aggregate_return_pointer_facts,
             .blocks = blocks,
             .trap_edges = .empty,
             .contract_regions = .empty,
@@ -6398,7 +6400,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -6429,6 +6431,7 @@ const FunctionBuilder = struct {
             .global_type_exprs = global_type_exprs,
             .mutable_globals = mutable_globals,
             .pointer_return_summaries = pointer_return_summaries,
+            .aggregate_return_pointer_facts = aggregate_return_pointer_facts,
             .blocks = blocks,
             .trap_edges = .empty,
             .contract_regions = .empty,
@@ -9887,7 +9890,9 @@ const FunctionBuilder = struct {
         else if (slice_index)
             .race_unordered
         else if (self.executablePlaceHasDeref(place_expr))
-            if (root) |name| local_alias: {
+            if (self.executableAggregatePointerFieldAccessKind(place_expr)) |provenance_kind|
+                provenance_kind
+            else if (root) |name| local_alias: {
                 const local = self.executable_local_ids.get(name) orelse break :local_alias .race_unordered;
                 const root_ty = self.local_types.get(name) orelse break :local_alias .race_unordered;
                 const root_type_id = self.type_ids.get(root_ty) orelse break :local_alias .race_unordered;
@@ -9912,6 +9917,24 @@ const FunctionBuilder = struct {
         else
             .plain;
         return .{ .kind = kind, .alignment = alignment };
+    }
+
+    fn executableAggregatePointerFieldAccessKind(
+        self: *FunctionBuilder,
+        input: ast.Expr,
+    ) ?mir_model.ExecutableMemoryAccessKind {
+        var expr = input;
+        while (expr.kind == .grouped) expr = expr.kind.grouped.*;
+        const pointer_expr = switch (expr.kind) {
+            .deref => |inner| inner.*,
+            else => return null,
+        };
+        const path = self.directLocalAggregateMemberPath(pointer_expr) orelse return null;
+        const live = self.livePointerProvenanceForField(path.local_name, path.field_path) orelse return null;
+        return switch (live.provenance) {
+            .local_storage => .plain,
+            .global_storage, .unknown => .race_unordered,
+        };
     }
 
     fn executablePlaceHasDeref(self: *FunctionBuilder, expr: ast.Expr) bool {
@@ -15746,7 +15769,51 @@ const FunctionBuilder = struct {
             if (self.directAggregateCopySourceName(initializer, struct_name)) |source_name| {
                 if (std.mem.eql(u8, name.text, source_name)) continue;
                 try self.copyLiveAggregatePointerProvenance(name.text, source_name, .none, initializer.span);
+                continue;
             }
+            try self.recordAggregateReturnPointerProvenanceForLocal(name.text, initializer);
+        }
+    }
+
+    fn recordAggregateReturnPointerProvenanceForLocal(
+        self: *FunctionBuilder,
+        subject: []const u8,
+        input: ast.Expr,
+    ) !void {
+        var initializer = input;
+        while (initializer.kind == .grouped or initializer.kind == .move_expr) initializer = switch (initializer.kind) {
+            .grouped => |inner| inner.*,
+            .move_expr => |inner| inner.*,
+            else => unreachable,
+        };
+        const call = switch (initializer.kind) {
+            .call => |value| value,
+            else => return,
+        };
+        const callee = calleeIdentName(call.callee.*) orelse return;
+        for (self.aggregate_return_pointer_facts) |fact| {
+            if (!std.mem.eql(u8, fact.callee, callee) or fact.provenance != .global_storage) continue;
+            const owned_path = (try self.ownedPointerFactFieldPath(fact.field_path)).?;
+            try self.pointer_provenance_facts.append(self.allocator, .{
+                .subject = subject,
+                .field_path = owned_path,
+                .element_index = null,
+                .storage = null,
+                .provenance = fact.provenance,
+                .pointer_shape = fact.pointer_shape,
+                .invalidation_reason = .none,
+                .invalidation_policy = .invalidate_on_mutation_escape_or_call,
+                .source = .{ .line = initializer.span.line, .column = initializer.span.column },
+            });
+            self.clearLivePointerFieldProvenance(subject, fact.field_path);
+            try self.live_pointer_provenance.append(self.allocator, .{
+                .subject = subject,
+                .field_path = owned_path,
+                .element_index = null,
+                .pointer_shape = fact.pointer_shape,
+                .provenance = fact.provenance,
+                .storage = null,
+            });
         }
     }
 
