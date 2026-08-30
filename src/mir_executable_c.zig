@@ -493,10 +493,34 @@ fn emitExpressionOperation(
         },
         .index => |index| {
             if (!indexSupported(body, expression.*, index)) return error.InvalidExpression;
-            const slice_scalar = if (index.kind == .slice)
-                scalarMemoryInfo(expression.result_ty) orelse return error.UnsupportedType
+            const slice_scalar = if (index.kind == .slice) scalarMemoryInfo(expression.result_ty) else null;
+            const slice_aggregate = if (index.kind == .slice and slice_scalar == null)
+                raceAggregateLoadShape(body, expression.*) orelse return error.UnsupportedType
             else
                 null;
+            if (slice_aggregate) |shape| {
+                try out.appendSlice(allocator, "((");
+                try appendCType(allocator, out, body, expression.result_ty);
+                try out.appendSlice(allocator, "){ ");
+                for (shape.field_types[0..shape.field_count], shape.field_spellings[0..shape.field_count], 0..) |field_ty, field_name, field_index| {
+                    if (field_index != 0) try out.appendSlice(allocator, ", ");
+                    const scalar = scalarMemoryInfo(field_ty) orelse return error.UnsupportedType;
+                    try out.print(allocator, ".{s} = (({s})mc_race_load_{s}(&(", .{ field_name, scalar.c_type, scalar.helper_suffix });
+                    try out.append(allocator, '(');
+                    try emitExpression(allocator, out, body, index.base, depth + 1);
+                    try out.appendSlice(allocator, ").ptr[");
+                    if (index.checked) try out.appendSlice(allocator, "mc_check_index_usize(");
+                    try emitExpression(allocator, out, body, index.index, depth + 1);
+                    if (index.checked) {
+                        try out.appendSlice(allocator, ", (");
+                        try emitExpression(allocator, out, body, index.base, depth + 1);
+                        try out.appendSlice(allocator, ").len)");
+                    }
+                    try out.print(allocator, "].{s})))", .{field_name});
+                }
+                try out.appendSlice(allocator, " })");
+                return;
+            }
             if (slice_scalar) |scalar| try out.print(allocator, "(({s})mc_race_load_{s}(&(", .{ scalar.c_type, scalar.helper_suffix });
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, index.base, depth + 1);
@@ -1116,10 +1140,10 @@ fn indexSupported(
         },
         .slice => {
             if (operation.bound != null) return false;
-            // Slice indexing is emitted through the race-tolerant scalar
-            // load helpers. Aggregate elements require a separate copy
-            // lowering and must remain on the legacy path until that exists.
-            if (scalarMemoryInfo(expression.result_ty) == null) return false;
+            // Slice reads preserve the race-tolerant access contract. Scalars
+            // use one helper load; declared structs are rebuilt from verified
+            // scalar fields instead of performing a racy aggregate copy.
+            if (scalarMemoryInfo(expression.result_ty) == null and raceAggregateLoadShape(body, expression) == null) return false;
             const child = switch (base.result_ty) {
                 .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
                 .slice => |name| name,
@@ -1138,6 +1162,16 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn raceAggregateLoadShape(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?*const mir.ExecutableAggregateType {
+    const shape = aggregateType(body, expression.type_id) orelse return null;
+    if (shape.construction != .declared_struct or shape.field_count == 0 or
+        !sameValueType(shape.ty, expression.result_ty)) return null;
+    for (shape.field_types[0..shape.field_count], shape.field_spellings[0..shape.field_count]) |field_ty, field_name| {
+        if (scalarMemoryInfo(field_ty) == null or !isSafeIdentifier(field_name)) return null;
+    }
+    return shape;
 }
 
 fn parameterArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {

@@ -15590,7 +15590,9 @@ test "lower-c indexed aggregate scalar fields lower race-tolerantly" {
     try appendCTest("emit_c_indexed_member_access.mc", source, &output);
 
     const slice_load_body = try cFunctionBody(output.items, "static uint32_t slice_member_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
-    try expectContains(slice_load_body, "return ((uint32_t)mc_race_load_u32(&(cells.ptr[mc_check_index_usize(i, cells.len)].value)));");
+    try expectContains(slice_load_body, "/* canonical executable MIR */");
+    try expectContains(slice_load_body, "mc_race_load_u32");
+    try expectContains(slice_load_body, ".value");
     const slice_store_body = try cFunctionBody(output.items, "static void slice_member_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, uint32_t value)");
     try expectContains(slice_store_body, "mc_race_store_u32(&(cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, ".value), (uint32_t)mc_tmp");
@@ -16103,10 +16105,10 @@ test "lower-c aggregate whole-element access lowers recursively" {
     defer slice_load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_slice_aggregate_load.mc", slice_load_source, &slice_load_output);
     const slice_load_body = try cFunctionBody(slice_load_output.items, "static Cell slice_cell_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
-    try expectContains(slice_load_body, "uintptr_t mc_idx");
-    try expectContains(slice_load_body, "Cell * mc_ptr");
-    try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
+    try expectContains(slice_load_body, "/* canonical executable MIR */");
+    try expectContains(slice_load_body, "mc_check_index_usize(");
     try expectContains(slice_load_body, "mc_race_load_u32");
+    try expectContains(slice_load_body, "return mc_exec_tmp_");
 
     const slice_store_source =
         \\struct Cell {
@@ -22199,8 +22201,10 @@ test "C race-tolerant aggregate slice loads parenthesize generated pointer expre
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("emit_c_aggregate_slice_race_parentheses.mc", source, &output);
-    try expectContains(output.items, "mc_race_load_u32(&((&mc_tmp0.ptr[mc_check_index_usize(");
-    try expectContains(output.items, ")])->x)))");
+    try expectContains(output.items, "/* canonical executable MIR */");
+    try expectContains(output.items, "mc_race_load_u32(&((mc_exec_tmp_");
+    try expectContains(output.items, ".ptr[mc_check_index_usize(");
+    try expectContains(output.items, "].x)))");
 }
 
 test "C canonical executable MIR owns scalar integer conversions" {

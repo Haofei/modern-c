@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1439/1827 C functions and 1455/1879 LLVM functions.
-  The remaining 388 C and 424 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1440/1827 C functions and 1456/1879 LLVM functions.
+  The remaining 387 C and 423 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -32,6 +32,10 @@ Current leading blockers are `trap_projection`, `unsupported_statement`,
 `unsupported_member`, `general_switch`, string and
 aggregate construction, `try`, and unsupported calls. Renderer rejection is a
 smaller secondary group.
+
+Declared-struct slice element reads with scalar fields are no longer part of
+that renderer group. Canonical C and LLVM rebuild the value from unordered
+field loads, preserving the prior race-tolerant behavior.
 
 The producer no longer carries a one-off slice-store completion recognizer.
 The executable-body verifier promotes every valid body without an explicit

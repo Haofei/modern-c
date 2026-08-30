@@ -1020,8 +1020,27 @@ const Renderer = struct {
         }
         const result = try self.temp();
         if (operation.kind == .slice) {
-            const alignment = mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty) orelse return error.InvalidBody;
-            try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ result, result_ty, element_pointer, alignment });
+            if (mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty)) |alignment| {
+                try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ result, result_ty, element_pointer, alignment });
+            } else {
+                const shape = raceAggregateLoadShape(self.body, expression) orelse return error.InvalidBody;
+                var aggregate_value: []const u8 = "zeroinitializer";
+                for (shape.field_types[0..shape.field_count], 0..) |field_ty, field_index| {
+                    const field_type = try self.typeText(field_ty);
+                    const alignment = mir.ExecutableMemoryAccess.scalarAlignment(field_ty) orelse return error.InvalidBody;
+                    const field_pointer = try self.temp();
+                    const field_value = try self.temp();
+                    const inserted = if (field_index + 1 == shape.field_count) result else try self.temp();
+                    try self.output.print(
+                        self.allocator,
+                        "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n" ++
+                            "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n" ++
+                            "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n",
+                        .{ field_pointer, result_ty, element_pointer, field_index, field_value, field_type, field_pointer, alignment, inserted, result_ty, aggregate_value, field_type, field_value, field_index },
+                    );
+                    aggregate_value = inserted;
+                }
+            }
         } else {
             try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, result_ty, element_pointer });
         }
@@ -3174,7 +3193,8 @@ fn indexSupported(
                 .slice => |name| name,
                 else => return false,
             };
-            if (!std.mem.eql(u8, child, expression.result_ty.name()) or !llvmTypeSupported(body, base.result_ty)) return false;
+            if (!std.mem.eql(u8, child, expression.result_ty.name()) or !llvmTypeSupported(body, base.result_ty) or
+                (mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty) == null and raceAggregateLoadShape(body, expression) == null)) return false;
         },
     }
     if (operation.checked) return indexTrapEdgeIsExact(body, expression);
@@ -3187,6 +3207,16 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn raceAggregateLoadShape(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?*const mir.ExecutableAggregateType {
+    const shape = aggregateType(body, expression.type_id) orelse return null;
+    if (shape.construction != .declared_struct or shape.field_count == 0 or
+        !sameValueType(shape.ty, expression.result_ty)) return null;
+    for (shape.field_types[0..shape.field_count]) |field_ty| {
+        if (mir.ExecutableMemoryAccess.scalarAlignment(field_ty) == null or !llvmTypeSupported(body, field_ty)) return null;
+    }
+    return shape;
 }
 
 fn parameterArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
