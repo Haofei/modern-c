@@ -8206,18 +8206,14 @@ const FunctionBuilder = struct {
     }
 
     fn internExecutableLocal(self: *FunctionBuilder, spelling: []const u8) !LocalId {
-        const entry = try self.executable_local_ids.getOrPut(spelling);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = LocalId.fromIndex(self.executable_locals.items.len);
-            try self.executable_locals.append(self.allocator, .{ .id = entry.value_ptr.*, .spelling = spelling });
-        } else {
-            // The legacy function builder resolves locals by spelling and has
-            // no lexical generation table. Never claim the syntax-free body is
-            // complete when a declaration shadows/redeclares an existing
-            // spelling; a future scoped LocalId producer can reopen this case.
-            self.executable_supported = false;
-        }
-        return entry.value_ptr.*;
+        // LocalId identifies a declaration generation, not a spelling. MC
+        // permits a name to be reused after its lexical scope ends, so every
+        // declaration gets a fresh monotonically increasing identity while
+        // the lookup map points expressions at the currently visible one.
+        const id = LocalId.fromIndex(self.executable_locals.items.len);
+        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling });
+        try self.executable_local_ids.put(spelling, id);
+        return id;
     }
 
     fn appendSyntheticExecutableLocal(self: *FunctionBuilder, prefix: []const u8) !LocalId {

@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1440/1827 admitted | 1456/1879 admitted |
-| AST fallback | 387 | 423 |
+| broad sweep | 1440/1827 admitted | 1472/1879 admitted |
+| AST fallback | 387 | 407 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -38,6 +38,11 @@ Slice indexing of a declared struct whose fields are scalar is also canonical.
 Both renderers rebuild the aggregate from race-tolerant unordered field loads,
 so the cutover preserves the legacy access contract without a racy whole-value
 copy. `inferred_call_slice_element` is canonical in both backends.
+
+`LocalId` now identifies a declaration generation rather than a source
+spelling. Disjoint lexical scopes can reuse a name without collapsing LLVM
+allocas or types; this retired 16 LLVM-only fallbacks while leaving the C
+canonical path unchanged.
 
 The parameter-pointee fixed-array/address family is also closed. A leading
 typed parameter dereference is part of the shared fixed-array place metadata;
