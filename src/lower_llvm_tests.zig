@@ -510,7 +510,8 @@ test "LLVM local aggregate place updates return from MIR without body fallback" 
     try expectContains(field_body, "insertvalue { i32, i32 } zeroinitializer, i32 1, 0");
     try expectContains(field_body, "insertvalue { i32, i32 } %mc_expr_tmp_");
     try expectContains(field_body, "store i32 %mc_arg_0, ptr %mc_expr_tmp_");
-    try expectContains(field_body, "extractvalue { i32, i32 } %mc_expr_tmp_");
+    try expectContains(field_body, "getelementptr inbounds { i32, i32 }");
+    try expectContains(field_body, "load i32, ptr %mc_expr_tmp_");
     try expectContains(field_body, "alloca { i32, i32 }");
 
     const nested_array_body = try llvmFunctionBody(output.items, "define internal i32 @assign_nested_array");
@@ -2744,12 +2745,12 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectNotContains(read, "alloca");
     const read_global = try llvmFunctionBody(output.items, "define internal i32 @read_local_global");
     try expectContains(read_global, "load { { i32, i32 } }, ptr @box");
-    try expectContains(read_global, "extractvalue { { i32, i32 } }");
-    try expectContains(read_global, ", 1");
+    try expectContainsAny(read_global, &.{ "extractvalue { { i32, i32 } }", "getelementptr inbounds { { i32, i32 } }" });
+    try expectContains(read_global, "i32 1");
     const read_parameter = try llvmFunctionBody(output.items, "define internal i32 @read_local_parameter");
-    try expectContains(read_parameter, "extractvalue { { i32, i32 } } %mc_expr_tmp_0, 0");
-    try expectContains(read_parameter, "extractvalue { i32, i32 } %mc_expr_tmp_");
-    try expectContains(read_parameter, ", 0");
+    try expectContains(read_parameter, "; canonical executable MIR");
+    try expectContains(read_parameter, "getelementptr inbounds { { i32, i32 } }");
+    try expectContains(read_parameter, "i32 0");
     try expectContains(read_parameter, "alloca { { i32, i32 } }");
 }
 
@@ -13531,7 +13532,7 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(pointer_store_body, "store i32 %x, ptr %");
 
     const pointer_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_pointer_load");
-    try expectContains(pointer_load_body, "store ptr @shared_counter, ptr %gp.addr.");
+    try expectContains(pointer_load_body, "store ptr @shared_counter, ptr %mc_local_");
     try expectContains(pointer_load_body, "; mir pointer_provenance consumed fn=possibly_racing_pointer_load subject=gp provenance=global_storage reason=none");
     try expectContains(pointer_load_body, "load atomic i32, ptr %");
     try expectContains(pointer_load_body, " unordered, align 4");
@@ -14876,7 +14877,7 @@ test "LLVM slice scalar index access lowers race-tolerantly" {
     try expectNotContains(local_body, " atomic ");
 }
 
-test "LLVM access-plan slice bucket lowers without function body fallback" {
+test "LLVM canonical slice bucket lowers without function body fallback" {
     const source =
         \\fn read_slice(xs: []const u8, i: usize) -> u8 { return xs[i]; }
         \\fn read_literal(xs: []const u8) -> u8 { return xs[0]; }
@@ -14907,7 +14908,7 @@ test "LLVM access-plan slice bucket lowers without function body fallback" {
     try expectContains(direct_body, "load atomic i8, ptr %");
 }
 
-test "LLVM structural access plan materializes locals and addresses without body fallback" {
+test "LLVM canonical access lowering materializes locals and addresses without body fallback" {
     const source =
         \\struct Holder { value: u32 }
         \\global shared_holder: Holder = .{ .value = 9 };
@@ -14927,12 +14928,12 @@ test "LLVM structural access plan materializes locals and addresses without body
     try appendLlvmTestNoFunctionBodyFallback("llvm_structural_access_plan.mc", source, &output);
 
     const global_field = try llvmFunctionBody(output.items, "define internal i32 @global_field_address");
-    try expectContains(global_field, "getelementptr { i32 }, ptr @shared_holder");
+    try expectContains(global_field, "getelementptr inbounds { i32 }, ptr @shared_holder");
     try expectContains(global_field, "load atomic i32");
 
     const local_array = try llvmFunctionBody(output.items, "define internal i32 @local_array_address");
     try expectContains(local_array, "alloca [2 x i32]");
-    try expectContains(local_array, "getelementptr [2 x i32]");
+    try expectContains(local_array, "getelementptr inbounds [2 x i32]");
 
     const window = try llvmFunctionBody(output.items, "define internal i8 @array_window");
     try expectContains(window, "call void @mc_trap_Bounds()");
@@ -14948,7 +14949,7 @@ test "LLVM structural access plan materializes locals and addresses without body
     try expectContains(array, "load i8");
 }
 
-test "LLVM structural access plan lowers store-return and range builtin terminals without body fallback" {
+test "LLVM canonical access lowering handles store-return and range terminals without body fallback" {
     const source =
         \\struct Pair { left: u32, right: u32 }
         \\global pair: Pair = .{ .left = 1, .right = 2 };
@@ -14965,23 +14966,23 @@ test "LLVM structural access plan lowers store-return and range builtin terminal
     try appendLlvmTestNoFunctionBodyFallback("llvm_structural_access_terminals.mc", source, &output);
 
     const global_field = try llvmFunctionBody(output.items, "define internal i32 @address_global_field");
-    try expectContains(global_field, "store atomic i32 %value");
-    try expectContains(global_field, "getelementptr { i32, i32 }, ptr @pair, i64 0, i32 1");
+    try expectContains(global_field, "store atomic i32 %mc_arg_0");
+    try expectContains(global_field, "getelementptr inbounds { i32, i32 }, ptr @pair, i32 0, i32 1");
     try expectContains(global_field, "load atomic i32");
 
     const array_element = try llvmFunctionBody(output.items, "define internal i32 @address_array_element");
     try expectContains(array_element, "alloca [2 x i32]");
-    try expectContains(array_element, "store atomic i32 %value");
+    try expectContains(array_element, "store i32 %mc_arg_0");
     try expectContains(array_element, "load i32");
 
     const field = try llvmFunctionBody(output.items, "define internal i32 @address_field");
     try expectContains(field, "alloca { i32, i32 }");
-    try expectContains(field, "store atomic i32 %value");
+    try expectContains(field, "store i32 %mc_arg_0");
     try expectContains(field, "load i32");
 
     const global_pointer = try llvmFunctionBody(output.items, "define internal i32 @write_through_global_pointer");
     try expectContains(global_pointer, "load atomic ptr, ptr @shared_ptr");
-    try expectContains(global_pointer, "store atomic i32 %value");
+    try expectContains(global_pointer, "store atomic i32 %mc_arg_0");
     try expectContains(global_pointer, "load atomic i32, ptr @shared");
 
     const range = try llvmFunctionBody(output.items, "define internal i64 @slice_from_slice");
@@ -16421,14 +16422,14 @@ test "LLVM direct pointer locals without MIR facts lower conservatively" {
     try appendLlvmTestWithoutPointerProvenanceFacts("llvm_missing_pointer_provenance.mc", source, &cleared, &output);
 
     const initializer_body = try llvmFunctionBody(output.items, "define internal i32 @direct_initializer_requires_mir_fact");
-    try expectContains(initializer_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectContains(initializer_body, "store ptr @shared_counter, ptr %");
     try expectNotContains(initializer_body, "; mir pointer_provenance consumed");
     try expectContains(initializer_body, "load atomic i32, ptr %");
     try expectContains(initializer_body, " unordered, align 4");
     try expectNotContains(initializer_body, "load i32, ptr %");
 
     const assignment_body = try llvmFunctionBody(output.items, "define internal i32 @direct_assignment_requires_mir_fact");
-    try expectContains(assignment_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectContains(assignment_body, "store ptr @shared_counter, ptr %");
     try expectNotContains(assignment_body, "; mir pointer_provenance consumed");
     try expectContains(assignment_body, "load atomic i32, ptr %");
     try expectContains(assignment_body, " unordered, align 4");

@@ -64,7 +64,7 @@ def main() -> None:
         fail(f"fine ranking omitted call_targets: {text!r}")
 
     canonical = record("canonical", status="admitted", selected_path="canonical")
-    specialized = record("specialized", status="admitted", selected_path="access_structural")
+    specialized = record("specialized", status="admitted", selected_path="sequence_foreach_return")
     selected_summary = report.summarize_backend([canonical, specialized])
     if selected_summary["canonical_admitted"] != 1 or selected_summary["specialized_admitted"] != 1:
         fail(f"selected-path split is incorrect: {selected_summary!r}")
@@ -73,7 +73,7 @@ def main() -> None:
     with redirect_stdout(output):
         report.report_backend("c", [canonical, specialized])
     text = output.getvalue()
-    if "canonical emitter   :     1" not in text or "specialized MIR     :     1" not in text or "access_structural" not in text:
+    if "canonical emitter   :     1" not in text or "specialized MIR     :     1" not in text or "sequence_foreach_return" not in text:
         fail(f"selected-path report is incomplete: {text!r}")
 
     print(

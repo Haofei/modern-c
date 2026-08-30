@@ -177,6 +177,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     .atomic_load, .atomic_update, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     .try_unwrap => if (!tryUnwrapTrapEdgeIsExact(body, owner)) return false,
                     .index => |operation| if (!operation.checked or !indexTrapEdgeIsExact(body, owner)) return false,
+                    .range_slice => |operation| if (!operation.checked or !rangeSliceTrapEdgeIsExact(body, owner)) return false,
                     .builtin_call => |call| if (call.kind == .conversion_trap_from) {
                         if (!builtinTrapConversionEdgeIsExact(body, owner)) return false;
                     } else if (!representationTrapEdgeIsExact(body, owner)) return false,
@@ -418,6 +419,8 @@ const Renderer = struct {
                 const value = try self.emitExpression(store.value);
                 const pointer = indexed_pointer orelse if (computedRawManyDerefPlaceSupported(self.body, place, true))
                     try self.emitComputedRawManyDerefPointer(place)
+                else if (mir.executableGlobalPointerDerefPlace(self.body, place, true))
+                    try self.emitGuardedGlobalPointerStorePointer(statement, store.place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
                 else if (mir.executableAggregateFieldPlace(
@@ -582,7 +585,8 @@ const Renderer = struct {
             .struct_ => |aggregate| try self.emitStruct(expression, aggregate),
             .member => |member| try self.emitMember(expression, member),
             .index => |index| try self.emitIndex(expression, index),
-            .range_slice, .unsupported => return error.Unsupported,
+            .range_slice => |range| try self.emitRangeSlice(expression, range),
+            .unsupported => return error.Unsupported,
         };
         self.values[id.index()] = result;
         return result;
@@ -916,6 +920,87 @@ const Renderer = struct {
             try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, result_ty, element_pointer });
         }
         return .{ .ty = result_ty, .spelling = result };
+    }
+
+    fn emitRangeSlice(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operation: @FieldType(mir.ExecutableExpression.Operation, "range_slice"),
+    ) RenderError!Value {
+        if (!rangeSliceSupported(self.body, expression, operation)) return error.InvalidBody;
+        const base_expression = self.body.expressions[operation.base.index()];
+        const start = try self.emitExpression(operation.start);
+        const end = try self.emitExpression(operation.end);
+        if (!std.mem.eql(u8, start.ty, "i64") or !std.mem.eql(u8, end.ty, "i64")) return error.InvalidBody;
+
+        var pointer: []const u8 = undefined;
+        var length: []const u8 = undefined;
+        var element_value_ty: mir.ValueType = undefined;
+        switch (base_expression.result_ty) {
+            .array => |array| {
+                const local_id = rangeSliceBaseLocal(self.body, operation.base) orelse return error.InvalidBody;
+                const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+                if (!local.addressable) return error.InvalidBody;
+                const aggregate = aggregateType(self.body, base_expression.type_id) orelse return error.InvalidBody;
+                if (aggregate.field_count == 0 or array.length == null) return error.InvalidBody;
+                pointer = local.storage;
+                length = try std.fmt.allocPrint(self.allocator, "{d}", .{array.length.?});
+                element_value_ty = aggregate.field_types[0];
+            },
+            .pointer, .slice => {
+                const base = try self.emitExpression(operation.base);
+                if (!std.mem.eql(u8, base.ty, "{ ptr, i64 }")) return error.InvalidBody;
+                pointer = try self.temp();
+                length = try self.temp();
+                try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n", .{
+                    pointer,
+                    base.spelling,
+                    length,
+                    base.spelling,
+                });
+                const result_shape = switch (expression.result_ty) {
+                    .pointer => |shape| shape,
+                    else => return error.InvalidBody,
+                };
+                element_value_ty = rawManyElementValueType(self.body, result_shape.child) orelse return error.InvalidBody;
+            },
+            else => return error.InvalidBody,
+        }
+        if (operation.checked) {
+            const edge = rangeSliceTrapEdge(self.body, expression) orelse return error.InvalidBody;
+            const ordered = try self.temp();
+            const bounded = try self.temp();
+            const valid = try self.temp();
+            const continuation = try std.fmt.allocPrint(self.allocator, "mc_range_ready_{d}", .{expression.id.raw});
+            try self.output.print(
+                self.allocator,
+                "  {s} = icmp ule i64 {s}, {s}\n" ++
+                    "  {s} = icmp ule i64 {s}, {s}\n" ++
+                    "  {s} = and i1 {s}, {s}\n" ++
+                    "  br i1 {s}, label %{s}, label %mc_block_{d}\n" ++
+                    "{s}:\n",
+                .{ ordered, start.spelling, end.spelling, bounded, end.spelling, length, valid, ordered, bounded, valid, continuation, edge.trap_block.raw, continuation },
+            );
+        }
+        const element_ty = try self.typeText(element_value_ty);
+        const data = try self.temp();
+        const slice_len = try self.temp();
+        const with_pointer = try self.temp();
+        const result = try self.temp();
+        if (base_expression.result_ty == .array) {
+            const aggregate_ty = try self.typeText(base_expression.result_ty);
+            try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ data, aggregate_ty, pointer, start.spelling });
+        } else {
+            try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ data, element_ty, pointer, start.spelling });
+        }
+        try self.output.print(
+            self.allocator,
+            "  {s} = sub i64 {s}, {s}\n" ++
+                "  {s} = insertvalue {{ ptr, i64 }} zeroinitializer, ptr {s}, 0\n" ++
+                "  {s} = insertvalue {{ ptr, i64 }} {s}, i64 {s}, 1\n",
+            .{ slice_len, end.spelling, start.spelling, with_pointer, data, result, with_pointer, slice_len },
+        );
+        return .{ .ty = "{ ptr, i64 }", .spelling = result };
     }
 
     fn literalValue(self: *Renderer, ty: []const u8, literal: mir.ExecutableLiteral) RenderError!Value {
@@ -1813,6 +1898,8 @@ const Renderer = struct {
             try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id })
         else if (computedRawManyDerefPlaceSupported(self.body, place, false))
             try self.emitComputedRawManyDerefPointer(place)
+        else if (mir.executableGlobalPointerDerefPlace(self.body, place, false))
+            try self.emitGuardedGlobalPointer(expression, load.place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
         else if (mir.executableAggregateFieldPlace(
@@ -2005,6 +2092,9 @@ const Renderer = struct {
                 .ty = "ptr",
                 .spelling = try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id }),
             };
+        }
+        if (addressOfAggregateFieldSupported(self.body, expression, address)) {
+            return .{ .ty = "ptr", .spelling = try self.emitPlace(address.place, "ptr") };
         }
         if (computedRawManyDerefPlaceSupported(self.body, place, false)) {
             return .{ .ty = "ptr", .spelling = try self.emitComputedRawManyDerefPointer(place) };
@@ -2307,6 +2397,23 @@ const Renderer = struct {
         return pointer;
     }
 
+    fn emitGuardedGlobalPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableGlobalPointerDerefPlace(self.body, place, false)) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const symbol_id = switch (place.root) {
+            .symbol => |id| id,
+            .local, .value => return error.InvalidBody,
+        };
+        const spelling = symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load atomic ptr, ptr @{s} unordered, align 8\n", .{ pointer, spelling });
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_global_pointer_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
+    }
+
     fn emitGuardedLocalAddressAliasStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
@@ -2321,6 +2428,23 @@ const Renderer = struct {
         const pointer = try self.temp();
         try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ pointer, local.storage });
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_local_alias_store_ready_{d}", .{statement.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
+    }
+
+    fn emitGuardedGlobalPointerStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableGlobalPointerDerefPlace(self.body, place, true)) return error.InvalidBody;
+        const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
+        const symbol_id = switch (place.root) {
+            .symbol => |id| id,
+            .local, .value => return error.InvalidBody,
+        };
+        const spelling = symbolSpelling(self.body, symbol_id) orelse return error.InvalidBody;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load atomic ptr, ptr @{s} unordered, align 8\n", .{ pointer, spelling });
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_global_pointer_store_ready_{d}", .{statement.id.raw});
         try self.emitPointerRepresentationGuard(pointer, edge, continuation);
         return pointer;
     }
@@ -2551,6 +2675,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .indirect_call => |call| indirectCallSupported(body, expression, call),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfFixedArrayIndexSupported(body, expression, address) or
+            addressOfAggregateFieldSupported(body, expression, address) or
             addressOfParameterDerefSupported(body, expression, address) or
             addressOfLocalAddressAliasDerefSupported(body, expression, address) or
             addressOfComputedRawManyDerefSupported(body, expression, address),
@@ -2574,7 +2699,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .result => |result| resultConstructionSupported(body, expression, result),
-        .range_slice, .unsupported => false,
+        .range_slice => |range| rangeSliceSupported(body, expression, range),
+        .unsupported => false,
     };
 }
 
@@ -2871,6 +2997,69 @@ fn indexSupported(
             else => false,
         },
         else => false,
+    };
+}
+
+fn rangeSliceSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "range_slice"),
+) bool {
+    if (!expressionValid(body, operation.base) or !expressionValid(body, operation.start) or
+        !expressionValid(body, operation.end)) return false;
+    const base = body.expressions[operation.base.index()];
+    const start = body.expressions[operation.start.index()];
+    const end = body.expressions[operation.end.index()];
+    if (rangeSliceBaseLocal(body, operation.base) == null or
+        !base.block_id.eql(expression.block_id) or !start.block_id.eql(expression.block_id) or
+        !end.block_id.eql(expression.block_id) or
+        !base.owner_statement.eql(expression.owner_statement) or
+        !start.owner_statement.eql(expression.owner_statement) or
+        !end.owner_statement.eql(expression.owner_statement) or
+        !sameValueType(start.result_ty, .{ .integer = "usize" }) or
+        !sameValueType(end.result_ty, .{ .integer = "usize" }) or
+        !llvmTypeSupported(body, expression.result_ty)) return false;
+    const result = switch (expression.result_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape else return false,
+        else => return false,
+    };
+    const bound: ?usize = switch (base.result_ty) {
+        .array => |array| array_shape: {
+            const length = array.length orelse return false;
+            const aggregate = aggregateType(body, base.type_id) orelse return false;
+            if (aggregate.array_length == null or aggregate.array_length.? != length or aggregate.field_count == 0 or
+                !sameValueType(aggregate.ty, base.result_ty) or
+                !std.mem.eql(u8, aggregate.field_types[0].name(), result.child) or
+                !llvmTypeSupported(body, aggregate.field_types[0])) return false;
+            break :array_shape length;
+        },
+        .pointer => |shape| if (shape.kind == .slice and std.mem.eql(u8, shape.child, result.child)) null else return false,
+        .slice => |child| if (std.mem.eql(u8, child, result.child)) null else return false,
+        else => return false,
+    };
+    if (operation.checked) return rangeSliceTrapEdgeIsExact(body, expression);
+    if (ownedExpressionTrapCount(body, expression.id) != 0 or bound == null) return false;
+    const start_value = executableIntegerLiteral(start) orelse return false;
+    const end_value = executableIntegerLiteral(end) orelse return false;
+    return start_value <= end_value and end_value <= bound.?;
+}
+
+fn rangeSliceBaseLocal(body: *const mir.ExecutableBody, id: mir.ExprId) ?mir.LocalId {
+    if (!expressionValid(body, id)) return null;
+    return switch (body.expressions[id.index()].operation) {
+        .local => |local| local,
+        .representation_check => |check| rangeSliceBaseLocal(body, check.operand),
+        else => null,
+    };
+}
+
+fn executableIntegerLiteral(expression: mir.ExecutableExpression) ?u128 {
+    return switch (expression.operation) {
+        .literal => |literal| switch (literal) {
+            .integer => |value| value,
+            else => null,
+        },
+        else => null,
     };
 }
 
@@ -3554,6 +3743,7 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
     ) or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
         parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
+        mir.executableGlobalPointerDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
 
@@ -3766,6 +3956,20 @@ fn llvmAtomicOrdering(ordering: mir.ExecutableAtomicOrdering) []const u8 {
     };
 }
 
+fn addressOfAggregateFieldSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
+    if (!placeValid(body, address.place)) return false;
+    const place = body.places[address.place.index()];
+    return mir.executableAggregateFieldPlace(
+        body.locals,
+        body.statements,
+        body.aggregate_types,
+        place,
+        false,
+    ) and addressResultMatchesPlace(expression.result_ty, place.ty) and
+        expression.type_id.isValid() and address.representation_source == null and
+        !address.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
 fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
@@ -3858,7 +4062,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             statementRepresentationTrapEdge(body, statement) == null;
     }
     return (parameterScalarAccessStorePlaceSupported(body, place) or
-        mir.executableLocalAddressDerefPlace(body, place, true)) and
+        mir.executableLocalAddressDerefPlace(body, place, true) or
+        mir.executableGlobalPointerDerefPlace(body, place, true)) and
         store.representation_source != null and store.representation_span_id.isValid() and
         statementRepresentationTrapEdgeIsExact(body, statement);
 }
@@ -3921,12 +4126,20 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             };
             return sameValueType(place.ty, ty) and access.kind == expected_kind;
         }
-        const local_alias = mir.executableLocalAddressDerefPlace(body, place, false);
-        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
+        const local_alias_target = mir.executableLocalAddressDerefTarget(body, place, false);
+        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias_target) |target_id| switch (body.places[target_id.index()].root) {
+            .local => .plain,
+            .symbol => |id| if (symbolIdentity(body, id)) |identity|
+                if (identity.kind == .global and identity.mutable) .race_unordered else .plain
+            else
+                .race_unordered,
+            .value => .race_unordered,
+        } else .race_unordered;
         return sameValueType(place.ty, ty) and access.kind == expected_kind and
             if (is_store)
                 parameterScalarAccessStorePlaceSupported(body, place) or
                     mir.executableLocalAddressDerefPlace(body, place, true) or
+                    mir.executableGlobalPointerDerefPlace(body, place, true) or
                     computedRawManyDerefPlaceSupported(body, place, true)
             else
                 scalarAccessPlaceSupported(body, place);
@@ -3967,6 +4180,10 @@ fn tryUnwrapTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.Exe
 
 fn indexTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return indexTrapEdge(body, expression) != null;
+}
+
+fn rangeSliceTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    return rangeSliceTrapEdge(body, expression) != null;
 }
 
 fn fixedArrayLoadBoundsTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -4014,6 +4231,25 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
 
 fn indexTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
     if (expression.operation != .index or !expression.operation.index.checked or
+        ownedExpressionTrapCount(body, expression.id) != 1) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
+        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .Bounds or edge.source != .bounds_check)
+            return null;
+        const trap = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Bounds) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
+}
+
+fn rangeSliceTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    if (expression.operation != .range_slice or !expression.operation.range_slice.checked or
         ownedExpressionTrapCount(body, expression.id) != 1) return null;
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {

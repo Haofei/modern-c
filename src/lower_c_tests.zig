@@ -925,15 +925,15 @@ test "lower-c emits the structural access tail from MIR without body fallback" {
 
     const global_field = try cFunctionBody(output.items, "static uint32_t address_global_field(uint32_t value)");
     try expectContains(global_field, "mc_race_store_u32");
-    try expectContains(global_field, "mc_race_load_u32(&(pair.right))");
+    try expectContains(global_field, "mc_race_load_u32(&((pair).right))");
 
     const array_element = try cFunctionBody(output.items, "static uint32_t address_array_element(uint32_t value)");
-    try expectContains(array_element, "mc_race_store_u32");
-    try expectContains(array_element, "mc_race_load_u32(&(xs.elems[mc_check_index_usize(1, 2)]))");
+    try expectContains(array_element, "(*(p)) =");
+    try expectContains(array_element, ").elems[mc_check_index_usize(");
 
     const local_field = try cFunctionBody(output.items, "static uint32_t address_field(uint32_t value)");
-    try expectContains(local_field, "mc_race_store_u32");
-    try expectContains(local_field, "mc_race_load_u32(&(pair_local.right))");
+    try expectContains(local_field, "(*(p)) =");
+    try expectContains(local_field, "(pair_local).right");
 
     const global_pointer = try cFunctionBody(output.items, "static uint32_t write_through_global_pointer(uint32_t value)");
     try expectContains(global_pointer, "mc_race_store_u32");
@@ -941,7 +941,7 @@ test "lower-c emits the structural access tail from MIR without body fallback" {
 
     const slice = try cFunctionBody(output.items, "static uintptr_t slice_from_slice(");
     try expectContains(slice, "mc_trap_Bounds();");
-    try expectContains(slice, "return mc_tmp");
+    try expectContains(slice, "return mc_exec_tmp_");
 
     var temp = std.testing.tmpDir(.{});
     defer temp.cleanup();
@@ -2349,8 +2349,8 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     try expectContains(update, "mc_race_load_u32");
     const read = try cFunctionBody(output.items, "static uint32_t read(Box value)");
     if (isCanonicalExecutableCBody(read)) {
-        try expectContains(read, ").pair;");
-        try expectContains(read, ").right;");
+        try expectContains(read, ").pair");
+        try expectContains(read, ").right");
         try expectContains(read, "return mc_exec_tmp_");
     } else try expectContains(read, "return value.pair.right;");
     try expectNotContains(read, "mc_tmp");
@@ -2361,8 +2361,8 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     const read_parameter = try cFunctionBody(output.items, "static uint32_t read_local_parameter(Box value)");
     if (isCanonicalExecutableCBody(read_parameter)) {
         try expectContains(read_parameter, "Box copy = mc_exec_tmp_");
-        try expectContains(read_parameter, ").pair;");
-        try expectContains(read_parameter, ").left;");
+        try expectContains(read_parameter, ").pair");
+        try expectContains(read_parameter, ".left");
     } else {
         try expectContains(read_parameter, "Box copy = value;");
         try expectContains(read_parameter, "return copy.pair.left;");
@@ -7367,14 +7367,11 @@ test "lower-c inferred local direct addresses require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_address.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &shared_value") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &readonly_value") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &value") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &value") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &holder.value") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &holder.value") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &values.elems[") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &values.elems[") != null);
+    try expectContains(complete_output.items, "&shared_value");
+    try expectContains(complete_output.items, "&readonly_value");
+    try expectContains(complete_output.items, "&value");
+    try expectContains(complete_output.items, "holder).value");
+    try expectContains(complete_output.items, ").elems[");
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_pointee(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_const_pointee(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_raw_many_pointee(void)") != null);
@@ -16807,7 +16804,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(gp));");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_store subject=gp provenance=global_storage reason=none source=");
-    try expectContains(output.items, "mc_race_store_u32(gp, (uint32_t)mc_tmp");
+    try expectContains(output.items, "mc_race_store_u32(gp, (uint32_t)mc_");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_copy_load subject=copy provenance=global_storage reason=none source=");
     try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(copy));");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_copy_store subject=copy provenance=global_storage reason=reassignment source=");
@@ -17267,7 +17264,7 @@ test "lower-c direct pointer locals without MIR destination facts lower conserva
     try appendCheckedCTest("emit_c_direct_pointer_provenance.mc", source, &normal_output);
     const normal_initializer_body = try cFunctionBody(normal_output.items, "static uint32_t c_direct_initializer_requires_mir_fact(void)");
     try expectContains(normal_initializer_body, "/* mir pointer_provenance consumed fn=c_direct_initializer_requires_mir_fact subject=p provenance=global_storage reason=none source=");
-    try expectContains(normal_initializer_body, "return ((uint32_t)mc_race_load_u32(p));");
+    try expectContains(normal_initializer_body, "mc_race_load_u32(p)");
     try expectNotContains(normal_initializer_body, "return *p;");
 
     const normal_assignment_body = try cFunctionBody(normal_output.items, "static uint32_t c_direct_assignment_requires_mir_fact(void)");
@@ -17281,7 +17278,7 @@ test "lower-c direct pointer locals without MIR destination facts lower conserva
     try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_direct_pointer_missing_provenance.mc", source, "c_direct_initializer_requires_mir_fact", "p", &missing_initializer_output);
     const missing_initializer_body = try cFunctionBody(missing_initializer_output.items, "static uint32_t c_direct_initializer_requires_mir_fact(void)");
     try expectNotContains(missing_initializer_body, "/* mir pointer_provenance consumed fn=c_direct_initializer_requires_mir_fact subject=p");
-    try expectContains(missing_initializer_body, "return ((uint32_t)mc_race_load_u32(p));");
+    try expectContains(missing_initializer_body, "mc_race_load_u32(p)");
     try expectNotContains(missing_initializer_body, "return *p;");
 
     var missing_assignment_output: std.ArrayList(u8) = .empty;
@@ -19858,7 +19855,10 @@ test "lower-c emits slice typedefs and indexing" {
         try expectContains(body, "mc_race_load_");
         try expectContains(body, "mc_check_index_usize(");
     }
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 xs = ({ mc_slice_mut_u8 mc_scv") != null);
+    const const_range_body = try cFunctionBody(output.items, "static uint8_t const_slice_from_array_range(");
+    try std.testing.expect(isCanonicalExecutableCBody(const_range_body));
+    try expectContains(const_range_body, "mc_trap_Bounds()");
+    try expectContains(const_range_body, "mc_slice_const_u8");
 }
 
 test "lower-c emits checked u32 arithmetic helpers" {

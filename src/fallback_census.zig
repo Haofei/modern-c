@@ -59,7 +59,6 @@ pub const CanonicalStatus = enum {
 /// measurable instead of inferred from source shape.
 pub const SelectedPath = enum {
     canonical,
-    access_structural,
     sequence_foreach_update,
     sequence_foreach_return,
     ast_fallback,

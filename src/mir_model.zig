@@ -1047,7 +1047,7 @@ pub const ExecutableExpression = struct {
             /// operand is a canonical in-range integer literal.
             checked: bool = true,
         },
-        range_slice: struct { base: ExprId, start: ExprId, end: ExprId },
+        range_slice: struct { base: ExprId, start: ExprId, end: ExprId, checked: bool = true },
         member: struct { base: ExprId, field_index: usize },
         slice_length: ExprId,
         /// Construct the tagged representation of a sized value optional.
@@ -1299,6 +1299,64 @@ pub const ExecutableStatement = struct {
 /// Prove that `local` is initialized exactly once from the direct address of
 /// another local and is never reassigned. This is the bounded provenance fact
 /// needed to lower `*p` as local storage without reconstructing an AST alias.
+pub fn executableLocalAddressAliasTarget(
+    statements: []const ExecutableStatement,
+    expressions: []const ExecutableExpression,
+    places: []const ExecutablePlace,
+    local: LocalId,
+    pointer_ty: ValueType,
+    pointer_type_id: TypeId,
+) ?PlaceId {
+    // Any ordinary value use can copy or escape the pointer. Dereference
+    // places refer to the LocalId directly and therefore do not need a
+    // `.local` expression; keeping the accepted proof this narrow preserves
+    // the existing conservative access mode after calls, returns, or copies.
+    for (expressions) |expression| switch (expression.operation) {
+        .local => |used| if (used.eql(local)) return null,
+        .direct_call, .indirect_call, .builtin_call => return null,
+        else => {},
+    };
+    var found: ?PlaceId = null;
+    for (statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local)) {
+            if (found != null or init.value == null or !ValueType.eql(init.ty, pointer_ty) or
+                !init.type_id.eql(pointer_type_id)) return null;
+            const value_id = init.value.?;
+            if (!value_id.isValid() or value_id.index() >= expressions.len) return null;
+            const value = expressions[value_id.index()];
+            if (!value.id.eql(value_id) or !value.owner_statement.eql(statement.id) or
+                !ValueType.eql(value.result_ty, pointer_ty) or !value.type_id.eql(pointer_type_id)) return null;
+            const address = switch (value.operation) {
+                .address_of => |address| address,
+                else => return null,
+            };
+            if (!address.place.isValid() or address.place.index() >= places.len) return null;
+            const target = places[address.place.index()];
+            if (!target.id.eql(address.place) or target.projection_count > max_executable_projections or
+                !target.type_id.isValid()) return null;
+            switch (target.root) {
+                .local, .symbol => {},
+                .value => return null,
+            }
+            const pointer = switch (pointer_ty) {
+                .pointer => |shape| shape,
+                else => return null,
+            };
+            if (pointer.kind != .single or !std.mem.eql(u8, pointer.child, target.ty.name())) return null;
+            found = address.place;
+        },
+        .store => |store| if (store.place.isValid() and store.place.index() < places.len) {
+            const target = places[store.place.index()];
+            if (target.projection_count == 0) switch (target.root) {
+                .local => |stored| if (stored.eql(local)) return null,
+                .symbol, .value => {},
+            };
+        },
+        else => {},
+    };
+    return found;
+}
+
 pub fn executableLocalAddressAlias(
     statements: []const ExecutableStatement,
     expressions: []const ExecutableExpression,
@@ -1307,49 +1365,7 @@ pub fn executableLocalAddressAlias(
     pointer_ty: ValueType,
     pointer_type_id: TypeId,
 ) bool {
-    // Any ordinary value use can copy or escape the pointer. Dereference
-    // places refer to the LocalId directly and therefore do not need a
-    // `.local` expression; keeping the accepted proof this narrow preserves
-    // the existing conservative access mode after calls, returns, or copies.
-    for (expressions) |expression| switch (expression.operation) {
-        .local => |used| if (used.eql(local)) return false,
-        .direct_call, .indirect_call, .builtin_call => return false,
-        else => {},
-    };
-    var found = false;
-    for (statements) |statement| switch (statement.operation) {
-        .local_init => |init| if (init.local.eql(local)) {
-            if (found or init.value == null or !ValueType.eql(init.ty, pointer_ty) or
-                !init.type_id.eql(pointer_type_id)) return false;
-            const value_id = init.value.?;
-            if (!value_id.isValid() or value_id.index() >= expressions.len) return false;
-            const value = expressions[value_id.index()];
-            if (!value.id.eql(value_id) or !value.owner_statement.eql(statement.id) or
-                !ValueType.eql(value.result_ty, pointer_ty) or !value.type_id.eql(pointer_type_id)) return false;
-            const address = switch (value.operation) {
-                .address_of => |address| address,
-                else => return false,
-            };
-            if (!address.place.isValid() or address.place.index() >= places.len) return false;
-            const target = places[address.place.index()];
-            if (!target.id.eql(address.place) or target.projection_count != 0 or
-                !ValueType.eql(target.root_ty, target.ty)) return false;
-            switch (target.root) {
-                .local => {},
-                .symbol, .value => return false,
-            }
-            found = true;
-        },
-        .store => |store| if (store.place.isValid() and store.place.index() < places.len) {
-            const target = places[store.place.index()];
-            if (target.projection_count == 0) switch (target.root) {
-                .local => |stored| if (stored.eql(local)) return false,
-                .symbol, .value => {},
-            };
-        },
-        else => {},
-    };
-    return found;
+    return executableLocalAddressAliasTarget(statements, expressions, places, local, pointer_ty, pointer_type_id) != null;
 }
 
 pub const ExecutableParameter = struct {
@@ -1769,6 +1785,56 @@ pub fn executableLocalAddressDerefPlace(
         place.root_ty,
         place.root_type_id,
     )) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut) and
+        std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
+/// Return the canonical place borrowed by a scalar local-pointer
+/// dereference.  Consumers use the target root to preserve the memory access
+/// class: an alias of local storage is plain, while an alias of mutable global
+/// storage remains race-unordered.
+pub fn executableLocalAddressDerefTarget(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) ?PlaceId {
+    if (!executableLocalAddressDerefPlace(body, place, require_mutable)) return null;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return null,
+    };
+    return executableLocalAddressAliasTarget(
+        body.statements,
+        body.expressions,
+        body.places,
+        local,
+        place.root_ty,
+        place.root_type_id,
+    );
+}
+
+/// Check a scalar dereference through a pointer stored in a global. The
+/// pointer value itself is race-tolerantly loaded before the pointee access;
+/// the global symbol is never confused with the pointee address.
+pub fn executableGlobalPointerDerefPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        executableStorageAlignment(body.enum_types, place.ty) == null) return false;
+    const symbol_id = switch (place.root) {
+        .symbol => |id| id,
+        .local, .value => return false,
+    };
+    if (!symbol_id.isValid() or symbol_id.index() >= body.symbols.len) return false;
+    const symbol = body.symbols[symbol_id.index()];
+    if (!symbol.id.eql(symbol_id) or symbol.kind != .global) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
         else => return false,

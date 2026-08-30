@@ -24,7 +24,6 @@ const mir_body_plan = @import("mir_body_plan.zig");
 const mir_body_plan_tests = @import("mir_body_plan_tests.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_executable_body_tests = @import("mir_executable_body_tests.zig");
-const mir_access_plan_tests = @import("mir_access_plan_tests.zig");
 const module_graph = @import("module_graph.zig");
 const module_parser = @import("module_parser.zig");
 const monomorphize_tests = @import("monomorphize_tests.zig");
@@ -52,7 +51,6 @@ test {
     _ = mir_body_plan_tests;
     _ = mir_executable_body;
     _ = mir_executable_body_tests;
-    _ = mir_access_plan_tests;
     _ = module_graph;
     _ = module_parser;
     _ = monomorphize_tests;

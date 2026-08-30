@@ -7006,7 +7006,8 @@ const FunctionBuilder = struct {
         range_facts: []const RangeFact,
     ) bool {
         return switch (expression.operation) {
-            .unsupported, .deref, .range_slice => false,
+            .unsupported, .deref => false,
+            .range_slice => |operation| self.executableRangeSliceComplete(expression, operation),
             .index => |operation| self.executableIndexComplete(expression, operation),
             .array => |operation| self.executableArrayConstructionComplete(expression, operation),
             .optional_some => |operand| optional: {
@@ -7369,6 +7370,74 @@ const FunctionBuilder = struct {
         };
     }
 
+    fn executableRangeSliceComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "range_slice"),
+    ) bool {
+        if (!operation.base.isValid() or operation.base.index() >= expression.id.index() or
+            operation.base.index() >= self.executable_expressions.items.len or
+            !operation.start.isValid() or operation.start.index() >= expression.id.index() or
+            operation.start.index() >= self.executable_expressions.items.len or
+            !operation.end.isValid() or operation.end.index() >= expression.id.index() or
+            operation.end.index() >= self.executable_expressions.items.len)
+            return false;
+        const base = self.executable_expressions.items[operation.base.index()];
+        const start = self.executable_expressions.items[operation.start.index()];
+        const end = self.executable_expressions.items[operation.end.index()];
+        if (!base.block_id.eql(expression.block_id) or !start.block_id.eql(expression.block_id) or
+            !end.block_id.eql(expression.block_id) or
+            !base.owner_statement.eql(expression.owner_statement) or
+            !start.owner_statement.eql(expression.owner_statement) or
+            !end.owner_statement.eql(expression.owner_statement) or
+            !sameValueType(start.result_ty, .{ .integer = "usize" }) or
+            !sameValueType(end.result_ty, .{ .integer = "usize" })) return false;
+
+        const result_shape = switch (expression.result_ty) {
+            .pointer => |shape| if (shape.kind == .slice) shape else return false,
+            else => return false,
+        };
+        const bound: ?usize = switch (base.result_ty) {
+            .array => |array| array: {
+                const length = array.length orelse return false;
+                var aggregate: ?mir_model.ExecutableAggregateType = null;
+                for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(base.type_id)) {
+                    aggregate = candidate;
+                    break;
+                };
+                const shape = aggregate orelse return false;
+                if (shape.array_length == null or shape.array_length.? != length or shape.field_count == 0 or
+                    !sameValueType(shape.ty, base.result_ty) or
+                    !std.mem.eql(u8, result_shape.child, shape.field_types[0].name())) return false;
+                break :array length;
+            },
+            .pointer => |shape| if (shape.kind == .slice and std.mem.eql(u8, shape.child, result_shape.child)) null else return false,
+            .slice => |child| if (std.mem.eql(u8, child, result_shape.child)) null else return false,
+            else => return false,
+        };
+
+        var owned: usize = 0;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .expression => |id| if (id.eql(expression.id)) {
+                if (!operation.checked or edge.kind != .Bounds or edge.source != .bounds_check or
+                    !edge.from_block.eql(expression.block_id)) return false;
+                owned += 1;
+            },
+            .statement => {},
+        };
+        if (operation.checked) return owned == 1;
+        if (owned != 0 or bound == null) return false;
+        const start_value = switch (start.operation) {
+            .literal => |literal| switch (literal) { .integer => |value| value, else => return false },
+            else => return false,
+        };
+        const end_value = switch (end.operation) {
+            .literal => |literal| switch (literal) { .integer => |value| value, else => return false },
+            else => return false,
+        };
+        return start_value <= end_value and end_value <= bound.?;
+    }
+
     fn executablePlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
         if (place.storage == .atomic) return self.executableAtomicPlaceComplete(place);
         if (place.projection_count == 0) return true;
@@ -7383,9 +7452,12 @@ const FunctionBuilder = struct {
         )) return true;
         const transient_body: mir_model.ExecutableBody = .{
             .locals = self.executable_locals.items,
+            .symbols = self.executable_symbols.items,
             .aggregate_types = self.executable_aggregate_types.items,
+            .enum_types = self.executable_enum_types.items,
         };
         if (mir_model.executableAggregatePointerFieldDerefPlace(&transient_body, place, false) != null) return true;
+        if (mir_model.executableGlobalPointerDerefPlace(&transient_body, place, false)) return true;
         if (place.projection_count != 1 and place.projection_count != 2) return false;
         if (place.projections[0] != .deref) return false;
         const local_id = switch (place.root) {
@@ -7633,6 +7705,18 @@ const FunctionBuilder = struct {
                 self.executable_symbols.items[id.index()].kind == .global,
             .value => false,
         };
+        if (mir_model.executableAggregateFieldPlace(
+            self.executable_locals.items,
+            self.executable_statements.items,
+            self.executable_aggregate_types.items,
+            place,
+            false,
+        )) return switch (place.root) {
+            .local => true,
+            .symbol => |id| id.isValid() and id.index() < self.executable_symbols.items.len and
+                self.executable_symbols.items[id.index()].kind == .global,
+            .value => false,
+        };
         if (place.projection_count == 1) return switch (place.root) {
             .value => true,
             .local, .symbol => sameValueType(result_ty, place.root_ty),
@@ -7710,7 +7794,7 @@ const FunctionBuilder = struct {
                 .value => false,
             };
             const local_alias = switch (place.root) {
-                .local => |id| mir_model.executableLocalAddressAlias(
+                .local => |id| mir_model.executableLocalAddressAliasTarget(
                     self.executable_statements.items,
                     self.executable_expressions.items,
                     self.executable_places.items,
@@ -7718,9 +7802,17 @@ const FunctionBuilder = struct {
                     place.root_ty,
                     place.root_type_id,
                 ),
-                .symbol, .value => false,
+                .symbol, .value => null,
             };
-            const expected_kind: mir_model.ExecutableMemoryAccessKind = if (local_alias) .plain else .race_unordered;
+            const expected_kind: mir_model.ExecutableMemoryAccessKind = if (local_alias) |target_id| alias: {
+                const target = self.executable_places.items[target_id.index()];
+                break :alias switch (target.root) {
+                    .local => .plain,
+                    .symbol => |symbol_id| if (symbol_id.isValid() and symbol_id.index() < self.executable_symbols.items.len and
+                        self.executable_symbols.items[symbol_id.index()].mutable) .race_unordered else .plain,
+                    .value => return false,
+                };
+            } else .race_unordered;
             if (access.kind != expected_kind) return false;
             if (is_store) {
                 const shape = switch (place.root_ty) {
@@ -8368,6 +8460,10 @@ const FunctionBuilder = struct {
             .array => result_ty = expected,
             else => {},
         };
+        if (expr.kind == .slice) if (expected_ty) |expected| switch (expected) {
+            .pointer, .slice => result_ty = expected,
+            else => {},
+        };
         if (expr.kind == .enum_literal) if (expected_ty) |expected| switch (expected) {
             .closed_enum, .open_enum => result_ty = expected,
             else => {},
@@ -8593,8 +8689,9 @@ const FunctionBuilder = struct {
             },
             .slice => |node| .{ .range_slice = .{
                 .base = try self.ensureExecutableExpr(node.base.*),
-                .start = try self.ensureExecutableExpr(node.start.*),
-                .end = try self.ensureExecutableExpr(node.end.*),
+                .start = try self.ensureExecutableExprAs(node.start.*, .{ .integer = "usize" }),
+                .end = try self.ensureExecutableExprAs(node.end.*, .{ .integer = "usize" }),
+                .checked = !(self.optimize and self.sliceProvablyInBounds(node.base.*, node.start.*, node.end.*)),
             } },
             .member => |node| if (self.enumVariantPathTypeExpr(node) != null) enum_variant: {
                 const canonical = self.canonicalExecutableEnumLiteral(node.name.text, result_ty) orelse
@@ -8645,8 +8742,9 @@ const FunctionBuilder = struct {
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
-                const direct_global_storage = self.executablePlaceRootIsGlobal(node.base.*);
-                if (direct_global_storage and
+                const direct_named_storage = self.executablePlaceRootIsGlobal(node.base.*) or
+                    self.executablePlaceRootIsMaterializedLocal(node.base.*);
+                if (direct_named_storage and
                     mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
                 {
                     break :member .{ .load = .{
@@ -9746,14 +9844,21 @@ const FunctionBuilder = struct {
                 const local = self.executable_local_ids.get(name) orelse break :local_alias .race_unordered;
                 const root_ty = self.local_types.get(name) orelse break :local_alias .race_unordered;
                 const root_type_id = self.type_ids.get(root_ty) orelse break :local_alias .race_unordered;
-                break :local_alias if (mir_model.executableLocalAddressAlias(
+                const target_id = mir_model.executableLocalAddressAliasTarget(
                     self.executable_statements.items,
                     self.executable_expressions.items,
                     self.executable_places.items,
                     local,
                     root_ty,
                     root_type_id,
-                )) .plain else .race_unordered;
+                ) orelse break :local_alias .race_unordered;
+                const target = self.executable_places.items[target_id.index()];
+                break :local_alias switch (target.root) {
+                    .local => .plain,
+                    .symbol => |symbol_id| if (symbol_id.isValid() and symbol_id.index() < self.executable_symbols.items.len and
+                        self.executable_symbols.items[symbol_id.index()].mutable) .race_unordered else .plain,
+                    .value => .race_unordered,
+                };
             } else .race_unordered
         else if (root) |name|
             if (self.globals.contains(name) and self.mutable_globals.contains(name)) .race_unordered else .plain
@@ -10078,6 +10183,16 @@ const FunctionBuilder = struct {
             .grouped => |inner| self.executablePlaceRootIsGlobal(inner.*),
             else => false,
         };
+    }
+
+    fn executablePlaceRootIsMaterializedLocal(self: *const FunctionBuilder, expr: ast.Expr) bool {
+        const name = executablePlaceRootIdent(expr) orelse return false;
+        const local = self.executable_local_ids.get(name) orelse return false;
+        for (self.executable_statements.items) |statement| switch (statement.operation) {
+            .local_init => |local_init| if (local_init.local.eql(local)) return true,
+            else => {},
+        };
+        return false;
     }
 
     fn fillExecutablePlace(self: *FunctionBuilder, place: *ExecutablePlace, expr: ast.Expr) anyerror!bool {
@@ -12935,6 +13050,7 @@ const FunctionBuilder = struct {
                 } else {
                     try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                    try self.attachExecutableTrapEdge(expr.span, .Bounds, .bounds_check);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .slice,
                         .source = self.sourcePoint(expr.span),
@@ -13618,6 +13734,12 @@ const FunctionBuilder = struct {
                         }
                     },
                     .index => |operation| {
+                        if (operation.checked and kind == .Bounds and source == .bounds_check) {
+                            owner = expression.id;
+                            break;
+                        }
+                    },
+                    .range_slice => |operation| {
                         if (operation.checked and kind == .Bounds and source == .bounds_check) {
                             owner = expression.id;
                             break;

@@ -480,6 +480,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                         address.representation_span_id.isValid()) return error.InvalidMemoryAccessTrap;
                     if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*))
                         return error.InvalidMemoryAccessTrap;
+                } else if (mir.executableAggregateFieldPlace(
+                    body.locals,
+                    body.statements,
+                    body.aggregate_types,
+                    target.*,
+                    false,
+                )) {
+                    if (address.representation_source != null or address.representation_span_id.isValid() or
+                        ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                        return error.InvalidMemoryAccessTrap;
                 } else if (target.projection_count == 0) {
                     if (!directAddressablePlace(body, target.*) or address.representation_source != null or
                         address.representation_span_id.isValid() or ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
@@ -508,6 +518,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyOperand(body, value, operation.base);
             try verifyOperand(body, value, operation.start);
             try verifyOperand(body, value, operation.end);
+            if (body.complete) try verifyRangeSlice(function, value, operation);
         },
         .member => |operation| {
             try verifyOperand(body, value, operation.base);
@@ -690,6 +701,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         } else if (target.storage != .ordinary or
                             !(isParameterScalarAccessPlace(body, target.*, false) or
                                 mir.executableLocalAddressDerefPlace(body, target.*, false) or
+                                mir.executableGlobalPointerDerefPlace(body, target.*, false) or
                                 mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
@@ -741,6 +753,10 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         if (!operation.checked or edge.kind != .Bounds or edge.source != .bounds_check)
                             return error.InvalidTrapEdge;
                     },
+                    .range_slice => |operation| {
+                        if (!operation.checked or edge.kind != .Bounds or edge.source != .bounds_check)
+                            return error.InvalidTrapEdge;
+                    },
                     else => return error.InvalidTrapEdge,
                 }
                 const span_id = switch (owner.operation) {
@@ -770,7 +786,9 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             const projection = indexedProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                             break :statement_owner .{ .block_id = owner.block_id, .span_id = projection.span_id };
                         }
-                        if (!(isParameterScalarAccessPlace(body, target.*, true) or mir.executableLocalAddressDerefPlace(body, target.*, true)) or
+                        if (!(isParameterScalarAccessPlace(body, target.*, true) or
+                            mir.executableLocalAddressDerefPlace(body, target.*, true) or
+                            mir.executableGlobalPointerDerefPlace(body, target.*, true)) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                         break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
@@ -1222,7 +1240,8 @@ fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableSta
 
 fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
     for (body.expressions) |value| switch (value.operation) {
-        .unsupported, .deref, .range_slice => return true,
+        .unsupported, .deref => return true,
+        .range_slice => {},
         .builtin_call => |call| {
             if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return true;
             if (call.argument_count > mir.max_executable_operands) return true;
@@ -1455,6 +1474,59 @@ fn verifyIndexProjection(
     }
 }
 
+fn verifyRangeSlice(
+    function: *const mir.Function,
+    value: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "range_slice"),
+) !void {
+    const body = &function.executable_body;
+    const base = expression(body, operation.base) orelse return error.InvalidExpressionReference;
+    const start = expression(body, operation.start) orelse return error.InvalidExpressionReference;
+    const end = expression(body, operation.end) orelse return error.InvalidExpressionReference;
+    if (!base.block_id.eql(value.block_id) or !start.block_id.eql(value.block_id) or !end.block_id.eql(value.block_id) or
+        !base.owner_statement.eql(value.owner_statement) or !start.owner_statement.eql(value.owner_statement) or
+        !end.owner_statement.eql(value.owner_statement) or
+        !sameValueType(start.result_ty, .{ .integer = "usize" }) or
+        !sameValueType(end.result_ty, .{ .integer = "usize" }))
+        return error.InvalidAggregateType;
+
+    const result_shape = switch (value.result_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape else return error.InvalidAggregateType,
+        else => return error.InvalidAggregateType,
+    };
+    const bound: ?usize = switch (base.result_ty) {
+        .array => |shape| array: {
+            const length = shape.length orelse return error.InvalidAggregateType;
+            const aggregate = aggregateType(body, base.type_id) orelse return error.InvalidAggregateType;
+            if (aggregate.array_length == null or aggregate.array_length.? != length or aggregate.field_count == 0 or
+                !sameValueType(aggregate.ty, base.result_ty) or
+                !std.mem.eql(u8, result_shape.child, aggregate.field_types[0].name()))
+                return error.InvalidAggregateType;
+            break :array length;
+        },
+        .pointer => |shape| if (shape.kind == .slice and std.mem.eql(u8, shape.child, result_shape.child)) null else return error.InvalidAggregateType,
+        .slice => |child| if (std.mem.eql(u8, child, result_shape.child)) null else return error.InvalidAggregateType,
+        else => return error.InvalidAggregateType,
+    };
+
+    const owner: mir.ExecutableTrapOwner = .{ .expression = value.id };
+    if (operation.checked) {
+        if (ownedTrapCountAll(body, owner) != 1 or ownedTrapCount(body, owner, .Bounds, .bounds_check) != 1)
+            return error.InvalidMemoryAccessTrap;
+        return;
+    }
+    if (ownedTrapCountAll(body, owner) != 0 or bound == null) return error.InvalidMemoryAccessTrap;
+    const start_value = switch (start.operation) {
+        .literal => |literal| switch (literal) { .integer => |magnitude| magnitude, else => return error.InvalidMemoryAccessTrap },
+        else => return error.InvalidMemoryAccessTrap,
+    };
+    const end_value = switch (end.operation) {
+        .literal => |literal| switch (literal) { .integer => |magnitude| magnitude, else => return error.InvalidMemoryAccessTrap },
+        else => return error.InvalidMemoryAccessTrap,
+    };
+    if (start_value > end_value or end_value > bound.?) return error.InvalidMemoryAccessTrap;
+}
+
 fn verifyStructConstruction(
     function: *const mir.Function,
     value: mir.ExecutableExpression,
@@ -1585,8 +1657,29 @@ fn verifyMemoryAccess(
             return;
         }
         if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
-        const expected_kind: mir.ExecutableMemoryAccessKind =
-            if (mir.executableLocalAddressDerefPlace(body, target.*, false)) .plain else .race_unordered;
+        const expected_kind: mir.ExecutableMemoryAccessKind = alias_kind: {
+            const local_id = switch (target.root) {
+                .local => |id| id,
+                .symbol, .value => break :alias_kind .race_unordered,
+            };
+            const alias_target_id = mir.executableLocalAddressAliasTarget(
+                body.statements,
+                body.expressions,
+                body.places,
+                local_id,
+                target.root_ty,
+                target.root_type_id,
+            ) orelse break :alias_kind .race_unordered;
+            const alias_target = place(body, alias_target_id) orelse return error.InvalidPlaceType;
+            break :alias_kind switch (alias_target.root) {
+                .local => .plain,
+                .symbol => |id| if ((symbol(body, id) orelse return error.InvalidSymbolReference).mutable)
+                    .race_unordered
+                else
+                    .plain,
+                .value => return error.InvalidPlaceType,
+            };
+        };
         if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
         return;
     }
@@ -1673,6 +1766,7 @@ fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePl
     ) or mir.executableAggregatePointerFieldDerefPlace(body, target, require_mutable) != null or
         isParameterScalarAccessPlace(body, target, require_mutable) or
         mir.executableLocalAddressDerefPlace(body, target, require_mutable) or
+        mir.executableGlobalPointerDerefPlace(body, target, require_mutable) or
         isComputedRawManyDerefPlace(body, target, require_mutable);
 }
 
