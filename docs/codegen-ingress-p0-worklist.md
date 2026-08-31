@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1455/1825 admitted | 1497/1879 admitted |
-| AST fallback | 370 | 382 |
+| broad sweep | 1457/1825 admitted | 1499/1879 admitted |
+| AST fallback | 368 | 380 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -20,6 +20,12 @@ memory-access class in executable MIR. Declared structs, value optionals, and
 fixed arrays lower recursively to scalar leaf loads/stores in both backends;
 packed bits and unions remain one storage unit and therefore do not take the
 leaf path. The broad sweep gained eight C and nine LLVM canonical bodies.
+
+Checked arithmetic trap edges are now attached after all evaluation-ordered
+expressions exist. The producer still requires an exact, unambiguous typed
+owner and the verifier still checks every edge bijectively. This closes both
+`fill_size` monomorphizations in C and LLVM and reduces the leading
+`trap_projection` bucket from 60 to 55.
 
 ## Ranked next slices
 

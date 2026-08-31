@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1455/1825 C functions and 1497/1879 LLVM functions.
-  The remaining 370 C and 382 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1457/1825 C functions and 1499/1879 LLVM functions.
+  The remaining 368 C and 380 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -27,6 +27,13 @@ their representation is not decomposed incorrectly. This closes eight C and
 nine LLVM broad-corpus fallbacks while preserving the prior race-unordered
 contract. C fixed-array leaves use the canonical `.elems[index]` layout and the
 generated row-replacement fixture compile-checks with `clang -Werror`.
+
+Checked unary/binary trap ownership is resolved after the canonical expression
+table is complete. This removes the construction-order dependency between the
+source-shaped legacy fact walk and evaluation-ordered `ExprId`s without
+weakening the bijective trap projection check. The complete monomorphization
+fixture is now 8/8 canonical in both backends; the broad `trap_projection`
+reason fell from 60 to 55.
 
 ## Next work
 

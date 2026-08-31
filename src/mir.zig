@@ -6790,6 +6790,13 @@ const FunctionBuilder = struct {
         span_identities: []const SpanIdentity,
         legacy_blocks: []const Block,
     ) !ExecutableBody {
+        // The legacy fact walk records checked arithmetic before recursively
+        // visiting its operands.  Canonical expressions, by contrast, are
+        // appended after their operands so ExprId order is evaluation order.
+        // Resolve those trap owners once the complete expression table exists
+        // instead of treating the harmless construction-order difference as
+        // an unsupported executable body.
+        try self.resolveExecutableCheckedTrapEdges(trap_edges);
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
         if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
@@ -7961,6 +7968,58 @@ const FunctionBuilder = struct {
         return true;
     }
 
+    fn resolveExecutableCheckedTrapEdges(self: *FunctionBuilder, legacy_edges: []const TrapEdge) !void {
+        for (legacy_edges) |legacy| {
+            if (legacy.source != .checked_arithmetic and legacy.source != .checked_shift) continue;
+            var already_present = false;
+            for (self.executable_trap_edges.items) |edge| {
+                if (self.executableTrapEdgeMatchesLegacy(edge, legacy)) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (already_present) continue;
+
+            var owner: ?ExprId = null;
+            for (self.executable_expressions.items) |expression| {
+                if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block)) or
+                    !expression.span_id.eql(legacy.typed_span_id)) continue;
+                const requirements = switch (expression.operation) {
+                    .unary => |unary| mir_model.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty),
+                    .binary => |binary| if (binary.arithmetic == .checked)
+                        mir_model.executableCheckedBinaryTrapRequirements(binary.op, expression.result_ty)
+                    else
+                        null,
+                    else => null,
+                } orelse continue;
+                var owns_edge = false;
+                for (requirements.items[0..requirements.count]) |requirement| {
+                    if (requirement.kind == legacy.kind and requirement.source == legacy.source) {
+                        owns_edge = true;
+                        break;
+                    }
+                }
+                if (!owns_edge) continue;
+                // Two same-span checked operations would make source identity
+                // insufficient.  Keep that body incomplete rather than guess.
+                if (owner != null) {
+                    owner = null;
+                    break;
+                }
+                owner = expression.id;
+            }
+            const owner_id = owner orelse continue;
+            try self.executable_trap_edges.append(self.allocator, .{
+                .owner = .{ .expression = owner_id },
+                .from_block = BlockId.fromIndex(legacy.from_block),
+                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .kind = legacy.kind,
+                .source = legacy.source,
+                .span_id = legacy.typed_span_id,
+            });
+        }
+    }
+
     fn executableTrapEdgeMatchesLegacy(
         self: *const FunctionBuilder,
         edge: mir_model.ExecutableTrapEdge,
@@ -8580,7 +8639,8 @@ const FunctionBuilder = struct {
             .binary => |node| binary: {
                 result_ty = self.executableBinaryResultType(node);
                 if (expected_ty) |expected| {
-                    if (std.meta.activeTag(expected) == std.meta.activeTag(result_ty)) result_ty = expected;
+                    if (result_ty == .unknown or result_ty == .value or
+                        std.meta.activeTag(expected) == std.meta.activeTag(result_ty)) result_ty = expected;
                 }
                 const operand_ty = if (mirIsComparisonBinary(node.op)) comparison_operand: {
                     const left_ty = self.exprType(node.left.*);
@@ -14001,7 +14061,11 @@ const FunctionBuilder = struct {
             }
         }
         if (owner == null and statement_owner == null) {
-            self.executable_supported = false;
+            // Canonical expressions are appended in evaluation order and may
+            // not exist yet while the source-shaped legacy walk records this
+            // edge. finishExecutableBody resolves checked owners from the
+            // completed expression table; an unresolved edge still fails the
+            // exact projection check there.
             return;
         }
         const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
