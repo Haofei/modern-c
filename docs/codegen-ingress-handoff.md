@@ -1,14 +1,14 @@
 # Codegen ingress handoff
 
-Measured 2026-08-30 on `master`.
+Measured 2026-08-31 on `master`.
 
 ## Current state
 
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1457/1825 C functions and 1499/1879 LLVM functions.
-  The remaining 368 C and 380 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1463/1825 C functions and 1505/1879 LLVM functions.
+  The remaining 362 C and 374 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -34,6 +34,13 @@ source-shaped legacy fact walk and evaluation-ordered `ExprId`s without
 weakening the bijective trap projection check. The complete monomorphization
 fixture is now 8/8 canonical in both backends; the broad `trap_projection`
 reason fell from 60 to 55.
+
+Scalar/enum switch admission now keeps source wildcard arms separate from
+representation/bounds trap successors created while evaluating the subject.
+Those traps remain explicit executable edges; they no longer consume the
+switch default slot. Six broad-corpus entries per backend moved to canonical
+emission, leaving 17 C / 19 LLVM `general_switch` bodies in the structural
+variant/generated-control-flow tail.
 
 ## Next work
 

@@ -8208,14 +8208,28 @@ const FunctionBuilder = struct {
             else => return null,
         }
         var result: mir_model.ExecutableSwitchTerminator = .{ .subject = subject };
+        // A representation or bounds check evaluated while forming the switch
+        // subject also leaves its trap block in the legacy dispatch successor
+        // list.  That edge is already owned by executable_trap_edges and is not
+        // the switch default.  Prefer a source arm marker (including `_`) over
+        // the target block's terminator, and only use an unmarked trap successor
+        // as the implicit invalid-representation default when the source has no
+        // explicit wildcard arm.
+        var has_explicit_default = false;
+        for (dispatch.successors) |successor| {
+            if (successor >= legacy_blocks.len) return null;
+            for (legacy_blocks[successor].instructions) |instruction| {
+                if (instruction.kind == .expr and instruction.result_ty == .branch and
+                    std.mem.eql(u8, instruction.detail, "_"))
+                {
+                    has_explicit_default = true;
+                    break;
+                }
+            }
+        }
         for (dispatch.successors) |successor| {
             if (successor >= legacy_blocks.len) return null;
             const target = legacy_blocks[successor];
-            if (target.terminator == .trap_) {
-                if (result.default_block.isValid()) return null;
-                result.default_block = BlockId.fromIndex(successor);
-                continue;
-            }
             var marker: ?Instruction = null;
             for (target.instructions) |instruction| {
                 if (instruction.kind == .expr and instruction.result_ty == .branch) {
@@ -8223,7 +8237,13 @@ const FunctionBuilder = struct {
                     break;
                 }
             }
-            const arm = marker orelse return null;
+            const arm = marker orelse {
+                if (target.terminator != .trap_) return null;
+                if (has_explicit_default) continue;
+                if (result.default_block.isValid()) return null;
+                result.default_block = BlockId.fromIndex(successor);
+                continue;
+            };
             if (std.mem.eql(u8, arm.detail, "_")) {
                 if (result.default_block.isValid()) return null;
                 result.default_block = BlockId.fromIndex(successor);

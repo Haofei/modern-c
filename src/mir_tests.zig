@@ -5,6 +5,7 @@ const checked_program = @import("checked_program.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
+const mir_model = @import("mir_model.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_executable_c = @import("mir_executable_c.zig");
 const mir_executable_llvm = @import("mir_executable_llvm.zig");
@@ -437,6 +438,36 @@ test "executable MIR owns typed enum switch dispatch and rejects case drift" {
     function.executable_body.terminators[index].operation.switch_.case_count = 0;
     try std.testing.expectError(error.InvalidTerminatorCondition, mir_executable_body.verify(function));
     function.executable_body.terminators[index].operation.switch_ = saved;
+    try mir_executable_body.verify(function);
+}
+
+test "executable MIR keeps wildcard switch default separate from subject traps" {
+    const source =
+        \\enum Choice { left, right }
+        \\fn choose(value: Choice) -> u32 {
+        \\    switch value {
+        \\        .left => { return 1; },
+        \\        _ => { return 2; },
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_enum_wildcard_switch.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "choose") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.trap_edges.len);
+    var switch_value: ?mir_model.ExecutableSwitchTerminator = null;
+    for (function.executable_body.terminators) |terminator| switch (terminator.operation) {
+        .switch_ => |value| switch_value = value,
+        else => {},
+    };
+    const value = switch_value orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), value.case_count);
+    try std.testing.expect(value.default_block.isValid());
+    try std.testing.expect(!value.default_block.eql(function.executable_body.trap_edges[0].trap_block));
     try mir_executable_body.verify(function);
 }
 const TypeId = mir.TypeId;

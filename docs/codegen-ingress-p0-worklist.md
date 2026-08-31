@@ -3,13 +3,13 @@
 Goal: delete the AST function-body fallback after every ordinary body is
 emitted from verified executable MIR.
 
-## Measurement (2026-08-30)
+## Measurement (2026-08-31)
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1457/1825 admitted | 1499/1879 admitted |
-| AST fallback | 368 | 380 |
+| broad sweep | 1463/1825 admitted | 1505/1879 admitted |
+| AST fallback | 362 | 374 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -27,12 +27,19 @@ owner and the verifier still checks every edge bijectively. This closes both
 `fill_size` monomorphizations in C and LLVM and reduces the leading
 `trap_projection` bucket from 60 to 55.
 
+Typed scalar/enum switches now distinguish a source wildcard arm from trap
+successors created while evaluating the subject. Representation and bounds
+traps remain independently owned executable edges instead of being mistaken
+for a second switch default. This retires six broad-corpus fallback entries in
+each backend and reduces `general_switch` to 17 C / 19 LLVM bodies.
+
 ## Ranked next slices
 
 1. Attach remaining trap projections to canonical expression/statement IDs.
 2. Close signature/type-reference mismatches.
 3. Lower unsupported statements and generic member/place operations.
-4. Lower general switches with typed cases and explicit CFG.
+4. Lower the remaining variant and generated general switches with typed cases
+   and explicit CFG.
 5. Lower strings, arrays/aggregates, `try`, and remaining calls.
 6. Close renderer-only capability gaps.
 7. Delete the AST fallback artifact and both backend branches.
