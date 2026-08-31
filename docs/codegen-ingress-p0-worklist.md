@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1469/1825 admitted | 1511/1879 admitted |
-| AST fallback | 356 | 368 |
+| broad sweep | 1471/1825 admitted | 1513/1879 admitted |
+| AST fallback | 354 | 366 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -49,6 +49,14 @@ read-modify-write. Local storage remains plain, while a mutable global uses the
 existing race-unordered load/store contract. This closes `set_tx_empty` and
 `update_global_tx_empty` in both backends without treating the field as an
 ordinary byte-sized boolean store.
+
+Direct store access now follows the canonical `PlaceId` root after name
+resolution. A local that shadows a mutable global therefore remains plain
+local storage instead of inheriting race access from the shared spelling.
+Direct local `u128`/`i128` storage also has its actual 16-byte alignment; the C
+renderer still rejects shared 128-bit scalar access because the qualified
+runtime intentionally provides no such race helper. These two identity/layout
+fixes retire one fallback per backend each.
 
 ## Ranked next slices
 

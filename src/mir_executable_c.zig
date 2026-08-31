@@ -3970,6 +3970,10 @@ const ScalarMemoryInfo = struct {
 };
 
 fn scalarMemoryInfo(ty: mir.ValueType) ?ScalarMemoryInfo {
+    // The C runtime deliberately has no race-access helper for 128-bit
+    // scalars. They remain valid direct local storage, but shared/projected
+    // access must fail renderer admission closed.
+    if (mir.ExecutableCastKind.integerInfo(ty)) |integer| if (integer.bits > 64) return null;
     const suffix = switch (ty) {
         .bool => "bool",
         .integer, .float => |name| name,

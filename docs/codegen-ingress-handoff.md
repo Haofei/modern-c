@@ -7,8 +7,8 @@ Measured 2026-08-31 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1469/1825 C functions and 1511/1879 LLVM functions.
-  The remaining 356 C and 368 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1471/1825 C functions and 1513/1879 LLVM functions.
+  The remaining 354 C and 366 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -60,6 +60,13 @@ field index and scalar-storage access class. Both renderers perform the same
 read-modify-write, including race-unordered mutable-global access. The local
 and global updates in `packed_overlay.mc` moved to canonical emission in both
 backends.
+
+Ordinary stores now derive their access class from the resolved place root,
+not from a source spelling that may also name a global. The
+`local_shadows_global_assignment` regression is canonical in both backends.
+The shared memory model also records 16-byte alignment for direct local
+`u128`/`i128` values while leaving unsupported shared C access fail-closed;
+`numeric_literal_boundaries.wide_assignment` is canonical in both backends.
 
 ## Next work
 

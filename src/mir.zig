@@ -11000,7 +11000,10 @@ const FunctionBuilder = struct {
                         self.executableDerefOperandSource(node.target)
                     else
                         null;
-                    const store_access = self.executableMemoryAccess(node.target, assignment_target_ty);
+                    var store_access = self.executableMemoryAccess(node.target, assignment_target_ty);
+                    // Place identity, not a possibly shadowed source spelling,
+                    // decides whether direct local storage is thread-shared.
+                    if (place.projection_count == 0 and place.root == .local) store_access.kind = .plain;
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
                         .place = place_id,
                         .value = store_value,

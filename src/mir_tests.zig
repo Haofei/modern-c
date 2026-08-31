@@ -600,6 +600,56 @@ test "executable MIR owns and verifies packed-bits storage metadata" {
     try std.testing.expect(found_global_store);
 }
 
+test "executable MIR store access follows local identity across global shadowing" {
+    const source =
+        \\global shared_value: u32 = 0;
+        \\fn update() -> bool {
+        \\    var shared_value: bool = false;
+        \\    shared_value = true;
+        \\    return shared_value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_local_shadows_global_store.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const function = functionByNameMut(&module_mir, "update") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(function);
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+    var found = false;
+    for (function.executable_body.statements) |statement| switch (statement.operation) {
+        .store => |store| if (store.access.kind == .plain and
+            function.executable_body.places[store.place.index()].root == .local)
+        {
+            found = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(found);
+}
+
+test "executable MIR admits direct local 128-bit storage" {
+    const source =
+        \\fn update() -> u128 {
+        \\    var value: u128 = 0;
+        \\    value = 340282366920938463463374607431768211455;
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_local_u128_store.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const function = functionByNameMut(&module_mir, "update") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(function);
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+    try std.testing.expectEqual(@as(?u16, 16), mir_model.ExecutableMemoryAccess.scalarAlignment(.{ .integer = "u128" }));
+}
+
 test "executable MIR classifies representation-preserving pointer casts" {
     const mutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const const_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };

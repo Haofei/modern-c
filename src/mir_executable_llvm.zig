@@ -4682,7 +4682,8 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
 
 fn unorderedMemoryTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
     return switch (ty) {
-        .bool, .integer, .domain_integer, .float, .cstr, .address => true,
+        .integer, .domain_integer => if (mir.ExecutableCastKind.integerInfo(ty)) |integer| integer.bits <= 64 else false,
+        .bool, .float, .cstr, .address => true,
         .pointer => |shape| shape.kind != .slice,
         .nullable_pointer => |shape| shape.kind != .slice,
         .closed_enum, .open_enum => enumTypeForValueType(body, ty) != null,
