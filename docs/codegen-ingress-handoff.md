@@ -7,8 +7,8 @@ Measured 2026-08-31 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1466/1825 C functions and 1508/1879 LLVM functions.
-  The remaining 359 C and 371 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1467/1825 C functions and 1509/1879 LLVM functions.
+  The remaining 358 C and 370 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -48,6 +48,11 @@ Fixed-array `const_get` is also syntax-free at codegen ingress. Its executable
 builtin owns both the array receiver and checked compile-time index; the MIR
 verifier rejects an out-of-range mutation, while C emits `.elems[index]` and
 LLVM emits `extractvalue`. One additional body per backend is canonical.
+
+Reflection comparisons are syntax-free as well. MIR uses the checked `usize`
+result of `size_of`, `alignof`, and `field_offset` to target-type the opposite
+unsuffixed literal, so neither renderer sees a residual `comptime_int`.
+`fuzz_c_union.size_check` moved to canonical emission in both backends.
 
 ## Next work
 

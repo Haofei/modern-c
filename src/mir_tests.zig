@@ -5191,6 +5191,38 @@ test "MIR owns value reflection call target facts" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "executable MIR target-types literals compared with reflection results" {
+    const source =
+        \\extern struct Packet {
+        \\    len: u16,
+        \\    tag: u8,
+        \\}
+        \\fn reflection_comparisons() -> u32 {
+        \\    if size_of<Packet>() != 4 { return 0; }
+        \\    if alignof<Packet>() != 2 { return 0; }
+        \\    if field_offset<Packet>(.tag) != 2 { return 0; }
+        \\    return 1;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_reflection_comparisons.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "reflection_comparisons") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(function);
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+    for (function.executable_body.expressions) |expression| switch (expression.operation) {
+        .literal => |literal| switch (literal) {
+            .integer, .signed_integer => try std.testing.expect(!mir.ValueType.eql(expression.result_ty, .{ .integer = "comptime_int" })),
+            else => {},
+        },
+        else => {},
+    };
+}
+
 test "MIR owns byte-view call target facts" {
     const source =
         \\fn byte_view(value: u32) -> []const u8 {

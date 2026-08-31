@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1466/1825 admitted | 1508/1879 admitted |
-| AST fallback | 359 | 371 |
+| broad sweep | 1467/1825 admitted | 1509/1879 admitted |
+| AST fallback | 358 | 370 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -36,6 +36,11 @@ The two slices retire eight broad-corpus fallback entries per backend and
 reduce `general_switch` to 16 C / 18 LLVM bodies. Fixed-array `const_get` now
 stores its receiver and compile-time index directly on the verified builtin
 operation; this retires one further fallback per backend.
+
+Reflection calls now contribute their checked `usize` result type when MIR
+selects a comparison operand type. Unsuffixed constants compared with
+`size_of`, `alignof`, or `field_offset` no longer leak `comptime_int` into
+either renderer; `fuzz_c_union.size_check` is canonical in both backends.
 
 ## Ranked next slices
 

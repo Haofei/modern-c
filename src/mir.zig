@@ -8663,8 +8663,8 @@ const FunctionBuilder = struct {
                         std.meta.activeTag(expected) == std.meta.activeTag(result_ty)) result_ty = expected;
                 }
                 const operand_ty = if (mirIsComparisonBinary(node.op)) comparison_operand: {
-                    const left_ty = self.exprType(node.left.*);
-                    const right_ty = self.exprType(node.right.*);
+                    const left_ty = self.executableComparisonOperandType(node.left.*);
+                    const right_ty = self.executableComparisonOperandType(node.right.*);
                     if (executableComparisonPointerType(left_ty, right_ty)) |pointer_ty|
                         break :comparison_operand pointer_ty;
                     if (left_ty != .unknown and std.meta.activeTag(left_ty) != .value) break :comparison_operand left_ty;
@@ -9959,6 +9959,26 @@ const FunctionBuilder = struct {
         if (left_literal and !right_literal and right != .unknown) return right;
         if (right_literal and !left_literal and left != .unknown) return left;
         return left;
+    }
+
+    /// Reflection calls are compile-time `usize` values even though the
+    /// source expression query classifies an arbitrary call as opaque
+    /// `.value`. Comparisons must target-type the opposite literal from that
+    /// checked result, or a renderer receives a stray `comptime_int` operand.
+    fn executableComparisonOperandType(self: *FunctionBuilder, input: ast.Expr) ValueType {
+        var expr = input;
+        while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
+            .grouped => |inner| inner.*,
+            .move_expr => |inner| inner.*,
+            else => unreachable,
+        };
+        return switch (expr.kind) {
+            .call => |call| if (reflectionCallTargetKind(call) != null)
+                .{ .integer = "usize" }
+            else
+                self.exprType(expr),
+            else => self.exprType(expr),
+        };
     }
 
     /// Select the common representation used by pointer equality. Mutability
