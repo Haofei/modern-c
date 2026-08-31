@@ -658,6 +658,11 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
                 std.mem.eql(u8, shape.child, "u8"),
             else => false,
         },
+        // Secret<T> is representation-transparent. Sema proves that the source
+        // is Secret<T> and records the escape facts; executable MIR retains the
+        // payload ValueType and the unsafe authorization, so lowering is an
+        // identity operation only when the structural types still agree.
+        .declassify => operands.len == 1 and ValueType.eql(result, operands[0]),
         // `forget_unchecked` consumes its operand at the ownership layer, but
         // deliberately has no runtime release action.  The executable body
         // still carries the operand so both mechanical renderers must evaluate
@@ -682,7 +687,7 @@ fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
 
 pub fn executableBuiltinRequiresUnsafe(kind: CallTargetKind) bool {
     return switch (kind) {
-        .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .forget_unchecked, .cpu_pause => true,
+        .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .declassify, .forget_unchecked, .cpu_pause => true,
         else => false,
     };
 }

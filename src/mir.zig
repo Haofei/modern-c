@@ -9103,6 +9103,7 @@ const FunctionBuilder = struct {
                     const domain_target = try self.domainCallTarget(node);
                     const conversion_target = self.conversionCallFactInfo(node);
                     const byte_view_target = self.byteViewCallTarget(node);
+                    const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                     const result_target_type = if (kind == .result_ok or kind == .result_err)
                         (expected_type_expr orelse self.assignment_target_type_expr)
                     else
@@ -9136,6 +9137,8 @@ const FunctionBuilder = struct {
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
                         }
                     } else if (byte_view_target) |target| {
+                        result_ty = target.result_ty;
+                    } else if (semantic_escape_target) |target| {
                         result_ty = target.result_ty;
                     } else if (kind == .forget_unchecked or kind == .cpu_pause or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;

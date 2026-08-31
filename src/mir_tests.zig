@@ -5765,13 +5765,17 @@ test "MIR owns semantic escape call target facts" {
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
-    const reveal_fn = functionByName(typed_mir, "reveal_value").?;
+    const reveal_fn = functionByNamePtr(&typed_mir, "reveal_value").?;
+    try std.testing.expect(reveal_fn.executable_body.complete);
+    try mir_executable_body.verify(reveal_fn);
+    try std.testing.expect(mir_executable_c.canEmitBody(&reveal_fn.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&reveal_fn.executable_body, reveal_fn.return_ty));
     try std.testing.expectEqual(@as(usize, 1), reveal_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.declassify, reveal_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u8", reveal_fn.call_target_facts[0].result_ty.name());
-    const declassify_source = targetTypeFactByKind(reveal_fn, .declassify_source) orelse return error.TestUnexpectedResult;
+    const declassify_source = targetTypeFactByKind(reveal_fn.*, .declassify_source) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Secret", declassify_source.target_ty.kind.generic.base.text);
-    const declassify_result = targetTypeFactByKind(reveal_fn, .declassify_result) orelse return error.TestUnexpectedResult;
+    const declassify_result = targetTypeFactByKind(reveal_fn.*, .declassify_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u8", declassify_result.result_ty.name());
 
     const noalias_fn = functionByName(typed_mir, "noalias_value").?;

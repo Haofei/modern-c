@@ -1698,7 +1698,7 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = add {s} {s}, {s}\n", .{ result, result_ty, left.spelling, right.spelling });
                 return .{ .ty = result_ty, .spelling = result };
             },
-            .wrap_residue, .enum_raw => {
+            .declassify, .wrap_residue, .enum_raw => {
                 const operand = operands[0];
                 if (!std.mem.eql(u8, operand.ty, result_ty)) return error.InvalidBody;
                 return .{ .ty = result_ty, .spelling = operand.spelling };
@@ -3643,7 +3643,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -5844,6 +5844,7 @@ fn renderBuiltinForTest(allocator: std.mem.Allocator, kind: mir.CallTargetKind, 
         .result_ty = result_ty,
         .operation = .{ .builtin_call = .{
             .kind = kind,
+            .unsafe_authorized = mir.executableBuiltinRequiresUnsafe(kind),
             .callee_source = source,
             .arguments = arguments,
             .argument_count = operand_types.len,
@@ -5905,6 +5906,10 @@ test "mechanical renderer emits selected canonical builtins" {
     defer std.testing.allocator.free(same_llvm_type);
     try std.testing.expect(std.mem.indexOf(u8, same_llvm_type, "ret i32 %mc_arg_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, same_llvm_type, " = bitcast ") == null);
+
+    const declassified = try renderBuiltinForTest(std.testing.allocator, .declassify, &u32_source, .{ .integer = "u32" });
+    defer std.testing.allocator.free(declassified);
+    try std.testing.expect(std.mem.indexOf(u8, declassified, "ret i32 %mc_arg_0") != null);
 }
 
 test "mechanical renderer rejects mutated selected builtin types and kinds" {

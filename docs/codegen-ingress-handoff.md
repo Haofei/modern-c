@@ -7,8 +7,8 @@ Measured 2026-08-31 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1463/1825 C functions and 1505/1879 LLVM functions.
-  The remaining 362 C and 374 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1465/1825 C functions and 1507/1879 LLVM functions.
+  The remaining 360 C and 372 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -38,8 +38,10 @@ reason fell from 60 to 55.
 Scalar/enum switch admission now keeps source wildcard arms separate from
 representation/bounds trap successors created while evaluating the subject.
 Those traps remain explicit executable edges; they no longer consume the
-switch default slot. Six broad-corpus entries per backend moved to canonical
-emission, leaving 17 C / 19 LLVM `general_switch` bodies in the structural
+switch default slot. Canonical `declassify` now carries its payload type and
+unsafe authorization and lowers as the representation-transparent identity it
+is. Eight broad-corpus entries per backend moved to canonical emission across
+the two slices, leaving 16 C / 18 LLVM `general_switch` bodies in the structural
 variant/generated-control-flow tail.
 
 ## Next work

@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1463/1825 admitted | 1505/1879 admitted |
-| AST fallback | 362 | 374 |
+| broad sweep | 1465/1825 admitted | 1507/1879 admitted |
+| AST fallback | 360 | 372 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -30,8 +30,10 @@ owner and the verifier still checks every edge bijectively. This closes both
 Typed scalar/enum switches now distinguish a source wildcard arm from trap
 successors created while evaluating the subject. Representation and bounds
 traps remain independently owned executable edges instead of being mistaken
-for a second switch default. This retires six broad-corpus fallback entries in
-each backend and reduces `general_switch` to 17 C / 19 LLVM bodies.
+for a second switch default. Canonical `declassify` then supplies its verified
+payload type and unsafe authorization as a representation-identity builtin.
+The two slices retire eight broad-corpus fallback entries per backend and
+reduce `general_switch` to 16 C / 18 LLVM bodies.
 
 ## Ranked next slices
 
