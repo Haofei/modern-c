@@ -1331,6 +1331,15 @@ pub const ExecutableStatement = struct {
             representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
+        /// Update one boolean field in a packed-bits value.  The place names
+        /// the complete scalar-backed aggregate; codegen performs one
+        /// read-modify-write of its canonical storage representation.
+        packed_field_store: struct {
+            place: PlaceId,
+            field_index: usize,
+            value: ExprId,
+            access: ExecutableMemoryAccess,
+        },
         eval: ExprId,
         guard: struct { kind: enum { if_, while_, switch_, assert_ }, condition: ExprId },
         contract_marker: struct {

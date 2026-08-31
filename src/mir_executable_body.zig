@@ -1090,6 +1090,35 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             const stored = expression(body, operation.value) orelse return error.InvalidExpressionReference;
             if (body.complete and !sameValueType(stored.result_ty, operation.ty)) return error.InvalidStoreType;
         },
+        .packed_field_store => |operation| {
+            const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
+            if (target.storage != .ordinary or target.projection_count != 0 or
+                !sameValueType(target.root_ty, target.ty) or !target.root_type_id.eql(target.type_id))
+                return error.InvalidPlaceType;
+            const aggregate = aggregateType(body, target.type_id) orelse return error.InvalidAggregateType;
+            if (aggregate.construction != .packed_bits or !sameValueType(aggregate.ty, target.ty) or
+                operation.field_index >= aggregate.field_count or
+                aggregate.field_types[operation.field_index] != .bool)
+                return error.InvalidAggregateType;
+            const expected_alignment = mir.executableMemoryAlignment(body.enum_types, aggregate.storage_ty) orelse
+                return error.InvalidMemoryAccessType;
+            if (operation.access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
+            switch (target.root) {
+                .local => if (operation.access.kind != .plain) return error.InvalidMemoryAccessKind,
+                .symbol => |id| {
+                    const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
+                    if (identity.kind != .global or !identity.mutable) return error.ImmutableGlobalStore;
+                    if (operation.access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
+                },
+                .value => return error.InvalidPlaceType,
+            }
+            try verifyStatementExpr(body, statement_value, operation.value);
+            const stored = expression(body, operation.value) orelse return error.InvalidExpressionReference;
+            if (stored.result_ty != .bool or !stored.type_id.eql(aggregate.field_type_ids[operation.field_index]))
+                return error.InvalidStoreType;
+            if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 0)
+                return error.InvalidMemoryAccessTrap;
+        },
         .eval => |id| try verifyStatementExpr(body, statement_value, id),
         .guard => |operation| {
             try verifyStatementExpr(body, statement_value, operation.condition);

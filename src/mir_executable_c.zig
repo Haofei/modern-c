@@ -179,6 +179,7 @@ fn emitStatement(
                 },
             }
         },
+        .packed_field_store => |store| try emitPackedFieldStore(allocator, out, body, store, indent),
         .eval => |value| {
             // `prepareStatementExpressions` evaluated the complete expression
             // graph, including a void-valued root.  Emitting it again would
@@ -878,6 +879,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                 } else if (isSliceType(local.ty) or local.ty == .value) return false;
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
+            .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store)) return false,
             .eval => |value| if (expressionById(body, value) == null) return false,
             .guard => |guard| {
                 const condition = expressionById(body, guard.condition) orelse return false;
@@ -906,6 +908,66 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
     };
     return true;
+}
+
+fn packedFieldStoreSupported(
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    store: @FieldType(mir.ExecutableStatement.Operation, "packed_field_store"),
+) bool {
+    const place = placeById(body, store.place) orelse return false;
+    const value = expressionById(body, store.value) orelse return false;
+    const aggregate = aggregateType(body, place.type_id) orelse return false;
+    if (place.storage != .ordinary or place.projection_count != 0 or
+        !sameValueType(place.root_ty, place.ty) or !place.root_type_id.eql(place.type_id) or
+        aggregate.construction != .packed_bits or !sameValueType(aggregate.ty, place.ty) or
+        store.field_index >= aggregate.field_count or aggregate.field_types[store.field_index] != .bool or
+        value.result_ty != .bool or !value.type_id.eql(aggregate.field_type_ids[store.field_index]) or
+        scalarMemoryInfo(aggregate.storage_ty) == null or
+        store.access.alignment != mir.executableMemoryAlignment(body.enum_types, aggregate.storage_ty) or
+        ownedStatementTrapEdgeCount(body, statement.id) != 0) return false;
+    return switch (place.root) {
+        .local => |local| localById(body, local) != null and store.access.kind == .plain,
+        .symbol => |symbol| if (symbolById(body, symbol)) |identity|
+            identity.kind == .global and identity.mutable and store.access.kind == .race_unordered
+        else
+            false,
+        .value => false,
+    };
+}
+
+fn emitPackedFieldStore(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    store: @FieldType(mir.ExecutableStatement.Operation, "packed_field_store"),
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    const place = placeById(body, store.place) orelse return error.InvalidPlace;
+    const aggregate = aggregateType(body, place.type_id) orelse return error.InvalidPlace;
+    const scalar = scalarMemoryInfo(aggregate.storage_ty) orelse return error.UnsupportedType;
+    if (store.field_index >= 128) return error.UnsupportedOperation;
+    const mask = @as(u128, 1) << @intCast(store.field_index);
+
+    try writeIndent(allocator, out, indent);
+    if (store.access.kind == .race_unordered) {
+        try out.print(allocator, "mc_race_store_{s}(", .{scalar.helper_suffix});
+        try emitPlaceAddress(allocator, out, body, store.place);
+        try out.print(allocator, ", ({s})((mc_race_load_{s}(", .{ scalar.c_type, scalar.helper_suffix });
+        try emitPlaceAddress(allocator, out, body, store.place);
+        try out.print(allocator, ") & ({s})~(({s}){d})) | (", .{ scalar.c_type, scalar.c_type, mask });
+        try emitExpression(allocator, out, body, store.value, 0);
+        try out.print(allocator, " ? ({s}){d} : ({s})0)));\n", .{ scalar.c_type, mask, scalar.c_type });
+        return;
+    }
+    try emitPlace(allocator, out, body, store.place);
+    try out.appendSlice(allocator, " = (");
+    try appendCType(allocator, out, body, place.ty);
+    try out.appendSlice(allocator, ")((");
+    try emitPlace(allocator, out, body, store.place);
+    try out.print(allocator, " & ({s})~(({s}){d})) | (", .{ scalar.c_type, scalar.c_type, mask });
+    try emitExpression(allocator, out, body, store.value, 0);
+    try out.print(allocator, " ? ({s}){d} : ({s})0));\n", .{ scalar.c_type, mask, scalar.c_type });
 }
 
 fn localInit(body: *const mir.ExecutableBody, id: mir.LocalId) ?@FieldType(mir.ExecutableStatement.Operation, "local_init") {

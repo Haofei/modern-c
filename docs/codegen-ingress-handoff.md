@@ -7,8 +7,8 @@ Measured 2026-08-31 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1467/1825 C functions and 1509/1879 LLVM functions.
-  The remaining 358 C and 370 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1469/1825 C functions and 1511/1879 LLVM functions.
+  The remaining 356 C and 368 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -53,6 +53,13 @@ Reflection comparisons are syntax-free as well. MIR uses the checked `usize`
 result of `size_of`, `alignof`, and `field_offset` to target-type the opposite
 unsuffixed literal, so neither renderer sees a residual `comptime_int`.
 `fuzz_c_union.size_check` moved to canonical emission in both backends.
+
+Packed-bits field stores are no longer reconstructed by the legacy body
+emitter. Executable MIR carries a whole-aggregate place plus the exact boolean
+field index and scalar-storage access class. Both renderers perform the same
+read-modify-write, including race-unordered mutable-global access. The local
+and global updates in `packed_overlay.mc` moved to canonical emission in both
+backends.
 
 ## Next work
 

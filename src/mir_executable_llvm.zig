@@ -224,6 +224,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     !sameValueType(store.ty, body.expressions[store.value.index()].result_ty) or
                     !memoryStoreSupported(body, statement, store)) return false;
             },
+            .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store)) return false,
             .eval => |value| if (!expressionValid(body, value)) return false,
             .guard => |guard| {
                 if (!expressionValid(body, guard.condition)) return false;
@@ -517,6 +518,7 @@ const Renderer = struct {
                 if (!sameValueType(store.ty, self.body.expressions[store.value.index()].result_ty)) return error.InvalidBody;
                 try self.emitMemoryStore(store.place, value, pointer, store.access);
             },
+            .packed_field_store => |store| try self.emitPackedFieldStore(store),
             .eval => |value| _ = try self.emitExpression(value),
             .guard => |guard| {
                 const condition = try self.emitExpression(guard.condition);
@@ -584,6 +586,48 @@ const Renderer = struct {
                 try self.output.appendSlice(self.allocator, "  ]\n");
             },
             .fallthrough => return error.Unsupported,
+        }
+    }
+
+    fn emitPackedFieldStore(
+        self: *Renderer,
+        store: @FieldType(mir.ExecutableStatement.Operation, "packed_field_store"),
+    ) RenderError!void {
+        if (!placeValid(self.body, store.place) or !expressionValid(self.body, store.value)) return error.InvalidBody;
+        const place = self.body.places[store.place.index()];
+        const aggregate = aggregateType(self.body, place.type_id) orelse return error.InvalidBody;
+        const storage_info = mir.ExecutableCastKind.integerInfo(aggregate.storage_ty) orelse return error.InvalidBody;
+        if (store.field_index >= storage_info.bits or storage_info.bits > 128) return error.InvalidBody;
+        const storage_ty = try self.typeText(aggregate.storage_ty);
+        const pointer = try self.emitPlace(store.place, storage_ty);
+        const value = try self.emitExpression(store.value);
+        if (!std.mem.eql(u8, value.ty, "i1")) return error.InvalidBody;
+        const mask = @as(u128, 1) << @intCast(store.field_index);
+        const all_bits = if (storage_info.bits == 128)
+            std.math.maxInt(u128)
+        else
+            (@as(u128, 1) << @intCast(storage_info.bits)) - 1;
+        const clear_mask = all_bits ^ mask;
+        const loaded = try self.temp();
+        switch (store.access.kind) {
+            .plain => try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}, align {d}\n", .{ loaded, storage_ty, pointer, store.access.alignment }),
+            .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ loaded, storage_ty, pointer, store.access.alignment }),
+        }
+        const cleared = try self.temp();
+        const widened = try self.temp();
+        const shifted = try self.temp();
+        const updated = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = and {s} {s}, {d}\n" ++
+                "  {s} = zext i1 {s} to {s}\n" ++
+                "  {s} = shl {s} {s}, {d}\n" ++
+                "  {s} = or {s} {s}, {s}\n",
+            .{ cleared, storage_ty, loaded, clear_mask, widened, value.spelling, storage_ty, shifted, storage_ty, widened, store.field_index, updated, storage_ty, cleared, shifted },
+        );
+        switch (store.access.kind) {
+            .plain => try self.output.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}\n", .{ storage_ty, updated, pointer, store.access.alignment }),
+            .race_unordered => try self.output.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}\n", .{ storage_ty, updated, pointer, store.access.alignment }),
         }
     }
 
@@ -4513,6 +4557,34 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         mir.executableGlobalPointerDerefPlace(body, place, true)) and
         store.representation_source != null and store.representation_span_id.isValid() and
         statementRepresentationTrapEdgeIsExact(body, statement);
+}
+
+fn packedFieldStoreSupported(
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    store: @FieldType(mir.ExecutableStatement.Operation, "packed_field_store"),
+) bool {
+    if (!placeValid(body, store.place) or !expressionValid(body, store.value) or
+        ownedStatementTrapEdgeCount(body, statement.id) != 0) return false;
+    const place = body.places[store.place.index()];
+    const value = body.expressions[store.value.index()];
+    const aggregate = aggregateType(body, place.type_id) orelse return false;
+    if (place.storage != .ordinary or place.projection_count != 0 or
+        !sameValueType(place.root_ty, place.ty) or !place.root_type_id.eql(place.type_id) or
+        aggregate.construction != .packed_bits or !sameValueType(aggregate.ty, place.ty) or
+        store.field_index >= aggregate.field_count or aggregate.field_types[store.field_index] != .bool or
+        value.result_ty != .bool or !value.type_id.eql(aggregate.field_type_ids[store.field_index]) or
+        scalarLlvmType(aggregate.storage_ty) == null or
+        mir.ExecutableCastKind.integerInfo(aggregate.storage_ty) == null or
+        store.access.alignment != mir.executableMemoryAlignment(body.enum_types, aggregate.storage_ty)) return false;
+    return switch (place.root) {
+        .local => |local| localAddressable(body, local) and store.access.kind == .plain,
+        .symbol => |symbol| if (symbolIdentity(body, symbol)) |identity|
+            identity.kind == .global and identity.mutable and store.access.kind == .race_unordered
+        else
+            false,
+        .value => false,
+    };
 }
 
 fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool, allow_unordered_value: bool) bool {

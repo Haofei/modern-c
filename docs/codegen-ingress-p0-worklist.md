@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1467/1825 admitted | 1509/1879 admitted |
-| AST fallback | 358 | 370 |
+| broad sweep | 1469/1825 admitted | 1511/1879 admitted |
+| AST fallback | 356 | 368 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -41,6 +41,14 @@ Reflection calls now contribute their checked `usize` result type when MIR
 selects a comparison operand type. Unsuffixed constants compared with
 `size_of`, `alignof`, or `field_offset` no longer leak `comptime_int` into
 either renderer; `fuzz_c_union.size_check` is canonical in both backends.
+
+Packed-bits field assignment is now an explicit executable-MIR
+`packed_field_store`. It owns the complete packed place, boolean field index,
+and storage access class; C and LLVM mechanically emit the same scalar
+read-modify-write. Local storage remains plain, while a mutable global uses the
+existing race-unordered load/store contract. This closes `set_tx_empty` and
+`update_global_tx_empty` in both backends without treating the field as an
+ordinary byte-sized boolean store.
 
 ## Ranked next slices
 

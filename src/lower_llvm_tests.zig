@@ -10,6 +10,30 @@ const mir = @import("mir.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM canonical MIR renders packed field read-modify-write" {
+    const source =
+        \\packed bits Flags: u8 { ready: bool, busy: bool }
+        \\global shared_flags: Flags = 0;
+        \\fn update_local(input: Flags, set: bool) -> Flags {
+        \\    var next: Flags = input;
+        \\    next.busy = set;
+        \\    return next;
+        \\}
+        \\fn update_global(set: bool) -> void { shared_flags.ready = set; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_packed_field_store.mc", source, &output);
+
+    const local = try llvmFunctionBody(output.items, "define internal i8 @update_local");
+    try expectContains(local, "; canonical executable MIR");
+    try expectContains(local, "and i8");
+    try expectContains(local, "shl i8");
+    const global = try llvmFunctionBody(output.items, "define internal void @update_global");
+    try expectContains(global, "load atomic i8, ptr @shared_flags unordered, align 1");
+    try expectContains(global, "store atomic i8");
+}
+
 test "LLVM canonical executable MIR preserves function render attributes" {
     const source =
         \\#[section(".text.hot")]

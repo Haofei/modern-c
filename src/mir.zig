@@ -6880,6 +6880,22 @@ const FunctionBuilder = struct {
                     }
                     if (store.access.alignment == 0) complete = false;
                 },
+                .packed_field_store => |store| {
+                    if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len or
+                        !store.value.isValid() or store.value.index() >= self.executable_expressions.items.len)
+                    {
+                        complete = false;
+                    } else {
+                        const place = self.executable_places.items[store.place.index()];
+                        const value = self.executable_expressions.items[store.value.index()];
+                        const aggregate = self.executableAggregateType(place.type_id);
+                        if (aggregate == null or aggregate.?.construction != .packed_bits or
+                            !sameValueType(aggregate.?.ty, place.ty) or store.field_index >= aggregate.?.field_count or
+                            aggregate.?.field_types[store.field_index] != .bool or value.result_ty != .bool or
+                            store.access.alignment != mir_model.executableMemoryAlignment(self.executable_enum_types.items, aggregate.?.storage_ty))
+                            complete = false;
+                    }
+                },
                 .return_ => |maybe_value| if (maybe_value) |value_id| {
                     const value = self.executable_expressions.items[value_id.index()];
                     if (!sameValueType(value.result_ty, self.return_ty)) complete = false;
@@ -10284,6 +10300,65 @@ const FunctionBuilder = struct {
         });
     }
 
+    const ExecutablePackedFieldTarget = struct {
+        base: ast.Expr,
+        field_index: usize,
+        storage_ty: ValueType,
+    };
+
+    fn executablePackedFieldTarget(self: *FunctionBuilder, input: ast.Expr) !?ExecutablePackedFieldTarget {
+        var target = input;
+        while (target.kind == .grouped) target = target.kind.grouped.*;
+        const member = switch (target.kind) {
+            .member => |node| node,
+            else => return null,
+        };
+        var base_ty = self.exprType(member.base.*);
+        if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(member.base.*)) |resolved| {
+            base_ty = valueTypeFromTypeAlias(resolved, self.enums, self.structs, self.packed_bits, self.aliases);
+        };
+        const name = switch (base_ty) {
+            .struct_ => |value| value,
+            else => return null,
+        };
+        const summary = self.packed_bits.get(name) orelse return null;
+        const field_index = self.memberFieldIndex(member) orelse return null;
+        if (field_index >= summary.fields.len or
+            valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases) != .bool or
+            !try self.internExecutablePackedBitsType(base_ty, summary)) return null;
+        return .{
+            .base = member.base.*,
+            .field_index = field_index,
+            .storage_ty = valueTypeFromTypeAlias(summary.repr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+    }
+
+    fn executableAggregateType(self: *const FunctionBuilder, type_id: TypeId) ?*const mir_model.ExecutableAggregateType {
+        for (self.executable_aggregate_types.items) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
+        return null;
+    }
+
+    fn executablePackedStoreAccess(
+        self: *FunctionBuilder,
+        place_id: PlaceId,
+        storage_ty: ValueType,
+    ) mir_model.ExecutableMemoryAccess {
+        const alignment = mir_model.executableMemoryAlignment(self.executable_enum_types.items, storage_ty) orelse 0;
+        if (alignment == 0 or !place_id.isValid() or place_id.index() >= self.executable_places.items.len) {
+            self.executable_supported = false;
+            return .{ .kind = .plain, .alignment = alignment };
+        }
+        return .{
+            .kind = switch (self.executable_places.items[place_id.index()].root) {
+                .local => .plain,
+                .symbol => |symbol_id| if (symbol_id.isValid() and symbol_id.index() < self.executable_symbols.items.len and
+                    self.executable_symbols.items[symbol_id.index()].mutable) .race_unordered else .plain,
+                .value => .race_unordered,
+            },
+            .alignment = alignment,
+        };
+    }
+
     fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) anyerror!PlaceId {
         const place_ty = self.exprType(expr);
         var place: ExecutablePlace = .{
@@ -10910,21 +10985,31 @@ const FunctionBuilder = struct {
                     defer self.executable_assignment_rhs = previous_executable_assignment_rhs;
                     break :rhs try self.ensureExecutablePointerCoercedExprAsType(node.value, assignment_target_ty, assignment_target_type_expr);
                 };
-                const place_id = try self.appendExecutablePlace(node.target);
-                const place = self.executable_places.items[place_id.index()];
-                const representation_source = if (self.executablePlaceNeedsRepresentationGuard(place))
-                    self.executableDerefOperandSource(node.target)
-                else
-                    null;
-                const store_access = self.executableMemoryAccess(node.target, assignment_target_ty);
-                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
-                    .place = place_id,
-                    .value = store_value,
-                    .ty = assignment_target_ty,
-                    .access = store_access,
-                    .representation_source = representation_source,
-                    .representation_span_id = if (representation_source) |source| try self.internSpanId(source) else .invalid,
-                } });
+                if (try self.executablePackedFieldTarget(node.target)) |packed_target| {
+                    const place_id = try self.appendExecutablePlace(packed_target.base);
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .packed_field_store = .{
+                        .place = place_id,
+                        .field_index = packed_target.field_index,
+                        .value = store_value,
+                        .access = self.executablePackedStoreAccess(place_id, packed_target.storage_ty),
+                    } });
+                } else {
+                    const place_id = try self.appendExecutablePlace(node.target);
+                    const place = self.executable_places.items[place_id.index()];
+                    const representation_source = if (self.executablePlaceNeedsRepresentationGuard(place))
+                        self.executableDerefOperandSource(node.target)
+                    else
+                        null;
+                    const store_access = self.executableMemoryAccess(node.target, assignment_target_ty);
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .store = .{
+                        .place = place_id,
+                        .value = store_value,
+                        .ty = assignment_target_ty,
+                        .access = store_access,
+                        .representation_source = representation_source,
+                        .representation_span_id = if (representation_source) |source| try self.internSpanId(source) else .invalid,
+                    } });
+                }
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
                 const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 assignment_instruction.typed_target_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.target).span));

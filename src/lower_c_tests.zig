@@ -63,6 +63,30 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     });
 }
 
+test "lower-c canonical MIR renders packed field read-modify-write" {
+    const source =
+        \\packed bits Flags: u8 { ready: bool, busy: bool }
+        \\global shared_flags: Flags = 0;
+        \\fn update_local(input: Flags, set: bool) -> Flags {
+        \\    var next: Flags = input;
+        \\    next.busy = set;
+        \\    return next;
+        \\}
+        \\fn update_global(set: bool) -> void { shared_flags.ready = set; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_packed_field_store.mc", source, &output);
+
+    const local = try cFunctionBody(output.items, "update_local(");
+    try expectContains(local, "/* canonical executable MIR */");
+    try expectContains(local, "next = (Flags)((next & (uint8_t)~((uint8_t)2))");
+    const global = try cFunctionBody(output.items, "update_global(");
+    try expectContains(global, "/* canonical executable MIR */");
+    try expectContains(global, "mc_race_store_u8(&shared_flags");
+    try expectContains(global, "mc_race_load_u8(&shared_flags)");
+}
+
 test "lower-c canonical executable MIR preserves function render attributes" {
     const source =
         \\#[section(".text.hot")]

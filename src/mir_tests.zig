@@ -518,12 +518,21 @@ test "executable MIR classifies mixed-sign and narrowing integer resizing" {
 test "executable MIR owns and verifies packed-bits storage metadata" {
     const source =
         \\packed bits Flags: u8 { ready: bool, busy: bool }
+        \\global shared_flags: Flags = 0;
         \\fn ready(flags: Flags) -> bool { return flags.ready; }
         \\fn make(ready: bool, busy: bool) -> Flags { return .{ .ready = ready, .busy = busy }; }
         \\fn replace(ready: bool) -> Flags {
         \\    var flags: Flags = .{ .ready = false, .busy = false };
         \\    flags = .{ .ready = ready, .busy = false };
         \\    return flags;
+        \\}
+        \\fn update(flags: Flags, busy: bool) -> Flags {
+        \\    var next: Flags = flags;
+        \\    next.busy = busy;
+        \\    return next;
+        \\}
+        \\fn update_global(ready_value: bool) -> void {
+        \\    shared_flags.ready = ready_value;
         \\}
     ;
     var parsed = try test_support.parseCheckedModule("mir_packed_bits_storage.mc", source);
@@ -557,6 +566,38 @@ test "executable MIR owns and verifies packed-bits storage metadata" {
     try std.testing.expect(replacement.executable_body.complete);
     try std.testing.expect(mir_executable_c.canEmitBody(&replacement.executable_body));
     try std.testing.expect(mir_executable_llvm.supports(&replacement.executable_body, replacement.return_ty));
+
+    const update = functionByNameMut(&module_mir, "update") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(update);
+    try std.testing.expect(update.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&update.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&update.executable_body, update.return_ty));
+    var local_store: ?*mir.ExecutableStatement = null;
+    for (update.executable_body.statements) |*statement| switch (statement.operation) {
+        .packed_field_store => |store| if (store.field_index == 1 and store.access.kind == .plain) {
+            local_store = statement;
+        },
+        else => {},
+    };
+    const checked_store = local_store orelse return error.TestUnexpectedResult;
+    checked_store.operation.packed_field_store.field_index = 2;
+    try std.testing.expectError(error.InvalidAggregateType, mir_executable_body.verify(update));
+    checked_store.operation.packed_field_store.field_index = 1;
+    try mir_executable_body.verify(update);
+
+    const update_global = functionByNameMut(&module_mir, "update_global") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(update_global);
+    try std.testing.expect(update_global.executable_body.complete);
+    try std.testing.expect(mir_executable_c.canEmitBody(&update_global.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&update_global.executable_body, update_global.return_ty));
+    var found_global_store = false;
+    for (update_global.executable_body.statements) |statement| switch (statement.operation) {
+        .packed_field_store => |store| if (store.field_index == 0 and store.access.kind == .race_unordered) {
+            found_global_store = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(found_global_store);
 }
 
 test "executable MIR classifies representation-preserving pointer casts" {
