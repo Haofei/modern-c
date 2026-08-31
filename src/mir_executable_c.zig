@@ -1655,7 +1655,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -1734,6 +1734,12 @@ fn emitBuiltinCall(
 ) (RenderError || std.mem.Allocator.Error)!void {
     const result_ty = expression.result_ty;
     switch (call.kind) {
+        .const_get => {
+            const index = call.const_index orelse return error.InvalidExpression;
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.print(allocator, ").elems[{d}]", .{index});
+        },
         .phys => {
             try out.appendSlice(allocator, "((uintptr_t)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);

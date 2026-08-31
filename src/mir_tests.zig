@@ -4652,11 +4652,25 @@ test "MIR const_get fixed indexing has no bounds trap edge" {
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
-    const fixed_fn = functionByName(typed_mir, "fixed").?;
+    const fixed_fn = functionByNameMut(&typed_mir, "fixed").?;
     const rejected_fn = functionByName(typed_mir, "rejected").?;
-    try std.testing.expect(functionHasInstruction(fixed_fn, .index, "const_get"));
-    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(fixed_fn, .Bounds));
+    try std.testing.expect(functionHasInstruction(fixed_fn.*, .index, "const_get"));
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(fixed_fn.*, .Bounds));
     try std.testing.expectEqual(@as(usize, 1), countTrapEdges(rejected_fn, .Bounds));
+    try std.testing.expect(fixed_fn.executable_body.complete);
+    try mir_executable_body.verify(fixed_fn);
+    try std.testing.expect(mir_executable_c.canEmitBody(&fixed_fn.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&fixed_fn.executable_body, fixed_fn.return_ty));
+    for (fixed_fn.executable_body.expressions) |*expression| switch (expression.operation) {
+        .builtin_call => |*call| if (call.kind == .const_get) {
+            try std.testing.expectEqual(@as(?usize, 1), call.const_index);
+            call.const_index = 2;
+            try std.testing.expectError(error.InvalidBuiltinCall, mir_executable_body.verify(fixed_fn));
+            call.const_index = 1;
+        },
+        else => {},
+    };
+    try mir_executable_body.verify(fixed_fn);
 
     try mir.verifyBuiltMir(typed_mir, &reporter);
     try std.testing.expect(reporter.has_errors);

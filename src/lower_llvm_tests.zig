@@ -7930,7 +7930,8 @@ test "LLVM const_get consumes MIR base result and index facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_const_get_facts.mc", .{}, false, .riscv64, null);
-        try std.testing.expect(std.mem.indexOf(u8, output.items, "i64 2") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "extractvalue [3 x i32]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, ", 2") != null);
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});

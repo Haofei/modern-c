@@ -7,8 +7,8 @@ Measured 2026-08-31 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1465/1825 C functions and 1507/1879 LLVM functions.
-  The remaining 360 C and 372 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1466/1825 C functions and 1508/1879 LLVM functions.
+  The remaining 359 C and 371 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -43,6 +43,11 @@ unsafe authorization and lowers as the representation-transparent identity it
 is. Eight broad-corpus entries per backend moved to canonical emission across
 the two slices, leaving 16 C / 18 LLVM `general_switch` bodies in the structural
 variant/generated-control-flow tail.
+
+Fixed-array `const_get` is also syntax-free at codegen ingress. Its executable
+builtin owns both the array receiver and checked compile-time index; the MIR
+verifier rejects an out-of-range mutation, while C emits `.elems[index]` and
+LLVM emits `extractvalue`. One additional body per backend is canonical.
 
 ## Next work
 

@@ -458,6 +458,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             }
             if (body.complete) {
                 if (!mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return error.InvalidBuiltinCall;
+                if (call.kind == .const_get) {
+                    const index = call.const_index orelse return error.InvalidBuiltinCall;
+                    const array = switch (operand_types[0]) {
+                        .array => |shape| shape,
+                        else => return error.InvalidBuiltinCall,
+                    };
+                    if (array.length == null or index >= array.length.?) return error.InvalidBuiltinCall;
+                } else if (call.const_index != null) {
+                    return error.InvalidBuiltinCall;
+                }
                 if (call.kind == .raw_ptr) {
                     const source = call.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, call.representation_span_id, source);

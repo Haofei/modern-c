@@ -19771,7 +19771,7 @@ test "lower-c emits fixed array indexing with bounds checks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u8_4 xs") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 xs") != null);
     try std.testing.expect(std.mem.count(u8, output.items, "mc_check_index_usize(") >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.elems[2];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ").elems[2]") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize(2, 4)") == null);
 }
 

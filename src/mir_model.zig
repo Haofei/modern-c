@@ -529,6 +529,10 @@ pub const ExecutableIntegerInfo = struct { signed: bool, bits: u16 };
 
 pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, operands: []const ValueType) bool {
     return switch (kind) {
+        .const_get => operands.len == 1 and switch (operands[0]) {
+            .array => |shape| shape.length != null and std.mem.eql(u8, shape.child, result.name()),
+            else => false,
+        },
         .phys => operands.len == 1 and switch (result) {
             .address => |class| class == .paddr and unsignedIntegerAtLeast(operands[0], 64),
             else => false,
@@ -1061,6 +1065,10 @@ pub const ExecutableExpression = struct {
             /// non-null pointer obligation in MIR rather than in a backend.
             representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
+            /// Compile-time index owned by `const_get`; absent for every other
+            /// builtin kind. Keeping it on the verified operation prevents a
+            /// renderer from reopening generic syntax to recover the index.
+            const_index: ?usize = null,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },

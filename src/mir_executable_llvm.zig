@@ -1685,6 +1685,13 @@ const Renderer = struct {
         for (call.arguments[0..call.argument_count], 0..) |id, index| operands[index] = try self.emitExpression(id);
         const result_ty = try self.typeText(expression.result_ty);
         return switch (call.kind) {
+            .const_get => {
+                const index = call.const_index orelse return error.InvalidBody;
+                const operand = operands[0];
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ result, operand.ty, operand.spelling, index });
+                return .{ .ty = result_ty, .spelling = result };
+            },
             .phys => {
                 const operand = operands[0];
                 if (!std.mem.eql(u8, operand.ty, result_ty)) return error.Unsupported;
@@ -3643,7 +3650,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;

@@ -9097,6 +9097,7 @@ const FunctionBuilder = struct {
                     } };
                 }
                 if (try self.executableBuiltinCallKind(node)) |kind| {
+                    const const_get_target = self.constGetCallTarget(node);
                     const raw_target = self.rawCallTarget(node);
                     const wrapping_target = self.wrappingCallTarget(node);
                     const enum_raw_target = self.enumRawCallTarget(node);
@@ -9112,6 +9113,8 @@ const FunctionBuilder = struct {
                         result_ty = valueTypeFromTypeAlias(target_type, self.enums, self.structs, self.packed_bits, self.aliases);
                         if (!try self.internExecutableResultType(result_ty, target_type))
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    } else if (const_get_target) |target| {
+                        result_ty = target.result_ty;
                     } else if (kind == .phys) {
                         result_ty = .{ .address = .paddr };
                     } else if (wrapping_target) |target| {
@@ -9147,6 +9150,11 @@ const FunctionBuilder = struct {
                     }
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     const receiver, const receiver_ty = switch (kind) {
+                        .const_get => .{
+                            (const_get_target orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*,
+                            const_get_target.?.base_ty,
+                        },
                         .raw_many_offset => .{
                             (memberExpr(node.callee.*) orelse
                                 break :call self.unsupportedExecutableExpression(.unsupported_call)).base.*,
@@ -9174,6 +9182,7 @@ const FunctionBuilder = struct {
                         .callee_span_id = try self.internSpanId(callee_source),
                         .representation_source = if (kind == .raw_ptr) source else null,
                         .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
+                        .const_index = if (const_get_target) |target| target.index else null,
                         .argument_count = argument_count,
                     };
                     var argument_index: usize = 0;
