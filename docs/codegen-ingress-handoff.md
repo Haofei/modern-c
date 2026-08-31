@@ -7,8 +7,8 @@ Measured 2026-08-30 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1447/1825 C functions and 1488/1879 LLVM functions.
-  The remaining 378 C and 391 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1455/1825 C functions and 1497/1879 LLVM functions.
+  The remaining 370 C and 382 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -18,6 +18,15 @@ owns iterable evaluation, synthetic iterable/index locals, element binding,
 loop control, and representation traps. Both renderers mechanically consume the
 same verified terminators. The old foreach return/update recognizers, emitters,
 tests, census variants, and shared statement-plan module were deleted.
+
+Canonical memory facts now distinguish ordinary aggregate storage from packed
+bits and unions. Declared structs, value optionals, and fixed arrays are copied
+through recursively verified scalar leaves for mutable-global and guarded
+pointer accesses; packed/union values retain one plain storage operation so
+their representation is not decomposed incorrectly. This closes eight C and
+nine LLVM broad-corpus fallbacks while preserving the prior race-unordered
+contract. C fixed-array leaves use the canonical `.elems[index]` layout and the
+generated row-replacement fixture compile-checks with `clang -Werror`.
 
 ## Next work
 

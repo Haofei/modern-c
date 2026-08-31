@@ -7473,6 +7473,16 @@ const FunctionBuilder = struct {
             place,
             false,
         )) return true;
+        const parameter_body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+        };
+        if (mir_model.executableParameterProjectedPlace(&parameter_body, place, false)) return true;
+        if (mir_model.executableGuardedLocalAggregateDerefPlace(&parameter_body, place, false)) return true;
         const transient_body: mir_model.ExecutableBody = .{
             .locals = self.executable_locals.items,
             .symbols = self.executable_symbols.items,
@@ -7542,7 +7552,7 @@ const FunctionBuilder = struct {
             .places = self.executable_places.items,
             .aggregate_types = self.executable_aggregate_types.items,
         };
-        return mir_model.executableParameterFieldPlace(&transient_body, place, false);
+        return mir_model.executableParameterProjectedPlace(&transient_body, place, false);
     }
 
     fn executableFixedArrayIndexPlaceComplete(self: *const FunctionBuilder, place: ExecutablePlace) bool {
@@ -7763,20 +7773,17 @@ const FunctionBuilder = struct {
         is_store: bool,
     ) bool {
         if (!sameValueType(place.ty, ty)) return false;
-        const aggregate_copy = mir_model.executableAggregateCopyAlignment(ty) != null;
         const expected_alignment = mir_model.executableMemoryAlignment(self.executable_enum_types.items, ty) orelse return false;
         if (access.alignment != expected_alignment) return false;
-        if (aggregate_copy and access.kind != .plain) return false;
+        const aggregate_body: mir_model.ExecutableBody = .{
+            .aggregate_types = self.executable_aggregate_types.items,
+            .enum_types = self.executable_enum_types.items,
+        };
+        if (mir_model.executableAggregateCopyAlignment(ty) != null and access.kind == .race_unordered) {
+            if (!mir_model.executableRaceAggregateTypeSupported(&aggregate_body, place.type_id, place.ty)) return false;
+        }
         if (place.projection_count != 0) {
             if (!self.executablePlaceComplete(place)) return false;
-            if (aggregate_copy) return switch (place.root) {
-                .local => true,
-                .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
-                    const identity = self.executable_symbols.items[id.index()];
-                    break :symbol identity.kind == .global and (!is_store or identity.mutable);
-                } else false,
-                .value => false,
-            };
             if (self.executableFixedArrayIndexPlaceComplete(place)) return switch (place.root) {
                 .local => access.kind == .plain,
                 .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
@@ -7854,8 +7861,11 @@ const FunctionBuilder = struct {
             .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
                 const identity = self.executable_symbols.items[id.index()];
                 if (identity.kind != .global or (is_store and !identity.mutable)) break :symbol false;
-                if (aggregate_copy) break :symbol access.kind == .plain;
-                const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+                const expected_kind: mir_model.ExecutableMemoryAccessKind = if (mir_model.executableAggregateRequiresPlainAccess(
+                    &aggregate_body,
+                    place.type_id,
+                    place.ty,
+                )) .plain else if (identity.mutable) .race_unordered else .plain;
                 break :symbol access.kind == expected_kind;
             } else false,
             .value => false,
@@ -8663,6 +8673,18 @@ const FunctionBuilder = struct {
             },
             .borrow_expr => self.unsupportedExecutableExpression(.unsupported_borrow),
             .deref => |inner| load: {
+                // A dereference can introduce an aggregate type that does not
+                // appear in the function signature or a local declaration
+                // (for example copying `Tok` through two locally constructed
+                // `*Tok` values). Intern its canonical layout at the operation
+                // that first materializes the value so renderers never have to
+                // recover aggregate shape from pointer spelling.
+                if (mir_model.executableAggregateCopyAlignment(result_ty) != null) {
+                    const result_type_expr = self.typeExprForExpr(expr) orelse
+                        break :load self.unsupportedExecutableExpression(.unsupported_address);
+                    if (!try self.internExecutableTypeExpr(result_ty, result_type_expr))
+                        break :load self.unsupportedExecutableExpression(.unsupported_address);
+                }
                 const place_id = try self.appendExecutablePlace(expr);
                 const place = self.executable_places.items[place_id.index()];
                 const guard_source: ?SourcePoint = if (self.executablePlaceNeedsRepresentationGuard(place)) self.sourcePoint(inner.span) else null;
@@ -9889,9 +9911,9 @@ const FunctionBuilder = struct {
 
     fn executableMemoryAccess(self: *FunctionBuilder, place_expr: ast.Expr, ty: ValueType) mir_model.ExecutableMemoryAccess {
         const root = executablePlaceRootIdent(place_expr);
-        const aggregate_copy = mir_model.executableAggregateCopyAlignment(ty) != null;
         const alignment = mir_model.executableMemoryAlignment(self.executable_enum_types.items, ty) orelse 0;
         if (alignment == 0) self.executable_supported = false;
+        const aggregate_plain = self.executableAggregateRequiresPlainAccess(ty);
         const slice_index = switch (place_expr.kind) {
             .index => |node| switch (self.exprType(node.base.*)) {
                 .pointer => |shape| shape.kind == .slice,
@@ -9900,7 +9922,7 @@ const FunctionBuilder = struct {
             },
             else => false,
         };
-        const kind: mir_model.ExecutableMemoryAccessKind = if (aggregate_copy)
+        const kind: mir_model.ExecutableMemoryAccessKind = if (aggregate_plain)
             .plain
         else if (slice_index)
             .race_unordered
@@ -9932,6 +9954,15 @@ const FunctionBuilder = struct {
         else
             .plain;
         return .{ .kind = kind, .alignment = alignment };
+    }
+
+    fn executableAggregateRequiresPlainAccess(self: *const FunctionBuilder, ty: ValueType) bool {
+        if (mir_model.executableAggregateCopyAlignment(ty) == null) return false;
+        for (self.executable_aggregate_types.items) |shape| {
+            if (!sameValueType(shape.ty, ty)) continue;
+            return shape.construction != .declared_struct;
+        }
+        return false;
     }
 
     fn executableAggregatePointerFieldAccessKind(
@@ -15220,15 +15251,18 @@ const FunctionBuilder = struct {
                 .locals = self.executable_locals.items,
                 .statements = self.executable_statements.items,
                 .expressions = self.executable_expressions.items,
+                .places = self.executable_places.items,
                 .aggregate_types = self.executable_aggregate_types.items,
             };
             const parameter_index_address = if (representation.parameter_field_address)
                 if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| indexed.parameter_pointee else false
             else
                 false;
-            // Trap ownership is established when the checked operation is
-            // created. Aggregate/type tables may still be growing at this
-            // point; final place completeness is verified after construction.
+            // A computed pointer value owns its own representation check. In
+            // particular raw.ptr must retain the edge on the builtin call;
+            // assigning it to the later load/store would duplicate the guard
+            // semantics and fail verifier admission.
+            if (place.root == .value) continue;
             if (place.projection_count == 0 or
                 (!self.executablePlaceComplete(place) and
                     !(representation.parameter_field_address and self.executableParameterFieldPlaceComplete(place)) and
@@ -15258,6 +15292,7 @@ const FunctionBuilder = struct {
             if (!store.representation_span_id.eql(span_id)) continue;
             if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len) continue;
             const place = self.executable_places.items[store.place.index()];
+            if (place.root == .value) continue;
             if (!self.executablePlaceComplete(place) or place.projection_count == 0 or
                 !self.executableMemoryAccessComplete(place, store.ty, store.access, true)) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];

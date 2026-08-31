@@ -206,7 +206,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         } else if (place.projection_count == 0) {
             if (!placeRootValid(body, place)) return false;
         } else if (!scalarAccessPlaceSupported(body, place) and
-            !mir.executableParameterFieldPlace(body, place, false) and
+            !mir.executableGuardedLocalAggregateDerefPlace(body, place, false) and
+            !mir.executableParameterProjectedPlace(body, place, false) and
             mir.executableFixedArrayIndexPlace(body, place) == null and
             mir.executableSliceIndexPlace(body, place) == null) return false;
     }
@@ -499,6 +500,8 @@ const Renderer = struct {
                     try self.emitGuardedGlobalPointerStorePointer(statement, store.place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
+                else if (mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true))
+                    try self.emitGuardedLocalAggregateStorePointer(statement, store.place)
                 else if (mir.executableAggregateFieldPlace(
                     self.body.locals,
                     self.body.statements,
@@ -2165,6 +2168,8 @@ const Renderer = struct {
             try self.emitGuardedGlobalPointer(expression, load.place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
+        else if (mir.executableGuardedLocalAggregateDerefPlace(self.body, place, false))
+            try self.emitGuardedLocalAggregatePointer(expression, load.place)
         else if (mir.executableAggregateFieldPlace(
             self.body.locals,
             self.body.statements,
@@ -2179,6 +2184,9 @@ const Renderer = struct {
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
             try self.emitPlace(load.place, value_ty);
+        if (mir.executableAggregateCopyAlignment(expression.result_ty) != null and load.access.kind == .race_unordered) {
+            return self.emitRaceAggregateLoad(pointer, expression.result_ty, expression.type_id);
+        }
         if (callable_has_environment orelse false) {
             const code = try self.temp();
             const environment_pointer = try self.temp();
@@ -2331,6 +2339,9 @@ const Renderer = struct {
 
     fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
         const place = &self.body.places[place_id.index()];
+        if (mir.executableAggregateCopyAlignment(place.ty) != null and access.kind == .race_unordered) {
+            return self.emitRaceAggregateStore(pointer, place.ty, place.type_id, value);
+        }
         const byte_sized_bool = std.mem.eql(u8, value.ty, "i1") and
             (place.root == .symbol or access.kind == .race_unordered);
         var stored = value.spelling;
@@ -2342,6 +2353,72 @@ const Renderer = struct {
         switch (access.kind) {
             .plain => try self.output.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}\n", .{ storage_ty, stored, pointer, access.alignment }),
             .race_unordered => try self.output.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}\n", .{ storage_ty, stored, pointer, access.alignment }),
+        }
+    }
+
+    fn emitRaceAggregateLoad(self: *Renderer, pointer: []const u8, ty: mir.ValueType, type_id: mir.TypeId) RenderError!Value {
+        if (mir.executableAggregateCopyAlignment(ty) == null) {
+            const value_ty = try self.typeText(ty);
+            const storage_ty: []const u8 = if (ty == .bool) "i8" else value_ty;
+            const alignment = mir.executableMemoryAlignment(self.body.enum_types, ty) orelse return error.InvalidBody;
+            const loaded = try self.temp();
+            try self.output.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}\n", .{ loaded, storage_ty, pointer, alignment });
+            if (ty != .bool) return .{ .ty = value_ty, .spelling = loaded };
+            const converted = try self.temp();
+            try self.output.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ converted, loaded });
+            return .{ .ty = "i1", .spelling = converted };
+        }
+        const shape = aggregateType(self.body, type_id) orelse return error.InvalidBody;
+        if (!sameValueType(shape.ty, ty)) return error.InvalidBody;
+        const aggregate_ty = try self.typeText(ty);
+        var aggregate_value: []const u8 = "zeroinitializer";
+        const count = shape.array_length orelse shape.field_count;
+        var index: usize = 0;
+        while (index < count) : (index += 1) {
+            const metadata_index: usize = if (shape.array_length != null) 0 else index;
+            if (metadata_index >= shape.field_count) return error.InvalidBody;
+            const child_pointer = try self.temp();
+            try self.output.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n", .{ child_pointer, aggregate_ty, pointer, index });
+            const child = try self.emitRaceAggregateLoad(child_pointer, shape.field_types[metadata_index], shape.field_type_ids[metadata_index]);
+            const inserted = try self.temp();
+            try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{ inserted, aggregate_ty, aggregate_value, child.ty, child.spelling, index });
+            aggregate_value = inserted;
+        }
+        return .{ .ty = aggregate_ty, .spelling = aggregate_value };
+    }
+
+    fn emitRaceAggregateStore(self: *Renderer, pointer: []const u8, ty: mir.ValueType, type_id: mir.TypeId, value: Value) RenderError!void {
+        if (mir.executableAggregateCopyAlignment(ty) == null) {
+            const value_ty = try self.typeText(ty);
+            if (!std.mem.eql(u8, value.ty, value_ty)) return error.InvalidBody;
+            const alignment = mir.executableMemoryAlignment(self.body.enum_types, ty) orelse return error.InvalidBody;
+            if (ty == .bool) {
+                const converted = try self.temp();
+                try self.output.print(self.allocator, "  {s} = zext i1 {s} to i8\n  store atomic i8 {s}, ptr {s} unordered, align {d}\n", .{ converted, value.spelling, converted, pointer, alignment });
+            } else {
+                try self.output.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}\n", .{ value_ty, value.spelling, pointer, alignment });
+            }
+            return;
+        }
+        const shape = aggregateType(self.body, type_id) orelse return error.InvalidBody;
+        if (!sameValueType(shape.ty, ty)) return error.InvalidBody;
+        const aggregate_ty = try self.typeText(ty);
+        if (!std.mem.eql(u8, value.ty, aggregate_ty)) return error.InvalidBody;
+        const count = shape.array_length orelse shape.field_count;
+        var index: usize = 0;
+        while (index < count) : (index += 1) {
+            const metadata_index: usize = if (shape.array_length != null) 0 else index;
+            if (metadata_index >= shape.field_count) return error.InvalidBody;
+            const child_ty = try self.typeText(shape.field_types[metadata_index]);
+            const child_value = try self.temp();
+            const child_pointer = try self.temp();
+            try self.output.print(
+                self.allocator,
+                "  {s} = extractvalue {s} {s}, {d}\n" ++
+                    "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                .{ child_value, aggregate_ty, value.spelling, index, child_pointer, aggregate_ty, pointer, index },
+            );
+            try self.emitRaceAggregateStore(child_pointer, shape.field_types[metadata_index], shape.field_type_ids[metadata_index], .{ .ty = child_ty, .spelling = child_value });
         }
     }
 
@@ -2618,7 +2695,7 @@ const Renderer = struct {
     fn emitGuardedParameterFieldPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
-        if (!mir.executableParameterFieldPlace(self.body, place, false)) return error.InvalidBody;
+        if (!mir.executableParameterProjectedPlace(self.body, place, false)) return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
             .symbol, .value => return error.InvalidBody,
@@ -2705,6 +2782,41 @@ const Renderer = struct {
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_ready_{d}", .{expression.id.raw});
         try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
         return self.emitParameterAccessPointer(place, local.storage);
+    }
+
+    fn emitGuardedLocalAggregatePointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableGuardedLocalAggregateDerefPlace(self.body, place, false)) return error.InvalidBody;
+        const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const pointer = try self.localPointerValue(place);
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_aggregate_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
+    }
+
+    fn emitGuardedLocalAggregateStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
+        if (!placeValid(self.body, place_id)) return error.InvalidBody;
+        const place = self.body.places[place_id.index()];
+        if (!mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true)) return error.InvalidBody;
+        const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
+        const pointer = try self.localPointerValue(place);
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_aggregate_store_ready_{d}", .{statement.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return pointer;
+    }
+
+    fn localPointerValue(self: *Renderer, place: mir.ExecutablePlace) RenderError![]const u8 {
+        const local_id = switch (place.root) {
+            .local => |id| id,
+            .symbol, .value => return error.InvalidBody,
+        };
+        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+        if (!std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        if (!local.addressable) return local.storage;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ pointer, local.storage });
+        return pointer;
     }
 
     fn emitGuardedParameterStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
@@ -2795,25 +2907,33 @@ const Renderer = struct {
 
     fn emitParameterAccessPointer(self: *Renderer, place: mir.ExecutablePlace, root_pointer: []const u8) RenderError![]const u8 {
         if (place.projection_count == 1) return root_pointer;
-        if (place.projection_count != 2) return error.InvalidBody;
-        const field_index = switch (place.projections[1]) {
-            .field => |index| index,
-            .deref, .index => return error.InvalidBody,
-        };
         const pointer = switch (place.root_ty) {
             .pointer => |shape| shape,
             else => return error.InvalidBody,
         };
-        const aggregate = aggregateTypeForValueType(self.body, .{ .struct_ = pointer.child }) orelse return error.InvalidBody;
-        if (field_index >= aggregate.field_count) return error.InvalidBody;
-        const aggregate_ty = try self.typeText(aggregate.ty);
-        const field_pointer = try self.temp();
-        try self.output.print(
-            self.allocator,
-            "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
-            .{ field_pointer, aggregate_ty, root_pointer, field_index },
-        );
-        return field_pointer;
+        var aggregate = aggregateTypeForValueType(self.body, .{ .struct_ = pointer.child }) orelse return error.InvalidBody;
+        var current_pointer = root_pointer;
+        var projection_index: usize = 1;
+        while (projection_index < place.projection_count) : (projection_index += 1) {
+            const projection = place.projections[projection_index];
+            const field_index = switch (projection) {
+                .field => |index| index,
+                .deref, .index => return error.InvalidBody,
+            };
+            if (field_index >= aggregate.field_count) return error.InvalidBody;
+            const aggregate_ty = try self.typeText(aggregate.ty);
+            const field_pointer = try self.temp();
+            try self.output.print(
+                self.allocator,
+                "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                .{ field_pointer, aggregate_ty, current_pointer, field_index },
+            );
+            current_pointer = field_pointer;
+            if (projection_index + 1 < place.projection_count) {
+                aggregate = aggregateType(self.body, aggregate.field_type_ids[field_index]) orelse return error.InvalidBody;
+            }
+        }
+        return current_pointer;
     }
 
     fn emitPointerRepresentationGuard(self: *Renderer, pointer: []const u8, edge: mir.ExecutableTrapEdge, continuation: []const u8) RenderError!void {
@@ -4103,23 +4223,6 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         representationTrapEdgeIsExact(body, expression);
 }
 
-fn completeAggregateCopyPlace(body: *const mir.ExecutableBody, place: mir.ExecutablePlace, is_store: bool) bool {
-    if (mir.executableAggregateCopyAlignment(place.ty) == null) return false;
-    const root_ok = switch (place.root) {
-        .local => |id| localExists(body, id),
-        .symbol => |id| if (symbolIdentity(body, id)) |identity|
-            identity.kind == .global and (!is_store or identity.mutable)
-        else
-            false,
-        .value => false,
-    };
-    if (!root_ok) return false;
-    if (place.projection_count == 0) return true;
-    if (mir.executableFixedArrayIndexPlace(body, place) != null) return true;
-    return place.type_id.isValid() and place.root_type_id.isValid() and
-        place.projection_count <= mir.max_executable_projections;
-}
-
 fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
@@ -4299,7 +4402,7 @@ fn addressOfAggregateFieldSupported(body: *const mir.ExecutableBody, expression:
 fn addressOfParameterFieldSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
-    return mir.executableParameterFieldPlace(body, place, false) and
+    return mir.executableParameterProjectedPlace(body, place, false) and
         addressResultMatchesPlace(expression.result_ty, place.ty) and
         expression.type_id.isValid() and address.representation_source != null and
         address.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
@@ -4399,6 +4502,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     }
     return (parameterScalarAccessStorePlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, true) or
+        mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
         mir.executableGlobalPointerDerefPlace(body, place, true)) and
         store.representation_source != null and store.representation_span_id.isValid() and
         statementRepresentationTrapEdgeIsExact(body, statement);
@@ -4411,14 +4515,11 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     const aggregate_copy = mir.executableAggregateCopyAlignment(ty) != null;
     const expected_alignment = mir.executableMemoryAlignment(body.enum_types, ty) orelse return false;
     if (access.alignment != expected_alignment) return false;
-    if (aggregate_copy and access.kind != .plain) return false;
-    // LLVM atomic load/store does not accept aggregate values. Aggregate
-    // accesses through shared pointer/global storage must remain on the
-    // legacy leaf-wise path until executable MIR carries a leaf access plan.
+    if (aggregate_copy and access.kind == .race_unordered and
+        !mir.executableRaceAggregateTypeSupported(body, place.type_id, place.ty)) return false;
     if (access.kind == .race_unordered and !unorderedMemoryTypeSupported(body, ty) and
-        !(allow_unordered_value and ty == .value)) return false;
+        !aggregate_copy and !(allow_unordered_value and ty == .value)) return false;
     if (place.projection_count != 0) {
-        if (aggregate_copy) return sameValueType(place.ty, ty) and completeAggregateCopyPlace(body, place, is_store);
         if (mir.executableFixedArrayIndexPlace(body, place) != null) {
             const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
                 .local => .plain,
@@ -4477,16 +4578,18 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             if (is_store)
                 parameterScalarAccessStorePlaceSupported(body, place) or
                     mir.executableLocalAddressDerefPlace(body, place, true) or
+                    mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
                     mir.executableGlobalPointerDerefPlace(body, place, true) or
                     computedRawManyDerefPlaceSupported(body, place, true)
             else
-                scalarAccessPlaceSupported(body, place);
+                scalarAccessPlaceSupported(body, place) or
+                    (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place, false));
     }
     return switch (place.root) {
         .local => |id| localAddressable(body, id) and access.kind == .plain,
         .symbol => |id| if (symbolIdentity(body, id)) |identity|
             identity.kind == .global and
-                if (aggregate_copy)
+                if (mir.executableAggregateRequiresPlainAccess(body, place.type_id, place.ty))
                     (!is_store or identity.mutable) and access.kind == .plain
                 else if (identity.mutable)
                     access.kind == .race_unordered

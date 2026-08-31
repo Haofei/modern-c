@@ -8,12 +8,18 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1447/1825 admitted | 1488/1879 admitted |
-| AST fallback | 378 | 391 |
+| broad sweep | 1455/1825 admitted | 1497/1879 admitted |
+| AST fallback | 370 | 382 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
 foreach plan emitters, and all selected-path enum variants were deleted.
+
+Guarded aggregate dereferences and mutable aggregate globals now carry their
+memory-access class in executable MIR. Declared structs, value optionals, and
+fixed arrays lower recursively to scalar leaf loads/stores in both backends;
+packed bits and unions remain one storage unit and therefore do not take the
+leaf path. The broad sweep gained eight C and nine LLVM canonical bodies.
 
 ## Ranked next slices
 

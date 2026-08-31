@@ -524,7 +524,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     if (address.representation_source != null or address.representation_span_id.isValid() or
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
-                } else if (mir.executableParameterFieldPlace(body, target.*, false)) {
+                } else if (mir.executableParameterProjectedPlace(body, target.*, false)) {
                     const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
                     try verifySpan(function, address.representation_span_id, source);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
@@ -734,6 +734,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         } else if (target.storage != .ordinary or
                             !(isParameterScalarAccessPlace(body, target.*, false) or
                                 mir.executableLocalAddressDerefPlace(body, target.*, false) or
+                                mir.executableGuardedLocalAggregateDerefPlace(body, target.*, false) or
                                 mir.executableGlobalPointerDerefPlace(body, target.*, false) or
                                 mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null) or
                             edge.kind != .InvalidRepresentation or
@@ -759,7 +760,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             if (indexed != null and !fixedArrayAddressableRoot(body, target.*)) return error.InvalidTrapEdge;
                         } else if (!(isSingleParameterDerefPlace(body, target.*, false) or
                             mir.executableLocalAddressDerefPlace(body, target.*, false) or
-                            mir.executableParameterFieldPlace(body, target.*, false) or
+                            mir.executableParameterProjectedPlace(body, target.*, false) or
                             (indexed != null and indexed.?.parameter_pointee)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
@@ -825,9 +826,10 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         }
                         if (!(isParameterScalarAccessPlace(body, target.*, true) or
                             mir.executableLocalAddressDerefPlace(body, target.*, true) or
+                            mir.executableGuardedLocalAggregateDerefPlace(body, target.*, true) or
                             mir.executableGlobalPointerDerefPlace(body, target.*, true) or
                             mir.executableAggregatePointerFieldDerefPlace(body, target.*, true) != null or
-                            mir.executableParameterFieldPlace(body, target.*, true)) or
+                            mir.executableParameterProjectedPlace(body, target.*, true)) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                         break :statement_owner .{ .block_id = owner.block_id, .span_id = store.representation_span_id };
@@ -1328,7 +1330,8 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
         if (value.storage == .atomic) {
             if (!atomicPlaceSupported(body, value)) return true;
         } else if (value.projection_count != 0 and !isScalarAccessPlace(body, value, false) and
-            !mir.executableParameterFieldPlace(body, value, false) and
+            !mir.executableGuardedLocalAggregateDerefPlace(body, value, false) and
+            !mir.executableParameterProjectedPlace(body, value, false) and
             mir.executableFixedArrayIndexPlace(body, value) == null and
             mir.executableSliceIndexPlace(body, value) == null) return true;
     }
@@ -1668,20 +1671,9 @@ fn verifyMemoryAccess(
     const aggregate_copy = mir.executableAggregateCopyAlignment(ty) != null;
     const expected_alignment = mir.executableMemoryAlignment(body.enum_types, ty) orelse return error.InvalidMemoryAccessType;
     if (access.alignment != expected_alignment) return error.InvalidMemoryAccessAlignment;
-    if (aggregate_copy and access.kind != .plain) return error.InvalidMemoryAccessKind;
+    if (aggregate_copy and access.kind == .race_unordered and
+        !mir.executableRaceAggregateTypeSupported(body, target.type_id, target.ty)) return error.InvalidMemoryAccessType;
     if (target.projection_count != 0) {
-        if (aggregate_copy) {
-            try verifyCompletePlace(body, target.*);
-            switch (target.root) {
-                .local => {},
-                .symbol => |id| {
-                    const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
-                    if (identity.kind != .global or (is_store and !identity.mutable)) return error.InvalidMemoryAccessType;
-                },
-                .value => return error.InvalidPlaceType,
-            }
-            return;
-        }
         if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
             switch (target.root) {
                 .local => if (access.kind != .plain) return error.InvalidMemoryAccessKind,
@@ -1730,7 +1722,9 @@ fn verifyMemoryAccess(
             if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
             return;
         }
-        if (!isScalarAccessPlace(body, target.*, is_store)) return error.InvalidPlaceType;
+        if (!isScalarAccessPlace(body, target.*, is_store) and
+            !(aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, target.*, is_store)))
+            return error.InvalidPlaceType;
         const expected_kind: mir.ExecutableMemoryAccessKind = alias_kind: {
             const local_id = switch (target.root) {
                 .local => |id| id,
@@ -1765,7 +1759,11 @@ fn verifyMemoryAccess(
             const identity = symbol(body, id) orelse return error.InvalidSymbolReference;
             if (identity.kind != .global) return error.InvalidGlobalSymbol;
             if (is_store and !identity.mutable) return error.ImmutableGlobalStore;
-            const expected_kind: mir.ExecutableMemoryAccessKind = if (aggregate_copy) .plain else if (identity.mutable) .race_unordered else .plain;
+            const expected_kind: mir.ExecutableMemoryAccessKind = if (mir.executableAggregateRequiresPlainAccess(
+                body,
+                target.type_id,
+                target.ty,
+            )) .plain else if (identity.mutable) .race_unordered else .plain;
             if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
         },
         .value => return error.InvalidPlaceType,
@@ -1870,20 +1868,21 @@ fn isSingleParameterDerefPlace(body: *const mir.ExecutableBody, target: mir.Exec
         break;
     };
     const root_ty = parameter_ty orelse return false;
-    if (!sameValueType(root_ty, target.root_ty) or mir.executableStorageAlignment(body.enum_types, target.ty) == null) return false;
+    if (!sameValueType(root_ty, target.root_ty) or mir.executableMemoryAlignment(body.enum_types, target.ty) == null) return false;
     const shape = switch (root_ty) {
         .pointer => |value| value,
         else => return false,
     };
     if (shape.kind != .single or (require_mutable and shape.mutability != .mut)) return false;
-    return std.mem.eql(u8, shape.child, target.ty.name());
+    return mir.executableAggregateCopyAlignment(target.ty) != null or
+        std.mem.eql(u8, shape.child, target.ty.name());
 }
 
 fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace, require_mutable: bool) bool {
     if (target.storage != .ordinary) return false;
     if (target.projection_count == 1) return isSingleParameterDerefPlace(body, target, require_mutable);
     return mir.executableStorageAlignment(body.enum_types, target.ty) != null and
-        mir.executableParameterFieldPlace(body, target, require_mutable);
+        mir.executableParameterProjectedPlace(body, target, require_mutable);
 }
 
 fn atomicPlaceSupported(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {

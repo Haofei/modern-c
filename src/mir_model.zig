@@ -1874,6 +1874,55 @@ pub fn executableParameterFieldPlace(
         ValueType.eql(shape.field_types[field_index], place.ty);
 }
 
+/// Recognize a field projection rooted at a single-pointer parameter, or at
+/// an immutable local initialized from that parameter.  The complete
+/// projection is represented by the canonical place (`p.*.outer.inner`), so
+/// consumers do not need to recover aggregate nesting from source syntax.
+pub fn executableParameterProjectedPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count < 2 or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        place.projections[0] != .deref) return false;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    if (!executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id)) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    if (pointer.kind != .single or (require_mutable and pointer.mutability != .mut)) return false;
+
+    var current_ty: ValueType = .{ .struct_ = pointer.child };
+    var current_type_id: ?TypeId = null;
+    for (body.aggregate_types) |candidate| if (ValueType.eql(candidate.ty, current_ty)) {
+        current_type_id = candidate.type_id;
+        break;
+    };
+    var type_id = current_type_id orelse return false;
+    for (place.projections[1..place.projection_count]) |projection| {
+        const field_index = switch (projection) {
+            .field => |index| index,
+            .deref, .index => return false,
+        };
+        var aggregate: ?ExecutableAggregateType = null;
+        for (body.aggregate_types) |candidate| if (candidate.type_id.eql(type_id)) {
+            aggregate = candidate;
+            break;
+        };
+        const shape = aggregate orelse return false;
+        if ((shape.construction != .declared_struct and shape.construction != .c_union) or
+            !ValueType.eql(shape.ty, current_ty) or field_index >= shape.field_count) return false;
+        current_ty = shape.field_types[field_index];
+        type_id = shape.field_type_ids[field_index];
+    }
+    return type_id.eql(place.type_id) and ValueType.eql(current_ty, place.ty);
+}
+
 /// Recognize `aggregate_local.pointer_field.*` from canonical place and layout
 /// metadata.  The pointer-bearing field is the representation-guard subject;
 /// the final dereference is the scalar access.  Keeping this predicate in MIR
@@ -1943,6 +1992,82 @@ pub fn executableLocalAddressDerefPlace(
     };
     return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut) and
         std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
+/// Check an aggregate dereference through a typed local pointer. The pointer
+/// value is guarded at the dereference, so no source-level provenance recovery
+/// is required; the local generation, pointer type, and aggregate result type
+/// are all canonical executable-body facts.
+pub fn executableGuardedLocalAggregateDerefPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        executableAggregateCopyAlignment(place.ty) == null) return false;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    if (!local.isValid() or local.index() >= body.locals.len or !body.locals[local.index()].id.eql(local)) return false;
+
+    var root_matches = false;
+    for (body.parameters) |parameter| if (parameter.local.eql(local)) {
+        root_matches = parameter.type_id.eql(place.root_type_id) and ValueType.eql(parameter.ty, place.root_ty);
+        break;
+    };
+    if (!root_matches) for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local)) {
+            root_matches = init.value != null and init.type_id.eql(place.root_type_id) and ValueType.eql(init.ty, place.root_ty);
+            break;
+        },
+        else => {},
+    };
+    if (!root_matches) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    if (pointer.kind != .single or (require_mutable and pointer.mutability != .mut)) return false;
+    return executableRaceAggregateTypeSupported(body, place.type_id, place.ty);
+}
+
+/// Whether an aggregate can be lowered as a deterministic sequence of
+/// race-unordered scalar leaf accesses. C unions intentionally fail closed:
+/// their active storage member is not represented by ordinary field recursion.
+pub fn executableRaceAggregateTypeSupported(body: *const ExecutableBody, type_id: TypeId, ty: ValueType) bool {
+    return executableRaceAggregateTypeSupportedDepth(body, type_id, ty, 0);
+}
+
+/// Packed-bit and union values keep their single-storage representation. They
+/// cannot be decomposed into independent race-unordered fields without
+/// changing active-member or bitfield semantics.
+pub fn executableAggregateRequiresPlainAccess(body: *const ExecutableBody, type_id: TypeId, ty: ValueType) bool {
+    if (executableAggregateCopyAlignment(ty) == null or !type_id.isValid()) return false;
+    for (body.aggregate_types) |shape| {
+        if (!shape.type_id.eql(type_id) or !ValueType.eql(shape.ty, ty)) continue;
+        return shape.construction == .packed_bits or shape.construction == .c_union;
+    }
+    return false;
+}
+
+fn executableRaceAggregateTypeSupportedDepth(body: *const ExecutableBody, type_id: TypeId, ty: ValueType, depth: usize) bool {
+    if (depth >= max_executable_projections) return false;
+    if (executableAggregateCopyAlignment(ty) == null)
+        return executableMemoryAlignment(body.enum_types, ty) != null;
+    var aggregate: ?ExecutableAggregateType = null;
+    for (body.aggregate_types) |candidate| if (candidate.type_id.eql(type_id)) {
+        aggregate = candidate;
+        break;
+    };
+    const shape = aggregate orelse return false;
+    if (shape.construction != .declared_struct or !ValueType.eql(shape.ty, ty) or shape.field_count == 0) return false;
+    const count: usize = if (shape.array_length != null) 1 else shape.field_count;
+    for (shape.field_types[0..count], shape.field_type_ids[0..count]) |field_ty, field_type_id| {
+        if (!executableRaceAggregateTypeSupportedDepth(body, field_type_id, field_ty, depth + 1)) return false;
+    }
+    return true;
 }
 
 /// Return the canonical place borrowed by a scalar local-pointer

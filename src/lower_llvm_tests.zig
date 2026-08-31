@@ -2570,12 +2570,14 @@ test "LLVM emits simple global stores after specialized plan retirement" {
 
     const none_body = try llvmFunctionBody(output.items, "define internal void @store_none");
     try expectContains(none_body, "; canonical executable MIR");
-    try expectContains(none_body, "store { i1, i32 } zeroinitializer, ptr @maybe");
+    try expectContains(none_body, "store atomic i8");
+    try expectContains(none_body, "store atomic i32");
+    try expectContains(none_body, "ptr @maybe");
     try expectNotContains(none_body, "alloca");
 
     const pair_body = try llvmFunctionBody(output.items, "define internal void @store_pair");
     try expectContains(pair_body, "; canonical executable MIR");
-    try expectContains(pair_body, "store { i32, i32 }");
+    try std.testing.expect(std.mem.count(u8, pair_body, "store atomic i32") == 2);
     try expectContains(pair_body, "ptr @pair");
 
     const result_ok_body = try llvmFunctionBody(output.items, "define internal void @store_result_ok");
@@ -2751,8 +2753,8 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     try expectContains(read, ", 1");
     try expectNotContains(read, "alloca");
     const read_global = try llvmFunctionBody(output.items, "define internal i32 @read_local_global");
-    try expectContains(read_global, "load { { i32, i32 } }, ptr @box");
-    try expectContainsAny(read_global, &.{ "extractvalue { { i32, i32 } }", "getelementptr inbounds { { i32, i32 } }" });
+    try expectContains(read_global, "load atomic i32");
+    try expectContains(read_global, "insertvalue { { i32, i32 } }");
     try expectContains(read_global, "i32 1");
     const read_parameter = try llvmFunctionBody(output.items, "define internal i32 @read_local_parameter");
     try expectContains(read_parameter, "; canonical executable MIR");

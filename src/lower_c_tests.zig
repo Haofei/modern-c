@@ -2177,11 +2177,13 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     const none_body = try cFunctionBody(output.items, "static void store_none(void)");
     try expectContains(none_body, "/* canonical executable MIR */");
     try expectContains(none_body, ".present = false");
-    try expectContains(none_body, "maybe =");
+    try expectContains(none_body, "mc_race_store_bool(&(maybe.present)");
+    try expectContains(none_body, "mc_race_store_u32(&(maybe.value)");
 
     const pair_body = try cFunctionBody(output.items, "static void store_pair(uint32_t x)");
     try expectContains(pair_body, "/* canonical executable MIR */");
-    try expectContains(pair_body, "pair =");
+    try expectContains(pair_body, "mc_race_store_u32(&(pair.a)");
+    try expectContains(pair_body, "mc_race_store_u32(&(pair.b)");
 
     const result_ok_body = try cFunctionBody(output.items, "static void store_result_ok(uint32_t x)");
     try expectContains(result_ok_body, "result = (");
@@ -14707,8 +14709,8 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     defer load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_aggregate_load.mc", load_source, &load_output);
     const load_body = try cFunctionBody(load_output.items, "static Cell pointer_aggregate_load(Cell * p)");
-    try expectContains(load_body, "Cell * mc_ptr");
-    try expectContains(load_body, "return ({");
+    try expectContains(load_body, "/* canonical executable MIR */");
+    try expectContains(load_body, "mc_exec_tmp_0 = ((Cell){");
     try expectContains(load_body, "mc_race_load_u32");
 
     const init_source =
@@ -14725,9 +14727,10 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     defer init_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_aggregate_init.mc", init_source, &init_output);
     const init_body = try cFunctionBody(init_output.items, "static uint32_t pointer_aggregate_init(Cell * p)");
-    try expectContains(init_body, "Cell cell = ({");
+    try expectContains(init_body, "/* canonical executable MIR */");
+    try expectContains(init_body, "Cell cell = mc_exec_tmp_");
     try expectContains(init_body, "mc_race_load_u32");
-    try expectContains(init_body, "return cell.value;");
+    try expectContains(init_body, "return mc_exec_tmp_");
 
     const store_source =
         \\struct Cell {
@@ -14742,8 +14745,8 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     defer store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_aggregate_store(Cell * p, Cell value)");
-    try expectContains(store_body, "Cell * mc_ptr");
-    try expectContains(store_body, "Cell mc_tmp");
+    try expectContains(store_body, "/* canonical executable MIR */");
+    try expectContains(store_body, "Cell mc_exec_tmp_");
     try expectContains(store_body, "mc_race_store_u32");
 
     const raw_many_load_source =
