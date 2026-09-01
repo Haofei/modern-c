@@ -942,6 +942,7 @@ const Renderer = struct {
             .variant_payload => |operation| try self.emitVariant(expression, operation.operand, operation.kind, true),
             .try_unwrap => |operand| try self.emitTryUnwrap(expression, operand),
             .try_propagate => |operand| try self.emitTryPropagate(expression, operand),
+            .try_map_error => |operation| try self.emitTryMapError(expression, operation),
             .mmio_map_checked => |operation| try self.emitMmioMapChecked(expression, operation),
             .result => |result| try self.emitResult(expression, result),
             .address_of => |address| try self.emitAddressOf(expression, address),
@@ -1070,6 +1071,57 @@ const Renderer = struct {
             "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  ret {s} {s}\n{s}:\n",
             .{ present, continuation, failure, failure, operand.ty, operand.spelling, continuation },
         );
+        const payload = try self.temp();
+        const payload_ty = try self.typeText(expression.result_ty);
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, operand.ty, operand.spelling });
+        return .{ .ty = payload_ty, .spelling = payload };
+    }
+
+    fn emitTryMapError(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operation: @FieldType(mir.ExecutableExpression.Operation, "try_map_error"),
+    ) RenderError!Value {
+        if (!tryMapErrorSupported(self.body, expression, operation)) return error.InvalidBody;
+        const operand = try self.emitExpression(operation.operand);
+        const source = resultType(self.body, self.body.expressions[operation.operand.index()].type_id) orelse return error.InvalidBody;
+        const target = resultType(self.body, self.body.return_type_id) orelse return error.InvalidBody;
+        const is_ok = try self.temp();
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_map_error_ok_{d}", .{expression.id.raw});
+        const failure = try std.fmt.allocPrint(self.allocator, "mc_map_error_err_{d}", .{expression.id.raw});
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, operand.ty, operand.spelling });
+        try self.output.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ is_ok, continuation, failure, failure });
+        const mapped_error = switch (operation.mapper) {
+            .conversion => |conversion| converted: {
+                const source_error = try self.temp();
+                const source_error_ty = try self.typeText(source.err_ty);
+                const target_error_ty = try self.typeText(target.err_ty);
+                const callee = symbolSpelling(self.body, conversion.callee) orelse return error.InvalidBody;
+                try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ source_error, operand.ty, operand.spelling });
+                const converted_error = try self.temp();
+                try self.output.print(self.allocator, "  {s} = call {s} @{s}({s} {s})\n", .{
+                    converted_error,
+                    target_error_ty,
+                    callee,
+                    source_error_ty,
+                    source_error,
+                });
+                break :converted Value{ .ty = target_error_ty, .spelling = converted_error };
+            },
+            .literal => |literal_id| try self.emitExpression(literal_id),
+        };
+        const target_ty = try self.typeText(target.ty);
+        const tagged = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 false, 0\n", .{ tagged, target_ty });
+        const propagated = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 2\n", .{
+            propagated,
+            target_ty,
+            tagged,
+            mapped_error.ty,
+            mapped_error.spelling,
+        });
+        try self.output.print(self.allocator, "  ret {s} {s}\n{s}:\n", .{ target_ty, propagated, continuation });
         const payload = try self.temp();
         const payload_ty = try self.typeText(expression.result_ty);
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, operand.ty, operand.spelling });
@@ -3548,6 +3600,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
+        .try_map_error => |operation| tryMapErrorSupported(body, expression, operation),
         .mmio_map_checked => |operation| mmioMapCheckedSupported(body, expression, operation),
         .result => |result| resultConstructionSupported(body, expression, result),
         .range_slice => |range| rangeSliceSupported(body, expression, range),
@@ -3619,6 +3672,43 @@ fn tryPropagateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     const shape = resultType(body, operand.type_id) orelse return false;
     return sameValueType(shape.ty, operand.result_ty) and
         sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
+}
+
+fn tryMapErrorSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "try_map_error"),
+) bool {
+    if (!expressionValid(body, operation.operand)) return false;
+    const operand = body.expressions[operation.operand.index()];
+    if (operand.result_ty != .result or ownedExpressionTrapCount(body, expression.id) != 0) return false;
+    const source = resultType(body, operand.type_id) orelse return false;
+    const target = resultType(body, body.return_type_id) orelse return false;
+    if (!sameValueType(source.ok_ty, target.ok_ty) or
+        !sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
+    return switch (operation.mapper) {
+        .conversion => |conversion| conversion_valid: {
+            const callee = symbolIdentity(body, conversion.callee) orelse break :conversion_valid false;
+            const signature = conversion.signature;
+            break :conversion_valid callee.kind == .function and signature.parameter_count == 1 and
+                !signature.has_environment and sameValueType(signature.parameter_types[0], source.err_ty) and
+                signature.parameter_type_ids[0].eql(source.err_type_id) and
+                sameValueType(signature.return_ty, target.err_ty) and signature.return_type_id.eql(target.err_type_id);
+        },
+        .literal => |literal_id| literal_valid: {
+            if (!expressionValid(body, literal_id)) break :literal_valid false;
+            const literal = body.expressions[literal_id.index()];
+            if (!sameValueType(literal.result_ty, target.err_ty) or !literal.type_id.eql(target.err_type_id))
+                break :literal_valid false;
+            break :literal_valid switch (literal.operation) {
+                .literal => |payload| switch (payload) {
+                    .integer, .signed_integer => true,
+                    else => false,
+                },
+                else => false,
+            };
+        },
+    };
 }
 
 fn mmioMapCheckedSupported(

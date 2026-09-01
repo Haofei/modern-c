@@ -63,6 +63,36 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     });
 }
 
+test "lower-c canonical MIR maps propagated Result errors" {
+    const source =
+        \\enum LowErr { Failed }
+        \\enum HighErr { Other, Mapped }
+        \\#[error_from]
+        \\fn promote(error_value: LowErr) -> HighErr { return .Mapped; }
+        \\fn low() -> Result<u32, LowErr> { return err(.Failed); }
+        \\fn converted() -> Result<u32, HighErr> {
+        \\    let value: u32 = low()?;
+        \\    return ok(value);
+        \\}
+        \\fn mapped() -> Result<u32, HighErr> {
+        \\    let value: u32 = low()? else .Mapped;
+        \\    return ok(value);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_try_map_error.mc", source, &output);
+
+    const converted = try cFunctionBody(output.items, "static mc_result_u32_mc_type_name_7_HighErr converted");
+    try expectContains(converted, "/* canonical executable MIR */");
+    try expectContains(converted, ".payload.err = promote(");
+
+    const mapped = try cFunctionBody(output.items, "static mc_result_u32_mc_type_name_7_HighErr mapped");
+    try expectContains(mapped, "/* canonical executable MIR */");
+    try expectContains(mapped, "if (!mc_exec_tmp_0.is_ok) return");
+    try expectContains(mapped, ".payload.err = mc_exec_tmp_1");
+}
+
 test "lower-c canonical MIR renders packed field read-modify-write" {
     const source =
         \\packed bits Flags: u8 { ready: bool, busy: bool }

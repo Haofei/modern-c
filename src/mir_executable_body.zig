@@ -619,6 +619,24 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
                 return error.InvalidAggregateConstruction;
         },
+        .try_map_error => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            if (operation.mapper == .literal) try verifyOperand(body, value, operation.mapper.literal);
+            if (operation.mapper == .conversion) {
+                const signature = operation.mapper.conversion.signature;
+                if (signature.parameter_count == 1) try verifyType(
+                    function,
+                    signature.parameter_type_ids[0],
+                    signature.parameter_types[0],
+                    body.complete,
+                );
+                try verifyType(function, signature.return_type_id, signature.return_ty, body.complete);
+            }
+            const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
+            if (body.complete and (!tryMapErrorPayloadValid(body, &value, operand, operation.mapper) or
+                ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
+                return error.InvalidAggregateConstruction;
+        },
         .result => |operation| {
             try verifyOperand(body, value, operation.payload);
             if (body.complete) {
@@ -936,15 +954,24 @@ fn tryPropagationProjectionMatches(function: *const mir.Function, legacy: mir.Tr
     var match: ?*const mir.ExecutableExpression = null;
     for (body.expressions) |*value| {
         if (!value.block_id.eql(mir.BlockId.fromIndex(legacy.from_block)) or
-            !value.span_id.eql(legacy.typed_span_id) or value.operation != .try_propagate)
+            !value.span_id.eql(legacy.typed_span_id) or
+            (value.operation != .try_propagate and value.operation != .try_map_error))
             continue;
         if (match != null) return false;
         match = value;
     }
     const value = match orelse return false;
-    const operand_id = value.operation.try_propagate;
+    const operand_id = switch (value.operation) {
+        .try_propagate => |id| id,
+        .try_map_error => |operation| operation.operand,
+        else => return false,
+    };
     const operand = expression(body, operand_id) orelse return false;
-    return tryPropagatePayloadValid(body, value, operand);
+    return switch (value.operation) {
+        .try_propagate => tryPropagatePayloadValid(body, value, operand),
+        .try_map_error => |operation| tryMapErrorPayloadValid(body, value, operand, operation.mapper),
+        else => false,
+    };
 }
 
 fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.TrapEdge) bool {
@@ -1822,6 +1849,41 @@ fn tryPropagatePayloadValid(
     const shape = resultType(body, operand.type_id) orelse return false;
     return sameValueType(shape.ty, operand.result_ty) and
         sameValueType(value.result_ty, shape.ok_ty) and value.type_id.eql(shape.ok_type_id);
+}
+
+fn tryMapErrorPayloadValid(
+    body: *const mir.ExecutableBody,
+    value: *const mir.ExecutableExpression,
+    operand: *const mir.ExecutableExpression,
+    mapper: mir.ExecutableTryErrorMapper,
+) bool {
+    if (operand.result_ty != .result) return false;
+    const source = resultType(body, operand.type_id) orelse return false;
+    const target = resultType(body, body.return_type_id) orelse return false;
+    if (!sameValueType(source.ok_ty, target.ok_ty) or
+        !sameValueType(value.result_ty, source.ok_ty) or !value.type_id.eql(source.ok_type_id)) return false;
+    return switch (mapper) {
+        .conversion => |conversion| conversion_valid: {
+            const callee = symbol(body, conversion.callee) orelse break :conversion_valid false;
+            const signature = conversion.signature;
+            break :conversion_valid callee.kind == .function and signature.parameter_count == 1 and
+                !signature.has_environment and sameValueType(signature.parameter_types[0], source.err_ty) and
+                signature.parameter_type_ids[0].eql(source.err_type_id) and
+                sameValueType(signature.return_ty, target.err_ty) and signature.return_type_id.eql(target.err_type_id);
+        },
+        .literal => |literal_id| literal_valid: {
+            const literal = expression(body, literal_id) orelse break :literal_valid false;
+            if (!sameValueType(literal.result_ty, target.err_ty) or !literal.type_id.eql(target.err_type_id))
+                break :literal_valid false;
+            break :literal_valid switch (literal.operation) {
+                .literal => |payload| switch (payload) {
+                    .integer, .signed_integer => true,
+                    else => false,
+                },
+                else => false,
+            };
+        },
+    };
 }
 
 fn verifyMemoryAccess(

@@ -968,6 +968,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                     .irq_context = hasAttr(decl.attrs, "irq_context"),
                     .is_variadic = fn_decl.is_variadic,
+                    .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
+                    .error_from = hasAttr(decl.attrs, "error_from"),
                     .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                     .return_type_expr = fn_decl.return_type,
                     .params = fn_decl.params,
@@ -7105,6 +7107,7 @@ const FunctionBuilder = struct {
             .variant_payload => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, true),
             .try_unwrap => |operand_id| self.executableTryUnwrapComplete(expression, operand_id),
             .try_propagate => |operand_id| self.executableTryPropagateComplete(expression, operand_id),
+            .try_map_error => |operation| self.executableTryMapErrorComplete(expression, operation),
             .result => |operation| result: {
                 if (!operation.payload.isValid() or operation.payload.index() >= expression.id.index() or
                     operation.payload.index() >= self.executable_expressions.items.len) break :result false;
@@ -7184,6 +7187,61 @@ const FunctionBuilder = struct {
             return sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
         }
         return false;
+    }
+
+    fn executableTryMapErrorComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "try_map_error"),
+    ) bool {
+        if (!operation.operand.isValid() or operation.operand.index() >= expression.id.index() or
+            operation.operand.index() >= self.executable_expressions.items.len or self.return_ty != .result)
+            return false;
+        const operand = self.executable_expressions.items[operation.operand.index()];
+        if (operand.result_ty != .result) return false;
+        const return_type_id = self.type_ids.get(self.return_ty) orelse return false;
+        var source_shape: ?mir_model.ExecutableResultType = null;
+        var target_shape: ?mir_model.ExecutableResultType = null;
+        for (self.executable_result_types.items) |shape| {
+            if (shape.type_id.eql(operand.type_id)) source_shape = shape;
+            if (shape.type_id.eql(return_type_id)) target_shape = shape;
+        }
+        const source = source_shape orelse return false;
+        const target = target_shape orelse return false;
+        if (!sameValueType(source.ok_ty, target.ok_ty) or
+            !sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
+        return switch (operation.mapper) {
+            .conversion => |conversion| conversion_valid: {
+                if (!conversion.callee.isValid() or conversion.callee.index() >= self.executable_symbols.items.len) break :conversion_valid false;
+                const symbol = self.executable_symbols.items[conversion.callee.index()];
+                const summary = self.summaries.get(symbol.spelling) orelse break :conversion_valid false;
+                if (symbol.kind != .function or !summary.error_from or summary.c_abi or summary.is_variadic or
+                    summary.params.len != 1 or !sameValueType(summary.return_ty, target.err_ty) or
+                    conversion.signature.parameter_count != 1 or conversion.signature.has_environment or
+                    !sameValueType(conversion.signature.parameter_types[0], source.err_ty) or
+                    !conversion.signature.parameter_type_ids[0].eql(source.err_type_id) or
+                    !sameValueType(conversion.signature.return_ty, target.err_ty) or
+                    !conversion.signature.return_type_id.eql(target.err_type_id)) break :conversion_valid false;
+                break :conversion_valid sameValueType(
+                    valueTypeFromTypeAlias(summary.params[0].ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                    source.err_ty,
+                );
+            },
+            .literal => |literal_id| literal: {
+                if (!literal_id.isValid() or literal_id.index() >= expression.id.index() or
+                    literal_id.index() >= self.executable_expressions.items.len) break :literal false;
+                const literal_expression = self.executable_expressions.items[literal_id.index()];
+                if (!sameValueType(literal_expression.result_ty, target.err_ty) or
+                    !literal_expression.type_id.eql(target.err_type_id)) break :literal false;
+                break :literal switch (literal_expression.operation) {
+                    .literal => |value| switch (value) {
+                        .integer, .signed_integer => true,
+                        else => false,
+                    },
+                    else => false,
+                };
+            },
+        };
     }
 
     fn executableMmioMapComplete(
@@ -8101,7 +8159,8 @@ const FunctionBuilder = struct {
         var matched = false;
         for (self.executable_expressions.items) |expression| {
             if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block)) or
-                !expression.span_id.eql(legacy.typed_span_id) or expression.operation != .try_propagate)
+                !expression.span_id.eql(legacy.typed_span_id) or
+                (expression.operation != .try_propagate and expression.operation != .try_map_error))
                 continue;
             if (matched) return false;
             matched = true;
@@ -8589,6 +8648,23 @@ const FunctionBuilder = struct {
         if (identity.kind != .unknown and identity.kind != .function) self.executable_supported = false;
         identity.kind = .function;
         return id;
+    }
+
+    fn executableErrorConversion(self: *const FunctionBuilder, source_error_ty: ValueType, target_error_ty: ValueType) ?[]const u8 {
+        if (sameValueType(source_error_ty, target_error_ty)) return null;
+        var found: ?[]const u8 = null;
+        var iterator = self.summaries.iterator();
+        while (iterator.next()) |entry| {
+            const summary = entry.value_ptr.*;
+            if (!summary.error_from or summary.c_abi or summary.is_variadic or summary.params.len != 1 or
+                !sameValueType(summary.return_ty, target_error_ty))
+                continue;
+            const parameter_ty = valueTypeFromTypeAlias(summary.params[0].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (!sameValueType(parameter_ty, source_error_ty)) continue;
+            if (found != null) return null;
+            found = entry.key_ptr.*;
+        }
+        return found;
     }
 
     fn internExecutableGlobalSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
@@ -9680,11 +9756,10 @@ const FunctionBuilder = struct {
                 break :aggregate .{ .struct_ = value };
             },
             .try_expr => |node| unwrap: {
-                // Mapped errors still require an explicit conversion edge.
-                // Same-type Result propagation and trapping unwraps are
-                // distinct canonical operations so backends never infer the
-                // meaning of postfix `?` from source syntax.
-                if (node.mapped != null) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                // Result propagation, mapped errors, trapping unwraps, and
+                // pointer-niche MMIO mapping are distinct canonical
+                // operations. Backends never infer postfix-`?` semantics from
+                // source syntax.
                 const mmio_map_call = switch (node.operand.*.kind) {
                     .call => |call| try self.mmioMapCallTarget(call),
                     else => null,
@@ -9729,10 +9804,48 @@ const FunctionBuilder = struct {
                 if (operand_ty == .result and self.return_ty == .result) {
                     const return_type_expr = self.return_type_expr orelse
                         break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
-                    if (!sameValueType(self.return_ty, operand_ty) or
-                        !try self.internExecutableResultType(self.return_ty, return_type_expr))
+                    if (!try self.internExecutableResultType(self.return_ty, return_type_expr))
                         break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
-                    break :unwrap .{ .try_propagate = operand_id };
+                    if (node.mapped == null and sameValueType(self.return_ty, operand_ty))
+                        break :unwrap .{ .try_propagate = operand_id };
+                    if (!std.mem.eql(u8, operand_ty.result.ok, self.return_ty.result.ok))
+                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    const source_error_ty = valueTypeFromTypeNameAlias(operand_ty.result.err, self.enums, self.structs, self.packed_bits);
+                    const target_error_ty = valueTypeFromTypeNameAlias(self.return_ty.result.err, self.enums, self.structs, self.packed_bits);
+                    if (source_error_ty == .unknown or target_error_ty == .unknown)
+                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    const mapper: mir_model.ExecutableTryErrorMapper = if (node.mapped) |mapped| mapped_mapper: {
+                        const target_error_type_expr = resultPayloadTypeExprAlias(return_type_expr, "err", self.aliases) orelse
+                            break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                        const mapped_id = try self.ensureExecutableExprAsType(mapped.*, target_error_ty, target_error_type_expr);
+                        try self.contextualizeExecutableLiteral(mapped_id, target_error_ty);
+                        const mapped_expression = &self.executable_expressions.items[mapped_id.index()];
+                        switch (mapped_expression.operation) {
+                            .literal => |literal| switch (literal) {
+                                .integer, .signed_integer => {},
+                                else => break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
+                            },
+                            else => break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
+                        }
+                        if (!sameValueType(mapped_expression.result_ty, target_error_ty))
+                            break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                        break :mapped_mapper .{ .literal = mapped_id };
+                    } else conversion_mapper: {
+                        const converter = self.executableErrorConversion(source_error_ty, target_error_ty) orelse
+                            break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                        var signature: mir_model.ExecutableCallSignature = .{
+                            .parameter_count = 1,
+                            .return_ty = target_error_ty,
+                            .return_type_id = try self.internTypeId(target_error_ty),
+                        };
+                        signature.parameter_types[0] = source_error_ty;
+                        signature.parameter_type_ids[0] = try self.internTypeId(source_error_ty);
+                        break :conversion_mapper .{ .conversion = .{
+                            .callee = try self.internExecutableFunctionSymbol(converter),
+                            .signature = signature,
+                        } };
+                    };
+                    break :unwrap .{ .try_map_error = .{ .operand = operand_id, .mapper = mapper } };
                 }
                 break :unwrap .{ .try_unwrap = operand_id };
             },
@@ -10211,7 +10324,8 @@ const FunctionBuilder = struct {
         for (self.executable_enum_types.items) |enum_ty| {
             if (!enum_ty.type_id.eql(type_id)) continue;
             return sameValueType(enum_ty.ty, ty) and enum_ty.repr_type_id.eql(repr_type_id) and
-                sameValueType(enum_ty.repr_ty, repr_ty) and enum_ty.valid_value_count == valid_value_count and
+                sameValueType(enum_ty.repr_ty, repr_ty) and enum_ty.explicit_repr == (summary.repr != null) and
+                enum_ty.valid_value_count == valid_value_count and
                 std.mem.eql(i128, enum_ty.valid_values[0..valid_value_count], valid_values[0..valid_value_count]);
         }
         try self.executable_enum_types.append(self.allocator, .{
@@ -10219,6 +10333,7 @@ const FunctionBuilder = struct {
             .ty = ty,
             .repr_type_id = repr_type_id,
             .repr_ty = repr_ty,
+            .explicit_repr = summary.repr != null,
             .valid_values = valid_values,
             .valid_value_count = valid_value_count,
         });

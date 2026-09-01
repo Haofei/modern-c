@@ -180,8 +180,12 @@ fn emitStatement(
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
-            const identity = localById(body, local.local) orelse return error.InvalidLocal;
-            if (std.mem.startsWith(u8, identity.spelling, "_")) try out.appendSlice(allocator, "MC_UNUSED ");
+            _ = localById(body, local.local) orelse return error.InvalidLocal;
+            // Canonical MIR intentionally does not reconstruct source-level liveness in the
+            // renderer.  Mark every generated local as potentially unused so pattern bindings
+            // and other control-flow-local values remain valid under the toolchain's -Werror
+            // policy without adding a second liveness authority to codegen.
+            try out.appendSlice(allocator, "MC_UNUSED ");
             if (isSliceType(local.ty) or local.ty == .value) {
                 if (local.value == null) return error.UnsupportedType;
                 try out.appendSlice(allocator, "__auto_type ");
@@ -949,6 +953,11 @@ fn emitExpressionOperation(
             try emitExpression(allocator, out, body, operand_id, depth + 1);
             try out.appendSlice(allocator, ".payload.ok)");
         },
+        .try_map_error => |operation| {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, operation.operand, depth + 1);
+            try out.appendSlice(allocator, ".payload.ok)");
+        },
         .mmio_map_checked => |operation| {
             try out.appendSlice(allocator, "((void volatile *)((uintptr_t)");
             try emitExpression(allocator, out, body, operation.address, depth + 1);
@@ -1301,6 +1310,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
+        .try_map_error => |operation| tryMapErrorSupported(body, expression, operation),
         .mmio_map_checked => |operation| mmioMapCheckedSupported(body, expression, operation),
         .result => |result| resultConstructionSupported(body, expression, result),
         .index => |index| indexSupported(body, expression, index),
@@ -1380,6 +1390,41 @@ fn tryPropagateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     const shape = resultType(body, operand.type_id) orelse return false;
     return sameValueType(shape.ty, operand.result_ty) and
         sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
+}
+
+fn tryMapErrorSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "try_map_error"),
+) bool {
+    const operand = expressionById(body, operation.operand) orelse return false;
+    if (operand.result_ty != .result or ownedTrapEdgeCount(body, expression.id) != 0) return false;
+    const source = resultType(body, operand.type_id) orelse return false;
+    const target = resultType(body, body.return_type_id) orelse return false;
+    if (!sameValueType(source.ok_ty, target.ok_ty) or
+        !sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
+    return switch (operation.mapper) {
+        .conversion => |conversion| conversion_valid: {
+            const callee = symbolById(body, conversion.callee) orelse break :conversion_valid false;
+            const signature = conversion.signature;
+            break :conversion_valid callee.kind == .function and signature.parameter_count == 1 and
+                !signature.has_environment and sameValueType(signature.parameter_types[0], source.err_ty) and
+                signature.parameter_type_ids[0].eql(source.err_type_id) and
+                sameValueType(signature.return_ty, target.err_ty) and signature.return_type_id.eql(target.err_type_id);
+        },
+        .literal => |literal_id| literal_valid: {
+            const literal = expressionById(body, literal_id) orelse break :literal_valid false;
+            if (!sameValueType(literal.result_ty, target.err_ty) or !literal.type_id.eql(target.err_type_id))
+                break :literal_valid false;
+            break :literal_valid switch (literal.operation) {
+                .literal => |payload| switch (payload) {
+                    .integer, .signed_integer => true,
+                    else => false,
+                },
+                else => false,
+            };
+        },
+    };
 }
 
 fn mmioMapCheckedSupported(
@@ -3538,6 +3583,28 @@ fn prepareStatementExpressions(
             try emitExpression(allocator, out, body, operand, 0);
             try out.appendSlice(allocator, ";\n");
         }
+        if (expression.operation == .try_map_error) {
+            const operation = expression.operation.try_map_error;
+            if (!tryMapErrorSupported(body, expression, operation)) return error.InvalidExpression;
+            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "if (!");
+            try emitExpression(allocator, out, body, operation.operand, 0);
+            try out.appendSlice(allocator, ".is_ok) return ((");
+            const target = resultType(body, body.return_type_id) orelse return error.InvalidExpression;
+            try appendCType(allocator, out, body, target.ty);
+            try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = ");
+            switch (operation.mapper) {
+                .conversion => |conversion| {
+                    try appendSymbol(allocator, out, body, conversion.callee);
+                    try out.append(allocator, '(');
+                    try emitExpression(allocator, out, body, operation.operand, 0);
+                    try out.appendSlice(allocator, ".payload.err)");
+                },
+                .literal => |literal| try emitExpression(allocator, out, body, literal, 0),
+            }
+            try out.appendSlice(allocator, " });\n");
+        }
         switch (expression.operation) {
             .binary => |binary| if (binary.arithmetic == .unchecked) {
                 try writeSourceLineDirective(allocator, out, source_path, expression.source);
@@ -4038,9 +4105,9 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
         .result => |identity| {
             const shape = resultTypeForValueType(body, ty) orelse return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_result_");
-            try appendResultCTypeSuffix(allocator, out, identity.ok, shape.ok_ty);
+            try appendResultCTypeSuffix(allocator, out, body, identity.ok, shape.ok_ty);
             try out.append(allocator, '_');
-            try appendResultCTypeSuffix(allocator, out, identity.err, shape.err_ty);
+            try appendResultCTypeSuffix(allocator, out, body, identity.err, shape.err_ty);
         },
         else => return error.UnsupportedType,
     }
@@ -4049,6 +4116,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
 fn appendResultCTypeSuffix(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
     identity: []const u8,
     storage_ty: mir.ValueType,
 ) (RenderError || std.mem.Allocator.Error)!void {
@@ -4060,6 +4128,10 @@ fn appendResultCTypeSuffix(
         // struct encoding. Prefer the verified storage identity so expression
         // temporaries name the same typedef as the function signature.
         .struct_ => return appendCTypeSuffix(allocator, out, storage_ty),
+        .closed_enum, .open_enum => if (enumTypeForValueType(body, storage_ty)) |enum_ty| {
+            if (!enum_ty.explicit_repr)
+                return out.print(allocator, "mc_type_name_{d}_{s}", .{ identity.len, identity });
+        },
         else => {},
     }
     if (isSafeIdentifier(identity)) return out.appendSlice(allocator, identity);
@@ -4373,7 +4445,7 @@ test "executable C renderer emits typed CFG labels and branches" {
         \\    if (mc_exec_tmp_0) goto mc_bb_1; else goto mc_bb_2;
         \\mc_bb_1: ;
         \\    mc_exec_tmp_1 = 1;
-        \\    uint32_t x = mc_exec_tmp_1;
+        \\    MC_UNUSED uint32_t x = mc_exec_tmp_1;
         \\    mc_exec_tmp_3 = x;
         \\    return mc_exec_tmp_3;
         \\mc_bb_2: ;

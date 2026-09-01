@@ -7,6 +7,8 @@ pub const FunctionSummary = struct {
     no_lang_trap: bool,
     irq_context: bool,
     is_variadic: bool,
+    c_abi: bool,
+    error_from: bool,
     return_ty: mir_model.ValueType,
     return_type_expr: ?ast.TypeExpr,
     params: []const ast.Param,

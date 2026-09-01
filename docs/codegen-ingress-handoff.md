@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1541/1825 C functions and 1583/1879 LLVM functions.
-  The remaining 284 C and 296 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1545/1825 C functions and 1587/1879 LLVM functions.
+  The remaining 280 C and 292 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
 backend fallback branches.
@@ -22,10 +22,14 @@ payload. Assignment, expression-statement, nested-call, and multiple-`?`
 evaluation order now use this operation. Checked `mmio.map<T>(PAddr)?` is also
 one explicit pointer-niche MIR operation: lexical unsafe admission, exact
 `Unwrap` edge, address-to-pointer conversion, and null trapping are verified
-once and rendered mechanically by both backends. These slices retired twenty
-broad-corpus fallbacks per backend in total and reduced `unsupported_try` from
-26 to 4. Mapped `#[error_from]`, mapped `? else`, and cleanup-edge integration
-remain fail-closed. The census runner refreshes
+once and rendered mechanically by both backends. Mapped propagation is now an
+explicit `try_map_error` operation as well: it admits either one verified,
+non-C-ABI `#[error_from]` conversion or one pure canonical enum literal, and
+both renderers return the mapped enclosing Result only on the error edge. These
+slices retired twenty-four broad-corpus fallbacks per backend in total and
+reduced `unsupported_try` from 26 to zero. Cleanup-integrated propagation is
+still separately classified as `defer_cleanup` and remains fail-closed. The
+census runner refreshes
 the default installed compiler before measuring, closing a stale-binary hole.
 
 The latest cutover added canonical `for_each` and `for_step` terminators. MIR

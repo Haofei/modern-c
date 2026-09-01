@@ -10,6 +10,37 @@ const mir = @import("mir.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM canonical MIR maps propagated Result errors" {
+    const source =
+        \\enum LowErr { Failed }
+        \\enum HighErr { Other, Mapped }
+        \\#[error_from]
+        \\fn promote(error_value: LowErr) -> HighErr { return .Mapped; }
+        \\fn low() -> Result<u32, LowErr> { return err(.Failed); }
+        \\fn converted() -> Result<u32, HighErr> {
+        \\    let value: u32 = low()?;
+        \\    return ok(value);
+        \\}
+        \\fn mapped() -> Result<u32, HighErr> {
+        \\    let value: u32 = low()? else .Mapped;
+        \\    return ok(value);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_try_map_error.mc", source, &output);
+
+    const converted = try llvmFunctionBody(output.items, "define internal { i1, i32, i64 } @converted");
+    try expectContains(converted, "; canonical executable MIR");
+    try expectContains(converted, "mc_map_error_err_");
+    try expectContains(converted, "call i64 @promote(i64");
+
+    const mapped = try llvmFunctionBody(output.items, "define internal { i1, i32, i64 } @mapped");
+    try expectContains(mapped, "; canonical executable MIR");
+    try expectContains(mapped, "mc_map_error_err_");
+    try expectContains(mapped, ", i64 1, 2");
+}
+
 test "LLVM canonical MIR renders packed field read-modify-write" {
     const source =
         \\packed bits Flags: u8 { ready: bool, busy: bool }

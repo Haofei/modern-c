@@ -1166,6 +1166,13 @@ pub const ExecutableExpression = struct {
         /// operand unchanged on its error edge. Admission requires the
         /// enclosing function to return the same canonical Result type.
         try_propagate: ExprId,
+        /// Propagate a Result error after converting it to the enclosing
+        /// function's error type. The success payload remains the value of the
+        /// expression; the error edge returns from the current function.
+        try_map_error: struct {
+            operand: ExprId,
+            mapper: ExecutableTryErrorMapper,
+        },
         result: struct {
             is_ok: bool,
             payload: ExprId,
@@ -1193,6 +1200,18 @@ pub const ExecutableVariantKind = enum {
     optional_present,
     result_ok,
     result_err,
+};
+
+/// Error-path mapping for Result propagation. Arbitrary source expressions
+/// are deliberately excluded: a direct checked converter remains lazy on the
+/// error edge, while a canonical literal is pure and may be materialized by a
+/// backend without changing observable evaluation order.
+pub const ExecutableTryErrorMapper = union(enum) {
+    conversion: struct {
+        callee: SymbolId,
+        signature: ExecutableCallSignature,
+    },
+    literal: ExprId,
 };
 
 /// Canonical callable contract carried by an indirect call. Function values
@@ -1598,6 +1617,9 @@ pub const ExecutableEnumType = struct {
     ty: ValueType,
     repr_type_id: TypeId,
     repr_ty: ValueType,
+    /// Preserves the declaration's explicit-representation choice for stable
+    /// generated C helper names.  LLVM consumes only `repr_ty`.
+    explicit_repr: bool = false,
     /// Exact accepted representation set for a closed enum. Open enums keep
     /// this empty because every value of the repr type is valid.
     valid_values: [max_executable_operands]i128 = [_]i128{0} ** max_executable_operands,
