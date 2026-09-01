@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1481/1825 C functions and 1523/1879 LLVM functions.
-  The remaining 344 C and 356 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1495/1825 C functions and 1537/1879 LLVM functions.
+  The remaining 330 C and 342 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -82,7 +82,7 @@ Current leading blockers are `trap_projection`, `unsupported_statement`,
 aggregate construction, `try`, and unsupported calls. Renderer rejection is a
 smaller secondary group.
 
-The remaining `trap_projection` group is 42 bodies per backend. Representation
+The remaining `trap_projection` group is 26 bodies per backend. Representation
 edges are now resolved after canonical statement construction, which removes
 the earlier source-walk ordering dependency for local pointer stores. The
 resolver remains bijective and syntax-free: it accepts exactly one typed
@@ -101,6 +101,14 @@ place, attaches the exact representation edge to the projected pointee, and
 both renderers use that same place. Eleven entries leave the trap-projection
 group; four broad-corpus functions per backend become fully canonical, while
 the remainder expose their next structural blocker instead of guessing.
+
+Fixed-array places rooted behind a checked pointer parameter carry one
+representation obligation plus their checked-index obligations. The producer,
+verifier, C renderer, and LLVM renderer share that accounting; LLVM emits the
+pointer guard for either an expression or statement owner. This removes sixteen
+more entries from `trap_projection` and admits fourteen broad-corpus functions
+per backend, including pool/ring/slotmap/const-generic families. Two bodies now
+fail closed on the next structural reason rather than on trap ownership.
 
 Declared-struct slice element reads with scalar fields are no longer part of
 that renderer group. Canonical C and LLVM rebuild the value from unordered

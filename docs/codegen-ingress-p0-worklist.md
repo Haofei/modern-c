@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1481/1825 admitted | 1523/1879 admitted |
-| AST fallback | 344 | 356 |
+| broad sweep | 1495/1825 admitted | 1537/1879 admitted |
+| AST fallback | 330 | 342 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -47,6 +47,15 @@ whose value lives in an addressable slot. This removes eleven entries from the
 `trap_projection` bucket, admits four additional broad-corpus functions per
 backend, and leaves 42 trap-projection bodies per backend; the other newly
 exposed bodies remain fail-closed on their next structural blocker.
+
+Fixed-array projections behind a checked pointer parameter now own both parts
+of their safety contract: one pointer-representation edge and every checked
+index edge. Access classification treats the pointee as external storage rather
+than the local parameter slot, and LLVM can emit the representation guard for
+both expression and statement owners. Sixteen `trap_projection` entries leave
+the bucket, fourteen functions per backend become canonical, and the remaining
+two expose their next typed-operation blocker. The bucket is now 26 bodies per
+backend.
 
 Typed scalar/enum switches now distinguish a source wildcard arm from trap
 successors created while evaluating the subject. Representation and bounds

@@ -73,6 +73,35 @@ test "guarded local pointer member access is canonical" {
     try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
 }
 
+test "pointer-pointee fixed array owns representation and bounds edges" {
+    const source =
+        \\struct Bucket { values: [4]u32 }
+        \\fn replace(bucket: *mut Bucket, index: usize, value: u32) -> void {
+        \\    bucket.values[index] = value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_pointer_pointee_fixed_array.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "replace") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 2), function.executable_body.trap_edges.len);
+    var representation_count: usize = 0;
+    var bounds_count: usize = 0;
+    for (function.executable_body.trap_edges) |edge| switch (edge.kind) {
+        .InvalidRepresentation => representation_count += 1,
+        .Bounds => bounds_count += 1,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 1), representation_count);
+    try std.testing.expectEqual(@as(usize, 1), bounds_count);
+    try mir_executable_body.verify(function);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+}
+
 test "executable MIR preserves union construction identity" {
     const source =
         \\overlay union Word {

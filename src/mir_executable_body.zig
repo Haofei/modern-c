@@ -747,7 +747,8 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                                 mir.executableGuardedLocalScalarDerefPlace(body, target.*, false) or
                                 mir.executableGuardedLocalAggregateDerefPlace(body, target.*, false) or
                                 mir.executableGlobalPointerDerefPlace(body, target.*, false) or
-                                mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null) or
+                                mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null or
+                                mir.executableFixedArrayParameterPointeePlace(body, target.*, false)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
@@ -841,6 +842,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             mir.executableGuardedLocalAggregateDerefPlace(body, target.*, true) or
                             mir.executableGlobalPointerDerefPlace(body, target.*, true) or
                             mir.executableAggregatePointerFieldDerefPlace(body, target.*, true) != null or
+                            mir.executableFixedArrayParameterPointeePlace(body, target.*, true) or
                             mir.executableParameterProjectedPlace(body, target.*, true)) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
@@ -1077,7 +1079,13 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                 } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
-                if (indexed and !indexedBoundsEdgesExact(body, .{ .statement = statement_value.id }, statement_value.block_id, target.*, 0)) {
+                if (indexed and !indexedBoundsEdgesExact(
+                    body,
+                    .{ .statement = statement_value.id },
+                    statement_value.block_id,
+                    target.*,
+                    @intFromBool(guarded),
+                )) {
                     return error.InvalidMemoryAccessTrap;
                 }
                 if (ownedTrapCountAll(body, .{ .statement = statement_value.id }) != expected_traps) {
@@ -1716,6 +1724,10 @@ fn verifyMemoryAccess(
         !mir.executableRaceAggregateTypeSupported(body, target.type_id, target.ty)) return error.InvalidMemoryAccessType;
     if (target.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
+            if (mir.executableFixedArrayParameterPointeePlace(body, target.*, is_store)) {
+                if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
+                return;
+            }
             switch (target.root) {
                 .local => if (access.kind != .plain) return error.InvalidMemoryAccessKind,
                 .symbol => |id| {

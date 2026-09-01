@@ -7484,15 +7484,7 @@ const FunctionBuilder = struct {
         if (place.storage == .atomic) return self.executableAtomicPlaceComplete(place);
         if (place.projection_count == 0) return true;
         if (self.executableFixedArrayIndexPlaceComplete(place)) {
-            const transient_body: mir_model.ExecutableBody = .{
-                .parameters = self.executable_parameters.items,
-                .locals = self.executable_locals.items,
-                .statements = self.executable_statements.items,
-                .expressions = self.executable_expressions.items,
-                .aggregate_types = self.executable_aggregate_types.items,
-            };
-            const indexed = mir_model.executableFixedArrayIndexPlace(&transient_body, place) orelse return false;
-            if (!indexed.parameter_pointee) return true;
+            return true;
         }
         if (self.executableSliceIndexPlaceComplete(place)) return true;
         if (mir_model.executableAggregateFieldPlace(
@@ -7814,16 +7806,27 @@ const FunctionBuilder = struct {
         }
         if (place.projection_count != 0) {
             if (!self.executablePlaceComplete(place)) return false;
-            if (self.executableFixedArrayIndexPlaceComplete(place)) return switch (place.root) {
-                .local => access.kind == .plain,
-                .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
-                    const identity = self.executable_symbols.items[id.index()];
-                    if (identity.kind != .global or (is_store and !identity.mutable)) break :symbol false;
-                    const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
-                    break :symbol access.kind == expected_kind;
-                } else false,
-                .value => false,
-            };
+            if (self.executableFixedArrayIndexPlaceComplete(place)) {
+                const transient_body: mir_model.ExecutableBody = .{
+                    .parameters = self.executable_parameters.items,
+                    .locals = self.executable_locals.items,
+                    .statements = self.executable_statements.items,
+                    .expressions = self.executable_expressions.items,
+                    .aggregate_types = self.executable_aggregate_types.items,
+                };
+                if (mir_model.executableFixedArrayParameterPointeePlace(&transient_body, place, is_store))
+                    return access.kind == .race_unordered;
+                return switch (place.root) {
+                    .local => access.kind == .plain,
+                    .symbol => |id| if (id.isValid() and id.index() < self.executable_symbols.items.len) symbol: {
+                        const identity = self.executable_symbols.items[id.index()];
+                        if (identity.kind != .global or (is_store and !identity.mutable)) break :symbol false;
+                        const expected_kind: mir_model.ExecutableMemoryAccessKind = if (identity.mutable) .race_unordered else .plain;
+                        break :symbol access.kind == expected_kind;
+                    } else false,
+                    .value => false,
+                };
+            }
             if (self.executableSliceIndexPlaceComplete(place)) {
                 const transient_body: mir_model.ExecutableBody = .{
                     .parameters = self.executable_parameters.items,
@@ -8135,6 +8138,7 @@ const FunctionBuilder = struct {
             mir_model.executableGuardedLocalAggregateDerefPlace(&body, place, require_mutable) or
             mir_model.executableGlobalPointerDerefPlace(&body, place, require_mutable) or
             mir_model.executableAggregatePointerFieldDerefPlace(&body, place, require_mutable) != null or
+            mir_model.executableFixedArrayParameterPointeePlace(&body, place, require_mutable) or
             mir_model.executableParameterProjectedPlace(&body, place, require_mutable);
     }
 

@@ -2330,6 +2330,24 @@ pub fn executableFixedArrayIndexPlace(
     return .{ .first_index = first_index orelse return null, .parameter_pointee = parameter_pointee };
 }
 
+/// A fixed-array projection whose storage begins behind a checked pointer
+/// parameter.  Such a place owns one representation edge in addition to its
+/// checked index edges, and accesses external pointee storage rather than the
+/// local parameter slot.
+pub fn executableFixedArrayParameterPointeePlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    const indexed = executableFixedArrayIndexPlace(body, place) orelse return false;
+    if (!indexed.parameter_pointee) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut);
+}
+
 pub fn executableFixedArrayCheckedProjectionCount(place: ExecutablePlace) usize {
     var count: usize = 0;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
