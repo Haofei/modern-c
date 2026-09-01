@@ -944,6 +944,11 @@ fn emitExpressionOperation(
             }
             try out.append(allocator, ')');
         },
+        .try_propagate => |operand_id| {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, operand_id, depth + 1);
+            try out.appendSlice(allocator, ".payload.ok)");
+        },
         .result => |result| {
             const shape = resultType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!resultConstructionSupported(body, expression.*, result)) return error.InvalidExpression;
@@ -1290,6 +1295,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
+        .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
         .result => |result| resultConstructionSupported(body, expression, result),
         .index => |index| indexSupported(body, expression, index),
         .range_slice => |range| rangeSliceSupported(body, expression, range),
@@ -1359,6 +1365,15 @@ fn tryUnwrapSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         else => false,
     };
     return payload_valid and tryUnwrapTrapEdge(body, expression) != null;
+}
+
+fn tryPropagateSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    const operand = expressionById(body, operand_id) orelse return false;
+    if (operand.result_ty != .result or !operand.type_id.eql(body.return_type_id) or
+        ownedTrapEdgeCount(body, expression.id) != 0) return false;
+    const shape = resultType(body, operand.type_id) orelse return false;
+    return sameValueType(shape.ty, operand.result_ty) and
+        sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
 }
 
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -3478,6 +3493,17 @@ fn prepareStatementExpressions(
                 else => return error.InvalidExpression,
             });
             try out.appendSlice(allocator, ") mc_trap_NullUnwrap();\n");
+        }
+        if (expression.operation == .try_propagate) {
+            const operand = expression.operation.try_propagate;
+            if (!tryPropagateSupported(body, expression, operand)) return error.InvalidExpression;
+            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "if (!");
+            try emitExpression(allocator, out, body, operand, 0);
+            try out.appendSlice(allocator, ".is_ok) return ");
+            try emitExpression(allocator, out, body, operand, 0);
+            try out.appendSlice(allocator, ";\n");
         }
         switch (expression.operation) {
             .binary => |binary| if (binary.arithmetic == .unchecked) {

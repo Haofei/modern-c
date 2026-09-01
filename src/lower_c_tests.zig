@@ -14023,13 +14023,15 @@ test "lower-c emits Result try in local initializers" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_result_try.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("emit_c_result_try.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_tmp0.payload.err });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = mc_tmp0.payload.ok;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = mc_checked_add_u32(value, 1) });") != null);
+    const body = try cFunctionBody(output.items, "static mc_result_u32_Error add_one(void)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "make_result()");
+    try expectContains(body, ".is_ok) return mc_exec_tmp_");
+    try expectContains(body, ".payload.ok");
+    try expectContains(body, "mc_checked_add_u32");
+    try expectContains(body, ".is_ok = true");
 }
 
 test "lower-c emits Result try in return statements" {
@@ -14055,6 +14057,9 @@ test "lower-c emits Result try in return statements" {
         \\fn unwrap_pair(result: Result<Pair, Error>) -> u32 {
         \\    let pair: Pair = result?;
         \\    return pair.left + pair.right;
+        \\}
+        \\fn propagate(result: Result<u32, Error>) -> Result<u32, Error> {
+        \\    return ok(result?);
         \\}
     ;
 
@@ -14082,6 +14087,12 @@ test "lower-c emits Result try in return statements" {
     try expectContains(pair_body, "mc_result_mc_type_struct_4_Pair_Error mc_exec_tmp_");
     try expectContains(pair_body, ".is_ok == false) mc_trap_NullUnwrap();");
     try expectContains(pair_body, ".payload.ok");
+
+    const propagate_body = try cFunctionBody(output.items, "static mc_result_u32_Error propagate(mc_result_u32_Error result)");
+    try expectContains(propagate_body, "/* canonical executable MIR */");
+    try expectContains(propagate_body, "if (!mc_exec_tmp_");
+    try expectContains(propagate_body, ".is_ok) return mc_exec_tmp_");
+    try expectContains(propagate_body, ".payload.ok");
 }
 
 test "lower-c emits Result try in return call arguments" {
@@ -14238,18 +14249,19 @@ test "lower-c emits try in local initializer call arguments" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_try_local_initializer.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("emit_c_try_local_initializer.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error local_result_try(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_tmp0.payload.err });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = box_value(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t const * local_nullable_try(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr_id(mc_exec_tmp_") != null);
+    const result_body = try cFunctionBody(output.items, "static mc_result_u32_Error local_result_try(void)");
+    try expectContains(result_body, "/* canonical executable MIR */");
+    try expectContains(result_body, "make_result()");
+    try expectContains(result_body, ".is_ok) return mc_exec_tmp_");
+    try expectContains(result_body, ".payload.ok");
+    try expectContains(result_body, "box_value(mc_exec_tmp_");
+    const nullable_body = try cFunctionBody(output.items, "static uint8_t const * local_nullable_try(void)");
+    try expectContains(nullable_body, "/* canonical executable MIR */");
+    try expectContains(nullable_body, "make_nullable_pointer()");
+    try expectContains(nullable_body, "== NULL) mc_trap_NullUnwrap();");
+    try expectContains(nullable_body, "ptr_id(mc_exec_tmp_");
 }
 
 test "lower-c emits try in assignment and expression statements" {
@@ -14292,24 +14304,25 @@ test "lower-c emits try in assignment and expression statements" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_try_assignment_expr_stmt.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("emit_c_try_assignment_expr_stmt.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "value = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_value, (uint32_t)mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
+    const assign_result = try cFunctionBody(output.items, "static mc_result_u32_Error assign_result_try(void)");
+    try expectContains(assign_result, "/* canonical executable MIR */");
+    try expectContains(assign_result, ".is_ok) return mc_exec_tmp_");
+    try expectContains(assign_result, ".payload.ok");
+    try expectContains(assign_result, "mc_race_store_u32");
+    const expr_result = try cFunctionBody(output.items, "static mc_result_u32_Error expr_result_try(void)");
+    try expectContains(expr_result, ".is_ok) return mc_exec_tmp_");
+    try expectContains(expr_result, "consume(mc_exec_tmp_");
     const assign_nullable = try cFunctionBody(output.items, "static uint8_t const * assign_nullable_try(void)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "ptr = "));
     // Two executable null checks plus their two MIR trap blocks. Count the
     // guarded checks, not textual trap-block bodies that are unreachable on
     // the successful path.
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "== NULL) mc_trap_NullUnwrap();"));
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_exec_tmp_") != null);
+    const expr_nullable = try cFunctionBody(output.items, "static void expr_nullable_try(void)");
+    try expectContains(expr_nullable, "== NULL) mc_trap_NullUnwrap();");
+    try expectContains(expr_nullable, "consume_ptr(mc_exec_tmp_");
 }
 
 test "lower-c emits simple functions and race-safe globals" {

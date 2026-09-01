@@ -4097,6 +4097,9 @@ test "LLVM emits value optional and Result try from MIR without body fallback" {
         \\    let pair: Pair = result?;
         \\    return pair.left + pair.right;
         \\}
+        \\fn propagate(result: Result<u32, Error>) -> Result<u32, Error> {
+        \\    return ok(result?);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -4124,6 +4127,12 @@ test "LLVM emits value optional and Result try from MIR without body fallback" {
     try expectContains(pair_body, "extractvalue { i1, { i32, i32 }, i8 }");
     try expectContains(pair_body, "call void @mc_trap_NullUnwrap()");
     try expectContains(pair_body, "ret i32");
+
+    const propagate_body = try llvmFunctionBody(output.items, "define internal { i1, i32, i8 } @propagate");
+    try expectContains(propagate_body, "; canonical executable MIR");
+    try expectContains(propagate_body, "label %mc_propagate_ok_");
+    try expectContains(propagate_body, "label %mc_propagate_err_");
+    try expectContains(propagate_body, "ret { i1, i32, i8 }");
 }
 
 test "LLVM emits strict nullable control plans from MIR without body fallback" {

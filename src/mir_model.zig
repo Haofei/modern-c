@@ -1153,6 +1153,10 @@ pub const ExecutableExpression = struct {
         /// obligation made explicit; backends only encode this checked MIR
         /// operation and never rediscover source `?` syntax.
         try_unwrap: ExprId,
+        /// Extract the success payload of a Result while returning the exact
+        /// operand unchanged on its error edge. Admission requires the
+        /// enclosing function to return the same canonical Result type.
+        try_propagate: ExprId,
         result: struct {
             is_ok: bool,
             payload: ExprId,

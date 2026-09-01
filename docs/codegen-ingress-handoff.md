@@ -7,20 +7,23 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1530/1825 C functions and 1572/1879 LLVM functions.
-  The remaining 295 C and 307 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1540/1825 C functions and 1582/1879 LLVM functions.
+  The remaining 285 C and 297 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
 backend fallback branches.
 
-Canonical `try_unwrap` now consumes the existing nullable-value and Result
-layout tables as well as nullable-pointer shape. Trapping value-optionals and
-Results in non-Result-returning functions use one verified Unwrap edge and one
-mechanical payload extraction in both renderers; Result propagation remains
-fail-closed until MIR owns its early-return edge. This retired nine broad-corpus
-fallbacks per backend and reduced `unsupported_try` from 26 to 16. The census
-runner now refreshes the default installed compiler before measuring, closing
-a stale-binary hole that could otherwise report unchanged but invalid counts.
+Canonical `try_unwrap` consumes the nullable-value and Result layout tables as
+well as nullable-pointer shape. Canonical `try_propagate` owns the distinct
+same-type Result early-return contract: verifier admission requires the exact
+enclosing Result type, C returns the already evaluated operand on error, and
+LLVM emits the corresponding conditional return before extracting the success
+payload. Assignment, expression-statement, nested-call, and multiple-`?`
+evaluation order now use this operation. The two slices retired nineteen
+broad-corpus fallbacks per backend in total and reduced `unsupported_try` from
+26 to 5. Mapped `#[error_from]`, mapped `? else`, unsafe MMIO result handling,
+and cleanup-edge integration remain fail-closed. The census runner refreshes
+the default installed compiler before measuring, closing a stale-binary hole.
 
 The latest cutover added canonical `for_each` and `for_step` terminators. MIR
 owns iterable evaluation, synthetic iterable/index locals, element binding,

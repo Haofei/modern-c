@@ -940,6 +940,7 @@ const Renderer = struct {
             .variant_test => |operation| try self.emitVariant(expression, operation.operand, operation.kind, false),
             .variant_payload => |operation| try self.emitVariant(expression, operation.operand, operation.kind, true),
             .try_unwrap => |operand| try self.emitTryUnwrap(expression, operand),
+            .try_propagate => |operand| try self.emitTryPropagate(expression, operand),
             .result => |result| try self.emitResult(expression, result),
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
@@ -1052,6 +1053,25 @@ const Renderer = struct {
             },
             else => return error.InvalidBody,
         }
+    }
+
+    fn emitTryPropagate(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
+        if (!tryPropagateSupported(self.body, expression, operand_id)) return error.InvalidBody;
+        const operand = try self.emitExpression(operand_id);
+        if (!std.mem.eql(u8, operand.ty, self.return_ty)) return error.InvalidBody;
+        const present = try self.temp();
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_propagate_ok_{d}", .{expression.id.raw});
+        const failure = try std.fmt.allocPrint(self.allocator, "mc_propagate_err_{d}", .{expression.id.raw});
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ present, operand.ty, operand.spelling });
+        try self.output.print(
+            self.allocator,
+            "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  ret {s} {s}\n{s}:\n",
+            .{ present, continuation, failure, failure, operand.ty, operand.spelling, continuation },
+        );
+        const payload = try self.temp();
+        const payload_ty = try self.typeText(expression.result_ty);
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, operand.ty, operand.spelling });
+        return .{ .ty = payload_ty, .spelling = payload };
     }
 
     fn emitOptional(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
@@ -3509,6 +3529,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
+        .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
         .result => |result| resultConstructionSupported(body, expression, result),
         .range_slice => |range| rangeSliceSupported(body, expression, range),
         .unsupported => false,
@@ -3569,6 +3590,16 @@ fn tryUnwrapSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         else => false,
     };
     return payload_valid and tryUnwrapTrapEdgeIsExact(body, expression);
+}
+
+fn tryPropagateSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    if (!expressionValid(body, operand_id)) return false;
+    const operand = body.expressions[operand_id.index()];
+    if (operand.result_ty != .result or !operand.type_id.eql(body.return_type_id) or
+        ownedExpressionTrapCount(body, expression.id) != 0) return false;
+    const shape = resultType(body, operand.type_id) orelse return false;
+    return sameValueType(shape.ty, operand.result_ty) and
+        sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
 }
 
 fn optionalConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: ?mir.ExprId) bool {

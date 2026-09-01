@@ -7104,6 +7104,7 @@ const FunctionBuilder = struct {
             .variant_test => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, false),
             .variant_payload => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, true),
             .try_unwrap => |operand_id| self.executableTryUnwrapComplete(expression, operand_id),
+            .try_propagate => |operand_id| self.executableTryPropagateComplete(expression, operand_id),
             .result => |operation| result: {
                 if (!operation.payload.isValid() or operation.payload.index() >= expression.id.index() or
                     operation.payload.index() >= self.executable_expressions.items.len) break :result false;
@@ -7167,6 +7168,21 @@ const FunctionBuilder = struct {
             .representation_check => |check| self.executableRepresentationCheckComplete(expression, check),
             else => true,
         };
+    }
+
+    fn executableTryPropagateComplete(self: *const FunctionBuilder, expression: ExecutableExpression, operand_id: ExprId) bool {
+        if (!operand_id.isValid() or operand_id.index() >= expression.id.index() or
+            operand_id.index() >= self.executable_expressions.items.len or self.return_ty != .result)
+            return false;
+        const operand = self.executable_expressions.items[operand_id.index()];
+        if (operand.result_ty != .result or !sameValueType(operand.result_ty, self.return_ty)) return false;
+        const return_type_id = self.type_ids.get(self.return_ty) orelse return false;
+        if (!operand.type_id.eql(return_type_id)) return false;
+        for (self.executable_result_types.items) |shape| {
+            if (!shape.type_id.eql(operand.type_id)) continue;
+            return sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
+        }
+        return false;
     }
 
     fn executableUncheckedBinaryComplete(
@@ -8057,10 +8073,25 @@ const FunctionBuilder = struct {
                 found = true;
                 break;
             }
-            if (!found and !self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) return false;
+            if (!found and
+                !self.executableTryPropagationProjectionComplete(legacy) and
+                !self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) return false;
         }
         for (matched) |present| if (!present) return false;
         return true;
+    }
+
+    fn executableTryPropagationProjectionComplete(self: *const FunctionBuilder, legacy: TrapEdge) bool {
+        if (legacy.kind != .Unwrap or legacy.source != .unwrap) return false;
+        var matched = false;
+        for (self.executable_expressions.items) |expression| {
+            if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block)) or
+                !expression.span_id.eql(legacy.typed_span_id) or expression.operation != .try_propagate)
+                continue;
+            if (matched) return false;
+            matched = true;
+        }
+        return matched;
     }
 
     fn resolveExecutableCheckedTrapEdges(self: *FunctionBuilder, legacy_edges: []const TrapEdge) !void {
@@ -9634,10 +9665,10 @@ const FunctionBuilder = struct {
                 break :aggregate .{ .struct_ = value };
             },
             .try_expr => |node| unwrap: {
-                // Mapped errors and Result propagation still require an
-                // explicit early-return edge. Trapping unwraps share one
-                // canonical operation for pointers, value optionals, and
-                // Results whose enclosing function does not return Result.
+                // Mapped errors still require an explicit conversion edge.
+                // Same-type Result propagation and trapping unwraps are
+                // distinct canonical operations so backends never infer the
+                // meaning of postfix `?` from source syntax.
                 if (node.mapped != null) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                 const operand_type_expr = self.typeExprForExpr(node.operand.*) orelse
                     break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
@@ -9658,8 +9689,6 @@ const FunctionBuilder = struct {
                         if (!complete) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                     },
                     .result => {
-                        if (self.return_ty == .result)
-                            break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                         const complete = try self.internExecutableResultType(operand_ty, operand_type_expr);
                         if (!complete)
                             break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
@@ -9667,6 +9696,14 @@ const FunctionBuilder = struct {
                     else => break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
                 }
                 const operand_id = try self.ensureExecutableExpr(node.operand.*);
+                if (operand_ty == .result and self.return_ty == .result) {
+                    const return_type_expr = self.return_type_expr orelse
+                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    if (!sameValueType(self.return_ty, operand_ty) or
+                        !try self.internExecutableResultType(self.return_ty, return_type_expr))
+                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    break :unwrap .{ .try_propagate = operand_id };
+                }
                 break :unwrap .{ .try_unwrap = operand_id };
             },
             .block => self.unsupportedExecutableExpression(.unsupported_block_expression),

@@ -602,6 +602,13 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidAggregateConstruction;
             }
         },
+        .try_propagate => |operand_id| {
+            try verifyOperand(body, value, operand_id);
+            const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+            if (body.complete and (!tryPropagatePayloadValid(body, &value, operand) or
+                ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
+                return error.InvalidAggregateConstruction;
+        },
         .result => |operation| {
             try verifyOperand(body, value, operation.payload);
             if (body.complete) {
@@ -893,7 +900,9 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                 if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
                     legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(edge.span_id)) matches += 1;
             }
-            if (matches == 0 and terminalTrapProjectionMatches(function, legacy)) {
+            if (matches == 0 and (tryPropagationProjectionMatches(function, legacy) or
+                terminalTrapProjectionMatches(function, legacy)))
+            {
                 terminal_projections += 1;
                 continue;
             }
@@ -901,6 +910,23 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
         }
         if (body.trap_edges.len + terminal_projections != function.trap_edges.len) return error.InvalidCompletionClaim;
     }
+}
+
+fn tryPropagationProjectionMatches(function: *const mir.Function, legacy: mir.TrapEdge) bool {
+    if (legacy.kind != .Unwrap or legacy.source != .unwrap) return false;
+    const body = &function.executable_body;
+    var match: ?*const mir.ExecutableExpression = null;
+    for (body.expressions) |*value| {
+        if (!value.block_id.eql(mir.BlockId.fromIndex(legacy.from_block)) or
+            !value.span_id.eql(legacy.typed_span_id) or value.operation != .try_propagate)
+            continue;
+        if (match != null) return false;
+        match = value;
+    }
+    const value = match orelse return false;
+    const operand_id = value.operation.try_propagate;
+    const operand = expression(body, operand_id) orelse return false;
+    return tryPropagatePayloadValid(body, value, operand);
 }
 
 fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.TrapEdge) bool {
@@ -1767,6 +1793,17 @@ fn tryUnwrapPayloadValid(
         },
         else => false,
     };
+}
+
+fn tryPropagatePayloadValid(
+    body: *const mir.ExecutableBody,
+    value: *const mir.ExecutableExpression,
+    operand: *const mir.ExecutableExpression,
+) bool {
+    if (operand.result_ty != .result or !operand.type_id.eql(body.return_type_id)) return false;
+    const shape = resultType(body, operand.type_id) orelse return false;
+    return sameValueType(shape.ty, operand.result_ty) and
+        sameValueType(value.result_ty, shape.ok_ty) and value.type_id.eql(shape.ok_type_id);
 }
 
 fn verifyMemoryAccess(
