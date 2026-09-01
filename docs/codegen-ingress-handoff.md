@@ -1,14 +1,14 @@
 # Codegen ingress handoff
 
-Measured 2026-08-31 on `master`.
+Measured 2026-09-01 on `master`.
 
 ## Current state
 
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1471/1825 C functions and 1513/1879 LLVM functions.
-  The remaining 354 C and 366 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1475/1825 C functions and 1517/1879 LLVM functions.
+  The remaining 350 C and 362 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -81,6 +81,14 @@ Current leading blockers are `trap_projection`, `unsupported_statement`,
 `unsupported_member`, `general_switch`, string and
 aggregate construction, `try`, and unsupported calls. Renderer rejection is a
 smaller secondary group.
+
+The remaining `trap_projection` group is 46 bodies per backend. Representation
+edges are now resolved after canonical statement construction, which removes
+the earlier source-walk ordering dependency for local pointer stores. The
+resolver remains bijective and syntax-free: it accepts exactly one typed
+expression or statement owner, while dynamic-trait receiver calls and nullable
+dynamic values remain explicit structural blockers rather than being guessed
+from a span.
 
 Declared-struct slice element reads with scalar fields are no longer part of
 that renderer group. Canonical C and LLVM rebuild the value from unordered

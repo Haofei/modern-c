@@ -744,6 +744,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         } else if (target.storage != .ordinary or
                             !(isParameterScalarAccessPlace(body, target.*, false) or
                                 mir.executableLocalAddressDerefPlace(body, target.*, false) or
+                                mir.executableGuardedLocalScalarDerefPlace(body, target.*, false) or
                                 mir.executableGuardedLocalAggregateDerefPlace(body, target.*, false) or
                                 mir.executableGlobalPointerDerefPlace(body, target.*, false) or
                                 mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null) or
@@ -836,6 +837,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         }
                         if (!(isParameterScalarAccessPlace(body, target.*, true) or
                             mir.executableLocalAddressDerefPlace(body, target.*, true) or
+                            mir.executableGuardedLocalScalarDerefPlace(body, target.*, true) or
                             mir.executableGuardedLocalAggregateDerefPlace(body, target.*, true) or
                             mir.executableGlobalPointerDerefPlace(body, target.*, true) or
                             mir.executableAggregatePointerFieldDerefPlace(body, target.*, true) != null or
@@ -1764,29 +1766,7 @@ fn verifyMemoryAccess(
         if (!isScalarAccessPlace(body, target.*, is_store) and
             !(aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, target.*, is_store)))
             return error.InvalidPlaceType;
-        const expected_kind: mir.ExecutableMemoryAccessKind = alias_kind: {
-            const local_id = switch (target.root) {
-                .local => |id| id,
-                .symbol, .value => break :alias_kind .race_unordered,
-            };
-            const alias_target_id = mir.executableLocalAddressAliasTarget(
-                body.statements,
-                body.expressions,
-                body.places,
-                local_id,
-                target.root_ty,
-                target.root_type_id,
-            ) orelse break :alias_kind .race_unordered;
-            const alias_target = place(body, alias_target_id) orelse return error.InvalidPlaceType;
-            break :alias_kind switch (alias_target.root) {
-                .local => .plain,
-                .symbol => |id| if ((symbol(body, id) orelse return error.InvalidSymbolReference).mutable)
-                    .race_unordered
-                else
-                    .plain,
-                .value => return error.InvalidPlaceType,
-            };
-        };
+        const expected_kind = mir.executablePointerDerefAccessKind(body, target.*) orelse return error.InvalidPlaceType;
         if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;
         return;
     }
@@ -1810,6 +1790,14 @@ fn verifyMemoryAccess(
 }
 
 fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) !void {
+    if (target.pointer_provenance != .unknown) {
+        if (target.root != .local or target.projection_count == 0 or target.projections[0] != .deref)
+            return error.InvalidPlaceType;
+        switch (target.root_ty) {
+            .pointer => {},
+            else => return error.InvalidPlaceType,
+        }
+    }
     if (target.storage == .atomic) {
         if (!atomicPlaceSupported(body, target)) return error.InvalidAtomicLoad;
         return;
@@ -1877,6 +1865,7 @@ fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePl
     ) or mir.executableAggregatePointerFieldDerefPlace(body, target, require_mutable) != null or
         isParameterScalarAccessPlace(body, target, require_mutable) or
         mir.executableLocalAddressDerefPlace(body, target, require_mutable) or
+        mir.executableGuardedLocalScalarDerefPlace(body, target, require_mutable) or
         mir.executableGlobalPointerDerefPlace(body, target, require_mutable) or
         isComputedRawManyDerefPlace(body, target, require_mutable);
 }

@@ -6798,7 +6798,6 @@ const FunctionBuilder = struct {
         // an unsupported executable body.
         try self.resolveExecutableCheckedTrapEdges(trap_edges);
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
-        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
             parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
@@ -6911,6 +6910,13 @@ const FunctionBuilder = struct {
                 else => {},
             }
         }
+        // Representation facts are recorded by the source-shaped walk after
+        // recursively visiting some assignment/call operands. Resolve any
+        // still-unbound edge now that every canonical owner is normalized.
+        // The typed block/span identity must select exactly one operation;
+        // zero or multiple candidates remain fail-closed.
+        try self.resolveExecutableRepresentationTrapEdges(trap_edges, call_target_facts, legacy_blocks);
+        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
         for (self.blocks.items) |block| {
             const operation: @FieldType(ExecutableTerminator, "operation") = if (self.executable_for_each_terminators.get(block.id)) |for_each|
                 .{ .for_each = for_each }
@@ -7505,6 +7511,7 @@ const FunctionBuilder = struct {
             .aggregate_types = self.executable_aggregate_types.items,
         };
         if (mir_model.executableParameterProjectedPlace(&parameter_body, place, false)) return true;
+        if (mir_model.executableGuardedLocalScalarDerefPlace(&parameter_body, place, false)) return true;
         if (mir_model.executableGuardedLocalAggregateDerefPlace(&parameter_body, place, false)) return true;
         const transient_body: mir_model.ExecutableBody = .{
             .locals = self.executable_locals.items,
@@ -7860,15 +7867,19 @@ const FunctionBuilder = struct {
                 ),
                 .symbol, .value => null,
             };
-            const expected_kind: mir_model.ExecutableMemoryAccessKind = if (local_alias) |target_id| alias: {
-                const target = self.executable_places.items[target_id.index()];
-                break :alias switch (target.root) {
-                    .local => .plain,
-                    .symbol => |symbol_id| if (symbol_id.isValid() and symbol_id.index() < self.executable_symbols.items.len and
-                        self.executable_symbols.items[symbol_id.index()].mutable) .race_unordered else .plain,
-                    .value => return false,
-                };
-            } else .race_unordered;
+            const expected_kind: mir_model.ExecutableMemoryAccessKind = switch (place.pointer_provenance) {
+                .local_storage => .plain,
+                .global_storage => .race_unordered,
+                .unknown => if (local_alias) |target_id| alias: {
+                    const target = self.executable_places.items[target_id.index()];
+                    break :alias switch (target.root) {
+                        .local => .plain,
+                        .symbol => |symbol_id| if (symbol_id.isValid() and symbol_id.index() < self.executable_symbols.items.len and
+                            self.executable_symbols.items[symbol_id.index()].mutable) .race_unordered else .plain,
+                        .value => return false,
+                    };
+                } else .race_unordered,
+            };
             if (access.kind != expected_kind) return false;
             if (is_store) {
                 const shape = switch (place.root_ty) {
@@ -8034,6 +8045,103 @@ const FunctionBuilder = struct {
                 .span_id = legacy.typed_span_id,
             });
         }
+    }
+
+    fn resolveExecutableRepresentationTrapEdges(
+        self: *FunctionBuilder,
+        legacy_edges: []const TrapEdge,
+        call_target_facts: []const CallTargetFact,
+        legacy_blocks: []const Block,
+    ) !void {
+        for (legacy_edges) |legacy| {
+            if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check) continue;
+            var already_present = false;
+            for (self.executable_trap_edges.items) |edge| {
+                if (self.executableTrapEdgeMatchesLegacy(edge, legacy)) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (already_present) continue;
+            if (self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) continue;
+
+            var owner: ?mir_model.ExecutableTrapOwner = null;
+            var ambiguous = false;
+            for (self.executable_expressions.items) |expression| {
+                if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                const owns_edge = switch (expression.operation) {
+                    .representation_check => expression.span_id.eql(legacy.typed_span_id),
+                    .load => |load| load.representation_span_id.eql(legacy.typed_span_id) and
+                        self.executableRepresentationPlaceCandidate(load.place, false),
+                    .atomic_load => |load| load.representation_span_id.eql(legacy.typed_span_id) and
+                        self.executableAtomicRepresentationPlaceCandidate(load.place),
+                    .atomic_update => |update| update.representation_span_id.eql(legacy.typed_span_id) and
+                        self.executableAtomicRepresentationPlaceCandidate(update.place),
+                    .address_of => |address| address.representation_span_id.eql(legacy.typed_span_id) and
+                        self.executableRepresentationPlaceCandidate(address.place, false),
+                    .builtin_call => |call| call.kind == .raw_ptr and
+                        call.representation_span_id.eql(legacy.typed_span_id),
+                    else => false,
+                };
+                if (!owns_edge) continue;
+                if (owner != null) {
+                    ambiguous = true;
+                    break;
+                }
+                owner = .{ .expression = expression.id };
+            }
+            if (!ambiguous) for (self.executable_statements.items) |statement| {
+                if (!statement.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                const owns_edge = switch (statement.operation) {
+                    .store => |store| store.representation_span_id.eql(legacy.typed_span_id) and
+                        self.executableRepresentationPlaceCandidate(store.place, true),
+                    else => false,
+                };
+                if (!owns_edge) continue;
+                if (owner != null) {
+                    ambiguous = true;
+                    break;
+                }
+                owner = .{ .statement = statement.id };
+            };
+            if (ambiguous or owner == null) continue;
+            try self.executable_trap_edges.append(self.allocator, .{
+                .owner = owner.?,
+                .from_block = BlockId.fromIndex(legacy.from_block),
+                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .kind = legacy.kind,
+                .source = legacy.source,
+                .span_id = legacy.typed_span_id,
+            });
+        }
+    }
+
+    fn executableRepresentationPlaceCandidate(self: *const FunctionBuilder, place_id: PlaceId, require_mutable: bool) bool {
+        if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return false;
+        const place = self.executable_places.items[place_id.index()];
+        if (!self.executablePlaceComplete(place) or !self.executablePlaceNeedsRepresentationGuard(place)) return false;
+        const body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .symbols = self.executable_symbols.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+            .enum_types = self.executable_enum_types.items,
+        };
+        return mir_model.executableLocalAddressDerefPlace(&body, place, require_mutable) or
+            mir_model.executableGuardedLocalScalarDerefPlace(&body, place, require_mutable) or
+            mir_model.executableGuardedLocalAggregateDerefPlace(&body, place, require_mutable) or
+            mir_model.executableGlobalPointerDerefPlace(&body, place, require_mutable) or
+            mir_model.executableAggregatePointerFieldDerefPlace(&body, place, require_mutable) != null or
+            mir_model.executableParameterProjectedPlace(&body, place, require_mutable);
+    }
+
+    fn executableAtomicRepresentationPlaceCandidate(self: *const FunctionBuilder, place_id: PlaceId) bool {
+        if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return false;
+        const place = self.executable_places.items[place_id.index()];
+        return self.executableAtomicPlaceComplete(place) and self.executablePlaceNeedsRepresentationGuard(place);
     }
 
     fn executableTrapEdgeMatchesLegacy(
@@ -8786,7 +8894,7 @@ const FunctionBuilder = struct {
                 const guard_source: ?SourcePoint = if (self.executablePlaceNeedsRepresentationGuard(place)) self.sourcePoint(inner.span) else null;
                 break :load .{ .load = .{
                     .place = place_id,
-                    .access = self.executableMemoryAccess(expr, result_ty),
+                    .access = self.executableMemoryAccessForPlace(place_id, expr, result_ty),
                     .representation_source = guard_source,
                     .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                 } };
@@ -10058,6 +10166,12 @@ const FunctionBuilder = struct {
             if (self.executableAggregatePointerFieldAccessKind(place_expr)) |provenance_kind|
                 provenance_kind
             else if (root) |name| local_alias: {
+                if (self.livePointerProvenanceForDirectLocal(name)) |live| {
+                    break :local_alias switch (live.provenance) {
+                        .local_storage => .plain,
+                        .global_storage, .unknown => .race_unordered,
+                    };
+                }
                 const local = self.executable_local_ids.get(name) orelse break :local_alias .race_unordered;
                 const root_ty = self.local_types.get(name) orelse break :local_alias .race_unordered;
                 const root_type_id = self.type_ids.get(root_ty) orelse break :local_alias .race_unordered;
@@ -10082,6 +10196,25 @@ const FunctionBuilder = struct {
         else
             .plain;
         return .{ .kind = kind, .alignment = alignment };
+    }
+
+    fn executableMemoryAccessForPlace(
+        self: *FunctionBuilder,
+        place_id: PlaceId,
+        place_expr: ast.Expr,
+        ty: ValueType,
+    ) mir_model.ExecutableMemoryAccess {
+        var access = self.executableMemoryAccess(place_expr, ty);
+        if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return access;
+        const place = self.executable_places.items[place_id.index()];
+        if (place.projection_count == 0 or place.projections[0] != .deref or place.root != .local or
+            mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return access;
+        access.kind = switch (place.pointer_provenance) {
+            .local_storage => .plain,
+            .global_storage => .race_unordered,
+            .unknown => return access,
+        };
+        return access;
     }
 
     fn executableAggregateRequiresPlainAccess(self: *const FunctionBuilder, ty: ValueType) bool {
@@ -10385,6 +10518,17 @@ const FunctionBuilder = struct {
             // keeps this body incomplete; no backend may render the place.
             place.root = .{ .symbol = try self.internExecutableSymbol("<unsupported-place>") };
             place.projection_count = mir_model.max_executable_projections;
+        }
+        if (place.projection_count != 0 and place.projections[0] == .deref and place.root == .local and
+            mir_model.ExecutableMemoryAccess.scalarAlignment(place.ty) != null)
+        {
+            const local_id = place.root.local;
+            if (local_id.isValid() and local_id.index() < self.executable_locals.items.len) {
+                const spelling = self.executable_locals.items[local_id.index()].spelling;
+                if (self.livePointerProvenanceForDirectLocal(spelling)) |live| {
+                    place.pointer_provenance = live.provenance;
+                }
+            }
         }
         place.id = PlaceId.fromIndex(self.executable_places.items.len);
         try self.executable_places.append(self.allocator, place);
@@ -11000,7 +11144,7 @@ const FunctionBuilder = struct {
                         self.executableDerefOperandSource(node.target)
                     else
                         null;
-                    var store_access = self.executableMemoryAccess(node.target, assignment_target_ty);
+                    var store_access = self.executableMemoryAccessForPlace(place_id, node.target, assignment_target_ty);
                     // Place identity, not a possibly shadowed source spelling,
                     // decides whether direct local storage is thread-shared.
                     if (place.projection_count == 0 and place.root == .local) store_access.kind = .plain;

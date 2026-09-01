@@ -1293,6 +1293,11 @@ pub const ExecutablePlace = struct {
     ty: ValueType = .unknown,
     type_id: TypeId = .invalid,
     storage: ExecutablePlaceStorage = .ordinary,
+    /// Provenance of the pointer value at this exact place generation. This
+    /// is meaningful for a dereference rooted at a local pointer. Keeping it
+    /// on the canonical place prevents codegen from consulting the legacy
+    /// string-keyed pointer-fact log to choose plain versus unordered access.
+    pointer_provenance: PointerProvenance = .unknown,
     projections: [max_executable_projections]Projection = [_]Projection{.deref} ** max_executable_projections,
     projection_count: usize = 0,
 
@@ -2055,6 +2060,45 @@ pub fn executableGuardedLocalAggregateDerefPlace(
     return executableRaceAggregateTypeSupported(body, place.type_id, place.ty);
 }
 
+/// Check a scalar dereference through a typed local pointer value. Unlike an
+/// address alias, the local stores the pointer itself (for example `let q =
+/// p; q.* = value`). The representation edge guards that pointer generation;
+/// no source-name alias reconstruction is involved.
+pub fn executableGuardedLocalScalarDerefPlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    if (place.storage != .ordinary or place.projection_count != 1 or place.projections[0] != .deref or
+        !place.root_type_id.isValid() or !place.type_id.isValid() or
+        ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    if (!local.isValid() or local.index() >= body.locals.len or !body.locals[local.index()].id.eql(local)) return false;
+
+    var root_matches = false;
+    for (body.parameters) |parameter| if (parameter.local.eql(local)) {
+        root_matches = parameter.type_id.eql(place.root_type_id) and ValueType.eql(parameter.ty, place.root_ty);
+        break;
+    };
+    if (!root_matches) for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local)) {
+            root_matches = init.value != null and init.type_id.eql(place.root_type_id) and ValueType.eql(init.ty, place.root_ty);
+            break;
+        },
+        else => {},
+    };
+    if (!root_matches) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut) and
+        std.mem.eql(u8, pointer.child, place.ty.name());
+}
+
 /// Whether an aggregate can be lowered as a deterministic sequence of
 /// race-unordered scalar leaf accesses. C unions intentionally fail closed:
 /// their active storage member is not represented by ordinary field recursion.
@@ -2114,6 +2158,32 @@ pub fn executableLocalAddressDerefTarget(
         place.root_ty,
         place.root_type_id,
     );
+}
+
+/// Select the checked memory class for an indirect place. Pointer provenance
+/// belongs to the canonical place generation; the legacy source-fact log is
+/// not a codegen input. Address aliases use their canonical target place, and
+/// every unresolved pointer remains conservatively race-unordered.
+pub fn executablePointerDerefAccessKind(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+) ?ExecutableMemoryAccessKind {
+    if (place.storage != .ordinary or place.projection_count == 0) return null;
+    switch (place.pointer_provenance) {
+        .local_storage => return .plain,
+        .global_storage => return .race_unordered,
+        .unknown => {},
+    }
+    const target_id = executableLocalAddressDerefTarget(body, place, false) orelse return .race_unordered;
+    if (!target_id.isValid() or target_id.index() >= body.places.len) return null;
+    return switch (body.places[target_id.index()].root) {
+        .local => .plain,
+        .symbol => |id| if (id.isValid() and id.index() < body.symbols.len and body.symbols[id.index()].id.eql(id))
+            if (body.symbols[id.index()].mutable) .race_unordered else .plain
+        else
+            null,
+        .value => .race_unordered,
+    };
 }
 
 /// Check a scalar dereference through a pointer stored in a global. The

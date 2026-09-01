@@ -501,7 +501,8 @@ const Renderer = struct {
                     try self.emitGuardedGlobalPointerStorePointer(statement, store.place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAddressAliasStorePointer(statement, store.place)
-                else if (mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true))
+                else if (mir.executableGuardedLocalScalarDerefPlace(self.body, place, true) or
+                    mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAggregateStorePointer(statement, store.place)
                 else if (mir.executableAggregateFieldPlace(
                     self.body.locals,
@@ -2219,7 +2220,8 @@ const Renderer = struct {
             try self.emitGuardedGlobalPointer(expression, load.place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAddressAliasPointer(expression, load.place)
-        else if (mir.executableGuardedLocalAggregateDerefPlace(self.body, place, false))
+        else if (mir.executableGuardedLocalScalarDerefPlace(self.body, place, false) or
+            mir.executableGuardedLocalAggregateDerefPlace(self.body, place, false))
             try self.emitGuardedLocalAggregatePointer(expression, load.place)
         else if (mir.executableAggregateFieldPlace(
             self.body.locals,
@@ -2838,7 +2840,8 @@ const Renderer = struct {
     fn emitGuardedLocalAggregatePointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
-        if (!mir.executableGuardedLocalAggregateDerefPlace(self.body, place, false)) return error.InvalidBody;
+        if (!mir.executableGuardedLocalScalarDerefPlace(self.body, place, false) and
+            !mir.executableGuardedLocalAggregateDerefPlace(self.body, place, false)) return error.InvalidBody;
         const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
         const pointer = try self.localPointerValue(place);
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_aggregate_ready_{d}", .{expression.id.raw});
@@ -2849,7 +2852,8 @@ const Renderer = struct {
     fn emitGuardedLocalAggregateStorePointer(self: *Renderer, statement: mir.ExecutableStatement, place_id: mir.PlaceId) RenderError![]const u8 {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
-        if (!mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true)) return error.InvalidBody;
+        if (!mir.executableGuardedLocalScalarDerefPlace(self.body, place, true) and
+            !mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true)) return error.InvalidBody;
         const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
         const pointer = try self.localPointerValue(place);
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_aggregate_store_ready_{d}", .{statement.id.raw});
@@ -4232,6 +4236,7 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
     ) or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
         parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
+        mir.executableGuardedLocalScalarDerefPlace(body, place, false) or
         mir.executableGlobalPointerDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
@@ -4553,6 +4558,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     }
     return (parameterScalarAccessStorePlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, true) or
+        mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
         mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
         mir.executableGlobalPointerDerefPlace(body, place, true)) and
         store.representation_source != null and store.representation_span_id.isValid() and
@@ -4644,19 +4650,12 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             };
             return sameValueType(place.ty, ty) and access.kind == expected_kind;
         }
-        const local_alias_target = mir.executableLocalAddressDerefTarget(body, place, false);
-        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias_target) |target_id| switch (body.places[target_id.index()].root) {
-            .local => .plain,
-            .symbol => |id| if (symbolIdentity(body, id)) |identity|
-                if (identity.kind == .global and identity.mutable) .race_unordered else .plain
-            else
-                .race_unordered,
-            .value => .race_unordered,
-        } else .race_unordered;
+        const expected_kind = mir.executablePointerDerefAccessKind(body, place) orelse return false;
         return sameValueType(place.ty, ty) and access.kind == expected_kind and
             if (is_store)
                 parameterScalarAccessStorePlaceSupported(body, place) or
                     mir.executableLocalAddressDerefPlace(body, place, true) or
+                    mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
                     mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
                     mir.executableGlobalPointerDerefPlace(body, place, true) or
                     computedRawManyDerefPlaceSupported(body, place, true)

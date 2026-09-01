@@ -2206,15 +2206,7 @@ fn memoryLoadSupported(
         }
         if (!scalarAccessPlaceSupported(body, place.*) and
             !(aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place.*, false))) return false;
-        const local_alias_target = mir.executableLocalAddressDerefTarget(body, place.*, false);
-        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias_target) |target_id| switch (placeById(body, target_id).?.root) {
-            .local => .plain,
-            .symbol => |id| if (symbolById(body, id)) |symbol|
-                if (symbol.kind == .global and symbol.mutable) .race_unordered else .plain
-            else
-                .race_unordered,
-            .value => .race_unordered,
-        } else .race_unordered;
+        const expected_kind = mir.executablePointerDerefAccessKind(body, place.*) orelse return false;
         if (load.access.kind != expected_kind) return false;
         if (computedRawManyDerefPlaceSupported(body, place.*, false)) {
             return load.representation_source == null and !load.representation_span_id.isValid() and
@@ -2567,6 +2559,7 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
     ) or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
         parameterScalarAccessPlaceSupported(body, place) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
+        mir.executableGuardedLocalScalarDerefPlace(body, place, false) or
         mir.executableGlobalPointerDerefPlace(body, place, false) or
         computedRawManyDerefPlaceSupported(body, place, false);
 }
@@ -2638,22 +2631,15 @@ fn memoryStoreSupported(
             .pointer => |pointer| pointer,
             else => return false,
         };
-        const local_alias_target = mir.executableLocalAddressDerefTarget(body, place.*, false);
-        const local_alias = local_alias_target != null;
-        const expected_kind: mir.ExecutableMemoryAccessKind = if (local_alias_target) |target_id| switch (placeById(body, target_id).?.root) {
-            .local => .plain,
-            .symbol => |id| if (symbolById(body, id)) |symbol|
-                if (symbol.kind == .global and symbol.mutable) .race_unordered else .plain
-            else
-                .race_unordered,
-            .value => .race_unordered,
-        } else .race_unordered;
+        const local_alias = mir.executableLocalAddressDerefTarget(body, place.*, false) != null;
+        const expected_kind = mir.executablePointerDerefAccessKind(body, place.*) orelse return false;
         if (shape.mutability != .mut or store.access.kind != expected_kind) return false;
         if (computedRawManyDerefPlaceSupported(body, place.*, true)) {
             return store.representation_source == null and !store.representation_span_id.isValid() and
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
         return (parameterScalarAccessPlaceSupported(body, place.*) or local_alias or
+            mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
             (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true)) or
             mir.executableGlobalPointerDerefPlace(body, place.*, true)) and
             statementRepresentationOperationHasExactTrapEdge(body, statement, store);
@@ -2971,6 +2957,7 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
             const place = placeById(body, load.place) orelse return false;
             if (!(parameterScalarAccessPlaceSupported(body, place.*) or
                 mir.executableLocalAddressDerefPlace(body, place.*, false) or
+                mir.executableGuardedLocalScalarDerefPlace(body, place.*, false) or
                 mir.executableGuardedLocalAggregateDerefPlace(body, place.*, false) or
                 mir.executableGlobalPointerDerefPlace(body, place.*, false) or
                 mir.executableAggregatePointerFieldDerefPlace(body, place.*, false) != null)) return false;
@@ -3021,6 +3008,7 @@ fn statementRepresentationOperationHasExactTrapEdge(
     const place = placeById(body, store.place) orelse return false;
     if (!(parameterScalarAccessPlaceSupported(body, place.*) or
         mir.executableLocalAddressDerefPlace(body, place.*, false) or
+        mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
         mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true) or
         mir.executableGlobalPointerDerefPlace(body, place.*, true)) or
         store.representation_source == null or !store.representation_span_id.isValid() or
@@ -3499,7 +3487,9 @@ fn emitPlace(
         try out.appendSlice(allocator, ", __ATOMIC_RELAXED)))");
         return;
     }
-    if (mir.executableGuardedLocalAggregateDerefPlace(body, place.*, false)) {
+    if (mir.executableGuardedLocalScalarDerefPlace(body, place.*, false) or
+        mir.executableGuardedLocalAggregateDerefPlace(body, place.*, false))
+    {
         try out.appendSlice(allocator, "(*(");
         try emitPlaceRootValue(allocator, out, body, place.*);
         try out.appendSlice(allocator, "))");

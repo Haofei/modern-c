@@ -3,13 +3,13 @@
 Goal: delete the AST function-body fallback after every ordinary body is
 emitted from verified executable MIR.
 
-## Measurement (2026-08-31)
+## Measurement (2026-09-01)
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1471/1825 admitted | 1513/1879 admitted |
-| AST fallback | 354 | 366 |
+| broad sweep | 1475/1825 admitted | 1517/1879 admitted |
+| AST fallback | 350 | 362 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -26,6 +26,14 @@ expressions exist. The producer still requires an exact, unambiguous typed
 owner and the verifier still checks every edge bijectively. This closes both
 `fill_size` monomorphizations in C and LLVM and reduces the leading
 `trap_projection` bucket from 60 to 55.
+
+Representation trap ownership is now resolved after canonical places,
+expressions, and statements have all been normalized. Exact typed candidates
+are admitted only when the owner is unique; ambiguous and incomplete dynamic
+trait/nullable representations remain fail-closed. Local pointer generations
+such as `let q = p; q.* = value` now preserve their pointer shape and attach
+the store guard to the canonical place. This reduces `trap_projection` from 55
+to 46 per backend and retires four net fallbacks per backend.
 
 Typed scalar/enum switches now distinguish a source wildcard arm from trap
 successors created while evaluating the subject. Representation and bounds
