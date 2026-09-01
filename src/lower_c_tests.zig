@@ -224,6 +224,23 @@ test "lower-c callable parameters forward through canonical executable MIR" {
     try expectContains(body, "target(mc_exec_tmp_");
 }
 
+test "lower-c callable field stores use verified signatures" {
+    const source =
+        \\fn add(a: u32, b: u32) -> u32 { return a + b; }
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\global ops: [2]BinOp = .{ .{ .combine = add }, .{ .combine = add } };
+        \\fn replace() -> void { ops[1].combine = add; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_callable_field_store.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static void replace(void)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "__atomic_store_n(&((ops).elems[");
+    try expectContains(body, "].combine), add, __ATOMIC_RELAXED)");
+}
+
 test "lower-c valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {

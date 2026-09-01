@@ -102,6 +102,35 @@ test "pointer-pointee fixed array owns representation and bounds edges" {
     try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
 }
 
+test "callable field stores require an exact symbol signature" {
+    const source =
+        \\fn add(a: u32, b: u32) -> u32 { return a + b; }
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\global ops: [2]BinOp = .{ .{ .combine = add }, .{ .combine = add } };
+        \\fn replace() -> void { ops[1].combine = add; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_callable_field_store.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "replace") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try mir_executable_body.verify(function);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+
+    var callable_symbol: ?*mir.SymbolIdentity = null;
+    for (function.executable_body.symbols) |*symbol| {
+        if (std.mem.eql(u8, symbol.spelling, "add")) callable_symbol = symbol;
+    }
+    const symbol = callable_symbol orelse return error.TestUnexpectedResult;
+    var signature = symbol.callable_signature orelse return error.TestUnexpectedResult;
+    signature.has_environment = true;
+    symbol.callable_signature = signature;
+    try std.testing.expectError(error.InvalidFunctionSignature, mir_executable_body.verify(function));
+}
+
 test "executable MIR preserves union construction identity" {
     const source =
         \\overlay union Word {

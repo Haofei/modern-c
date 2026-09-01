@@ -8647,7 +8647,40 @@ const FunctionBuilder = struct {
         const identity = &self.executable_symbols.items[id.index()];
         if (identity.kind != .unknown and identity.kind != .function) self.executable_supported = false;
         identity.kind = .function;
+        if (self.summaries.get(spelling)) |summary| {
+            if (try self.executableFunctionSummarySignature(summary)) |signature| {
+                if (identity.callable_signature) |existing| {
+                    if (!existing.eql(signature)) self.executable_supported = false;
+                } else {
+                    identity.callable_signature = signature;
+                }
+            }
+        }
         return id;
+    }
+
+    fn executableFunctionSummarySignature(
+        self: *FunctionBuilder,
+        summary: FunctionSummary,
+    ) !?mir_model.ExecutableCallSignature {
+        if (summary.is_variadic or summary.params.len > mir_model.max_executable_operands or
+            summary.return_ty == .unknown or summary.return_ty == .value) return null;
+        var signature: mir_model.ExecutableCallSignature = .{
+            .parameter_count = summary.params.len,
+            .return_ty = summary.return_ty,
+            .return_type_id = try self.internTypeId(summary.return_ty),
+        };
+        if (summary.return_type_expr) |return_type| {
+            if (!try self.internExecutableTypeExpr(summary.return_ty, return_type)) return null;
+        } else if (summary.return_ty != .void) return null;
+        for (summary.params, 0..) |parameter, index| {
+            const parameter_ty = valueTypeFromTypeAlias(parameter.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (parameter_ty == .unknown or parameter_ty == .value or
+                !try self.internExecutableTypeExpr(parameter_ty, parameter.ty)) return null;
+            signature.parameter_types[index] = parameter_ty;
+            signature.parameter_type_ids[index] = try self.internTypeId(parameter_ty);
+        }
+        return signature;
     }
 
     fn executableErrorConversion(self: *const FunctionBuilder, source_error_ty: ValueType, target_error_ty: ValueType) ?[]const u8 {

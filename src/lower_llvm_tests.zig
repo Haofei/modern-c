@@ -191,6 +191,35 @@ test "LLVM callable parameters forward through canonical executable MIR" {
     try expectContains(body, "call void @target(ptr %mc_arg_0,");
 }
 
+test "LLVM callable field stores use verified signatures" {
+    const source =
+        \\fn add(a: u32, b: u32) -> u32 { return a + b; }
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\global ops: [2]BinOp = .{ .{ .combine = add }, .{ .combine = add } };
+        \\fn replace() -> void { ops[1].combine = add; }
+        \\struct Env { offset: u32 }
+        \\global environment: Env;
+        \\fn run(env: *mut Env, value: u32) -> u32 { return value; }
+        \\struct Slot { callback: closure(u32) -> u32 }
+        \\global slot: Slot;
+        \\fn install() -> void { slot.callback = bind(&environment, run); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_callable_field_store.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal void @replace");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "getelementptr inbounds [2 x { ptr }], ptr @ops");
+    try expectContains(body, "getelementptr inbounds { ptr }");
+    try expectContains(body, "store atomic ptr @add");
+
+    const closure_body = try llvmFunctionBody(output.items, "define internal void @install");
+    try expectContains(closure_body, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, closure_body, "store atomic ptr"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, closure_body, "extractvalue { ptr, ptr }"));
+}
+
 test "LLVM valid slice representation check uses canonical executable MIR" {
     const source =
         \\fn identity_slice(items: []const u32) -> []const u32 {

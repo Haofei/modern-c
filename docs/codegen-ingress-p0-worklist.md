@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 168/168 canonical | 168/168 canonical |
-| broad sweep | 1546/1825 admitted | 1588/1879 admitted |
-| AST fallback | 279 | 291 |
+| broad sweep | 1546/1825 admitted | 1592/1879 admitted |
+| AST fallback | 279 | 287 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -161,6 +161,14 @@ same fact for function signatures, direct-call results, local storage, and
 aggregate callable fields, so closure values are consistently represented as
 `{ ptr, ptr }`. The last four `canonical=ready` LLVM fallbacks are retired;
 every remaining LLVM fallback is either producer-incomplete or renderer-owned.
+
+Callable field stores now use exact signatures attached to function symbols,
+callable parameters, closure binds, and aggregate field metadata. The verifier
+rejects a mismatched signature before rendering. LLVM uses the canonical
+parameter-projected place for checked pointer roots and splits fat closure
+storage into code/environment pointer accesses, including recursively copied
+race-tolerant aggregates. Four additional LLVM broad-corpus functions are
+canonical; C remains at its existing boundary.
 
 Byte-view construction and equality are canonical executable operations in
 both renderers. Their source object size comes from the addressed canonical

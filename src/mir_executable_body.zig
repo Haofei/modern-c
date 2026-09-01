@@ -127,6 +127,10 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.symbols, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidSymbolIdentity;
+        if (identity.callable_signature) |signature| {
+            if (identity.kind != .function) return error.InvalidSymbolIdentity;
+            try verifyCallableSignature(function, signature, body.complete);
+        }
     }
     for (body.parameters) |parameter| {
         try verifyLocal(body, parameter.local);
@@ -1167,6 +1171,20 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             try verifyStatementExpr(body, statement_value, operation.value);
             const stored = expression(body, operation.value) orelse return error.InvalidExpressionReference;
             if (body.complete and !sameValueType(stored.result_ty, operation.ty)) return error.InvalidStoreType;
+            if (body.complete) if (mir.executableCallablePlace(body.aggregate_types, target.*)) |target_signature| {
+                const stored_signature = switch (stored.operation) {
+                    .symbol => |id| (symbol(body, id) orelse return error.InvalidSymbolReference).callable_signature orelse
+                        return error.InvalidFunctionSignature,
+                    .local => |id| parameter: {
+                        for (body.parameters) |parameter| if (parameter.local.eql(id))
+                            break :parameter parameter.callable_signature orelse return error.InvalidFunctionSignature;
+                        return error.InvalidFunctionSignature;
+                    },
+                    .closure_bind => |bind| bind.signature,
+                    else => return error.InvalidFunctionSignature,
+                };
+                if (!target_signature.eql(stored_signature)) return error.InvalidFunctionSignature;
+            };
         },
         .packed_field_store => |operation| {
             const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
@@ -1415,7 +1433,7 @@ fn verifyCallSignature(
         .local => |local_id| for (body.parameters) |parameter| {
             if (!parameter.local.eql(local_id)) continue;
             const declared = parameter.callable_signature orelse return error.InvalidFunctionSignature;
-            if (!callableSignaturesEqual(declared, call.signature)) return error.InvalidFunctionSignature;
+            if (!declared.eql(call.signature)) return error.InvalidFunctionSignature;
             break;
         },
         else => {},
@@ -1433,17 +1451,6 @@ fn verifyCallSignature(
         return error.InvalidFunctionSignature;
     for (call.signature.parameter_type_ids[call.signature.parameter_count..]) |id| if (id.isValid())
         return error.InvalidFunctionSignature;
-}
-
-fn callableSignaturesEqual(a: mir.ExecutableCallSignature, b: mir.ExecutableCallSignature) bool {
-    if (a.parameter_count != b.parameter_count or a.has_environment != b.has_environment or
-        !sameValueType(a.return_ty, b.return_ty) or
-        !a.return_type_id.eql(b.return_type_id)) return false;
-    for (a.parameter_types[0..a.parameter_count], b.parameter_types[0..b.parameter_count]) |a_ty, b_ty|
-        if (!sameValueType(a_ty, b_ty)) return false;
-    for (a.parameter_type_ids[0..a.parameter_count], b.parameter_type_ids[0..b.parameter_count]) |a_id, b_id|
-        if (!a_id.eql(b_id)) return false;
-    return true;
 }
 
 fn verifyCallableSignature(function: *const mir.Function, signature: mir.ExecutableCallSignature, complete: bool) !void {

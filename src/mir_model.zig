@@ -1226,6 +1226,17 @@ pub const ExecutableCallSignature = struct {
     /// Closures carry an erased environment pointer before the public
     /// parameters; plain function pointers do not.
     has_environment: bool = false,
+
+    pub fn eql(left: ExecutableCallSignature, right: ExecutableCallSignature) bool {
+        if (left.parameter_count != right.parameter_count or left.has_environment != right.has_environment or
+            !ValueType.eql(left.return_ty, right.return_ty) or
+            !left.return_type_id.eql(right.return_type_id)) return false;
+        for (left.parameter_types[0..left.parameter_count], right.parameter_types[0..right.parameter_count]) |left_ty, right_ty|
+            if (!ValueType.eql(left_ty, right_ty)) return false;
+        for (left.parameter_type_ids[0..left.parameter_count], right.parameter_type_ids[0..right.parameter_count]) |left_id, right_id|
+            if (!left_id.eql(right_id)) return false;
+        return true;
+    }
 };
 
 /// Typed exceptional control-flow owned by one executable operation.  The
@@ -3198,6 +3209,9 @@ pub const SymbolIdentity = struct {
     spelling: []const u8,
     kind: enum { unknown, function, global } = .unknown,
     mutable: bool = false,
+    /// Exact function-value shape when this symbol is used as a first-class
+    /// callable rather than only as a direct-call target.
+    callable_signature: ?ExecutableCallSignature = null,
     /// Payload identity for global `atomic<T>` storage.
     atomic_payload_type_id: TypeId = .invalid,
 };
