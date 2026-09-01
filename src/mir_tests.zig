@@ -4198,9 +4198,54 @@ test "MIR continues building facts after inline asm" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "asm_then_cast").?;
     try std.testing.expect(functionHasInstruction(function, .asm_effect, "opaque"));
+    try std.testing.expect(mir_executable_body.isComplete(&function));
+    var saw_precise_asm = false;
+    for (function.executable_body.statements) |statement| switch (statement.operation) {
+        .precise_asm => |asm_value| {
+            try std.testing.expectEqual(@as(usize, 1), asm_value.output_count);
+            try std.testing.expectEqual(@as(usize, 1), asm_value.input_count);
+            try std.testing.expectEqualStrings("rax", asm_value.outputs[0].constraint);
+            try std.testing.expectEqualStrings("rbx", asm_value.inputs[0].constraint);
+            saw_precise_asm = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_precise_asm);
     try std.testing.expect(targetTypeFactByKind(function, .explicit_cast_source) != null);
     try std.testing.expect(functionHasTerminator(function, .return_));
     try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns decoded opaque asm templates and clobbers" {
+    const source =
+        \\fn opaque_asm() -> void {
+        \\    unsafe { asm opaque volatile { "first\nline" "second" clobber("memory") } }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_opaque_asm.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "opaque_asm").?;
+    try std.testing.expect(mir_executable_body.isComplete(&function));
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.statements.len);
+    const asm_value = switch (function.executable_body.statements[0].operation) {
+        .opaque_asm => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(asm_value.is_volatile);
+    try std.testing.expectEqual(@as(usize, 2), asm_value.template_count);
+    try std.testing.expectEqualStrings("first\nline", asm_value.templates[0]);
+    try std.testing.expectEqualStrings("second", asm_value.templates[1]);
+    try std.testing.expectEqual(@as(usize, 1), asm_value.clobber_count);
+    try std.testing.expectEqualStrings("memory", asm_value.clobbers[0]);
 }
 
 test "MIR owns inferred local direct call types" {

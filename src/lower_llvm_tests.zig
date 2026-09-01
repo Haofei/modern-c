@@ -10815,6 +10815,49 @@ test "LLVM emits cpu pause after MIR call-target dispatch" {
     try expectContains(output.items, "call void asm sideeffect \"pause\", \"~{memory}\"()");
 }
 
+test "LLVM emits opaque asm from canonical executable MIR" {
+    const source =
+        \\fn asm_in_unsafe() -> void {
+        \\    unsafe { asm opaque volatile { "pause" clobber("memory") } }
+        \\}
+        \\fn boot_asm() -> void {
+        \\    unsafe { asm opaque volatile { "cli" "hlt" } }
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_canonical_opaque_asm.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "; canonical executable MIR"));
+    try expectContains(output.items, "call void asm sideeffect \"pause\", \"~{memory}\"()");
+    try expectContains(output.items, "call void asm sideeffect \"cli\\0A\\09hlt\", \"~{memory}\"()");
+}
+
+test "LLVM emits precise asm from canonical executable MIR" {
+    const source =
+        \\fn find_first_set(mask: u64) -> u64 {
+        \\    var idx: u64 = 0;
+        \\    #[unsafe_contract(precise_asm)] {
+        \\        unsafe {
+        \\            asm precise volatile {
+        \\                "bsf %1, %0"
+        \\                out("rax") idx: u64,
+        \\                in("rbx") mask: u64,
+        \\                clobber("cc")
+        \\            }
+        \\        }
+        \\    }
+        \\    return idx;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_canonical_precise_asm.mc", source, &output);
+    try expectContains(output.items, "; canonical executable MIR");
+    try expectContains(output.items, "call i64 asm sideeffect \"bsf $1, $0\", \"=r,r,~{cc}\"");
+}
+
 test "LLVM pointer-member closure loads lower leaf-wise race-tolerantly" {
     const source =
         \\struct Env { tag: u32 }

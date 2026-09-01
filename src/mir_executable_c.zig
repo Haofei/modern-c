@@ -22,13 +22,18 @@ pub const RenderError = error{
     UnsupportedType,
 };
 
+pub const EmitOptions = struct {
+    source_path: ?[]const u8 = null,
+    stub_asm: bool = false,
+};
+
 pub fn emitBody(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     body: *const mir.ExecutableBody,
     indent: usize,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    return emitBodyWithSourcePath(allocator, out, body, indent, null);
+    return emitBodyWithOptions(allocator, out, body, indent, .{});
 }
 
 pub fn emitBodyWithSourcePath(
@@ -37,6 +42,16 @@ pub fn emitBodyWithSourcePath(
     body: *const mir.ExecutableBody,
     indent: usize,
     source_path: ?[]const u8,
+) (RenderError || std.mem.Allocator.Error)!void {
+    return emitBodyWithOptions(allocator, out, body, indent, .{ .source_path = source_path });
+}
+
+pub fn emitBodyWithOptions(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    indent: usize,
+    options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
     if (!body.isComplete() or !canEmitBody(body)) return error.IncompleteBody;
     if (body.terminators.len == 0) return error.InvalidBlock;
@@ -79,9 +94,9 @@ pub fn emitBodyWithSourcePath(
 
         for (body.statements) |statement| {
             if (!statement.block_id.eql(terminator.block_id)) continue;
-            try emitStatement(allocator, out, body, statement, indent + 1, source_path);
+            try emitStatement(allocator, out, body, statement, indent + 1, options);
         }
-        try emitTerminator(allocator, out, body, terminator, indent + 1, source_path);
+        try emitTerminator(allocator, out, body, terminator, indent + 1, options.source_path);
     }
 }
 
@@ -116,14 +131,14 @@ fn emitStatement(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
     indent: usize,
-    source_path: ?[]const u8,
+    options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    try prepareStatementExpressions(allocator, out, body, statement, indent, source_path);
+    try prepareStatementExpressions(allocator, out, body, statement, indent, options.source_path);
     if (statementRepresentationGuard(statement)) |guard| {
-        try writeSourceLineDirective(allocator, out, source_path, guard.source);
+        try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
         try emitRepresentationGuard(allocator, out, body, guard, indent);
     }
-    try writeSourceLineDirective(allocator, out, source_path, statement.source);
+    try writeSourceLineDirective(allocator, out, options.source_path, statement.source);
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
@@ -205,6 +220,8 @@ fn emitStatement(
                 .end => try out.print(allocator, "/* MC_CONTRACT_END {s} */\n", .{marker.name}),
             }
         },
+        .opaque_asm => |asm_value| try emitOpaqueAsm(allocator, out, asm_value, indent, options.stub_asm),
+        .precise_asm => |asm_value| try emitPreciseAsm(allocator, out, body, asm_value, indent, options.stub_asm),
         .return_ => |value| {
             try writeIndent(allocator, out, indent);
             if (value) |expression| {
@@ -219,6 +236,143 @@ fn emitStatement(
         .control_transfer => {},
         .defer_cleanup, .unsupported => return error.UnsupportedOperation,
     }
+}
+
+fn emitOpaqueAsm(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    asm_value: mir.ExecutableOpaqueAsm,
+    indent: usize,
+    stub_asm: bool,
+) std.mem.Allocator.Error!void {
+    try writeIndent(allocator, out, indent);
+    if (stub_asm) {
+        try out.appendSlice(allocator, "__asm__ __volatile__(\"\" ::: \"memory\");\n");
+        return;
+    }
+    try out.appendSlice(allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, if (asm_value.is_volatile) "__asm__ __volatile__(" else "__asm__(");
+    if (asm_value.template_count == 0) {
+        try appendQuotedCBytes(allocator, out, "");
+    } else for (asm_value.templates[0..asm_value.template_count], 0..) |template, index| {
+        if (index != 0) try out.appendSlice(allocator, " \"\\n\\t\" ");
+        try appendQuotedCBytes(allocator, out, template);
+    }
+    try out.appendSlice(allocator, " ::: ");
+    if (asm_value.clobber_count == 0) {
+        try out.appendSlice(allocator, "\"memory\"");
+    } else for (asm_value.clobbers[0..asm_value.clobber_count], 0..) |clobber, index| {
+        if (index != 0) try out.appendSlice(allocator, ", ");
+        try appendQuotedCBytes(allocator, out, clobber);
+    }
+    try out.appendSlice(allocator, ");\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#else\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#error \"inline asm emission requires compiler support\"\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#endif\n");
+}
+
+fn appendQuotedCBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) std.mem.Allocator.Error!void {
+    try out.append(allocator, '"');
+    for (bytes) |byte| switch (byte) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\'' => try out.appendSlice(allocator, "\\'"),
+        '?' => try out.appendSlice(allocator, "\\?"),
+        0 => try out.appendSlice(allocator, "\\000"),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        32...33, 35...38, 40...62, 64...91, 93...126 => try out.append(allocator, byte),
+        else => {
+            try out.append(allocator, '\\');
+            try out.append(allocator, '0' + ((byte >> 6) & 0x07));
+            try out.append(allocator, '0' + ((byte >> 3) & 0x07));
+            try out.append(allocator, '0' + (byte & 0x07));
+        },
+    };
+    try out.append(allocator, '"');
+}
+
+fn emitPreciseAsm(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    asm_value: mir.ExecutablePreciseAsm,
+    indent: usize,
+    stub_asm: bool,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (stub_asm) {
+        for (asm_value.inputs[0..asm_value.input_count]) |input| {
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "(void)(");
+            try emitExpression(allocator, out, body, input.value, 0);
+            try out.appendSlice(allocator, ");\n");
+        }
+        for (asm_value.outputs[0..asm_value.output_count]) |output| {
+            try writeIndent(allocator, out, indent);
+            try appendLocal(allocator, out, body, output.local);
+            try out.appendSlice(allocator, " = 0;\n");
+        }
+        return;
+    }
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
+    if (asm_value.output_count != 0 or asm_value.input_count != 0) {
+        try writeIndent(allocator, out, indent);
+        try out.appendSlice(allocator, "/* MC_PRECISE_ASM");
+        for (asm_value.outputs[0..asm_value.output_count]) |output| {
+            try out.appendSlice(allocator, " out(\"");
+            try out.appendSlice(allocator, output.constraint);
+            try out.appendSlice(allocator, "\")->");
+            try appendLocal(allocator, out, body, output.local);
+        }
+        for (asm_value.inputs[0..asm_value.input_count]) |input| {
+            try out.appendSlice(allocator, " in(\"");
+            try out.appendSlice(allocator, input.constraint);
+            try out.appendSlice(allocator, "\")");
+        }
+        try out.appendSlice(allocator, " */\n");
+    }
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, if (asm_value.is_volatile) "__asm__ __volatile__(" else "__asm__(");
+    if (asm_value.template_count == 0) {
+        try appendQuotedCBytes(allocator, out, "");
+    } else for (asm_value.templates[0..asm_value.template_count], 0..) |template, index| {
+        if (index != 0) try out.appendSlice(allocator, " \"\\n\\t\" ");
+        try appendQuotedCBytes(allocator, out, template);
+    }
+    try out.appendSlice(allocator, " : ");
+    for (asm_value.outputs[0..asm_value.output_count], 0..) |output, index| {
+        if (index != 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, "\"=r\"(");
+        try appendLocal(allocator, out, body, output.local);
+        try out.append(allocator, ')');
+    }
+    try out.appendSlice(allocator, " : ");
+    for (asm_value.inputs[0..asm_value.input_count], 0..) |input, index| {
+        if (index != 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, "\"r\"(");
+        try emitExpression(allocator, out, body, input.value, 0);
+        try out.append(allocator, ')');
+    }
+    if (asm_value.clobber_count != 0) {
+        try out.appendSlice(allocator, " : ");
+        for (asm_value.clobbers[0..asm_value.clobber_count], 0..) |clobber, index| {
+            if (index != 0) try out.appendSlice(allocator, ", ");
+            try appendQuotedCBytes(allocator, out, clobber);
+        }
+    }
+    try out.appendSlice(allocator, ");\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#else\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#error \"inline asm emission requires compiler support\"\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#endif\n");
 }
 
 fn emitTerminator(
@@ -892,6 +1046,9 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
             },
             .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return false,
             .contract_marker => |marker| if (marker.name.len == 0) return false,
+            .opaque_asm => |asm_value| if (asm_value.template_count > mir.max_executable_operands or
+                asm_value.clobber_count > mir.max_executable_operands) return false,
+            .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,
             .control_transfer => {},
             .defer_cleanup, .unsupported => return false,
         }
@@ -907,6 +1064,22 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
         .for_step => |step| if (!forStepSupported(body, step)) return false,
         .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
     };
+    return true;
+}
+
+fn preciseAsmSupported(body: *const mir.ExecutableBody, asm_value: mir.ExecutablePreciseAsm) bool {
+    if (asm_value.template_count > mir.max_executable_operands or asm_value.clobber_count > mir.max_executable_operands or
+        asm_value.output_count > mir.max_executable_operands or asm_value.input_count > mir.max_executable_operands) return false;
+    for (asm_value.outputs[0..asm_value.output_count]) |output| {
+        const declaration = localInit(body, output.local) orelse return false;
+        if (!declaration.mutable or !sameValueType(declaration.ty, output.ty) or
+            !declaration.type_id.eql(output.type_id) or !supportsType(body, output.ty)) return false;
+    }
+    for (asm_value.inputs[0..asm_value.input_count]) |input| {
+        const value = expressionById(body, input.value) orelse return false;
+        if (!sameValueType(value.result_ty, input.ty) or !value.type_id.eql(input.type_id) or
+            !supportsType(body, input.ty)) return false;
+    }
     return true;
 }
 

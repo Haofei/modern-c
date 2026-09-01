@@ -1158,8 +1158,51 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
             } else if (body.complete and function.return_ty != .void) return error.InvalidReturnStatement;
         },
         .contract_marker => |marker| if (marker.name.len == 0) return error.InvalidContractMarker,
+        .opaque_asm => |asm_value| {
+            if (asm_value.template_count > mir.max_executable_operands or
+                asm_value.clobber_count > mir.max_executable_operands or
+                ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 0)
+                return error.InvalidStatementIdentity;
+        },
+        .precise_asm => |asm_value| {
+            if (asm_value.template_count > mir.max_executable_operands or
+                asm_value.clobber_count > mir.max_executable_operands or
+                asm_value.output_count > mir.max_executable_operands or
+                asm_value.input_count > mir.max_executable_operands or
+                ownedTrapCountAll(body, .{ .statement = statement_value.id }) != 0)
+                return error.InvalidStatementIdentity;
+            for (asm_value.outputs[0..asm_value.output_count]) |output| {
+                try verifyLocal(body, output.local);
+                try verifyType(function, output.type_id, output.ty, body.complete);
+                const declared = mutableLocalDeclaration(body, output.local) orelse return error.InvalidLocalIdentity;
+                if (!sameValueType(declared.ty, output.ty) or !declared.type_id.eql(output.type_id))
+                    return error.InvalidStatementIdentity;
+            }
+            for (asm_value.inputs[0..asm_value.input_count]) |input| {
+                try verifyType(function, input.type_id, input.ty, body.complete);
+                try verifyStatementExpr(body, statement_value, input.value);
+                const value = expression(body, input.value) orelse return error.InvalidExpressionReference;
+                if (!sameValueType(value.result_ty, input.ty) or !value.type_id.eql(input.type_id))
+                    return error.InvalidStatementIdentity;
+            }
+        },
         .control_transfer, .defer_cleanup, .unsupported => {},
     }
+}
+
+fn mutableLocalDeclaration(
+    body: *const mir.ExecutableBody,
+    local_id: mir.LocalId,
+) ?@FieldType(mir.ExecutableStatement.Operation, "local_init") {
+    var found: ?@FieldType(mir.ExecutableStatement.Operation, "local_init") = null;
+    for (body.statements) |statement_value| switch (statement_value.operation) {
+        .local_init => |declaration| if (declaration.local.eql(local_id)) {
+            if (!declaration.mutable or found != null) return null;
+            found = declaration;
+        },
+        else => {},
+    };
+    return found;
 }
 
 fn verifyContractMarkers(body: *const mir.ExecutableBody) !void {

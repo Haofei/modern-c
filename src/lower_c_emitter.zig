@@ -1432,7 +1432,10 @@ pub const CEmitter = struct {
             self.indent += 1;
             defer self.indent -= 1;
             for (fn_mir.pointer_provenance_facts) |fact| try self.emitMirPointerProvenanceConsumedComment(fact);
-            try mir_executable_c.emitBodyWithSourcePath(self.allocator, self.out, body, self.indent, self.source_path);
+            try mir_executable_c.emitBodyWithOptions(self.allocator, self.out, body, self.indent, .{
+                .source_path = self.source_path,
+                .stub_asm = self.stub_asm,
+            });
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
     }

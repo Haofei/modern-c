@@ -21733,7 +21733,8 @@ test "lower-c emits opaque volatile asm" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_asm.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("emit_c_asm.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void asm_in_unsafe(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"pause\" ::: \"memory\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"cli\" \"\\n\\t\" \"hlt\" ::: \"memory\");") != null);
@@ -21760,8 +21761,9 @@ test "lower-c emits precise asm with operands" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_precise_asm.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"bsf %1, %0\" : \"=r\"(idx) : \"r\"(mask) : \"cc\");") != null);
+    try appendCheckedCTestNoFunctionBodyFallback("emit_c_precise_asm.mc", source, &output);
+    try expectContains(output.items, "/* canonical executable MIR */");
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"bsf %1, %0\" : \"=r\"(idx) : \"r\"(mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_PRECISE_ASM out(\"rax\")->idx in(\"rbx\") */") != null);
 }
 

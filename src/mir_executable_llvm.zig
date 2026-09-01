@@ -10,6 +10,10 @@ const scalar_repr = @import("scalar_repr.zig");
 
 pub const RenderError = error{ Unsupported, InvalidBody, OutOfMemory };
 
+pub const RenderOptions = struct {
+    stub_asm: bool = false,
+};
+
 /// Target ABI facts needed by the syntax-free renderer.  This is deliberately
 /// narrower than the driver target configuration: direct calls only need the
 /// integer-extension rules of the selected C ABI.
@@ -244,6 +248,9 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                 if (!expressionValid(body, result)) return false;
             },
             .contract_marker => |marker| if (marker.name.len == 0) return false,
+            .opaque_asm => |asm_value| if (asm_value.template_count > mir.max_executable_operands or
+                asm_value.clobber_count > mir.max_executable_operands) return false,
+            .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,
             .control_transfer => {},
             .defer_cleanup, .unsupported => return false,
         }
@@ -318,7 +325,7 @@ fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.Execu
 
 pub fn render(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType) RenderError![]u8 {
     if (!supports(body, return_ty)) return error.Unsupported;
-    return renderValidated(allocator, body, return_ty, null);
+    return renderValidated(allocator, body, return_ty, null, .{});
 }
 
 pub fn supportsWithCallAbi(body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) bool {
@@ -327,13 +334,24 @@ pub fn supportsWithCallAbi(body: *const mir.ExecutableBody, return_ty: mir.Value
 
 pub fn renderWithCallAbi(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) RenderError![]u8 {
     if (!supportsWithCallAbi(body, return_ty, plan)) return error.Unsupported;
-    return renderValidated(allocator, body, return_ty, &plan);
+    return renderValidated(allocator, body, return_ty, &plan, .{});
 }
 
-fn renderValidated(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: ?*const CallAbiPlan) RenderError![]u8 {
+pub fn renderWithCallAbiAndOptions(
+    allocator: std.mem.Allocator,
+    body: *const mir.ExecutableBody,
+    return_ty: mir.ValueType,
+    plan: CallAbiPlan,
+    options: RenderOptions,
+) RenderError![]u8 {
+    if (!supportsWithCallAbi(body, return_ty, plan)) return error.Unsupported;
+    return renderValidated(allocator, body, return_ty, &plan, options);
+}
+
+fn renderValidated(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: ?*const CallAbiPlan, options: RenderOptions) RenderError![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    var renderer = try Renderer.init(arena.allocator(), body, return_ty, plan);
+    var renderer = try Renderer.init(arena.allocator(), body, return_ty, plan, options);
     defer renderer.deinit();
     try renderer.emit();
     return try allocator.dupe(u8, renderer.output.items);
@@ -349,8 +367,9 @@ const Renderer = struct {
     returns: std.AutoHashMap(u32, ?Value),
     next_temp: usize = 0,
     call_abi_plan: ?*const CallAbiPlan,
+    options: RenderOptions,
 
-    fn init(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, call_abi_plan: ?*const CallAbiPlan) RenderError!Renderer {
+    fn init(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, call_abi_plan: ?*const CallAbiPlan, options: RenderOptions) RenderError!Renderer {
         const values = try allocator.alloc(?Value, body.expressions.len);
         @memset(values, null);
         var result: Renderer = .{
@@ -361,6 +380,7 @@ const Renderer = struct {
             .locals = std.AutoHashMap(u32, Local).init(allocator),
             .returns = std.AutoHashMap(u32, ?Value).init(allocator),
             .call_abi_plan = call_abi_plan,
+            .options = options,
         };
         result.return_ty = try result.callableStorageType(return_ty, if (call_abi_plan) |plan| plan.function_return_callable_signature else null);
         return result;
@@ -542,6 +562,8 @@ const Renderer = struct {
                 .begin => try self.output.print(self.allocator, "  ; MC_CONTRACT_BEGIN {s}\n", .{marker.name}),
                 .end => try self.output.print(self.allocator, "  ; MC_CONTRACT_END {s}\n", .{marker.name}),
             },
+            .opaque_asm => |asm_value| try self.emitOpaqueAsm(asm_value),
+            .precise_asm => |asm_value| try self.emitPreciseAsm(asm_value),
             .return_ => |value| {
                 const rendered = if (value) |result| try self.emitExpression(result) else null;
                 try self.returns.put(statement.block_id.raw, rendered);
@@ -551,6 +573,133 @@ const Renderer = struct {
             .control_transfer => {},
             .defer_cleanup, .unsupported => return error.Unsupported,
         }
+    }
+
+    fn emitOpaqueAsm(self: *Renderer, asm_value: mir.ExecutableOpaqueAsm) RenderError!void {
+        const sideeffect: []const u8 = if (asm_value.is_volatile) " sideeffect" else "";
+        if (self.options.stub_asm) {
+            try self.output.print(self.allocator, "  call void asm{s} \"\", \"~{{memory}}\"()\n", .{sideeffect});
+            return;
+        }
+        var template: std.ArrayList(u8) = .empty;
+        for (asm_value.templates[0..asm_value.template_count], 0..) |part, part_index| {
+            if (part_index != 0) try template.appendSlice(self.allocator, "\\0A\\09");
+            var index: usize = 0;
+            while (index < part.len) {
+                const byte = part[index];
+                if (byte == '%' and index + 1 < part.len and part[index + 1] == '%') {
+                    try template.append(self.allocator, '%');
+                    index += 2;
+                    continue;
+                }
+                if (byte == '$') {
+                    try template.appendSlice(self.allocator, "$$");
+                } else {
+                    try appendLlvmAsmByte(self.allocator, &template, byte);
+                }
+                index += 1;
+            }
+        }
+        var constraints: std.ArrayList(u8) = .empty;
+        if (asm_value.clobber_count == 0) {
+            try constraints.appendSlice(self.allocator, "~{memory}");
+        } else for (asm_value.clobbers[0..asm_value.clobber_count], 0..) |clobber, index| {
+            if (index != 0) try constraints.append(self.allocator, ',');
+            try constraints.print(self.allocator, "~{{{s}}}", .{clobber});
+        }
+        try self.output.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"()\n", .{ sideeffect, template.items, constraints.items });
+    }
+
+    fn emitPreciseAsm(self: *Renderer, asm_value: mir.ExecutablePreciseAsm) RenderError!void {
+        if (self.options.stub_asm) {
+            for (asm_value.inputs[0..asm_value.input_count]) |input| _ = try self.emitExpression(input.value);
+            for (asm_value.outputs[0..asm_value.output_count]) |output| {
+                const local_value = self.locals.get(output.local.raw) orelse return error.InvalidBody;
+                const ty = try self.typeText(output.ty);
+                if (!std.mem.eql(u8, ty, local_value.ty) or !local_value.addressable) return error.InvalidBody;
+                try self.output.print(self.allocator, "  store {s} 0, ptr {s}\n", .{ ty, local_value.storage });
+            }
+            return;
+        }
+        var template: std.ArrayList(u8) = .empty;
+        for (asm_value.templates[0..asm_value.template_count], 0..) |part, part_index| {
+            if (part_index != 0) try template.appendSlice(self.allocator, "\\0A\\09");
+            var index: usize = 0;
+            while (index < part.len) {
+                const byte = part[index];
+                if (byte == '%' and index + 1 < part.len and std.ascii.isDigit(part[index + 1])) {
+                    try template.append(self.allocator, '$');
+                    index += 1;
+                    while (index < part.len and std.ascii.isDigit(part[index])) : (index += 1)
+                        try template.append(self.allocator, part[index]);
+                    continue;
+                }
+                if (byte == '%' and index + 1 < part.len and part[index + 1] == '%') {
+                    try template.append(self.allocator, '%');
+                    index += 2;
+                    continue;
+                }
+                if (byte == '$') try template.appendSlice(self.allocator, "$$") else try appendLlvmAsmByte(self.allocator, &template, byte);
+                index += 1;
+            }
+        }
+        var constraints: std.ArrayList(u8) = .empty;
+        var first = true;
+        for (0..asm_value.output_count) |_| {
+            if (!first) try constraints.append(self.allocator, ',');
+            first = false;
+            try constraints.appendSlice(self.allocator, "=r");
+        }
+        for (0..asm_value.input_count) |_| {
+            if (!first) try constraints.append(self.allocator, ',');
+            first = false;
+            try constraints.append(self.allocator, 'r');
+        }
+        for (asm_value.clobbers[0..asm_value.clobber_count]) |clobber| {
+            if (!first) try constraints.append(self.allocator, ',');
+            first = false;
+            try constraints.print(self.allocator, "~{{{s}}}", .{clobber});
+        }
+        const return_ty = try self.preciseAsmReturnType(asm_value);
+        const sideeffect: []const u8 = if (asm_value.is_volatile) " sideeffect" else "";
+        const result = if (asm_value.output_count == 0) null else try self.temp();
+        if (result) |name|
+            try self.output.print(self.allocator, "  {s} = call {s} asm{s} \"{s}\", \"{s}\"(", .{ name, return_ty, sideeffect, template.items, constraints.items })
+        else
+            try self.output.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"(", .{ sideeffect, template.items, constraints.items });
+        for (asm_value.inputs[0..asm_value.input_count], 0..) |input, index| {
+            if (index != 0) try self.output.appendSlice(self.allocator, ", ");
+            const value = try self.emitExpression(input.value);
+            const expected = try self.typeText(input.ty);
+            if (!std.mem.eql(u8, expected, value.ty)) return error.InvalidBody;
+            try self.output.print(self.allocator, "{s} {s}", .{ value.ty, value.spelling });
+        }
+        try self.output.appendSlice(self.allocator, ")\n");
+        const asm_result = result orelse return;
+        for (asm_value.outputs[0..asm_value.output_count], 0..) |output, index| {
+            const local_value = self.locals.get(output.local.raw) orelse return error.InvalidBody;
+            const ty = try self.typeText(output.ty);
+            if (!std.mem.eql(u8, ty, local_value.ty) or !local_value.addressable) return error.InvalidBody;
+            const value = if (asm_value.output_count == 1) asm_result else blk: {
+                const extracted = try self.temp();
+                try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ extracted, return_ty, asm_result, index });
+                break :blk extracted;
+            };
+            try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ ty, value, local_value.storage });
+        }
+    }
+
+    fn preciseAsmReturnType(self: *Renderer, asm_value: mir.ExecutablePreciseAsm) RenderError![]const u8 {
+        if (asm_value.output_count == 0) return "void";
+        if (asm_value.output_count == 1) return self.typeText(asm_value.outputs[0].ty);
+        var text: std.ArrayList(u8) = .empty;
+        try text.appendSlice(self.allocator, "{ ");
+        for (asm_value.outputs[0..asm_value.output_count], 0..) |output, index| {
+            if (index != 0) try text.appendSlice(self.allocator, ", ");
+            try text.appendSlice(self.allocator, try self.typeText(output.ty));
+        }
+        try text.appendSlice(self.allocator, " }");
+        return text.toOwnedSlice(self.allocator);
     }
 
     fn emitTerminator(self: *Renderer, terminator: mir.ExecutableTerminator) RenderError!void {
@@ -3088,6 +3237,38 @@ const Renderer = struct {
         return value;
     }
 };
+
+fn appendLlvmAsmByte(allocator: std.mem.Allocator, out: *std.ArrayList(u8), byte: u8) std.mem.Allocator.Error!void {
+    switch (byte) {
+        '\\' => try out.appendSlice(allocator, "\\5C"),
+        '"' => try out.appendSlice(allocator, "\\22"),
+        0 => try out.appendSlice(allocator, "\\00"),
+        32...33, 35...91, 93...126 => try out.append(allocator, byte),
+        else => {
+            const digits = "0123456789ABCDEF";
+            try out.append(allocator, '\\');
+            try out.append(allocator, digits[byte >> 4]);
+            try out.append(allocator, digits[byte & 0x0f]);
+        },
+    }
+}
+
+fn preciseAsmSupported(body: *const mir.ExecutableBody, asm_value: mir.ExecutablePreciseAsm) bool {
+    if (asm_value.template_count > mir.max_executable_operands or asm_value.clobber_count > mir.max_executable_operands or
+        asm_value.output_count > mir.max_executable_operands or asm_value.input_count > mir.max_executable_operands) return false;
+    for (asm_value.outputs[0..asm_value.output_count]) |output| {
+        const declaration = localInit(body, output.local) orelse return false;
+        if (!declaration.mutable or !sameValueType(declaration.ty, output.ty) or
+            !declaration.type_id.eql(output.type_id) or !llvmTypeSupported(body, output.ty)) return false;
+    }
+    for (asm_value.inputs[0..asm_value.input_count]) |input| {
+        if (!expressionValid(body, input.value)) return false;
+        const value = body.expressions[input.value.index()];
+        if (!sameValueType(value.result_ty, input.ty) or !value.type_id.eql(input.type_id) or
+            !llvmTypeSupported(body, input.ty)) return false;
+    }
+    return true;
+}
 
 fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
     return switch (ty) {

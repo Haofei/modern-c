@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1495/1825 C functions and 1537/1879 LLVM functions.
-  The remaining 330 C and 342 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1516/1825 C functions and 1558/1879 LLVM functions.
+  The remaining 309 C and 321 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -77,10 +77,18 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
   bash tools/toolchain/fallback-census.sh
 ```
 
-Current leading blockers are `trap_projection`, `unsupported_statement`,
-`unsupported_member`, `general_switch`, string and
-aggregate construction, `try`, and unsupported calls. Renderer rejection is a
-smaller secondary group.
+Current leading blockers are `trap_projection`, `try`, `unsupported_member`,
+signature/place invariants, `general_switch`, string and aggregate
+construction, and unsupported calls. Renderer rejection is a smaller
+secondary group.
+
+Opaque and precise inline assembly are syntax-free executable statements now.
+MIR owns decoded template/clobber bytes, precise input `ExprId`s, output
+`LocalId`s, and checked operand types; stub mode is an explicit renderer option.
+Both backends consume the same operation and the precise-asm fixture is 4/4
+canonical. This retires nineteen broad-corpus fallbacks per backend and reduces
+`unsupported_statement` from 27 bodies to one; naked-function admission remains
+a separate renderer/ABI concern.
 
 The remaining `trap_projection` group is 26 bodies per backend. Representation
 edges are now resolved after canonical statement construction, which removes

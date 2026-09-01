@@ -14,6 +14,7 @@ const parser = @import("parser.zig");
 const sema_builtin = @import("sema_builtin.zig");
 const sema_type = @import("sema_type.zig");
 const scalar_repr = @import("scalar_repr.zig");
+const string_literal = @import("string_literal.zig");
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
@@ -6181,6 +6182,7 @@ const FunctionBuilder = struct {
     executable_places: std.ArrayList(ExecutablePlace),
     executable_statements: std.ArrayList(ExecutableStatement),
     executable_terminators: std.ArrayList(ExecutableTerminator),
+    executable_owned_bytes: std.ArrayList([]const u8),
     executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
     executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
@@ -6323,6 +6325,7 @@ const FunctionBuilder = struct {
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
+            .executable_owned_bytes = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -6468,6 +6471,7 @@ const FunctionBuilder = struct {
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
+            .executable_owned_bytes = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -6547,6 +6551,8 @@ const FunctionBuilder = struct {
         self.executable_places.deinit(self.allocator);
         self.executable_statements.deinit(self.allocator);
         self.executable_terminators.deinit(self.allocator);
+        for (self.executable_owned_bytes.items) |bytes| self.allocator.free(bytes);
+        self.executable_owned_bytes.deinit(self.allocator);
         self.executable_for_each_terminators.deinit();
         self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
@@ -6906,6 +6912,26 @@ const FunctionBuilder = struct {
                 {
                     complete = false;
                 },
+                .opaque_asm => |asm_value| {
+                    if (asm_value.template_count > mir_model.max_executable_operands or
+                        asm_value.clobber_count > mir_model.max_executable_operands)
+                        complete = false;
+                },
+                .precise_asm => |*asm_value| {
+                    if (asm_value.template_count > mir_model.max_executable_operands or
+                        asm_value.clobber_count > mir_model.max_executable_operands or
+                        asm_value.output_count > mir_model.max_executable_operands or
+                        asm_value.input_count > mir_model.max_executable_operands)
+                        complete = false;
+                    for (asm_value.outputs[0..asm_value.output_count]) |*output| {
+                        output.type_id = self.type_ids.get(output.ty) orelse .invalid;
+                        if (!output.type_id.isValid()) complete = false;
+                    }
+                    for (asm_value.inputs[0..asm_value.input_count]) |*input| {
+                        input.type_id = self.type_ids.get(input.ty) orelse .invalid;
+                        if (!input.type_id.isValid()) complete = false;
+                    }
+                },
                 .unsupported, .defer_cleanup => complete = false,
                 else => {},
             }
@@ -7013,6 +7039,11 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(statements);
         const terminators = try self.executable_terminators.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(terminators);
+        const owned_bytes = try self.executable_owned_bytes.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_bytes) |bytes| self.allocator.free(bytes);
+            self.allocator.free(owned_bytes);
+        }
         self.executable_local_ids.deinit();
         self.executable_local_ids = std.StringHashMap(LocalId).init(self.allocator);
         self.executable_symbol_ids.deinit();
@@ -7032,6 +7063,7 @@ const FunctionBuilder = struct {
             .places = places,
             .statements = statements,
             .terminators = terminators,
+            .owned_bytes = owned_bytes,
         };
     }
 
@@ -10451,6 +10483,73 @@ const FunctionBuilder = struct {
         });
     }
 
+    fn ownExecutableStringLiteral(self: *FunctionBuilder, literal: []const u8) ![]const u8 {
+        const scratch = try self.allocator.alloc(u8, literal.len);
+        defer self.allocator.free(scratch);
+        const decoded = try string_literal.decodeInto(scratch, literal);
+        const owned = try self.allocator.dupe(u8, decoded);
+        errdefer self.allocator.free(owned);
+        try self.executable_owned_bytes.append(self.allocator, owned);
+        return owned;
+    }
+
+    fn executableOpaqueAsm(self: *FunctionBuilder, asm_stmt: ast.AsmStmt) !?mir_model.ExecutableOpaqueAsm {
+        if (asm_stmt.form != .@"opaque" or asm_stmt.inputs.len != 0 or asm_stmt.outputs.len != 0 or
+            asm_stmt.templates.len > mir_model.max_executable_operands or
+            asm_stmt.clobbers.len > mir_model.max_executable_operands)
+            return null;
+        var result: mir_model.ExecutableOpaqueAsm = .{ .is_volatile = asm_stmt.is_volatile };
+        for (asm_stmt.templates, 0..) |template, index| {
+            result.templates[index] = try self.ownExecutableStringLiteral(template);
+            result.template_count += 1;
+        }
+        for (asm_stmt.clobbers, 0..) |clobber, index| {
+            result.clobbers[index] = try self.ownExecutableStringLiteral(clobber);
+            result.clobber_count += 1;
+        }
+        return result;
+    }
+
+    fn executablePreciseAsm(self: *FunctionBuilder, asm_stmt: ast.AsmStmt) !?mir_model.ExecutablePreciseAsm {
+        if (asm_stmt.form != .precise or asm_stmt.templates.len > mir_model.max_executable_operands or
+            asm_stmt.clobbers.len > mir_model.max_executable_operands or
+            asm_stmt.outputs.len > mir_model.max_executable_operands or
+            asm_stmt.inputs.len > mir_model.max_executable_operands)
+            return null;
+        var result: mir_model.ExecutablePreciseAsm = .{ .is_volatile = asm_stmt.is_volatile };
+        for (asm_stmt.templates, 0..) |template, index| {
+            result.templates[index] = try self.ownExecutableStringLiteral(template);
+            result.template_count += 1;
+        }
+        for (asm_stmt.clobbers, 0..) |clobber, index| {
+            result.clobbers[index] = try self.ownExecutableStringLiteral(clobber);
+            result.clobber_count += 1;
+        }
+        for (asm_stmt.outputs, 0..) |output, index| {
+            const local = self.executable_local_ids.get(output.name.text) orelse return null;
+            if (!(self.local_mutability.get(output.name.text) orelse false)) return null;
+            const ty = valueTypeFromTypeAlias(output.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            const local_ty = self.local_types.get(output.name.text) orelse return null;
+            if (!sameValueType(ty, local_ty)) return null;
+            result.outputs[index] = .{
+                .constraint = try self.ownExecutableStringLiteral(output.reg),
+                .local = local,
+                .ty = ty,
+            };
+            result.output_count += 1;
+        }
+        for (asm_stmt.inputs, 0..) |input, index| {
+            const ty = valueTypeFromTypeAlias(input.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            result.inputs[index] = .{
+                .constraint = try self.ownExecutableStringLiteral(input.reg),
+                .value = try self.ensureExecutableExprAsType(input.value, ty, input.ty),
+                .ty = ty,
+            };
+            result.input_count += 1;
+        }
+        return result;
+    }
+
     const ExecutablePackedFieldTarget = struct {
         base: ast.Expr,
         field_index: usize,
@@ -11347,8 +11446,13 @@ const FunctionBuilder = struct {
                 }
                 return true;
             },
-            .asm_stmt => {
-                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .unsupported);
+            .asm_stmt => |asm_stmt| {
+                if (try self.executableOpaqueAsm(asm_stmt)) |asm_value|
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .opaque_asm = asm_value })
+                else if (try self.executablePreciseAsm(asm_stmt)) |asm_value|
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .precise_asm = asm_value })
+                else
+                    try self.appendExecutableStatement(self.sourcePoint(stmt.span), .unsupported);
                 if (!self.active_unsafe) try self.addInstr(.unsafe_check, "asm.opaque", .unknown, stmt.span);
                 try self.addInstr(.asm_effect, "opaque", .value, stmt.span);
                 if (self.naked) {

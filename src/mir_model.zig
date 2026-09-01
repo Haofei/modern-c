@@ -346,6 +346,43 @@ pub const Instruction = struct {
 pub const max_executable_operands: usize = 16;
 pub const max_executable_projections: usize = 8;
 
+/// Syntax-free operand-less inline assembly. Template and clobber entries are
+/// decoded byte strings owned by `ExecutableBody.owned_bytes`; source string
+/// literal quoting is never exposed to codegen.
+pub const ExecutableOpaqueAsm = struct {
+    is_volatile: bool,
+    templates: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
+    template_count: usize = 0,
+    clobbers: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
+    clobber_count: usize = 0,
+};
+
+pub const ExecutableAsmOutput = struct {
+    constraint: []const u8,
+    local: LocalId,
+    ty: ValueType,
+    type_id: TypeId = .invalid,
+};
+
+pub const ExecutableAsmInput = struct {
+    constraint: []const u8,
+    value: ExprId,
+    ty: ValueType,
+    type_id: TypeId = .invalid,
+};
+
+pub const ExecutablePreciseAsm = struct {
+    is_volatile: bool,
+    templates: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
+    template_count: usize = 0,
+    clobbers: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
+    clobber_count: usize = 0,
+    outputs: [max_executable_operands]ExecutableAsmOutput = undefined,
+    output_count: usize = 0,
+    inputs: [max_executable_operands]ExecutableAsmInput = undefined,
+    input_count: usize = 0,
+};
+
 pub const ExecutableUnaryOp = enum { neg, bit_not, logical_not };
 pub const ExecutableBinaryOp = enum {
     logical_or,
@@ -1353,6 +1390,8 @@ pub const ExecutableStatement = struct {
         },
         return_: ?ExprId,
         control_transfer: enum { break_, continue_ },
+        opaque_asm: ExecutableOpaqueAsm,
+        precise_asm: ExecutablePreciseAsm,
         defer_cleanup,
         unsupported,
     };
@@ -1676,6 +1715,10 @@ pub const ExecutableBody = struct {
     places: []ExecutablePlace = &.{},
     statements: []ExecutableStatement = &.{},
     terminators: []ExecutableTerminator = &.{},
+    /// Allocations referenced by syntax-free executable operations. Keeping
+    /// ownership on the body makes operation payloads self-contained without
+    /// embedding AST nodes or source-literal spellings.
+    owned_bytes: []const []const u8 = &.{},
 
     pub fn isComplete(self: *const ExecutableBody) bool {
         return self.complete;
@@ -1693,6 +1736,8 @@ pub const ExecutableBody = struct {
         if (self.places.len != 0) allocator.free(self.places);
         if (self.statements.len != 0) allocator.free(self.statements);
         if (self.terminators.len != 0) allocator.free(self.terminators);
+        for (self.owned_bytes) |bytes| allocator.free(bytes);
+        if (self.owned_bytes.len != 0) allocator.free(self.owned_bytes);
         self.* = .{};
     }
 };

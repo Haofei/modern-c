@@ -1448,7 +1448,9 @@ const LlvmEmitter = struct {
         if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(fn_mir)) return false;
 
         const call_abi_plan = (try self.buildExecutableDirectCallAbiPlan(fn_mir)) orelse return false;
-        const rendered = mir_executable_llvm.renderWithCallAbi(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty, call_abi_plan) catch |err| switch (err) {
+        const rendered = mir_executable_llvm.renderWithCallAbiAndOptions(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty, call_abi_plan, .{
+            .stub_asm = self.stub_asm,
+        }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported, error.InvalidBody => return false,
         };

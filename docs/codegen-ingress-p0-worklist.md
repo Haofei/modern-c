@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1495/1825 admitted | 1537/1879 admitted |
-| AST fallback | 330 | 342 |
+| broad sweep | 1516/1825 admitted | 1558/1879 admitted |
+| AST fallback | 309 | 321 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -57,6 +57,13 @@ the bucket, fourteen functions per backend become canonical, and the remaining
 two expose their next typed-operation blocker. The bucket is now 26 bodies per
 backend.
 
+Opaque and precise inline assembly are executable-MIR statements. Decoded
+templates and clobbers are body-owned bytes; precise inputs and outputs use
+`ExprId`, `LocalId`, and checked `TypeId` facts. C and LLVM share the operation
+and receive stub mode explicitly. Nineteen broad-corpus functions per backend
+move to canonical emission, leaving one `unsupported_statement` body and the
+separate naked-function renderer tail.
+
 Typed scalar/enum switches now distinguish a source wildcard arm from trap
 successors created while evaluating the subject. Representation and bounds
 traps remain independently owned executable edges instead of being mistaken
@@ -92,7 +99,7 @@ fixes retire one fallback per backend each.
 
 1. Attach remaining trap projections to canonical expression/statement IDs.
 2. Close signature/type-reference mismatches.
-3. Lower unsupported statements and generic member/place operations.
+3. Lower generic member/place operations and close naked-function admission.
 4. Lower the remaining variant and generated general switches with typed cases
    and explicit CFG.
 5. Lower strings, arrays/aggregates, `try`, and remaining calls.
