@@ -7,11 +7,20 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1521/1825 C functions and 1563/1879 LLVM functions.
-  The remaining 304 C and 316 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1530/1825 C functions and 1572/1879 LLVM functions.
+  The remaining 295 C and 307 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
-  backend fallback branches.
+backend fallback branches.
+
+Canonical `try_unwrap` now consumes the existing nullable-value and Result
+layout tables as well as nullable-pointer shape. Trapping value-optionals and
+Results in non-Result-returning functions use one verified Unwrap edge and one
+mechanical payload extraction in both renderers; Result propagation remains
+fail-closed until MIR owns its early-return edge. This retired nine broad-corpus
+fallbacks per backend and reduced `unsupported_try` from 26 to 16. The census
+runner now refreshes the default installed compiler before measuring, closing
+a stale-binary hole that could otherwise report unchanged but invalid counts.
 
 The latest cutover added canonical `for_each` and `for_step` terminators. MIR
 owns iterable evaluation, synthetic iterable/index locals, element binding,

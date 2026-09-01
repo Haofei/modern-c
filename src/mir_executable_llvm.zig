@@ -1028,11 +1028,30 @@ const Renderer = struct {
     fn emitTryUnwrap(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
         if (!tryUnwrapSupported(self.body, expression, operand_id)) return error.InvalidBody;
         const operand = try self.emitExpression(operand_id);
-        if (!std.mem.eql(u8, operand.ty, "ptr")) return error.InvalidBody;
         const edge = tryUnwrapTrapEdge(self.body, expression) orelse return error.InvalidBody;
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_unwrap_ready_{d}", .{expression.id.raw});
-        try self.emitPointerRepresentationGuard(operand.spelling, edge, continuation);
-        return operand;
+        const operand_expression = self.body.expressions[operand_id.index()];
+        switch (operand_expression.result_ty) {
+            .nullable_pointer => {
+                if (!std.mem.eql(u8, operand.ty, "ptr")) return error.InvalidBody;
+                try self.emitPointerRepresentationGuard(operand.spelling, edge, continuation);
+                return operand;
+            },
+            .nullable_value, .result => {
+                const present = try self.temp();
+                try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ present, operand.ty, operand.spelling });
+                try self.output.print(
+                    self.allocator,
+                    "  br i1 {s}, label %{s}, label %mc_block_{d}\n{s}:\n",
+                    .{ present, continuation, edge.trap_block.raw, continuation },
+                );
+                const payload = try self.temp();
+                const payload_ty = try self.typeText(expression.result_ty);
+                try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, operand.ty, operand.spelling });
+                return .{ .ty = payload_ty, .spelling = payload };
+            },
+            else => return error.InvalidBody,
+        }
     }
 
     fn emitOptional(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
@@ -3533,12 +3552,23 @@ fn variantOperationSupported(
 fn tryUnwrapSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
     if (!expressionValid(body, operand_id)) return false;
     const operand = body.expressions[operand_id.index()];
-    const shape = switch (operand.result_ty) {
-        .nullable_pointer => |pointer| pointer,
-        else => return false,
+    const payload_valid = switch (operand.result_ty) {
+        .nullable_pointer => |shape| sameValueType(expression.result_ty, .{ .pointer = shape }),
+        .nullable_value => optional: {
+            const aggregate = aggregateType(body, operand.type_id) orelse break :optional false;
+            break :optional aggregate.construction == .declared_struct and
+                aggregate.ty == .nullable_value and aggregate.field_count == 2 and
+                sameValueType(expression.result_ty, aggregate.field_types[1]) and
+                expression.type_id.eql(aggregate.field_type_ids[1]);
+        },
+        .result => result: {
+            const shape = resultType(body, operand.type_id) orelse break :result false;
+            break :result sameValueType(expression.result_ty, shape.ok_ty) and
+                expression.type_id.eql(shape.ok_type_id);
+        },
+        else => false,
     };
-    return sameValueType(expression.result_ty, .{ .pointer = shape }) and
-        tryUnwrapTrapEdgeIsExact(body, expression);
+    return payload_valid and tryUnwrapTrapEdgeIsExact(body, expression);
 }
 
 fn optionalConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: ?mir.ExprId) bool {

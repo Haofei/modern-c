@@ -596,11 +596,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyOperand(body, value, operand_id);
             const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
             if (body.complete) {
-                const shape = switch (operand.result_ty) {
-                    .nullable_pointer => |pointer| pointer,
-                    else => return error.InvalidAggregateConstruction,
-                };
-                if (!sameValueType(value.result_ty, .{ .pointer = shape }) or
+                if (!tryUnwrapPayloadValid(body, &value, operand) or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                     ownedTrapCount(body, .{ .expression = value.id }, .Unwrap, .unwrap) != 1)
                     return error.InvalidAggregateConstruction;
@@ -796,7 +792,8 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     },
                     .try_unwrap => |operand_id| {
                         const operand = expression(body, operand_id) orelse return error.InvalidTrapEdge;
-                        if (operand.result_ty != .nullable_pointer or edge.kind != .Unwrap or edge.source != .unwrap)
+                        if (!tryUnwrapPayloadValid(body, owner, operand) or
+                            edge.kind != .Unwrap or edge.source != .unwrap)
                             return error.InvalidTrapEdge;
                     },
                     .index => |operation| {
@@ -1747,6 +1744,29 @@ fn resultType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.
     if (!type_id.isValid()) return null;
     for (body.result_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
     return null;
+}
+
+fn tryUnwrapPayloadValid(
+    body: *const mir.ExecutableBody,
+    value: *const mir.ExecutableExpression,
+    operand: *const mir.ExecutableExpression,
+) bool {
+    return switch (operand.result_ty) {
+        .nullable_pointer => |shape| sameValueType(value.result_ty, .{ .pointer = shape }),
+        .nullable_value => optional: {
+            const aggregate = aggregateType(body, operand.type_id) orelse break :optional false;
+            break :optional aggregate.construction == .declared_struct and
+                aggregate.ty == .nullable_value and aggregate.field_count == 2 and
+                sameValueType(value.result_ty, aggregate.field_types[1]) and
+                value.type_id.eql(aggregate.field_type_ids[1]);
+        },
+        .result => result: {
+            const shape = resultType(body, operand.type_id) orelse break :result false;
+            break :result sameValueType(value.result_ty, shape.ok_ty) and
+                value.type_id.eql(shape.ok_type_id);
+        },
+        else => false,
+    };
 }
 
 fn verifyMemoryAccess(

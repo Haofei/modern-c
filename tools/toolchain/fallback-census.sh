@@ -37,7 +37,11 @@ set -euo pipefail
 SRC_ROOT="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 cd "$SRC_ROOT"
 
-MCC="${MCC:-zig-out/bin/mcc}"
+MCC_DEFAULT=0
+if [ -z "${MCC+x}" ]; then
+    MCC="zig-out/bin/mcc"
+    MCC_DEFAULT=1
+fi
 OUTDIR="${OUTDIR:-zig-out/fallback-census}"
 BACKENDS="${BACKENDS:-c llvm}"
 JOBS="${JOBS:-4}"
@@ -107,9 +111,15 @@ TIMEOUT_CMD=()
 if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD=(timeout "$CMD_TIMEOUT");
 elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD=(gtimeout "$CMD_TIMEOUT"); fi
 
-if [ ! -x "$MCC" ]; then
-    echo "building mcc..." >&2
-    zig build >&2
+if [ "$MCC_DEFAULT" -eq 1 ]; then
+    # The installed launcher is intentionally stable and therefore has an old
+    # timestamp. Always refresh its private compiler before measuring; merely
+    # checking whether `zig-out/bin/mcc` exists silently ran stale code after
+    # source edits and produced convincing but invalid migration numbers.
+    zig build install >&2
+elif [ ! -x "$MCC" ]; then
+    echo "MCC is not executable: $MCC" >&2
+    exit 2
 fi
 
 rm -rf "$OUTDIR"

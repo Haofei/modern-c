@@ -4079,6 +4079,53 @@ test "LLVM emits nullable pointer try from MIR without body fallback" {
     try expectContains(expr_body, "ret void");
 }
 
+test "LLVM emits value optional and Result try from MIR without body fallback" {
+    const source =
+        \\enum Error: u8 { denied = 1, }
+        \\struct Pair { left: u32, right: u32, }
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\fn unwrap_value(maybe: ?u32) -> u32 {
+        \\    return maybe?;
+        \\}
+        \\fn unwrap_result(result: Result<u32, Error>) -> u32 {
+        \\    return result?;
+        \\}
+        \\fn unwrap_result_call() -> u32 {
+        \\    return make_result()?;
+        \\}
+        \\fn unwrap_pair(result: Result<Pair, Error>) -> u32 {
+        \\    let pair: Pair = result?;
+        \\    return pair.left + pair.right;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_aggregate_try.mc", source, &output);
+
+    const optional_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_value");
+    try expectContains(optional_body, "; canonical executable MIR");
+    try expectContains(optional_body, "extractvalue { i1, i32 }");
+    try expectContains(optional_body, "br i1");
+    try expectContains(optional_body, "call void @mc_trap_NullUnwrap()");
+    try expectContains(optional_body, "ret i32");
+
+    const result_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_result");
+    try expectContains(result_body, "; canonical executable MIR");
+    try expectContains(result_body, "extractvalue { i1, i32, i8 }");
+    try expectContains(result_body, "call void @mc_trap_NullUnwrap()");
+    try expectContains(result_body, "ret i32");
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_result_call");
+    try expectContains(call_body, "call { i1, i32, i8 } @make_result()");
+    try expectContains(call_body, "call void @mc_trap_NullUnwrap()");
+    try expectContains(call_body, "ret i32");
+
+    const pair_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_pair");
+    try expectContains(pair_body, "extractvalue { i1, { i32, i32 }, i8 }");
+    try expectContains(pair_body, "call void @mc_trap_NullUnwrap()");
+    try expectContains(pair_body, "ret i32");
+}
+
 test "LLVM emits strict nullable control plans from MIR without body fallback" {
     const source =
         \\extern fn maybe_ptr() -> ?*mut u8;

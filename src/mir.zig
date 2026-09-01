@@ -7103,6 +7103,7 @@ const FunctionBuilder = struct {
             },
             .variant_test => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, false),
             .variant_payload => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, true),
+            .try_unwrap => |operand_id| self.executableTryUnwrapComplete(expression, operand_id),
             .result => |operation| result: {
                 if (!operation.payload.isValid() or operation.payload.index() >= expression.id.index() or
                     operation.payload.index() >= self.executable_expressions.items.len) break :result false;
@@ -7243,6 +7244,38 @@ const FunctionBuilder = struct {
                 }
                 break :result false;
             },
+        };
+    }
+
+    fn executableTryUnwrapComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operand_id: ExprId,
+    ) bool {
+        if (!operand_id.isValid() or operand_id.index() >= expression.id.index() or
+            operand_id.index() >= self.executable_expressions.items.len) return false;
+        const operand = self.executable_expressions.items[operand_id.index()];
+        return switch (operand.result_ty) {
+            .nullable_pointer => |shape| sameValueType(expression.result_ty, .{ .pointer = shape }),
+            .nullable_value => optional: {
+                for (self.executable_aggregate_types.items) |aggregate| {
+                    if (!aggregate.type_id.eql(operand.type_id)) continue;
+                    break :optional aggregate.construction == .declared_struct and
+                        aggregate.ty == .nullable_value and aggregate.field_count == 2 and
+                        sameValueType(expression.result_ty, aggregate.field_types[1]) and
+                        expression.type_id.eql(aggregate.field_type_ids[1]);
+                }
+                break :optional false;
+            },
+            .result => result: {
+                for (self.executable_result_types.items) |shape| {
+                    if (!shape.type_id.eql(operand.type_id)) continue;
+                    break :result sameValueType(expression.result_ty, shape.ok_ty) and
+                        expression.type_id.eql(shape.ok_type_id);
+                }
+                break :result false;
+            },
+            else => false,
         };
     }
 
@@ -9601,19 +9634,40 @@ const FunctionBuilder = struct {
                 break :aggregate .{ .struct_ = value };
             },
             .try_expr => |node| unwrap: {
-                // The first canonical slice is deliberately narrow: nullable
-                // pointer `?` has one value-preserving null check. Result
-                // propagation and mapped errors remain on the legacy path
-                // until MIR owns their early-return payload conversion.
+                // Mapped errors and Result propagation still require an
+                // explicit early-return edge. Trapping unwraps share one
+                // canonical operation for pointers, value optionals, and
+                // Results whose enclosing function does not return Result.
                 if (node.mapped != null) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
-                const operand_ty = self.exprType(node.operand.*);
-                const pointer = switch (operand_ty) {
-                    .nullable_pointer => |shape| shape,
-                    else => break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
-                };
-                if (!ValueType.eql(result_ty, .{ .pointer = pointer }))
+                const operand_type_expr = self.typeExprForExpr(node.operand.*) orelse
                     break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
-                break :unwrap .{ .try_unwrap = try self.ensureExecutableExpr(node.operand.*) };
+                const payload_type_expr = tryPayloadTypeExprAlias(operand_type_expr, self.aliases) orelse
+                    break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                const operand_ty = self.exprType(node.operand.*);
+                const payload_ty = switch (operand_ty) {
+                    .result => self.executableResultPayloadType(payload_type_expr),
+                    else => valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+                };
+                if (!ValueType.eql(result_ty, payload_ty))
+                    break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                switch (operand_ty) {
+                    .nullable_pointer => |shape| if (!ValueType.eql(payload_ty, .{ .pointer = shape }))
+                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
+                    .nullable_value => {
+                        const complete = try self.internExecutableValueOptionalType(operand_ty);
+                        if (!complete) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    },
+                    .result => {
+                        if (self.return_ty == .result)
+                            break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                        const complete = try self.internExecutableResultType(operand_ty, operand_type_expr);
+                        if (!complete)
+                            break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    },
+                    else => break :unwrap self.unsupportedExecutableExpression(.unsupported_try),
+                }
+                const operand_id = try self.ensureExecutableExpr(node.operand.*);
+                break :unwrap .{ .try_unwrap = operand_id };
             },
             .block => self.unsupportedExecutableExpression(.unsupported_block_expression),
             .unreachable_expr => self.unsupportedExecutableExpression(.unsupported_unreachable_expression),
@@ -18323,6 +18377,13 @@ const FunctionBuilder = struct {
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else switch (self.exprType(inner.operand.*)) {
                 .nullable_pointer => |name| .{ .pointer = name },
+                .nullable_value => if (self.typeExprForExpr(inner.operand.*)) |ty|
+                    if (tryPayloadTypeExprAlias(ty, self.aliases)) |payload|
+                        valueTypeFromTypeAlias(payload, self.enums, self.structs, self.packed_bits, self.aliases)
+                    else
+                        .unknown
+                else
+                    .unknown,
                 .result => |shape| valueTypeFromTypeName(shape.ok, self.enums, self.structs),
                 else => .unknown,
             },

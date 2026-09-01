@@ -933,7 +933,17 @@ fn emitExpressionOperation(
             }
             try out.append(allocator, ')');
         },
-        .try_unwrap => |operand| try emitExpression(allocator, out, body, operand, depth + 1),
+        .try_unwrap => |operand_id| {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, operand_id, depth + 1);
+            switch ((expressionById(body, operand_id) orelse return error.InvalidExpression).result_ty) {
+                .nullable_pointer => {},
+                .nullable_value => try out.appendSlice(allocator, ".value"),
+                .result => try out.appendSlice(allocator, ".payload.ok"),
+                else => return error.InvalidExpression,
+            }
+            try out.append(allocator, ')');
+        },
         .result => |result| {
             const shape = resultType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!resultConstructionSupported(body, expression.*, result)) return error.InvalidExpression;
@@ -1332,12 +1342,23 @@ fn variantOperationSupported(
 
 fn tryUnwrapSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
     const operand = expressionById(body, operand_id) orelse return false;
-    const shape = switch (operand.result_ty) {
-        .nullable_pointer => |pointer| pointer,
-        else => return false,
+    const payload_valid = switch (operand.result_ty) {
+        .nullable_pointer => |shape| sameValueType(expression.result_ty, .{ .pointer = shape }),
+        .nullable_value => optional: {
+            const aggregate = aggregateType(body, operand.type_id) orelse break :optional false;
+            break :optional aggregate.construction == .declared_struct and
+                aggregate.ty == .nullable_value and aggregate.field_count == 2 and
+                sameValueType(expression.result_ty, aggregate.field_types[1]) and
+                expression.type_id.eql(aggregate.field_type_ids[1]);
+        },
+        .result => result: {
+            const shape = resultType(body, operand.type_id) orelse break :result false;
+            break :result sameValueType(expression.result_ty, shape.ok_ty) and
+                expression.type_id.eql(shape.ok_type_id);
+        },
+        else => false,
     };
-    return sameValueType(expression.result_ty, .{ .pointer = shape }) and
-        tryUnwrapTrapEdge(body, expression) != null;
+    return payload_valid and tryUnwrapTrapEdge(body, expression) != null;
 }
 
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -3445,11 +3466,18 @@ fn prepareStatementExpressions(
                 .try_unwrap => |value| value,
                 else => return error.InvalidExpression,
             };
+            const operand_expression = expressionById(body, operand) orelse return error.InvalidExpression;
             try writeSourceLineDirective(allocator, out, source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (");
             try emitExpression(allocator, out, body, operand, 0);
-            try out.appendSlice(allocator, " == NULL) mc_trap_NullUnwrap();\n");
+            try out.appendSlice(allocator, switch (operand_expression.result_ty) {
+                .nullable_pointer => " == NULL",
+                .nullable_value => ".present == false",
+                .result => ".is_ok == false",
+                else => return error.InvalidExpression,
+            });
+            try out.appendSlice(allocator, ") mc_trap_NullUnwrap();\n");
         }
         switch (expression.operation) {
             .binary => |binary| if (binary.arithmetic == .unchecked) {
@@ -3963,6 +3991,11 @@ fn appendResultCTypeSuffix(
     switch (storage_ty) {
         .domain_integer => |domain| if (domain.kind == .duration)
             return out.print(allocator, "mc_type_generic_8_Duration_1_{d}_{s}", .{ domain.child.len, domain.child }),
+        // Generic instantiation spellings such as `Pair__u32` are valid C
+        // identifiers, but their declarations use the canonical nominal
+        // struct encoding. Prefer the verified storage identity so expression
+        // temporaries name the same typedef as the function signature.
+        .struct_ => return appendCTypeSuffix(allocator, out, storage_ty),
         else => {},
     }
     if (isSafeIdentifier(identity)) return out.appendSlice(allocator, identity);

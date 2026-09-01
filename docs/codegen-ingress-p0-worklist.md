@@ -8,12 +8,20 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1521/1825 admitted | 1563/1879 admitted |
-| AST fallback | 304 | 316 |
+| broad sweep | 1530/1825 admitted | 1572/1879 admitted |
+| AST fallback | 295 | 307 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
 foreach plan emitters, and all selected-path enum variants were deleted.
+
+Trapping `?` is canonical for nullable pointers, value optionals, and Results
+when the enclosing function does not return Result. Producer, verifier, C, and
+LLVM all consume the same typed aggregate/Result layouts and exact Unwrap edge.
+Nine broad-corpus fallbacks per backend were retired; the remaining 16
+`unsupported_try` entries require propagation, mapped errors, unsafe MMIO
+result handling, or cleanup-edge integration rather than another payload
+renderer special case.
 
 Guarded aggregate dereferences and mutable aggregate globals now carry their
 memory-access class in executable MIR. Declared structs, value optionals, and
