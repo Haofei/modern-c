@@ -17,18 +17,6 @@ pub fn boolLiteralValue(expr: ast.Expr) ?bool {
     };
 }
 
-pub fn nakedAsmStmt(body: ast.Block) ?ast.AsmStmt {
-    if (body.items.len != 1) return null;
-    return switch (body.items[0].kind) {
-        .asm_stmt => |stmt| stmt,
-        .unsafe_block => |inner| if (inner.items.len == 1) switch (inner.items[0].kind) {
-            .asm_stmt => |stmt| stmt,
-            else => null,
-        } else null,
-        else => null,
-    };
-}
-
 pub fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,

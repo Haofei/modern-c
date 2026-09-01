@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1516/1825 admitted | 1558/1879 admitted |
-| AST fallback | 309 | 321 |
+| broad sweep | 1521/1825 admitted | 1563/1879 admitted |
+| AST fallback | 304 | 316 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -61,8 +61,16 @@ Opaque and precise inline assembly are executable-MIR statements. Decoded
 templates and clobbers are body-owned bytes; precise inputs and outputs use
 `ExprId`, `LocalId`, and checked `TypeId` facts. C and LLVM share the operation
 and receive stub mode explicitly. Nineteen broad-corpus functions per backend
-move to canonical emission, leaving one `unsupported_statement` body and the
-separate naked-function renderer tail.
+move to canonical emission, leaving one malformed negative fixture in the
+`unsupported_statement` bucket.
+
+Valid naked functions now take a narrow canonical renderer path: one verified
+opaque asm statement and one `unreachable` terminator, with no ordinary CFG
+wrapper. The naked runtime proof passes in C and LLVM, five additional
+broad-corpus bodies per backend are canonical, and the legacy AST naked-body
+emitters and syntax bridge have been deleted. No broad fallback is marked
+`canonical=ready`; the remaining tail is producer-incomplete or an explicit
+renderer capability gap.
 
 Typed scalar/enum switches now distinguish a source wildcard arm from trap
 successors created while evaluating the subject. Representation and bounds
@@ -99,7 +107,7 @@ fixes retire one fallback per backend each.
 
 1. Attach remaining trap projections to canonical expression/statement IDs.
 2. Close signature/type-reference mismatches.
-3. Lower generic member/place operations and close naked-function admission.
+3. Lower generic member/place operations.
 4. Lower the remaining variant and generated general switches with typed cases
    and explicit CFG.
 5. Lower strings, arrays/aggregates, `try`, and remaining calls.

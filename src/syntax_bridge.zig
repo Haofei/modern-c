@@ -33,7 +33,6 @@ pub const isSatPreservingBinary = expr_syntax.isSatPreservingBinary;
 pub const isUninitLiteral = expr_syntax.isUninitLiteral;
 pub const memberCallee = expr_syntax.memberCallee;
 pub const memberExpr = expr_syntax.memberExpr;
-pub const nakedAsmStmt = expr_syntax.nakedAsmStmt;
 pub const overlayMemberFromIndexBase = expr_syntax.overlayMemberFromIndexBase;
 pub const qualifiedMemberCallee = expr_syntax.qualifiedMemberCallee;
 pub const reduceCallKind = expr_syntax.reduceCallKind;

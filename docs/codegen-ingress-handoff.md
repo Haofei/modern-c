@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1516/1825 C functions and 1558/1879 LLVM functions.
-  The remaining 309 C and 321 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1521/1825 C functions and 1563/1879 LLVM functions.
+  The remaining 304 C and 316 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -87,8 +87,15 @@ MIR owns decoded template/clobber bytes, precise input `ExprId`s, output
 `LocalId`s, and checked operand types; stub mode is an explicit renderer option.
 Both backends consume the same operation and the precise-asm fixture is 4/4
 canonical. This retires nineteen broad-corpus fallbacks per backend and reduces
-`unsupported_statement` from 27 bodies to one; naked-function admission remains
-a separate renderer/ABI concern.
+`unsupported_statement` from 27 bodies to one.
+
+The valid naked-function tail is canonical as well. A deliberately narrow
+verified shape admits exactly one opaque asm statement followed by
+`unreachable`; dedicated C and LLVM renderers emit no ordinary CFG prologue.
+The host-ISA runtime proof stores 42 through the ABI argument register in both
+backends. Five more broad-corpus fallbacks per backend moved to canonical
+emission, and the backend-local AST naked-body emitters plus their syntax bridge
+were deleted. The broad census has no `canonical=ready` fallback remaining.
 
 The remaining `trap_projection` group is 26 bodies per backend. Representation
 edges are now resolved after canonical statement construction, which removes

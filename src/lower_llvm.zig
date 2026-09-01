@@ -1439,7 +1439,7 @@ const LlvmEmitter = struct {
     };
 
     fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
-        if (render_attrs.naked) return false;
+        if (render_attrs.naked) return self.emitExecutableMirNakedFunction(function, fn_mir, render_attrs);
         const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
             fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
             for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
@@ -1496,6 +1496,58 @@ const LlvmEmitter = struct {
             try self.emitMirPointerProvenanceConsumedComment(fact);
         }
         try self.emitExecutableAggregateReturnPointerFacts(&fn_mir.executable_body);
+        try self.out.appendSlice(self.allocator, rendered);
+        try self.out.appendSlice(self.allocator, "}\n\n");
+        return true;
+    }
+
+    fn emitExecutableMirNakedFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
+        const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
+            fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
+            for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
+            break :cleanup_edges true;
+        };
+        if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or
+            !mir_executable_llvm.canRenderNaked(&fn_mir.executable_body) or
+            fn_mir.executable_body.parameters.len != fn_mir.param_types.len or
+            fn_mir.executable_body.parameters.len != fn_mir.param_count) return false;
+        for (fn_mir.executable_body.parameters, fn_mir.param_types) |parameter, parameter_ty|
+            if (!mir.ValueType.eql(parameter.ty, parameter_ty)) return false;
+
+        const rendered = mir_executable_llvm.renderNaked(self.scratch.allocator(), &fn_mir.executable_body) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unsupported, error.InvalidBody => return false,
+        };
+        const sig_facts = function.signature;
+        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
+        const ret_llvm = try self.llvmType(ret_ty);
+        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return false;
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
+        const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
+
+        const old_scope = self.current_debug_scope;
+        const old_span = self.current_debug_span;
+        const old_function = self.current_function;
+        self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
+        self.current_debug_span = sig_facts.name.span;
+        self.current_function = sig_facts.name.text;
+        defer {
+            self.current_debug_scope = old_scope;
+            self.current_debug_span = old_span;
+            self.current_function = old_function;
+        }
+
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
+        for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, index| {
+            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+            const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
+            try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.llvmType(param.ty), param_ext, executable_parameter.local.raw });
+        }
+        const entry_label = try self.functionEntryLabel();
+        if (self.current_debug_scope) |scope|
+            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, scope, entry_label })
+        else
+            try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
         try self.out.appendSlice(self.allocator, rendered);
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
@@ -3057,6 +3109,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitFunction(self: *LlvmEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {
+        if (attrs.naked) return error.UnsupportedLlvmEmission;
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
@@ -3081,11 +3134,6 @@ const LlvmEmitter = struct {
             self.current_params = old_params;
         }
         try self.validateFunctionCleanupAuthority();
-        // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
-        // epilogue. The body is a single inline-asm statement that performs the
-        // ABI-correct jump/return itself; we terminate the entry block with
-        // `unreachable` because the asm — not a synthesized `ret` — transfers control.
-        const naked = attrs.naked;
         const mechanics = try self.llvmFunctionRenderMechanics(attrs, sig_facts.exported);
         try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, 0..) |param, i| {
@@ -3099,19 +3147,6 @@ const LlvmEmitter = struct {
             if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.appendSlice(self.allocator, "...");
         }
-        // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
-        if (naked) {
-            if (self.current_debug_scope) |scope| {
-                try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, scope, entry_label });
-            } else {
-                try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
-            }
-            self.temp_index = 0;
-            try self.emitAsmStmt(syntax_bridge.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
-            try self.out.appendSlice(self.allocator, "  unreachable\n}\n\n");
-            return;
-        }
-
         // Emit the body into a scratch buffer while routing every alloca to a separate
         // entry-block buffer (see `entry_allocas`). After the body is built we splice them:
         //   define …(…) {  bb_entry:  <all allocas>  <body>  }

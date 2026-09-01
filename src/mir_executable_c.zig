@@ -100,6 +100,44 @@ pub fn emitBodyWithOptions(
     }
 }
 
+pub fn canEmitNakedBody(body: *const mir.ExecutableBody) bool {
+    if (!body.isComplete() or body.expressions.len != 0 or body.trap_edges.len != 0 or
+        body.places.len != 0 or body.statements.len != 1 or body.terminators.len != 1 or
+        body.terminators[0].operation != .unreachable_) return false;
+    return switch (body.statements[0].operation) {
+        .opaque_asm => |asm_value| asm_value.clobber_count == 0 and
+            asm_value.template_count <= mir.max_executable_operands,
+        else => false,
+    };
+}
+
+pub fn emitNakedBody(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    if (!canEmitNakedBody(body)) return error.IncompleteBody;
+    const asm_value = body.statements[0].operation.opaque_asm;
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "__asm__(");
+    if (asm_value.template_count == 0) {
+        try appendQuotedCBytes(allocator, out, "");
+    } else for (asm_value.templates[0..asm_value.template_count], 0..) |template, index| {
+        if (index != 0) try out.appendSlice(allocator, " \"\\n\\t\" ");
+        try appendQuotedCBytes(allocator, out, template);
+    }
+    try out.appendSlice(allocator, ");\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#else\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#error \"#[naked] requires GCC/Clang inline-asm support\"\n");
+    try writeIndent(allocator, out, indent);
+    try out.appendSlice(allocator, "#endif\n");
+}
+
 fn blockNeedsLabel(body: *const mir.ExecutableBody, block_id: mir.BlockId) bool {
     // Most MIR trap edges are rendered inline by checked helper calls. Only
     // assert guards emit a C `goto` to their trap block, so those are the only

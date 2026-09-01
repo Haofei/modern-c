@@ -348,6 +348,43 @@ pub fn renderWithCallAbiAndOptions(
     return renderValidated(allocator, body, return_ty, &plan, options);
 }
 
+pub fn canRenderNaked(body: *const mir.ExecutableBody) bool {
+    if (!body.isComplete() or body.expressions.len != 0 or body.trap_edges.len != 0 or
+        body.places.len != 0 or body.statements.len != 1 or body.terminators.len != 1 or
+        body.terminators[0].operation != .unreachable_) return false;
+    return switch (body.statements[0].operation) {
+        .opaque_asm => |asm_value| asm_value.clobber_count == 0 and
+            asm_value.template_count <= mir.max_executable_operands,
+        else => false,
+    };
+}
+
+pub fn renderNaked(allocator: std.mem.Allocator, body: *const mir.ExecutableBody) RenderError![]u8 {
+    if (!canRenderNaked(body)) return error.Unsupported;
+    const asm_value = body.statements[0].operation.opaque_asm;
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    var template: std.ArrayList(u8) = .empty;
+    defer template.deinit(allocator);
+    for (asm_value.templates[0..asm_value.template_count], 0..) |part, part_index| {
+        if (part_index != 0) try template.appendSlice(allocator, "\\0A\\09");
+        var index: usize = 0;
+        while (index < part.len) {
+            const byte = part[index];
+            if (byte == '%' and index + 1 < part.len and part[index + 1] == '%') {
+                try template.append(allocator, '%');
+                index += 2;
+                continue;
+            }
+            if (byte == '$') try template.appendSlice(allocator, "$$") else try appendLlvmAsmByte(allocator, &template, byte);
+            index += 1;
+        }
+    }
+    const sideeffect: []const u8 = if (asm_value.is_volatile) " sideeffect" else "";
+    try output.print(allocator, "  call void asm{s} \"{s}\", \"~{{memory}}\"()\n  unreachable\n", .{ sideeffect, template.items });
+    return output.toOwnedSlice(allocator);
+}
+
 fn renderValidated(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: ?*const CallAbiPlan, options: RenderOptions) RenderError![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();

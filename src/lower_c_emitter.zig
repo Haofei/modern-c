@@ -1186,20 +1186,10 @@ pub const CEmitter = struct {
     }
 
     fn emitFunction(self: *CEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) anyerror!void {
+        if (attrs.naked) return error.UnsupportedCEmission;
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionRenderAttrs(attrs);
-        if (attrs.naked) {
-            try self.emitNakedFunction(function, body);
-            return;
-        }
         try self.emitFunctionBody(function, body);
-    }
-
-    fn emitNakedFunction(self: *CEmitter, function: anytype, body: ast_bridge.Block) !void {
-        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
-        try self.out.appendSlice(self.allocator, " {\n");
-        try self.emitNakedAsmBody(body);
-        try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
     fn emitFunctionBody(self: *CEmitter, function: anytype, body: ast_bridge.Block) anyerror!void {
@@ -1409,13 +1399,27 @@ pub const CEmitter = struct {
             mir_executable_body.verify(&fn_mir) catch break :body null;
             break :body &fn_mir.executable_body;
         } else null;
-        if (!render_attrs.naked) if (executable_body) |body| {
-            try self.emitExecutableMirFunction(function, &fn_mir, body, render_attrs);
+        if (executable_body) |body| {
+            if (render_attrs.naked) {
+                if (!mir_executable_c.canEmitNakedBody(body)) return false;
+                try self.emitExecutableMirNakedFunction(function, body, render_attrs);
+            } else {
+                try self.emitExecutableMirFunction(function, &fn_mir, body, render_attrs);
+            }
             selected_path.* = .canonical;
             return true;
-        };
+        }
 
         return false;
+    }
+
+    fn emitExecutableMirNakedFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
+        try self.writeLineDirective(function.signature.name.span);
+        try self.emitFunctionRenderAttrs(render_attrs);
+        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
+        try self.out.appendSlice(self.allocator, " {\n");
+        try mir_executable_c.emitNakedBody(self.allocator, self.out, body, 1);
+        try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
     fn emitExecutableMirFunction(self: *CEmitter, function: anytype, fn_mir: *const mir.Function, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
@@ -2419,28 +2423,6 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
         try self.emitBlockItems(body, locals, return_ty);
-    }
-
-    // The single asm block of a `#[naked]` function, emitted as *basic* asm (no
-    // operands or clobber list — those are ill-formed inside a naked function). The
-    // template strings carry the hand-written machine code that does the ABI-correct
-    // jump/return itself.
-    fn emitNakedAsmBody(self: *CEmitter, body: ast_bridge.Block) !void {
-        const asm_stmt = syntax_bridge.nakedAsmStmt(body) orelse return error.UnsupportedCEmission;
-        self.indent += 1;
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "__asm__(");
-        try self.emitAsmTemplate(asm_stmt.templates);
-        try self.out.appendSlice(self.allocator, ");\n");
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "#else\n");
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "#error \"#[naked] requires GCC/Clang inline-asm support\"\n");
-        try self.writeIndent();
-        try self.out.appendSlice(self.allocator, "#endif\n");
-        self.indent -= 1;
     }
 
     fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, is_static: bool, with_asm_label: bool) !void {
