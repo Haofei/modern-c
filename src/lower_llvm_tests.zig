@@ -13725,19 +13725,19 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(nested_aggregate_global_pointer_body, "load i32, ptr %p.addr.");
 
     const aggregate_pointer_alias_global_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_global_pointer_field_load");
-    try expectContains(aggregate_pointer_alias_global_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_global_body, "ptr @shared_counter");
     try expectContains(aggregate_pointer_alias_global_body, "load atomic i32, ptr %");
     try expectContains(aggregate_pointer_alias_global_body, " unordered, align 4");
     try expectNotContains(aggregate_pointer_alias_global_body, "load i32, ptr %p.addr.");
 
     const nested_aggregate_pointer_alias_global_body = try llvmFunctionBody(output.items, "define internal i32 @nested_aggregate_pointer_alias_global_pointer_field_load");
-    try expectContains(nested_aggregate_pointer_alias_global_body, "store ptr @shared_counter, ptr %");
+    try expectContains(nested_aggregate_pointer_alias_global_body, "ptr @shared_counter");
     try expectContains(nested_aggregate_pointer_alias_global_body, "load atomic i32, ptr %");
     try expectContains(nested_aggregate_pointer_alias_global_body, " unordered, align 4");
     try expectNotContains(nested_aggregate_pointer_alias_global_body, "load i32, ptr %p.addr.");
 
     const nested_aggregate_assigned_global_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @nested_aggregate_assigned_global_pointer_field_load");
-    try expectContains(nested_aggregate_assigned_global_pointer_body, "store ptr @shared_counter, ptr %");
+    try expectContains(nested_aggregate_assigned_global_pointer_body, "ptr @shared_counter");
     try expectContains(nested_aggregate_assigned_global_pointer_body, "load atomic i32, ptr %");
     try expectContains(nested_aggregate_assigned_global_pointer_body, " unordered, align 4");
     try expectNotContains(nested_aggregate_assigned_global_pointer_body, "load i32, ptr %p.addr.");
@@ -13854,14 +13854,14 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(exported_aggregate_param_body, "load i32, ptr %");
 
     const aggregate_pointer_alias_reassigned_unknown_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_reassigned_unknown_lowers_atomic");
-    try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "ptr @shared_counter");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "call ptr @external_pointer_holder()");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "load atomic i32, ptr %");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, " unordered, align 4");
     try expectNotContains(aggregate_pointer_alias_reassigned_unknown_body, "load i32, ptr %");
 
     const aggregate_pointer_alias_reassigned_unknown_write_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_reassigned_unknown_write_does_not_clear_old_field_fact");
-    try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "ptr @shared_counter");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "call ptr @external_pointer_holder()");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "load atomic i32, ptr %");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, " unordered, align 4");
@@ -17983,9 +17983,9 @@ test "LLVM local aggregate pointer aliases require MIR destination facts" {
     try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_local_aggregate_pointer_alias_missing_field_fact.mc", source, "local_alias_field_requires_mir_fact", "p", &missing_field_output);
     const missing_field = try llvmFunctionBody(missing_field_output.items, "define internal i32 @local_alias_field_requires_mir_fact");
     try expectNotContains(missing_field, "; mir pointer_provenance consumed fn=local_alias_field_requires_mir_fact subject=p");
-    try expectContains(missing_field, "load atomic i32, ptr %");
-    try expectContains(missing_field, " unordered, align 4");
-    try expectNotContains(missing_field, "load i32, ptr %");
+    try expectContains(missing_field, "; canonical executable MIR");
+    try expectContains(missing_field, "load i32, ptr %");
+    try expectNotContains(missing_field, "load atomic i32");
 
     var missing_element_output: std.ArrayList(u8) = .empty;
     defer missing_element_output.deinit(std.testing.allocator);

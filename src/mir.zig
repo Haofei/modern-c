@@ -9017,8 +9017,10 @@ const FunctionBuilder = struct {
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
-                const direct_named_storage = self.executablePlaceRootIsGlobal(node.base.*) or
-                    self.executablePlaceRootIsMaterializedLocal(node.base.*);
+                const projected_through_pointer = self.executablePlaceHasDeref(node.base.*);
+                const direct_named_storage = pointer_shape == null and !projected_through_pointer and
+                    (self.executablePlaceRootIsGlobal(node.base.*) or
+                        self.executablePlaceRootIsMaterializedLocal(node.base.*));
                 if (direct_named_storage and
                     mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
                 {
@@ -9039,6 +9041,18 @@ const FunctionBuilder = struct {
                         mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null)
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
+                    break :member .{ .load = .{
+                        .place = try self.appendExecutablePlace(expr),
+                        .access = self.executableMemoryAccess(expr, result_ty),
+                        .representation_source = guard_source,
+                        .representation_span_id = try self.internSpanId(guard_source),
+                    } };
+                }
+                if (projected_through_pointer) {
+                    if (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null)
+                        break :member self.unsupportedExecutableExpression(.unsupported_member);
+                    const guard_source = self.executableDerefOperandSource(node.base.*) orelse
+                        break :member self.unsupportedExecutableExpression(.unsupported_member);
                     break :member .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
                         .access = self.executableMemoryAccess(expr, result_ty),
@@ -17706,7 +17720,20 @@ const FunctionBuilder = struct {
     // divide-by-zero yield inf/NaN), so float `+ - * /` and unary `-` emit no
     // trap edge.
     fn exprIsFloat(self: *FunctionBuilder, expr: ast.Expr) bool {
-        return std.meta.activeTag(self.exprType(expr)) == .float;
+        if (std.meta.activeTag(self.exprType(expr)) == .float) return true;
+        return switch (expr.kind) {
+            .grouped, .move_expr => |inner| self.exprIsFloat(inner.*),
+            .unary => |node| self.exprIsFloat(node.expr.*),
+            .binary => |node| self.exprIsFloat(node.left.*) or self.exprIsFloat(node.right.*),
+            .cast => |node| std.meta.activeTag(valueTypeFromTypeAlias(
+                node.ty.*,
+                self.enums,
+                self.structs,
+                self.packed_bits,
+                self.aliases,
+            )) == .float,
+            else => false,
+        };
     }
 
     fn binaryIsFloat(self: *FunctionBuilder, node: anytype) bool {

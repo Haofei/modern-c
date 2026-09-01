@@ -2233,6 +2233,8 @@ const Renderer = struct {
             try self.emitPlace(load.place, value_ty)
         else if (mir.executableAggregatePointerFieldDerefPlace(self.body, place, false) != null)
             try self.emitGuardedAggregatePointerFieldDerefPointer(expression, load.place)
+        else if (mir.executableParameterProjectedPlace(self.body, place, false))
+            try self.emitGuardedParameterFieldPointer(expression, load.place)
         else if (place.projection_count != 0)
             try self.emitGuardedParameterAccessPointer(expression, load.place)
         else
@@ -4235,6 +4237,7 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
         false,
     ) or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
         parameterScalarAccessPlaceSupported(body, place) or
+        mir.executableParameterProjectedPlace(body, place, false) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         mir.executableGuardedLocalScalarDerefPlace(body, place, false) or
         mir.executableGlobalPointerDerefPlace(body, place, false) or

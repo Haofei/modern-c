@@ -31,6 +31,48 @@ const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
 const SymbolId = mir.SymbolId;
 
+test "nested IEEE float arithmetic owns no integer-overflow edge" {
+    const source =
+        \\fn sum(values: [4]f32) -> f32 {
+        \\    return (values[0] + values[1]) + (values[2] + values[3]);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_nested_float_arithmetic.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "sum") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 4), function.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 4), function.executable_body.trap_edges.len);
+    for (function.trap_edges) |edge| try std.testing.expectEqual(mir.TrapKind.Bounds, edge.kind);
+    for (function.executable_body.trap_edges) |edge| try std.testing.expectEqual(mir.TrapKind.Bounds, edge.kind);
+    try mir_executable_body.verify(function);
+}
+
+test "guarded local pointer member access is canonical" {
+    const source =
+        \\struct Payload { value: u32 }
+        \\fn payload_value(block: PAddr) -> u32 {
+        \\    var p: *const Payload = uninit;
+        \\    unsafe { p = raw.ptr<Payload>(block); }
+        \\    return p.value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_guarded_local_pointer_member.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "payload_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 2), function.executable_body.trap_edges.len);
+    try mir_executable_body.verify(function);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+}
+
 test "executable MIR preserves union construction identity" {
     const source =
         \\overlay union Word {

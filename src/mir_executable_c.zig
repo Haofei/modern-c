@@ -2558,6 +2558,7 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
         false,
     ) or mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null or
         parameterScalarAccessPlaceSupported(body, place) or
+        mir.executableParameterProjectedPlace(body, place, false) or
         mir.executableLocalAddressDerefPlace(body, place, false) or
         mir.executableGuardedLocalScalarDerefPlace(body, place, false) or
         mir.executableGlobalPointerDerefPlace(body, place, false) or
@@ -2956,6 +2957,7 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
         .load => |load| blk: {
             const place = placeById(body, load.place) orelse return false;
             if (!(parameterScalarAccessPlaceSupported(body, place.*) or
+                mir.executableParameterProjectedPlace(body, place.*, false) or
                 mir.executableLocalAddressDerefPlace(body, place.*, false) or
                 mir.executableGuardedLocalScalarDerefPlace(body, place.*, false) or
                 mir.executableGuardedLocalAggregateDerefPlace(body, place.*, false) or

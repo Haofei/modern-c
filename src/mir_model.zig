@@ -1901,10 +1901,13 @@ pub fn executableParameterFieldPlace(
         ValueType.eql(shape.field_types[field_index], place.ty);
 }
 
-/// Recognize a field projection rooted at a single-pointer parameter, or at
-/// an immutable local initialized from that parameter.  The complete
-/// projection is represented by the canonical place (`p.*.outer.inner`), so
-/// consumers do not need to recover aggregate nesting from source syntax.
+/// Recognize a field projection rooted at a typed single-pointer local.  The
+/// local may be a parameter, an immutable alias of one, or an ordinary local
+/// pointer generation.  The operation's representation edge proves that the
+/// current pointer value is non-null; this predicate proves only the canonical
+/// local/type/projection shape.  The complete projection is represented by the
+/// place (`p.*.outer.inner`), so consumers never recover aggregate nesting from
+/// source syntax.
 pub fn executableParameterProjectedPlace(
     body: *const ExecutableBody,
     place: ExecutablePlace,
@@ -1917,7 +1920,18 @@ pub fn executableParameterProjectedPlace(
         .local => |id| id,
         .symbol, .value => return false,
     };
-    if (!executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id)) return false;
+    var typed_root = executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id);
+    if (!typed_root) {
+        if (!local.isValid() or local.index() >= body.locals.len or !body.locals[local.index()].id.eql(local)) return false;
+        for (body.statements) |statement| switch (statement.operation) {
+            .local_init => |init| if (init.local.eql(local)) {
+                typed_root = init.type_id.eql(place.root_type_id) and ValueType.eql(init.ty, place.root_ty);
+                break;
+            },
+            else => {},
+        };
+    }
+    if (!typed_root) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
         else => return false,

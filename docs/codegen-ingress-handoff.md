@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1475/1825 C functions and 1517/1879 LLVM functions.
-  The remaining 350 C and 362 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1481/1825 C functions and 1523/1879 LLVM functions.
+  The remaining 344 C and 356 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -82,13 +82,25 @@ Current leading blockers are `trap_projection`, `unsupported_statement`,
 aggregate construction, `try`, and unsupported calls. Renderer rejection is a
 smaller secondary group.
 
-The remaining `trap_projection` group is 46 bodies per backend. Representation
+The remaining `trap_projection` group is 42 bodies per backend. Representation
 edges are now resolved after canonical statement construction, which removes
 the earlier source-walk ordering dependency for local pointer stores. The
 resolver remains bijective and syntax-free: it accepts exactly one typed
 expression or statement owner, while dynamic-trait receiver calls and nullable
 dynamic values remain explicit structural blockers rather than being guessed
 from a span.
+
+Nested IEEE float arithmetic is no longer part of that group. Float
+classification now follows grouped, unary, binary, and cast expression
+structure, so legacy MIR no longer invents an `IntegerOverflow` edge for an
+expression such as `(a[0] + a[1]) + (a[2] + a[3])`.
+
+Field projection through a typed local pointer generation is canonical too.
+The producer distinguishes pointer-valued local storage from a direct aggregate
+place, attaches the exact representation edge to the projected pointee, and
+both renderers use that same place. Eleven entries leave the trap-projection
+group; four broad-corpus functions per backend become fully canonical, while
+the remainder expose their next structural blocker instead of guessing.
 
 Declared-struct slice element reads with scalar fields are no longer part of
 that renderer group. Canonical C and LLVM rebuild the value from unordered

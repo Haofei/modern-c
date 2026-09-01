@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1475/1825 admitted | 1517/1879 admitted |
-| AST fallback | 350 | 362 |
+| broad sweep | 1481/1825 admitted | 1523/1879 admitted |
+| AST fallback | 344 | 356 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -34,6 +34,19 @@ trait/nullable representations remain fail-closed. Local pointer generations
 such as `let q = p; q.* = value` now preserve their pointer shape and attach
 the store guard to the canonical place. This reduces `trap_projection` from 55
 to 46 per backend and retires four net fallbacks per backend.
+
+Recursive IEEE-float classification removes a spurious integer-overflow edge
+from nested float arithmetic. `f32x4_sum` is canonical in both renderers,
+reducing `trap_projection` from 46 to 45 and retiring two broad-corpus fallback
+instances per backend.
+
+Typed local pointer generations now retain their canonical pointee place when
+a field is projected through them. MIR owns the representation edge and both
+renderers consume the same projected place, including mutable pointer locals
+whose value lives in an addressable slot. This removes eleven entries from the
+`trap_projection` bucket, admits four additional broad-corpus functions per
+backend, and leaves 42 trap-projection bodies per backend; the other newly
+exposed bodies remain fail-closed on their next structural blocker.
 
 Typed scalar/enum switches now distinguish a source wildcard arm from trap
 successors created while evaluating the subject. Representation and bounds
