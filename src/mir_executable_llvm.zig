@@ -147,7 +147,8 @@ fn callAbiPlanValid(body: *const mir.ExecutableBody, plan: CallAbiPlan) bool {
 
 pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool {
     if (!body.isComplete() or body.terminators.len == 0 or
-        (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty)))
+        (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty) and
+            !(return_ty == .value and body.return_dyn_trait_symbol_id.isValid())))
         return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
@@ -226,7 +227,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         switch (statement.operation) {
             .local_init => |local| {
                 if (!local.local.isValid() or !(llvmTypeSupported(body, local.ty) or
-                    (local.ty == .value and callableLocalUsedAsIndirectCallee(body, local.local)))) return false;
+                    (local.ty == .value and (callableLocalUsedAsIndirectCallee(body, local.local) or
+                        dynLocal(body, local.local))))) return false;
                 if (local.value) |value| if (!expressionValid(body, value)) return false;
             },
             .store => |store| {
@@ -422,7 +424,10 @@ const Renderer = struct {
             .call_abi_plan = call_abi_plan,
             .options = options,
         };
-        result.return_ty = try result.callableStorageType(return_ty, if (call_abi_plan) |plan| plan.function_return_callable_signature else null);
+        result.return_ty = if (body.return_dyn_trait_symbol_id.isValid())
+            "{ ptr, ptr }"
+        else
+            try result.callableStorageType(return_ty, if (call_abi_plan) |plan| plan.function_return_callable_signature else null);
         return result;
     }
 
@@ -475,6 +480,7 @@ const Renderer = struct {
     }
 
     fn localStorageType(self: *Renderer, local: @FieldType(mir.ExecutableStatement.Operation, "local_init")) RenderError![]const u8 {
+        if (dynLocal(self.body, local.local)) return "{ ptr, ptr }";
         if (local.value) |initializer| if (expressionValid(self.body, initializer)) {
             const expression = self.body.expressions[initializer.index()];
             switch (expression.operation) {
@@ -885,6 +891,11 @@ const Renderer = struct {
         const ty = switch (expression.operation) {
             .local => |local_id| (self.locals.get(local_id.raw) orelse return error.InvalidBody).ty,
             .closure_bind => "{ ptr, ptr }",
+            .dyn_bind => "{ ptr, ptr }",
+            .direct_call => |call| if ((symbolIdentity(self.body, call.callee) orelse return error.InvalidBody).return_dyn_trait_symbol_id.isValid())
+                "{ ptr, ptr }"
+            else
+                try self.typeText(expression.result_ty),
             .load => blk: {
                 if (expression.result_ty == .value) {
                     if (callableHasEnvironment(self.body, expression.id)) |has_environment|
@@ -932,6 +943,7 @@ const Renderer = struct {
             .representation_check => |check| try self.emitRepresentationCheck(expression, check),
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
             .dyn_call => |call| try self.emitDynCall(expression, ty, call),
+            .dyn_bind => |bind| try self.emitDynBind(expression, bind),
             .deref => |operand| blk: {
                 const pointer = try self.emitExpression(operand);
                 if (!std.mem.eql(u8, pointer.ty, "ptr")) return error.InvalidBody;
@@ -966,6 +978,28 @@ const Renderer = struct {
         };
         self.values[id.index()] = result;
         return result;
+    }
+
+    fn emitDynBind(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        bind: @FieldType(mir.ExecutableExpression.Operation, "dyn_bind"),
+    ) RenderError!Value {
+        if (!dynBindSupported(self.body, expression)) return error.InvalidBody;
+        const source = try self.emitExpression(bind.source);
+        if (!std.mem.eql(u8, source.ty, "ptr")) return error.InvalidBody;
+        const trait = symbolIdentity(self.body, bind.trait_symbol) orelse return error.InvalidBody;
+        const concrete = symbolIdentity(self.body, bind.concrete_type_symbol) orelse return error.InvalidBody;
+        const with_data = try self.temp();
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = insertvalue {{ ptr, ptr }} zeroinitializer, ptr {s}, 0\n", .{ with_data, source.spelling });
+        try self.output.print(self.allocator, "  {s} = insertvalue {{ ptr, ptr }} {s}, ptr @__vt_{s}_{s}, 1\n", .{
+            result,
+            with_data,
+            concrete.spelling,
+            trait.spelling,
+        });
+        return .{ .ty = "{ ptr, ptr }", .spelling = result };
     }
 
     fn emitVariant(
@@ -1225,7 +1259,10 @@ const Renderer = struct {
         var current: []const u8 = "zeroinitializer";
         for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
             const operand = try self.emitExpression(operand_id);
-            const field_ty = try self.callableStorageType(shape.field_types[field_index], shape.field_callable_signatures[field_index]);
+            const field_ty = if (shape.field_dyn_trait_symbols[field_index].isValid())
+                "{ ptr, ptr }"
+            else
+                try self.callableStorageType(shape.field_types[field_index], shape.field_callable_signatures[field_index]);
             if (!std.mem.eql(u8, operand.ty, field_ty)) return error.InvalidBody;
             const result = try self.temp();
             try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
@@ -1984,9 +2021,15 @@ const Renderer = struct {
     }
 
     fn emitDirectCall(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, call: anytype) RenderError!Value {
-        const symbol = symbolSpelling(self.body, call.callee) orelse return error.InvalidBody;
+        const identity = symbolIdentity(self.body, call.callee) orelse return error.InvalidBody;
+        const symbol = identity.spelling;
         const abi = if (self.call_abi_plan) |plan| directCallAbiFor(plan.*, expression.id) orelse return error.InvalidBody else null;
-        const result_ty = if (abi) |entry| try self.callableStorageType(expression.result_ty, entry.result_callable_signature) else ty;
+        const result_ty = if (identity.return_dyn_trait_symbol_id.isValid())
+            ty
+        else if (abi) |entry|
+            try self.callableStorageType(expression.result_ty, entry.result_callable_signature)
+        else
+            ty;
         return self.emitCall(result_ty, try std.fmt.allocPrint(self.allocator, "@{s}", .{symbol}), call.arguments[0..call.argument_count], abi);
     }
 
@@ -2052,7 +2095,10 @@ const Renderer = struct {
             try self.output.print(self.allocator, "  {s} = load {{ ptr, ptr }}, ptr {s}\n", .{ loaded, local.storage });
             break :direct .{ .ty = "{ ptr, ptr }", .spelling = loaded };
         } else projected: {
-            const pointer = try self.emitGuardedParameterFieldPointer(expression, call.receiver);
+            const pointer = if (placeNeedsRepresentationGuard(self.body, place))
+                try self.emitGuardedParameterFieldPointer(expression, call.receiver)
+            else
+                try self.emitPlace(call.receiver, "{ ptr, ptr }");
             const loaded = try self.temp();
             try self.output.print(self.allocator, "  {s} = load {{ ptr, ptr }}, ptr {s}\n", .{ loaded, pointer });
             break :projected .{ .ty = "{ ptr, ptr }", .spelling = loaded };
@@ -3715,6 +3761,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
         .dyn_call => |call| dynCallSupported(body, expression, call),
+        .dyn_bind => dynBindSupported(body, expression),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfFixedArrayIndexSupported(body, expression, address) or
             addressOfSliceIndexSupported(body, expression, address) or
@@ -3749,6 +3796,23 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .range_slice => |range| rangeSliceSupported(body, expression, range),
         .unsupported => false,
     };
+}
+
+fn dynBindSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const bind = switch (expression.operation) {
+        .dyn_bind => |value| value,
+        else => return false,
+    };
+    if (expression.result_ty != .value or !expression.type_id.isValid() or !expressionValid(body, bind.source)) return false;
+    const source = body.expressions[bind.source.index()];
+    const pointer = switch (source.result_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    const trait = symbolIdentity(body, bind.trait_symbol) orelse return false;
+    const concrete = symbolIdentity(body, bind.concrete_type_symbol) orelse return false;
+    return pointer.kind == .single and trait.kind == .trait and concrete.kind == .type_ and
+        std.mem.eql(u8, pointer.child, concrete.spelling);
 }
 
 fn variantOperationSupported(
@@ -4019,6 +4083,12 @@ fn dynTraitParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
     for (body.parameters) |parameter| if (parameter.local.eql(local))
         return parameter.ty == .value and parameter.dyn_trait_symbol_id.isValid();
     return false;
+}
+
+fn dynLocal(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    if (!local.isValid() or local.index() >= body.locals.len) return false;
+    const identity = body.locals[local.index()];
+    return identity.id.eql(local) and identity.dyn_trait_symbol_id.isValid();
 }
 
 fn callableParameterSignature(body: *const mir.ExecutableBody, local: mir.LocalId) ?mir.ExecutableCallSignature {

@@ -108,6 +108,11 @@ pub fn verify(function: *const mir.Function) !void {
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
     try verifyType(function, body.return_type_id, function.return_ty, body.complete);
+    if (body.return_dyn_trait_symbol_id.isValid()) {
+        if (function.return_ty != .value or function.return_callable_signature != null) return error.InvalidFunctionSignature;
+        const trait = symbol(body, body.return_dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
+        if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
+    }
     if (function.return_callable_signature) |signature| {
         if (function.return_ty != .value) return error.InvalidFunctionSignature;
         try verifyCallableSignature(function, signature, body.complete);
@@ -123,12 +128,21 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
+        if (identity.dyn_trait_symbol_id.isValid()) {
+            const trait = symbol(body, identity.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
+            if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
+        }
     }
     for (body.symbols, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidSymbolIdentity;
         if (identity.callable_signature) |signature| {
             if (identity.kind != .function) return error.InvalidSymbolIdentity;
             try verifyCallableSignature(function, signature, body.complete);
+        }
+        if (identity.return_dyn_trait_symbol_id.isValid()) {
+            if (identity.kind != .function or identity.callable_signature != null) return error.InvalidSymbolIdentity;
+            const trait = symbol(body, identity.return_dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
+            if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
         }
     }
     for (body.parameters) |parameter| {
@@ -540,6 +554,22 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 {
                     return error.InvalidMemoryAccessTrap;
                 }
+            }
+        },
+        .dyn_bind => |bind| {
+            try verifyOperand(body, value, bind.source);
+            const source = expression(body, bind.source) orelse return error.InvalidExpressionReference;
+            const trait = symbol(body, bind.trait_symbol) orelse return error.InvalidSymbolReference;
+            const concrete = symbol(body, bind.concrete_type_symbol) orelse return error.InvalidSymbolReference;
+            if (body.complete) {
+                const pointer = switch (source.result_ty) {
+                    .pointer => |shape| shape,
+                    else => return error.InvalidPlaceType,
+                };
+                if (value.result_ty != .value or trait.kind != .trait or concrete.kind != .type_ or
+                    pointer.kind != .single or !std.mem.eql(u8, pointer.child, concrete.spelling) or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                    return error.InvalidPlaceType;
             }
         },
         .address_of => |address| {

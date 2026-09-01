@@ -78,7 +78,7 @@ pub fn emitBodyWithOptions(
                     else => return error.InvalidExpression,
                 };
                 try appendCType(allocator, out, body, place.ty);
-                try out.appendSlice(allocator, if (pointer.mutability == .mut) " *" else " const *");
+                try out.appendSlice(allocator, if (pointer.mutability == .@"const") " const *" else " *");
             },
             else => try appendCType(allocator, out, body, expression.result_ty),
         }
@@ -861,6 +861,13 @@ fn emitExpressionOperation(
             }
             try out.appendSlice(allocator, "); })");
         },
+        .dyn_bind => |bind| {
+            const trait = symbolById(body, bind.trait_symbol) orelse return error.InvalidExpression;
+            const concrete = symbolById(body, bind.concrete_type_symbol) orelse return error.InvalidExpression;
+            try out.print(allocator, "((mc_dyn_{s}){{ .data = (void *)", .{trait.spelling});
+            try emitExpression(allocator, out, body, bind.source, depth + 1);
+            try out.print(allocator, ", .vtable = &__vt_{s}_{s} }})", .{ concrete.spelling, trait.spelling });
+        },
         .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression, call, depth),
         .representation_check => |check| try emitExpression(allocator, out, body, check.operand, depth + 1),
         .address_of => |address| try emitPlaceAddress(allocator, out, body, address.place),
@@ -1125,7 +1132,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                     const expression = expressionById(body, value) orelse return false;
                     if (!sameValueType(local.ty, expression.result_ty)) return false;
                     if (!(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
-                        opaqueValueExpressionSupported(body, expression.*))) return false;
+                        dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*))) return false;
                 } else if (isSliceType(local.ty) or local.ty == .value) return false;
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
@@ -1293,7 +1300,7 @@ fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.Execu
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (functionSymbolExpressionSupported(body, expression)) return true;
     if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression) or
-        opaqueValueExpressionSupported(body, expression);
+        dynBindSupported(body, expression) or opaqueValueExpressionSupported(body, expression);
     if (!supportsType(body, expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
@@ -1328,6 +1335,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .closure_bind => |bind| closureBindSupported(body, expression, bind),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
         .dyn_call => |call| dynCallSupported(body, expression, call),
+        .dyn_bind => |bind| dynBindSupported(body, expression) and expressionById(body, bind.source) != null,
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call => |call| builtinCallSupported(body, expression, call),
         .address_of => |address| addressOfSupported(body, expression, address),
@@ -1349,14 +1357,36 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
     };
 }
 
+fn dynBindSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    const bind = switch (expression.operation) {
+        .dyn_bind => |value| value,
+        else => return false,
+    };
+    if (expression.result_ty != .value or !expression.type_id.isValid()) return false;
+    const source = expressionById(body, bind.source) orelse return false;
+    const pointer = switch (source.result_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    const trait = symbolById(body, bind.trait_symbol) orelse return false;
+    const concrete = symbolById(body, bind.concrete_type_symbol) orelse return false;
+    return pointer.kind == .single and trait.kind == .trait and concrete.kind == .type_ and
+        std.mem.eql(u8, pointer.child, concrete.spelling);
+}
+
 fn opaqueValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (expression.result_ty != .value or !expression.type_id.isValid()) return false;
     return switch (expression.operation) {
-        .local => |local| localById(body, local) != null,
+        .local => |local| localById(body, local) != null and (dynLocal(body, local) or dynTraitParameter(body, local)),
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         else => false,
     };
+}
+
+fn dynLocal(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    const identity = localById(body, local) orelse return false;
+    return identity.dyn_trait_symbol_id.isValid();
 }
 
 fn variantOperationSupported(
@@ -1998,7 +2028,8 @@ fn structConstructionSupported(
         const operand = expressionById(body, operand_id) orelse return false;
         if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
             !operand.type_id.eql(shape.field_type_ids[field_index]) or
-            !(supportsType(body, operand.result_ty) or functionSymbolExpressionSupported(body, operand.*))) return false;
+            !(supportsType(body, operand.result_ty) or functionSymbolExpressionSupported(body, operand.*) or
+                (shape.field_dyn_trait_symbols[field_index].isValid() and dynBindSupported(body, operand.*)))) return false;
     }
     for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;
@@ -4169,7 +4200,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             if (shape.kind == .slice) return error.UnsupportedType;
             const child = if (std.mem.eql(u8, shape.child, "c_void")) "void" else primitiveType(shape.child) orelse shape.child;
             try out.appendSlice(allocator, child);
-            try out.appendSlice(allocator, if (shape.mutability == .mut) " *" else " const *");
+            try out.appendSlice(allocator, if (shape.mutability == .@"const") " const *" else " *");
         },
         .address => |class| try out.appendSlice(allocator, if (class == .mmio_ptr) "void volatile *" else "uintptr_t"),
         .array => {
@@ -4476,6 +4507,27 @@ fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
     return spelling.len == prefix.len + child.len + 1 and
         std.mem.startsWith(u8, spelling, prefix) and spelling[spelling.len - 1] == '>' and
         std.mem.eql(u8, spelling[prefix.len .. spelling.len - 1], child);
+}
+
+test "executable C renderer preserves explicit pointer constness" {
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    const body: mir.ExecutableBody = .{};
+
+    try appendCType(std.testing.allocator, &output, &body, .{ .pointer = .{
+        .kind = .single,
+        .mutability = .none,
+        .child = "Square",
+    } });
+    try std.testing.expectEqualStrings("Square *", output.items);
+
+    output.clearRetainingCapacity();
+    try appendCType(std.testing.allocator, &output, &body, .{ .pointer = .{
+        .kind = .single,
+        .mutability = .@"const",
+        .child = "Square",
+    } });
+    try std.testing.expectEqualStrings("Square const *", output.items);
 }
 
 test "executable C renderer emits typed CFG labels and branches" {

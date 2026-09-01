@@ -1139,6 +1139,14 @@ pub const ExecutableExpression = struct {
             representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
+        /// Construct a checked dynamic-trait fat value from a concrete
+        /// pointer. The frontend has already selected the exact conformance;
+        /// codegen only combines the data pointer with its vtable symbol.
+        dyn_bind: struct {
+            source: ExprId,
+            trait_symbol: SymbolId,
+            concrete_type_symbol: SymbolId,
+        },
         address_of: struct {
             place: PlaceId,
             representation_source: ?SourcePoint = null,
@@ -1547,7 +1555,12 @@ pub const ExecutableParameter = struct {
     span_id: SpanId = .invalid,
 };
 
-pub const ExecutableLocalIdentity = struct { id: LocalId, spelling: []const u8 };
+pub const ExecutableLocalIdentity = struct {
+    id: LocalId,
+    spelling: []const u8,
+    /// Exact dynamic-trait identity for an opaque local fat value.
+    dyn_trait_symbol_id: SymbolId = .invalid,
+};
 
 pub const ExecutableAggregateType = struct {
     type_id: TypeId,
@@ -1652,6 +1665,41 @@ pub fn executableDynTraitPlace(body: *const ExecutableBody, place: ExecutablePla
         for (body.parameters) |parameter| if (parameter.local.eql(local) and
             parameter.type_id.eql(place.type_id) and ValueType.eql(parameter.ty, place.ty) and
             parameter.dyn_trait_symbol_id.isValid()) return parameter.dyn_trait_symbol_id;
+        for (body.locals) |identity| if (identity.id.eql(local) and identity.dyn_trait_symbol_id.isValid())
+            return identity.dyn_trait_symbol_id;
+        return null;
+    }
+    // A local aggregate carries the exact trait identity on its canonical
+    // field layout. Resolve field projections directly instead of requiring
+    // the root to be a pointer parameter.
+    if (place.root_ty == .struct_) {
+        var current: ?ExecutableAggregateType = null;
+        for (body.aggregate_types) |candidate| if (candidate.type_id.eql(place.root_type_id) and
+            ValueType.eql(candidate.ty, place.root_ty))
+        {
+            current = candidate;
+            break;
+        };
+        var aggregate = current orelse return null;
+        for (place.projections[0..place.projection_count], 0..) |projection, ordinal| {
+            const field_index = switch (projection) {
+                .field => |index| index,
+                .deref, .index => return null,
+            };
+            if (field_index >= aggregate.field_count) return null;
+            if (ordinal + 1 == place.projection_count)
+                return if (aggregate.field_dyn_trait_symbols[field_index].isValid())
+                    aggregate.field_dyn_trait_symbols[field_index]
+                else
+                    null;
+            const next_id = aggregate.field_type_ids[field_index];
+            var next: ?ExecutableAggregateType = null;
+            for (body.aggregate_types) |candidate| if (candidate.type_id.eql(next_id)) {
+                next = candidate;
+                break;
+            };
+            aggregate = next orelse return null;
+        }
         return null;
     }
     if (!executableParameterProjectedPlace(body, place, false)) return null;
@@ -1814,6 +1862,8 @@ pub const ExecutableBody = struct {
     complete: bool = true,
     incomplete_reason: ExecutableIncompleteReason = .none,
     return_type_id: TypeId = .invalid,
+    /// Exact dynamic-trait identity for an opaque two-pointer return value.
+    return_dyn_trait_symbol_id: SymbolId = .invalid,
     parameters: []ExecutableParameter = &.{},
     locals: []ExecutableLocalIdentity = &.{},
     symbols: []SymbolIdentity = &.{},
@@ -3271,11 +3321,13 @@ pub const TypeIdentity = struct {
 pub const SymbolIdentity = struct {
     id: SymbolId,
     spelling: []const u8,
-    kind: enum { unknown, function, global, trait } = .unknown,
+    kind: enum { unknown, function, global, trait, type_ } = .unknown,
     mutable: bool = false,
     /// Exact function-value shape when this symbol is used as a first-class
     /// callable rather than only as a direct-call target.
     callable_signature: ?ExecutableCallSignature = null,
+    /// Exact dynamic-trait representation returned by a function symbol.
+    return_dyn_trait_symbol_id: SymbolId = .invalid,
     /// Payload identity for global `atomic<T>` storage.
     atomic_payload_type_id: TypeId = .invalid,
 };

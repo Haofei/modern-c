@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 168/168 canonical | 168/168 canonical |
-| broad sweep | 1561/1818 admitted | 1605/1872 admitted |
-| AST fallback | 257 | 267 |
+| broad sweep | 1578/1818 admitted | 1627/1872 admitted |
+| AST fallback | 240 | 245 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -179,6 +179,14 @@ remaining `Join2__poll` fallback is a genuine short-circuit CFG requirement,
 not a missing dynamic-dispatch recognizer. Broad incomplete-reason telemetry
 now reports verifier errors after projection instead of stopping at a coarse
 legacy/executable trap-count mismatch.
+
+Dynamic-trait coercion itself is now syntax-free as well. `dyn_bind` records
+the concrete pointer operand and exact trait/concrete symbol pair; return and
+local identities retain the selected trait across direct calls and aggregate
+fields. C constructs `mc_dyn_Trait` and LLVM constructs `{ ptr, ptr }` from
+that same verified operation. The focused return/field/call-position fixture
+is 5/5 canonical in both backends, and the broad sweep retires 17 C and 22 LLVM
+fallbacks without adding a source-shape recognizer.
 
 Byte-view construction and equality are canonical executable operations in
 both renderers. Their source object size comes from the addressed canonical

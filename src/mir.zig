@@ -6151,6 +6151,7 @@ const FunctionBuilder = struct {
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
     aggregate_return_pointer_facts: []const AggregateReturnPointerFact,
     return_callable_signature: ?mir_model.ExecutableCallSignature = null,
+    return_dyn_trait_symbol_id: SymbolId = .invalid,
     blocks: std.ArrayList(MutableBlock),
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
@@ -6362,6 +6363,8 @@ const FunctionBuilder = struct {
             if (!try builder.internExecutableTypeExpr(builder.return_ty, return_type))
                 builder.executable_supported = false;
             builder.return_callable_signature = try builder.executableCallableSignature(return_type);
+            if (dynTraitNameFromTypeAlias(return_type, aliases)) |trait_name|
+                builder.return_dyn_trait_symbol_id = try builder.internExecutableTraitSymbol(trait_name);
         }
         for (fn_decl.params) |param| {
             const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
@@ -7064,6 +7067,7 @@ const FunctionBuilder = struct {
             .complete = complete,
             .incomplete_reason = self.executable_incomplete_reason,
             .return_type_id = self.type_ids.get(self.return_ty) orelse .invalid,
+            .return_dyn_trait_symbol_id = self.return_dyn_trait_symbol_id,
             .parameters = parameters,
             .locals = locals,
             .symbols = symbols,
@@ -8660,17 +8664,26 @@ const FunctionBuilder = struct {
 
     fn internExecutableFunctionSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
         const id = try self.internExecutableSymbol(spelling);
-        const identity = &self.executable_symbols.items[id.index()];
-        if (identity.kind != .unknown and identity.kind != .function) self.executable_supported = false;
-        identity.kind = .function;
+        if (self.executable_symbols.items[id.index()].kind != .unknown and
+            self.executable_symbols.items[id.index()].kind != .function) self.executable_supported = false;
+        self.executable_symbols.items[id.index()].kind = .function;
         if (self.summaries.get(spelling)) |summary| {
             if (try self.executableFunctionSummarySignature(summary)) |signature| {
+                const identity = &self.executable_symbols.items[id.index()];
                 if (identity.callable_signature) |existing| {
                     if (!existing.eql(signature)) self.executable_supported = false;
                 } else {
                     identity.callable_signature = signature;
                 }
             }
+            if (summary.return_type_expr) |return_type| if (dynTraitNameFromTypeAlias(return_type, self.aliases)) |trait_name| {
+                const trait_symbol = try self.internExecutableTraitSymbol(trait_name);
+                const identity = &self.executable_symbols.items[id.index()];
+                if (identity.return_dyn_trait_symbol_id.isValid() and !identity.return_dyn_trait_symbol_id.eql(trait_symbol))
+                    self.executable_supported = false
+                else
+                    identity.return_dyn_trait_symbol_id = trait_symbol;
+            };
         }
         return id;
     }
@@ -8739,6 +8752,14 @@ const FunctionBuilder = struct {
         return id;
     }
 
+    fn internExecutableTypeSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
+        const id = try self.internExecutableSymbol(spelling);
+        const identity = &self.executable_symbols.items[id.index()];
+        if (identity.kind != .unknown and identity.kind != .type_) self.executable_supported = false;
+        identity.kind = .type_;
+        return id;
+    }
+
     fn ensureExecutableExpr(self: *FunctionBuilder, input: ast.Expr) anyerror!ExprId {
         return self.ensureExecutableExprAs(input, null);
     }
@@ -8750,6 +8771,57 @@ const FunctionBuilder = struct {
         expected_type_expr: ?ast.TypeExpr,
     ) anyerror!ExprId {
         return self.ensureExecutableExprAsInner(input, expected_ty, expected_type_expr);
+    }
+
+    fn ensureExecutableDynBind(
+        self: *FunctionBuilder,
+        input: ast.Expr,
+        expected_type_expr: ?ast.TypeExpr,
+    ) anyerror!?ExprId {
+        const target_type = expected_type_expr orelse return null;
+        const trait_name = dynTraitNameFromTypeAlias(target_type, self.aliases) orelse return null;
+        if (!self.exprNeedsDynCoercion(input)) return null;
+
+        const source_type = self.dynCoercionSourceTypeExpr(input) orelse return null;
+        const resolved_source = aggregateTargetTypeAlias(source_type, self.aliases);
+        const concrete_type = switch (input.kind) {
+            .address_of => source_type,
+            else => switch (resolved_source.kind) {
+                .pointer => |pointer| pointer.child.*,
+                else => return null,
+            },
+        };
+        const concrete_ty = valueTypeFromTypeAlias(concrete_type, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (concrete_ty == .unknown or concrete_ty == .value) return null;
+
+        const pointer_type = switch (input.kind) {
+            .address_of => (try self.expressionResultTypeExpr(input)) orelse return null,
+            else => source_type,
+        };
+        const pointer_ty = valueTypeFromTypeAlias(pointer_type, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (pointer_ty != .pointer) return null;
+        const source = try self.ensureExecutableExprAsType(input, pointer_ty, pointer_type);
+        const source_point = self.sourcePoint(input.span);
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        const owner_statement = if (self.assignment_target_expr_depth != null and self.executable_statements.items.len != 0)
+            InstId.fromIndex(self.executable_statements.items.len - 1)
+        else
+            InstId.fromIndex(self.executable_statements.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = owner_statement,
+            .source = source_point,
+            .span_id = try self.internSpanId(source_point),
+            .result_ty = .value,
+            .type_id = try self.internTypeId(.value),
+            .operation = .{ .dyn_bind = .{
+                .source = source,
+                .trait_symbol = try self.internExecutableTraitSymbol(trait_name),
+                .concrete_type_symbol = try self.internExecutableTypeSymbol(concrete_ty.name()),
+            } },
+        });
+        return id;
     }
 
     fn ensureExecutableCoercedExpr(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType) anyerror!ExprId {
@@ -8925,6 +8997,7 @@ const FunctionBuilder = struct {
             .move_expr => |inner| inner.*,
             else => unreachable,
         };
+        if (try self.ensureExecutableDynBind(expr, expected_type_expr)) |id| return id;
         const source = self.sourcePoint(expr.span);
         var result_ty = self.exprType(expr);
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
@@ -11489,6 +11562,10 @@ const FunctionBuilder = struct {
                         else => {},
                     }
                     const executable_local = try self.internExecutableLocal(name.text);
+                    if (executable_ty_expr) |declared_ty| if (dynTraitNameFromTypeAlias(declared_ty, self.aliases)) |trait_name| {
+                        self.executable_locals.items[executable_local.index()].dyn_trait_symbol_id =
+                            try self.internExecutableTraitSymbol(trait_name);
+                    };
                     // `uninit` is a storage-initialization policy, not a value
                     // expression.  Canonical MIR represents it by omitting the
                     // local initializer; a later assignment creates the first

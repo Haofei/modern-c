@@ -188,6 +188,58 @@ test "dynamic dispatch and field stores require exact trait identity" {
     try mir_executable_body.verify(invoke);
 }
 
+test "dynamic trait binding carries exact conformance identity" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
+        \\fn dispatch(shape: *dyn Shape) -> u32 { return shape.area(); }
+        \\fn bind() -> u32 {
+        \\    var square: Square = .{ .side = 5 };
+        \\    let shape: *dyn Shape = &square;
+        \\    return dispatch(shape);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_dynamic_trait_binding.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "bind") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.complete);
+    try mir_executable_body.verify(function);
+    try std.testing.expect(mir_executable_c.canEmitBody(&function.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&function.executable_body, function.return_ty));
+
+    var binding: ?*@FieldType(mir.ExecutableExpression.Operation, "dyn_bind") = null;
+    for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .dyn_bind => |*bind_value| binding = bind_value,
+        else => {},
+    };
+    const bind_value = binding orelse return error.TestUnexpectedResult;
+    const trait_symbol = bind_value.trait_symbol;
+    const concrete_symbol = bind_value.concrete_type_symbol;
+
+    bind_value.trait_symbol = concrete_symbol;
+    try std.testing.expectError(error.InvalidPlaceType, mir_executable_body.verify(function));
+    bind_value.trait_symbol = trait_symbol;
+    bind_value.concrete_type_symbol = trait_symbol;
+    try std.testing.expectError(error.InvalidPlaceType, mir_executable_body.verify(function));
+    bind_value.concrete_type_symbol = concrete_symbol;
+    try mir_executable_body.verify(function);
+
+    var local_trait: ?*mir.ExecutableLocalIdentity = null;
+    for (function.executable_body.locals) |*identity| if (identity.dyn_trait_symbol_id.isValid()) {
+        local_trait = identity;
+        break;
+    };
+    const identity = local_trait orelse return error.TestUnexpectedResult;
+    identity.dyn_trait_symbol_id = concrete_symbol;
+    try std.testing.expectError(error.InvalidCalleeSymbol, mir_executable_body.verify(function));
+    identity.dyn_trait_symbol_id = trait_symbol;
+    try mir_executable_body.verify(function);
+}
+
 test "executable MIR preserves union construction identity" {
     const source =
         \\overlay union Word {
