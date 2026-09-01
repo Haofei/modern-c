@@ -7,9 +7,9 @@ emitted from verified executable MIR.
 
 | corpus | C | LLVM |
 | --- | ---: | ---: |
-| strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1545/1825 admitted | 1587/1879 admitted |
-| AST fallback | 280 | 292 |
+| strict ratchet | 168/168 canonical | 168/168 canonical |
+| broad sweep | 1546/1825 admitted | 1588/1879 admitted |
+| AST fallback | 279 | 291 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -119,6 +119,12 @@ Direct local `u128`/`i128` storage also has its actual 16-byte alignment; the C
 renderer still rejects shared 128-bit scalar access because the qualified
 runtime intentionally provides no such race helper. These two identity/layout
 fixes retire one fallback per backend each.
+
+Nested fixed-array indexing now traces a projection chain to either a local
+array or a by-value parameter array. The two renderers consume the same typed
+array shapes and checked bounds edges; `aggregate_ordering.mc` is 8/8
+canonical, is covered by the strict ratchet, and retires one broad fallback per
+backend.
 
 ## Ranked next slices
 

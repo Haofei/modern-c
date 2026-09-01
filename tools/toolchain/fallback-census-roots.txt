@@ -1,6 +1,7 @@
 # Deterministic --check corpus for fallback-census.sh.
 # Keep this list to roots that compile under both emit-c and emit-llvm; broad
 # exploratory reports can still pass explicit roots or run report mode.
+tests/c_emit/aggregate_ordering.mc
 tests/llvm/aggregate_abi.mc
 tests/llvm/aggregate_assignments.mc
 tests/llvm/aggregate_globals.mc

@@ -2943,6 +2943,23 @@ test "lower-c canonical executable MIR emits nested by-value struct member reads
     try expectContains(body, ").value;");
 }
 
+test "lower-c canonical executable MIR emits nested parameter array indexes" {
+    const source =
+        \\fn read(matrix: [2][3]u32) -> u32 {
+        \\    return matrix[0][0];
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_parameter_array_index.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t read(");
+    try expectContains(body, "/* canonical executable MIR */");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, ".elems[mc_check_index_usize("));
+    try expectContains(body, ", 2)]");
+    try expectContains(body, ", 3)]");
+}
+
 test "C canonical executable MIR keeps ordinary len fields distinct from slice length" {
     const source =
         \\struct WithLen { items: [8]u32, len: u32 }

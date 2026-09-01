@@ -4,11 +4,11 @@ Measured 2026-09-01 on `master`.
 
 ## Current state
 
-- The strict corpus is 160/160 canonical for both C and LLVM.
+- The strict corpus is 168/168 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1545/1825 C functions and 1587/1879 LLVM functions.
-  The remaining 280 C and 292 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1546/1825 C functions and 1588/1879 LLVM functions.
+  The remaining 279 C and 291 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
 backend fallback branches.
@@ -96,10 +96,16 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
   bash tools/toolchain/fallback-census.sh
 ```
 
-Current leading blockers are `trap_projection`, `try`, `unsupported_member`,
+Current leading blockers are `trap_projection`, `unsupported_member`,
 signature/place invariants, `general_switch`, string and aggregate
 construction, and unsupported calls. Renderer rejection is a smaller
 secondary group.
+
+Nested fixed-array indexes rooted in a by-value parameter are canonical in
+both renderers. Projection-root admission now follows the verified index chain
+back to either a local array generation or a parameter array generation. The
+`aggregate_ordering.mc` workload is 8/8 canonical in both backends and is part
+of the strict ratchet; one broad fallback per backend was retired.
 
 Opaque and precise inline assembly are syntax-free executable statements now.
 MIR owns decoded template/clobber bytes, precise input `ExprId`s, output

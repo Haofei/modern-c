@@ -1837,7 +1837,7 @@ fn projectionRootIsLocalArray(body: *const mir.ExecutableBody, start: mir.ExprId
     var current = start;
     var depth: usize = 0;
     while (depth <= mir.max_executable_projections) : (depth += 1) {
-        if (localArrayIndexBase(body, current)) return true;
+        if (localArrayIndexBase(body, current) or parameterArrayIndexBase(body, current)) return true;
         const expression = expressionById(body, current) orelse return false;
         current = switch (expression.operation) {
             .index => |index| if (index.kind == .fixed_array) index.base else return false,

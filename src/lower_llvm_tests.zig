@@ -3284,6 +3284,24 @@ test "LLVM canonical executable MIR emits nested by-value struct member reads" {
     try expectContains(body, "extractvalue { i32 }");
 }
 
+test "LLVM canonical executable MIR emits nested parameter array indexes" {
+    const source =
+        \\fn read(matrix: [2][3]u32) -> u32 {
+        \\    return matrix[0][0];
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_parameter_array_index.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @read");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "getelementptr [2 x [3 x i32]]");
+    try expectContains(body, "load [3 x i32]");
+    try expectContains(body, "getelementptr [3 x i32]");
+    try expectContains(body, "load i32");
+}
+
 test "LLVM canonical executable MIR emits guarded pointer member reads" {
     const source =
         \\struct State { winner: i32, ready: bool, count: usize }
