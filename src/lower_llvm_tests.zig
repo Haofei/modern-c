@@ -10768,12 +10768,15 @@ test "LLVM inferred local dyn dispatch calls require MIR types" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
         \\struct Square { side: u32 }
+        \\struct Holder { shape: *mut dyn Shape }
         \\impl Shape for Square { fn scale(self: *Square, amount: u32) -> u32 { return self.side * amount; } fn set(self: *mut Square, value: u32) -> void { self.side = value; } }
         \\fn caller(shape: *dyn Shape, amount: u32) -> u32 {
         \\    let result = shape.scale(amount);
         \\    return result;
         \\}
         \\fn notify(shape: *mut dyn Shape, value: u32) -> void { shape.set(value); }
+        \\fn holder_init(holder: *mut Holder, shape: *mut dyn Shape) -> void { holder.shape = shape; }
+        \\fn holder_scale(holder: *mut Holder, amount: u32) -> u32 { return holder.shape.scale(amount); }
     ;
     var parsed = try test_support.parseCheckedModule("llvm_inferred_local_dyn_dispatch_call_types.mc", source);
     defer parsed.deinit();
@@ -10783,7 +10786,19 @@ test "LLVM inferred local dyn dispatch calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%result") != null);
+    const caller_body = try llvmFunctionBody(complete_output.items, "define internal i32 @caller");
+    try expectContains(caller_body, "; canonical executable MIR");
+    try expectContains(caller_body, "getelementptr ptr, ptr");
+    try expectContains(caller_body, "call i32 %");
+    const notify_body = try llvmFunctionBody(complete_output.items, "define internal void @notify");
+    try expectContains(notify_body, "; canonical executable MIR");
+    try expectContains(notify_body, "call void %");
+    const holder_init_body = try llvmFunctionBody(complete_output.items, "define internal void @holder_init");
+    try expectContains(holder_init_body, "; canonical executable MIR");
+    try expectContains(holder_init_body, "store atomic ptr");
+    const holder_scale_body = try llvmFunctionBody(complete_output.items, "define internal i32 @holder_scale");
+    try expectContains(holder_scale_body, "; canonical executable MIR");
+    try expectContains(holder_scale_body, "getelementptr ptr, ptr");
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

@@ -131,6 +131,63 @@ test "callable field stores require an exact symbol signature" {
     try std.testing.expectError(error.InvalidFunctionSignature, mir_executable_body.verify(function));
 }
 
+test "dynamic dispatch and field stores require exact trait identity" {
+    const source =
+        \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; }
+        \\trait Other { fn ping(self: *Self) -> void; }
+        \\struct Holder { shape: *mut dyn Shape }
+        \\fn init(holder: *mut Holder, shape: *mut dyn Shape, other: *mut dyn Other) -> void {
+        \\    holder.shape = shape;
+        \\}
+        \\fn invoke(holder: *mut Holder, amount: u32) -> u32 {
+        \\    return holder.shape.scale(amount);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_dynamic_trait_identity.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const init = functionByNameMut(&module_mir, "init") orelse return error.TestUnexpectedResult;
+    const invoke = functionByNameMut(&module_mir, "invoke") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(init.executable_body.complete);
+    try std.testing.expect(invoke.executable_body.complete);
+    try mir_executable_body.verify(init);
+    try mir_executable_body.verify(invoke);
+    try std.testing.expect(mir_executable_c.canEmitBody(&init.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&init.executable_body, init.return_ty));
+    try std.testing.expect(mir_executable_c.canEmitBody(&invoke.executable_body));
+    try std.testing.expect(mir_executable_llvm.supports(&invoke.executable_body, invoke.return_ty));
+
+    var shape_parameter: ?*mir.ExecutableParameter = null;
+    var other_trait = mir.SymbolId.invalid;
+    for (init.executable_body.parameters) |*parameter| {
+        if (!parameter.dyn_trait_symbol_id.isValid()) continue;
+        const trait = init.executable_body.symbols[parameter.dyn_trait_symbol_id.index()];
+        if (std.mem.eql(u8, trait.spelling, "Shape")) shape_parameter = parameter;
+        if (std.mem.eql(u8, trait.spelling, "Other")) other_trait = parameter.dyn_trait_symbol_id;
+    }
+    const parameter = shape_parameter orelse return error.TestUnexpectedResult;
+    const shape_trait = parameter.dyn_trait_symbol_id;
+    try std.testing.expect(other_trait.isValid());
+    parameter.dyn_trait_symbol_id = other_trait;
+    try std.testing.expectError(error.InvalidFunctionSignature, mir_executable_body.verify(init));
+    parameter.dyn_trait_symbol_id = shape_trait;
+    try mir_executable_body.verify(init);
+
+    var dyn_call: ?*@FieldType(mir.ExecutableExpression.Operation, "dyn_call") = null;
+    for (invoke.executable_body.expressions) |*expression| switch (expression.operation) {
+        .dyn_call => |*call| dyn_call = call,
+        else => {},
+    };
+    const call = dyn_call orelse return error.TestUnexpectedResult;
+    const method_index = call.method_index;
+    call.method_index = mir_model.max_executable_operands;
+    try std.testing.expectError(error.InvalidFunctionSignature, mir_executable_body.verify(invoke));
+    call.method_index = method_index;
+    try mir_executable_body.verify(invoke);
+}
+
 test "executable MIR preserves union construction identity" {
     const source =
         \\overlay union Word {

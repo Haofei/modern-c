@@ -151,7 +151,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
-            (parameter.ty == .value and callableParameter(body, parameter.local))))
+            (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))))
             return false;
     }
     for (body.expressions) |expression| {
@@ -186,6 +186,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                         } else if (!representationTrapEdgeIsExact(body, owner)) return false;
                     },
                     .atomic_load, .atomic_update, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
+                    .dyn_call => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     .try_unwrap => if (!tryUnwrapTrapEdgeIsExact(body, owner)) return false,
                     .mmio_map_checked => if (!mmioMapTrapEdgeIsExact(body, owner)) return false,
                     .index => |operation| if (!operation.checked or !indexTrapEdgeIsExact(body, owner)) return false,
@@ -458,9 +459,9 @@ const Renderer = struct {
         }
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.allocator, "{ ");
-        for (aggregate.field_types[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count], 0..) |field_ty, callable, dyn_trait, index| {
+        for (aggregate.field_types[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count], 0..) |field_ty, callable, dyn_trait_symbol, index| {
             if (index != 0) try text.appendSlice(self.allocator, ", ");
-            try text.appendSlice(self.allocator, if (dyn_trait or (callable != null and callable.?.has_environment)) "{ ptr, ptr }" else try self.typeTextDepth(field_ty, depth + 1));
+            try text.appendSlice(self.allocator, if (dyn_trait_symbol.isValid() or (callable != null and callable.?.has_environment)) "{ ptr, ptr }" else try self.typeTextDepth(field_ty, depth + 1));
         }
         try text.appendSlice(self.allocator, " }");
         return text.toOwnedSlice(self.allocator);
@@ -493,6 +494,8 @@ const Renderer = struct {
         for (self.body.parameters) |parameter| {
             const ty = if (parameter.callable_signature) |signature|
                 if (signature.has_environment) "{ ptr, ptr }" else try self.typeText(parameter.ty)
+            else if (parameter.dyn_trait_symbol_id.isValid())
+                "{ ptr, ptr }"
             else
                 try self.typeText(parameter.ty);
             try self.locals.put(parameter.local.raw, .{ .ty = ty, .storage = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw}), .addressable = false });
@@ -550,6 +553,8 @@ const Renderer = struct {
             },
             .store => |store| {
                 const place = self.body.places[store.place.index()];
+                const stored_expression = self.body.expressions[store.value.index()];
+                const dyn_store = dynStoreTargetSupported(self.body, place, stored_expression);
                 const indexed_pointer = if (mir.executableSliceIndexPlace(self.body, place) != null)
                     try self.emitSliceIndexPlacePointer(place, .{ .statement = statement.id })
                 else if (mir.executableFixedArrayIndexPlace(self.body, place) != null)
@@ -566,7 +571,8 @@ const Renderer = struct {
                 else if (mir.executableGuardedLocalScalarDerefPlace(self.body, place, true) or
                     mir.executableGuardedLocalAggregateDerefPlace(self.body, place, true))
                     try self.emitGuardedLocalAggregateStorePointer(statement, store.place)
-                else if (parameterCallableProjectedPlaceSupported(self.body, place, true))
+                else if (parameterCallableProjectedPlaceSupported(self.body, place, true) or
+                    (dyn_store and mir.executableParameterProjectedPlace(self.body, place, true)))
                     try self.emitGuardedParameterStorePointer(statement, store.place)
                 else if (mir.executableAggregateFieldPlace(
                     self.body.locals,
@@ -925,6 +931,7 @@ const Renderer = struct {
             .builtin_call => |call| try self.emitBuiltinCall(expression, call),
             .representation_check => |check| try self.emitRepresentationCheck(expression, check),
             .indirect_call => |call| try self.emitIndirectCall(ty, call),
+            .dyn_call => |call| try self.emitDynCall(expression, ty, call),
             .deref => |operand| blk: {
                 const pointer = try self.emitExpression(operand);
                 if (!std.mem.eql(u8, pointer.ty, "ptr")) return error.InvalidBody;
@@ -2025,6 +2032,55 @@ const Renderer = struct {
         return self.emitCall(ty, callee.spelling, call.arguments[0..call.argument_count], null);
     }
 
+    fn emitDynCall(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        ty: []const u8,
+        call: @FieldType(mir.ExecutableExpression.Operation, "dyn_call"),
+    ) RenderError!Value {
+        if (!dynCallSupported(self.body, expression, call)) return error.InvalidBody;
+        const place = self.body.places[call.receiver.index()];
+        const receiver: Value = if (place.projection_count == 0) direct: {
+            const local_id = switch (place.root) {
+                .local => |id| id,
+                .symbol, .value => return error.InvalidBody,
+            };
+            const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+            if (!std.mem.eql(u8, local.ty, "{ ptr, ptr }")) return error.InvalidBody;
+            if (!local.addressable) break :direct .{ .ty = local.ty, .spelling = local.storage };
+            const loaded = try self.temp();
+            try self.output.print(self.allocator, "  {s} = load {{ ptr, ptr }}, ptr {s}\n", .{ loaded, local.storage });
+            break :direct .{ .ty = "{ ptr, ptr }", .spelling = loaded };
+        } else projected: {
+            const pointer = try self.emitGuardedParameterFieldPointer(expression, call.receiver);
+            const loaded = try self.temp();
+            try self.output.print(self.allocator, "  {s} = load {{ ptr, ptr }}, ptr {s}\n", .{ loaded, pointer });
+            break :projected .{ .ty = "{ ptr, ptr }", .spelling = loaded };
+        };
+        const data = try self.temp();
+        const vtable = try self.temp();
+        const slot_pointer = try self.temp();
+        const code = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = extractvalue {{ ptr, ptr }} {s}, 0\n" ++
+                "  {s} = extractvalue {{ ptr, ptr }} {s}, 1\n" ++
+                "  {s} = getelementptr ptr, ptr {s}, i64 {d}\n" ++
+                "  {s} = load ptr, ptr {s}\n",
+            .{ data, receiver.spelling, vtable, receiver.spelling, slot_pointer, vtable, call.method_index, code, slot_pointer },
+        );
+        var rendered: [mir.max_executable_operands]Value = undefined;
+        for (call.arguments[0..call.argument_count], 0..) |argument, index|
+            rendered[index] = try self.emitExpression(argument);
+        const result = if (!std.mem.eql(u8, ty, "void")) try self.temp() else "";
+        if (result.len != 0) try self.output.print(self.allocator, "  {s} = ", .{result}) else try self.output.appendSlice(self.allocator, "  ");
+        try self.output.print(self.allocator, "call {s} {s}(ptr {s}", .{ ty, code, data });
+        for (rendered[0..call.argument_count]) |argument|
+            try self.output.print(self.allocator, ", {s} {s}", .{ argument.ty, argument.spelling });
+        try self.output.appendSlice(self.allocator, ")\n");
+        return .{ .ty = ty, .spelling = result };
+    }
+
     fn emitBuiltinCall(self: *Renderer, expression: mir.ExecutableExpression, call: anytype) RenderError!Value {
         if (!builtinSupported(self.body, expression, call)) return error.InvalidBody;
         var operands: [mir.max_executable_operands]Value = undefined;
@@ -2675,6 +2731,7 @@ const Renderer = struct {
 
     fn emitMemoryStore(self: *Renderer, place_id: mir.PlaceId, value: Value, pointer: []const u8, access: mir.ExecutableMemoryAccess) RenderError!void {
         const place = &self.body.places[place_id.index()];
+        if (mir.executableDynTraitPlace(self.body, place.*) != null) return self.emitClosureStore(pointer, value, access);
         if (mir.executableCallablePlace(self.body.aggregate_types, place.*)) |signature| {
             if (signature.has_environment) return self.emitClosureStore(pointer, value, access);
             if (!std.mem.eql(u8, value.ty, "ptr")) return error.InvalidBody;
@@ -3307,7 +3364,9 @@ const Renderer = struct {
         if (!placeValid(self.body, place_id)) return error.InvalidBody;
         const place = self.body.places[place_id.index()];
         if (!parameterScalarAccessStorePlaceSupported(self.body, place) and
-            !parameterCallableProjectedPlaceSupported(self.body, place, true)) return error.InvalidBody;
+            !parameterCallableProjectedPlaceSupported(self.body, place, true) and
+            !(mir.executableDynTraitPlace(self.body, place) != null and
+                mir.executableParameterProjectedPlace(self.body, place, true))) return error.InvalidBody;
         const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
@@ -3544,12 +3603,12 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
     if (aggregate.construction == .packed_bits)
         return llvmTypeSupportedDepth(body, aggregate.storage_ty, depth + 1);
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
-    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count]) |field_ty, layout_complete, dyn_trait| {
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count]) |field_ty, layout_complete, dyn_trait_symbol| {
         // Only fixed arrays need the producer's explicit nested-layout bit.
         // Other aggregates are resolved recursively from their canonical type
         // metadata, and scalar fields have no nested layout to complete.
         if (field_ty == .array and !layout_complete) return false;
-        if (!dyn_trait and !llvmTypeSupportedDepth(body, field_ty, depth + 1)) return false;
+        if (!dyn_trait_symbol.isValid() and !llvmTypeSupportedDepth(body, field_ty, depth + 1)) return false;
     }
     return true;
 }
@@ -3655,6 +3714,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .builtin_call => |call| builtinSupported(body, expression, call),
         .representation_check => |check| representationCheckSupported(body, expression, check),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
+        .dyn_call => |call| dynCallSupported(body, expression, call),
         .address_of => |address| directAddressOfSupported(body, expression, address) or
             addressOfFixedArrayIndexSupported(body, expression, address) or
             addressOfSliceIndexSupported(body, expression, address) or
@@ -3838,6 +3898,40 @@ fn indirectCallSupported(
     return true;
 }
 
+fn dynCallSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "dyn_call"),
+) bool {
+    if (!call.receiver.isValid() or call.receiver.index() >= body.places.len) return false;
+    const receiver = body.places[call.receiver.index()];
+    const trait = symbolIdentity(body, call.trait_symbol) orelse return false;
+    const receiver_trait = mir.executableDynTraitPlace(body, receiver) orelse return false;
+    if (trait.kind != .trait or !receiver_trait.eql(call.trait_symbol) or call.method_spelling.len == 0 or
+        call.argument_count > mir.max_executable_operands or call.signature.parameter_count != call.argument_count or
+        call.signature.has_environment or !sameValueType(call.signature.return_ty, expression.result_ty) or
+        !call.signature.return_type_id.eql(expression.type_id)) return false;
+    for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
+        if (!expressionValid(body, argument_id)) return false;
+        const argument = body.expressions[argument_id.index()];
+        if (!sameValueType(argument.result_ty, call.signature.parameter_types[index]) or
+            !argument.type_id.eql(call.signature.parameter_type_ids[index])) return false;
+    }
+    const guarded = placeNeedsRepresentationGuard(body, receiver);
+    if (guarded != (call.representation_source != null and call.representation_span_id.isValid())) return false;
+    return if (guarded) representationTrapEdgeIsExact(body, expression) else ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn placeNeedsRepresentationGuard(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.projection_count == 0) return false;
+    if (mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null) return true;
+    return switch (place.root_ty) {
+        .pointer => |shape| shape.kind == .single,
+        .nullable_pointer => true,
+        else => false,
+    };
+}
+
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (expression.result_ty != .value) return false;
     return switch (expression.operation) {
@@ -3919,6 +4013,12 @@ fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.
 
 fn callableParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
     return callableParameterSignature(body, local) != null;
+}
+
+fn dynTraitParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    for (body.parameters) |parameter| if (parameter.local.eql(local))
+        return parameter.ty == .value and parameter.dyn_trait_symbol_id.isValid();
+    return false;
 }
 
 fn callableParameterSignature(body: *const mir.ExecutableBody, local: mir.LocalId) ?mir.ExecutableCallSignature {
@@ -5087,8 +5187,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     if (!expressionValid(body, store.value)) return false;
     const place = body.places[store.place.index()];
     const value = body.expressions[store.value.index()];
-    const callable_store = callableStoreTargetSupported(body, place, value);
-    if (!memoryAccessSupported(body, store.place, store.ty, store.access, true, callable_store)) return false;
+    const special_value_store = callableStoreTargetSupported(body, place, value) or dynStoreTargetSupported(body, place, value);
+    if (!memoryAccessSupported(body, store.place, store.ty, store.access, true, special_value_store)) return false;
     if (!sameValueType(store.ty, value.result_ty)) return false;
     if (place.projection_count == 0) {
         return store.representation_source == null and !store.representation_span_id.isValid();
@@ -5128,6 +5228,10 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         return store.representation_source != null and store.representation_span_id.isValid() and
             statementRepresentationTrapEdgeIsExact(body, statement);
     }
+    if (dynStoreTargetSupported(body, place, value) and mir.executableParameterProjectedPlace(body, place, true)) {
+        return store.representation_source != null and store.representation_span_id.isValid() and
+            statementRepresentationTrapEdgeIsExact(body, statement);
+    }
     if (computedRawManyDerefPlaceSupported(body, place, true)) {
         return store.representation_source == null and !store.representation_span_id.isValid() and
             statementRepresentationTrapEdge(body, statement) == null;
@@ -5155,6 +5259,21 @@ fn callableStoreTargetSupported(
         else => return false,
     };
     return target_signature.eql(value_signature);
+}
+
+fn dynStoreTargetSupported(
+    body: *const mir.ExecutableBody,
+    place: mir.ExecutablePlace,
+    value: mir.ExecutableExpression,
+) bool {
+    const target_trait = mir.executableDynTraitPlace(body, place) orelse return false;
+    if (value.result_ty != .value) return false;
+    const local_id = switch (value.operation) {
+        .local => |id| id,
+        else => return false,
+    };
+    const parameter = parameterIdentity(body, local_id) orelse return false;
+    return parameter.dyn_trait_symbol_id.isValid() and parameter.dyn_trait_symbol_id.eql(target_trait);
 }
 
 fn packedFieldStoreSupported(
@@ -5251,6 +5370,8 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             if (is_store)
                 parameterScalarAccessStorePlaceSupported(body, place) or
                     parameterCallableProjectedPlaceSupported(body, place, true) or
+                    (mir.executableDynTraitPlace(body, place) != null and
+                        mir.executableParameterProjectedPlace(body, place, true)) or
                     mir.executableLocalAddressDerefPlace(body, place, true) or
                     mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
                     mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or

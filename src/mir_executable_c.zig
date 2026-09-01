@@ -210,6 +210,20 @@ fn emitStatement(
                     try out.appendSlice(allocator, ";\n");
                 },
                 .race_unordered => {
+                    if (dynStoreTargetSupported(body, (placeById(body, store.place) orelse return error.InvalidPlace).*, (expressionById(body, store.value) orelse return error.InvalidExpression).*)) {
+                        try out.appendSlice(allocator, "__atomic_store_n(&(");
+                        try emitPlace(allocator, out, body, store.place);
+                        try out.appendSlice(allocator, ".data), (");
+                        try emitExpression(allocator, out, body, store.value, 0);
+                        try out.appendSlice(allocator, ").data, __ATOMIC_RELAXED);\n");
+                        try writeIndent(allocator, out, indent);
+                        try out.appendSlice(allocator, "__atomic_store_n(&(");
+                        try emitPlace(allocator, out, body, store.place);
+                        try out.appendSlice(allocator, ".vtable), (");
+                        try emitExpression(allocator, out, body, store.value, 0);
+                        try out.appendSlice(allocator, ").vtable, __ATOMIC_RELAXED);\n");
+                        return;
+                    }
                     if (mir.executableAggregateCopyAlignment(store.ty) != null) {
                         var projections: [mir.max_executable_projections]CLeafProjection = undefined;
                         var first = true;
@@ -832,6 +846,21 @@ fn emitExpressionOperation(
                 try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
             }
         },
+        .dyn_call => |call| {
+            const trait = symbolById(body, call.trait_symbol) orelse return error.InvalidExpression;
+            try out.print(allocator, "({{ mc_dyn_{s} mc_dyn_tmp_{d} = ", .{ trait.spelling, expression.id.raw });
+            try emitPlace(allocator, out, body, call.receiver);
+            try out.print(allocator, "; mc_dyn_tmp_{d}.vtable->{s}(mc_dyn_tmp_{d}.data", .{
+                expression.id.raw,
+                call.method_spelling,
+                expression.id.raw,
+            });
+            for (call.arguments[0..call.argument_count]) |argument| {
+                try out.appendSlice(allocator, ", ");
+                try emitExpression(allocator, out, body, argument, 0);
+            }
+            try out.appendSlice(allocator, "); })");
+        },
         .builtin_call => |call| try emitBuiltinCall(allocator, out, body, expression, call, depth),
         .representation_check => |check| try emitExpression(allocator, out, body, check.operand, depth + 1),
         .address_of => |address| try emitPlaceAddress(allocator, out, body, address.place),
@@ -1046,7 +1075,7 @@ fn emitExpressionOperation(
 pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     if (!body.isComplete() or body.terminators.len == 0) return false;
     for (body.parameters) |parameter| if (!(supportsParameterType(body, parameter.ty) or
-        (parameter.ty == .value and callableParameter(body, parameter.local))) or
+        (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))) or
         localById(body, parameter.local) == null)
         return false;
     for (body.expressions) |expression| if (!supportsExpression(body, expression)) return false;
@@ -1298,6 +1327,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .direct_call => |call| call.argument_count <= call.arguments.len and symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
         .closure_bind => |bind| closureBindSupported(body, expression, bind),
         .indirect_call => |call| indirectCallSupported(body, expression, call),
+        .dyn_call => |call| dynCallSupported(body, expression, call),
         .slice_length => |base| expressionById(body, base) != null,
         .builtin_call => |call| builtinCallSupported(body, expression, call),
         .address_of => |address| addressOfSupported(body, expression, address),
@@ -1503,6 +1533,12 @@ fn callableParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
     return false;
 }
 
+fn dynTraitParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    for (body.parameters) |parameter| if (parameter.local.eql(local))
+        return parameter.ty == .value and parameter.dyn_trait_symbol_id.isValid();
+    return false;
+}
+
 fn callableLocalUsedAsIndirectCallee(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
     for (body.expressions) |expression| switch (expression.operation) {
         .indirect_call => |call| {
@@ -1596,6 +1632,29 @@ fn indirectCallSupported(
             !argument.type_id.eql(call.signature.parameter_type_ids[index])) return false;
     }
     return true;
+}
+
+fn dynCallSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "dyn_call"),
+) bool {
+    const receiver = placeById(body, call.receiver) orelse return false;
+    const trait = symbolById(body, call.trait_symbol) orelse return false;
+    const receiver_trait = mir.executableDynTraitPlace(body, receiver.*) orelse return false;
+    if (trait.kind != .trait or !receiver_trait.eql(call.trait_symbol) or
+        !isSafeIdentifier(trait.spelling) or !isSafeIdentifier(call.method_spelling) or
+        call.argument_count > call.arguments.len or call.signature.parameter_count != call.argument_count or
+        call.signature.has_environment or !sameValueType(call.signature.return_ty, expression.result_ty) or
+        !call.signature.return_type_id.eql(expression.type_id)) return false;
+    for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
+        const argument = expressionById(body, argument_id) orelse return false;
+        if (!sameValueType(argument.result_ty, call.signature.parameter_types[index]) or
+            !argument.type_id.eql(call.signature.parameter_type_ids[index])) return false;
+    }
+    const guarded = placeNeedsRepresentationGuard(receiver.*);
+    if (guarded != (call.representation_source != null and call.representation_span_id.isValid())) return false;
+    return if (guarded) representationOperationHasExactTrapEdge(body, expression) else ownedTrapEdgeCount(body, expression.id) == 0;
 }
 
 fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -2888,13 +2947,14 @@ fn memoryStoreSupported(
     const place = placeById(body, store.place) orelse return false;
     if (place.storage != .ordinary) return false;
     const aggregate_copy = mir.executableAggregateCopyAlignment(store.ty) != null;
+    const dyn_store = dynStoreTargetSupported(body, place.*, value.*);
     const alignment = mir.executableMemoryAlignment(body.enum_types, store.ty) orelse return false;
     if (store.access.alignment != alignment) return false;
     if (aggregate_copy and store.access.kind == .race_unordered and
         !mir.executableRaceAggregateTypeSupported(body, place.type_id, place.ty)) return false;
     if (place.projection_count != 0) {
         if (!aggregate_copy and scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
-            mir.executableCallablePlace(body.aggregate_types, place.*) == null) return false;
+            mir.executableCallablePlace(body.aggregate_types, place.*) == null and !dyn_store) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
             const access_ok = if (indexed.parameter_pointee)
                 store.access.kind == .race_unordered and mir.executableFixedArrayParameterPointeePlace(body, place.*, true)
@@ -2956,7 +3016,8 @@ fn memoryStoreSupported(
             return store.representation_source == null and !store.representation_span_id.isValid() and
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
-        return (parameterScalarAccessPlaceSupported(body, place.*) or local_alias or
+        return (parameterScalarAccessPlaceSupported(body, place.*) or
+            (dyn_store and mir.executableParameterProjectedPlace(body, place.*, true)) or local_alias or
             mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
             (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true)) or
             mir.executableGlobalPointerDerefPlace(body, place.*, true)) and
@@ -2977,6 +3038,22 @@ fn memoryStoreSupported(
         } else false,
         .value => false,
     };
+}
+
+fn dynStoreTargetSupported(
+    body: *const mir.ExecutableBody,
+    place: mir.ExecutablePlace,
+    value: mir.ExecutableExpression,
+) bool {
+    const target_trait = mir.executableDynTraitPlace(body, place) orelse return false;
+    if (value.result_ty != .value) return false;
+    const local_id = switch (value.operation) {
+        .local => |id| id,
+        else => return false,
+    };
+    for (body.parameters) |parameter| if (parameter.local.eql(local_id))
+        return parameter.dyn_trait_symbol_id.isValid() and parameter.dyn_trait_symbol_id.eql(target_trait);
+    return false;
 }
 
 fn binarySupported(
@@ -3134,6 +3211,7 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
                 representationOperationHasExactTrapEdge(body, expression)
         else
             false,
+        .dyn_call => representationOperationHasExactTrapEdge(body, expression),
         .atomic_load, .atomic_update, .representation_check => representationOperationHasExactTrapEdge(body, expression),
         .builtin_call => |call| if (call.kind == .conversion_trap_from)
             builtinTrapConversionHasExactEdge(body, expression)
@@ -3316,6 +3394,11 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
         },
         .builtin_call => |call| blk: {
             if (call.kind != .raw_ptr) return false;
+            break :blk .{ .source = call.representation_source, .span_id = call.representation_span_id };
+        },
+        .dyn_call => |call| blk: {
+            const receiver = placeById(body, call.receiver) orelse return false;
+            if (mir.executableDynTraitPlace(body, receiver.*) == null or !placeNeedsRepresentationGuard(receiver.*)) return false;
             break :blk .{ .source = call.representation_source, .span_id = call.representation_span_id };
         },
         .representation_check => .{ .source = expression.source, .span_id = expression.span_id },
@@ -3680,6 +3763,7 @@ fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuar
         .atomic_load => |load| if (load.representation_source) |source| .{ .place = load.place, .source = source } else null,
         .atomic_update => |update| if (update.representation_source) |source| .{ .place = update.place, .source = source } else null,
         .address_of => |address| if (address.representation_source) |source| .{ .place = address.place, .source = source } else null,
+        .dyn_call => |call| if (call.representation_source) |source| .{ .place = call.receiver, .source = source } else null,
         else => null,
     };
 }

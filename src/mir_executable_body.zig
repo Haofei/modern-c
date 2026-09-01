@@ -46,7 +46,6 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
         .fallthrough => return "invalid_fallthrough",
         else => {},
     };
-    if (body.trap_edges.len != function.trap_edges.len) return "trap_projection";
     if (body.incomplete_reason != .none) return @tagName(body.incomplete_reason);
     // When every operation has a canonical shape but the producer declined to
     // mark the body complete, ask the verifier which invariant would fail if it
@@ -137,8 +136,12 @@ pub fn verify(function: *const mir.Function) !void {
         try verifySpan(function, parameter.span_id, parameter.source);
         try verifyType(function, parameter.type_id, parameter.ty, body.complete);
         if (parameter.callable_signature) |signature| {
-            if (parameter.ty != .value) return error.InvalidFunctionSignature;
+            if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid()) return error.InvalidFunctionSignature;
             try verifyCallableSignature(function, signature, body.complete);
+        } else if (parameter.dyn_trait_symbol_id.isValid()) {
+            if (parameter.ty != .value) return error.InvalidFunctionSignature;
+            const trait = symbol(body, parameter.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
+            if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
         } else if (body.complete and parameter.ty == .value) return error.InvalidFunctionSignature;
     }
 
@@ -506,6 +509,39 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             try verifyArguments(body, value, call.arguments, call.argument_count);
             try verifyCallSignature(function, body, value, call);
         },
+        .dyn_call => |call| {
+            const receiver = place(body, call.receiver) orelse return error.InvalidPlaceReference;
+            try verifySymbol(body, call.trait_symbol);
+            try verifyArguments(body, value, call.arguments, call.argument_count);
+            try verifyCallableSignature(function, call.signature, body.complete);
+            if (body.complete) {
+                const trait = symbol(body, call.trait_symbol) orelse return error.InvalidSymbolReference;
+                const receiver_trait = mir.executableDynTraitPlace(body, receiver.*) orelse return error.InvalidPlaceType;
+                if (trait.kind != .trait or !receiver_trait.eql(call.trait_symbol) or
+                    call.method_spelling.len == 0 or call.method_index >= mir.max_executable_operands or
+                    call.signature.has_environment or call.signature.parameter_count != call.argument_count or
+                    !sameValueType(call.signature.return_ty, value.result_ty) or
+                    !call.signature.return_type_id.eql(value.type_id)) return error.InvalidFunctionSignature;
+                for (call.arguments[0..call.argument_count], 0..) |argument_id, index| {
+                    const argument = expression(body, argument_id) orelse return error.InvalidExpressionReference;
+                    if (!sameValueType(argument.result_ty, call.signature.parameter_types[index]) or
+                        !argument.type_id.eql(call.signature.parameter_type_ids[index]))
+                        return error.InvalidFunctionSignature;
+                }
+                const guarded = placeNeedsRepresentationGuard(body, receiver.*);
+                if (guarded) {
+                    const source = call.representation_source orelse return error.InvalidMemoryAccessTrap;
+                    try verifySpan(function, call.representation_span_id, source);
+                    if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                        ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
+                        return error.InvalidMemoryAccessTrap;
+                } else if (call.representation_source != null or call.representation_span_id.isValid() or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                {
+                    return error.InvalidMemoryAccessTrap;
+                }
+            }
+        },
         .address_of => |address| {
             const target = place(body, address.place) orelse return error.InvalidPlaceReference;
             if (target.storage != .ordinary) return error.InvalidPlaceType;
@@ -823,6 +859,14 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                                 return error.InvalidTrapEdge;
                         } else return error.InvalidTrapEdge;
                     },
+                    .dyn_call => |call| {
+                        const receiver = place(body, call.receiver) orelse return error.InvalidTrapEdge;
+                        if (mir.executableDynTraitPlace(body, receiver.*) == null or
+                            !placeNeedsRepresentationGuard(body, receiver.*) or
+                            call.representation_source == null or !call.representation_span_id.isValid() or
+                            edge.kind != .InvalidRepresentation or edge.source != .representation_check)
+                            return error.InvalidTrapEdge;
+                    },
                     .representation_check => |check| {
                         const operand = expression(body, check.operand) orelse return error.InvalidTrapEdge;
                         if (!mir.ExecutableRepresentationCheckKind.typesValid(check.kind, owner.result_ty, operand.result_ty) or
@@ -867,6 +911,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         break :bounds projection.span_id;
                     } else address.representation_span_id,
                     .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
+                    .dyn_call => |call| call.representation_span_id,
                     else => owner.span_id,
                 };
                 break :expression_owner .{ .block_id = owner.block_id, .span_id = span_id };
@@ -1184,6 +1229,17 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                     else => return error.InvalidFunctionSignature,
                 };
                 if (!target_signature.eql(stored_signature)) return error.InvalidFunctionSignature;
+            };
+            if (body.complete) if (mir.executableDynTraitPlace(body, target.*)) |target_trait| {
+                const stored_trait = switch (stored.operation) {
+                    .local => |id| parameter: {
+                        for (body.parameters) |parameter| if (parameter.local.eql(id))
+                            break :parameter parameter.dyn_trait_symbol_id;
+                        return error.InvalidFunctionSignature;
+                    },
+                    else => return error.InvalidFunctionSignature,
+                };
+                if (!stored_trait.isValid() or !stored_trait.eql(target_trait)) return error.InvalidFunctionSignature;
             };
         },
         .packed_field_store => |operation| {
@@ -1559,10 +1615,15 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
     if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
         !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;
     for (body.aggregate_types[0..index]) |previous| if (previous.type_id.eql(aggregate.type_id)) return error.InvalidAggregateType;
-    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count], aggregate.field_dyn_traits[0..aggregate.field_count]) |field_ty, field_type_id, callable_signature, dyn_trait| {
+    for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_callable_signatures[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count]) |field_ty, field_type_id, callable_signature, dyn_trait_symbol| {
+        const dyn_trait = dyn_trait_symbol.isValid();
         if (field_ty == .unknown or (field_ty == .value) != ((callable_signature != null) != dyn_trait)) return error.InvalidAggregateType;
         try verifyType(function, field_type_id, field_ty, body.complete);
         if (callable_signature) |signature| try verifyCallableSignature(function, signature, body.complete);
+        if (dyn_trait) {
+            const trait = symbol(body, dyn_trait_symbol) orelse return error.InvalidSymbolReference;
+            if (body.complete and trait.kind != .trait) return error.InvalidAggregateType;
+        }
     }
     if (aggregate.ty == .array) {
         const length = aggregate.array_length orelse return error.InvalidAggregateType;
@@ -1591,8 +1652,8 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
         }
         if (!found) return error.InvalidAggregateType;
     }
-    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..], aggregate.field_callable_signatures[aggregate.field_count..], aggregate.field_dyn_traits[aggregate.field_count..]) |field_spelling, field_ty, field_type_id, callable_signature, dyn_trait| {
-        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid() or callable_signature != null or dyn_trait)
+    for (aggregate.field_spellings[aggregate.field_count..], aggregate.field_types[aggregate.field_count..], aggregate.field_type_ids[aggregate.field_count..], aggregate.field_callable_signatures[aggregate.field_count..], aggregate.field_dyn_trait_symbols[aggregate.field_count..]) |field_spelling, field_ty, field_type_id, callable_signature, dyn_trait_symbol| {
+        if (field_spelling.len != 0 or field_ty != .unknown or field_type_id.isValid() or callable_signature != null or dyn_trait_symbol.isValid())
             return error.InvalidAggregateType;
     }
 }

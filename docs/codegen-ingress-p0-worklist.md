@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 168/168 canonical | 168/168 canonical |
-| broad sweep | 1546/1825 admitted | 1592/1879 admitted |
-| AST fallback | 279 | 287 |
+| broad sweep | 1561/1818 admitted | 1605/1872 admitted |
+| AST fallback | 257 | 267 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -128,9 +128,9 @@ backend.
 
 ## Ranked next slices
 
-1. Attach remaining trap projections to canonical expression/statement IDs.
-2. Close signature/type-reference mismatches.
-3. Lower generic member/place operations.
+1. Close typed place and return/CFG invariants.
+2. Lower generic member/place operations and unsupported calls.
+3. Model non-eager logical operations as explicit short-circuit CFG.
 4. Lower the remaining variant and generated general switches with typed cases
    and explicit CFG.
 5. Lower strings, arrays/aggregates, `try`, and remaining calls.
@@ -169,6 +169,16 @@ parameter-projected place for checked pointer roots and splits fat closure
 storage into code/environment pointer accesses, including recursively copied
 race-tolerant aggregates. Four additional LLVM broad-corpus functions are
 canonical; C remains at its existing boundary.
+
+Dynamic-trait calls and stores are now syntax-free executable operations.
+Exact trait `SymbolId`s live on parameters and aggregate fields; a call owns
+its receiver `PlaceId`, vtable slot, signature, arguments, and representation
+edge. C and LLVM consume the same two-pointer value and the verifier rejects a
+trait-mismatched store. `std/task.mc` is 15/16 canonical in both backends; its
+remaining `Join2__poll` fallback is a genuine short-circuit CFG requirement,
+not a missing dynamic-dispatch recognizer. Broad incomplete-reason telemetry
+now reports verifier errors after projection instead of stopping at a coarse
+legacy/executable trap-count mismatch.
 
 Byte-view construction and equality are canonical executable operations in
 both renderers. Their source object size comes from the addressed canonical

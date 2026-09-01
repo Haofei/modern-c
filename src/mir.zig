@@ -6387,12 +6387,18 @@ const FunctionBuilder = struct {
             const executable_local = try builder.internExecutableLocal(param.name.text);
             const parameter_source = builder.sourcePoint(param.name.span);
             const callable_signature = try builder.executableCallableSignature(param.ty);
-            if (param_ty == .value and callable_signature == null) builder.executable_supported = false;
+            const dyn_trait_symbol_id = if (dynTraitNameFromTypeAlias(param.ty, aliases)) |trait_name|
+                try builder.internExecutableTraitSymbol(trait_name)
+            else
+                SymbolId.invalid;
+            if (param_ty == .value and callable_signature == null and !dyn_trait_symbol_id.isValid())
+                builder.executable_supported = false;
             try builder.executable_parameters.append(allocator, .{
                 .local = executable_local,
                 .ty = param_ty,
                 .type_id = try builder.internTypeId(param_ty),
                 .callable_signature = callable_signature,
+                .dyn_trait_symbol_id = dyn_trait_symbol_id,
                 .atomic_payload_type_id = if (atomic_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
                 .source = parameter_source,
                 .span_id = try builder.internSpanId(parameter_source),
@@ -6843,6 +6849,10 @@ const FunctionBuilder = struct {
                         call.representation_span_id = self.span_ids.get(source) orelse .invalid;
                         if (!call.representation_span_id.isValid()) complete = false;
                     }
+                },
+                .dyn_call => |*call| if (call.representation_source) |source| {
+                    call.representation_span_id = self.span_ids.get(source) orelse .invalid;
+                    if (!call.representation_span_id.isValid()) complete = false;
                 },
                 else => {},
             }
@@ -8236,7 +8246,6 @@ const FunctionBuilder = struct {
                 }
             }
             if (already_present) continue;
-            if (self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) continue;
 
             var owner: ?mir_model.ExecutableTrapOwner = null;
             var ambiguous = false;
@@ -8254,6 +8263,8 @@ const FunctionBuilder = struct {
                         self.executableRepresentationPlaceCandidate(address.place, false),
                     .builtin_call => |call| call.kind == .raw_ptr and
                         call.representation_span_id.eql(legacy.typed_span_id),
+                    .dyn_call => |call| call.representation_span_id.eql(legacy.typed_span_id) and
+                        self.executableRepresentationPlaceCandidate(call.receiver, false),
                     else => false,
                 };
                 if (!owns_edge) continue;
@@ -8277,7 +8288,11 @@ const FunctionBuilder = struct {
                 }
                 owner = .{ .statement = statement.id };
             };
-            if (ambiguous or owner == null) continue;
+            if (ambiguous) continue;
+            if (owner == null) {
+                if (self.executableTerminalTrapProjectionComplete(legacy, legacy_edges, call_target_facts, legacy_blocks)) continue;
+                continue;
+            }
             try self.executable_trap_edges.append(self.allocator, .{
                 .owner = owner.?,
                 .from_block = BlockId.fromIndex(legacy.from_block),
@@ -8348,6 +8363,7 @@ const FunctionBuilder = struct {
                         break :bounds projection.span_id;
                     } else address.representation_span_id,
                     .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
+                    .dyn_call => |call| call.representation_span_id,
                     else => owner.span_id,
                 };
                 break :expression .{ .block_id = owner.block_id, .span_id = owner_span_id };
@@ -8712,6 +8728,14 @@ const FunctionBuilder = struct {
                 identity.atomic_payload_type_id = try self.internTypeId(payload_ty);
             }
         }
+        return id;
+    }
+
+    fn internExecutableTraitSymbol(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
+        const id = try self.internExecutableSymbol(spelling);
+        const identity = &self.executable_symbols.items[id.index()];
+        if (identity.kind != .unknown and identity.kind != .trait) self.executable_supported = false;
+        identity.kind = .trait;
         return id;
     }
 
@@ -9633,6 +9657,50 @@ const FunctionBuilder = struct {
                         .signature = signature,
                     } };
                 }
+                if (self.dynDispatchCallTarget(node)) |target| {
+                    const member = memberExpr(node.callee.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    if (target.params.len == 0 or target.params.len - 1 != node.args.len)
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const receiver_place = try self.appendExecutablePlace(member.base.*);
+                    const receiver = self.executable_places.items[receiver_place.index()];
+                    const trait_symbol = try self.internExecutableTraitSymbol(target.trait_name);
+                    result_ty = target.result_ty;
+                    var signature: mir_model.ExecutableCallSignature = .{
+                        .parameter_count = node.args.len,
+                        .return_ty = result_ty,
+                        .return_type_id = try self.internTypeId(result_ty),
+                    };
+                    if (target.result_type_expr) |return_type| {
+                        if (!try self.internExecutableTypeExpr(result_ty, return_type))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    } else if (result_ty != .void) break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    var call_value: @FieldType(ExecutableExpression.Operation, "dyn_call") = .{
+                        .receiver = receiver_place,
+                        .trait_symbol = trait_symbol,
+                        .method_spelling = member.name.text,
+                        .method_index = target.method_index,
+                        .signature = signature,
+                        .argument_count = node.args.len,
+                    };
+                    for (node.args, target.params[1..], 0..) |argument, parameter, index| {
+                        const parameter_ty = valueTypeFromTypeAlias(parameter.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                        if (parameter_ty == .unknown or parameter_ty == .value or
+                            !try self.internExecutableTypeExpr(parameter_ty, parameter.ty))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        signature.parameter_types[index] = parameter_ty;
+                        signature.parameter_type_ids[index] = try self.internTypeId(parameter_ty);
+                        call_value.arguments[index] = try self.ensureExecutableExprAsType(argument, parameter_ty, parameter.ty);
+                    }
+                    call_value.signature = signature;
+                    if (self.executablePlaceNeedsRepresentationGuard(receiver)) {
+                        const guard = self.executableDerefOperandSource(member.base.*) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        call_value.representation_source = guard;
+                        call_value.representation_span_id = try self.internSpanId(guard);
+                    }
+                    break :call .{ .dyn_call = call_value };
+                }
                 if (directCalleeName(node.callee.*)) |callee_name| if (self.isKnownDirectCall(node.callee.*, callee_name)) {
                     const callee_source = self.sourcePoint(node.callee.*.span);
                     var call_value: @FieldType(ExecutableExpression.Operation, "direct_call") = .{
@@ -10199,8 +10267,8 @@ const FunctionBuilder = struct {
             aggregate.field_types[index] = field_ty;
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
             if (field_ty == .value) {
-                if (dynTraitNameFromTypeAlias(field.ty, self.aliases) != null) {
-                    aggregate.field_dyn_traits[index] = true;
+                if (dynTraitNameFromTypeAlias(field.ty, self.aliases)) |trait_name| {
+                    aggregate.field_dyn_trait_symbols[index] = try self.internExecutableTraitSymbol(trait_name);
                 } else {
                     aggregate.field_callable_signatures[index] = try self.executableCallableSignature(field.ty) orelse return false;
                 }

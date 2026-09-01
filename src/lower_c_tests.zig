@@ -10268,22 +10268,28 @@ test "lower-c inferred local dyn dispatch calls require MIR types" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
         \\struct Square { side: u32 }
+        \\struct Holder { shape: *mut dyn Shape }
         \\impl Shape for Square { fn scale(self: *Square, amount: u32) -> u32 { return self.side * amount; } fn set(self: *mut Square, value: u32) -> void { self.side = value; } }
         \\fn caller(shape: *dyn Shape, amount: u32) -> u32 {
         \\    let result = shape.scale(amount);
         \\    return result;
         \\}
         \\fn notify(shape: *mut dyn Shape, value: u32) -> void { shape.set(value); }
+        \\fn holder_init(holder: *mut Holder, shape: *mut dyn Shape) -> void { holder.shape = shape; }
+        \\fn holder_scale(holder: *mut Holder, amount: u32) -> u32 { return holder.shape.scale(amount); }
     ;
     var parsed = try test_support.parseCheckedModule("c_inferred_local_dyn_dispatch_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null);
+    try appendCheckedCTestNoFunctionBodyFallback("c_inferred_local_dyn_dispatch_call_types.mc", source, &complete_output);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->scale(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->set(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "__atomic_store_n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->scale(") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

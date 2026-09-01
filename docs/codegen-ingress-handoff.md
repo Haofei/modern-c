@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 168/168 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1546/1825 C functions and 1592/1879 LLVM functions.
-  The remaining 279 C and 287 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1561/1818 C functions and 1605/1872 LLVM functions.
+  The remaining 257 C and 267 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
 backend fallback branches.
@@ -96,10 +96,10 @@ OUTDIR=zig-out/fallback-census-broad JOBS=8 \
   bash tools/toolchain/fallback-census.sh
 ```
 
-Current leading blockers are `trap_projection`, `unsupported_member`,
-signature/place invariants, `general_switch`, string and aggregate
-construction, and unsupported calls. Renderer rejection is a smaller
-secondary group.
+Current leading blockers are typed place invariants, `unsupported_member`,
+unsupported calls, `general_switch`, return/CFG invariants, string and
+aggregate construction, and logical short-circuiting. Renderer rejection is a
+smaller secondary group.
 
 Nested fixed-array indexes rooted in a by-value parameter are canonical in
 both renderers. Projection-root admission now follows the verified index chain
@@ -172,6 +172,19 @@ fields as separate code/environment pointer slots during direct and recursive
 aggregate loads/stores. This admits four more broad-corpus LLVM functions while
 keeping C unchanged; the resulting `fn_pointer`, `global_closure`, and
 `std/task` artifacts assemble with `llvm-as`.
+
+Dynamic-trait values now have the same exact executable identity. Parameters
+and aggregate fields carry a verified trait `SymbolId`; virtual calls carry the
+receiver `PlaceId`, trait identity, vtable slot, method signature, arguments,
+and representation obligation. Dynamic values stored through a checked
+aggregate pointer are verified as an exact trait match and rendered as the
+same two-pointer value by C and LLVM. Representation edges for dynamic calls
+used as branch conditions are attached to the call before the legacy
+terminal-trap compatibility case is considered. The `std/task.mc` workload
+moved from 10/16 to 15/16 canonical in both backends; only the real
+short-circuit CFG case in `Join2__poll` remains. Broad telemetry now reports
+the verifier's exact incomplete invariant instead of the former coarse
+trap-count mismatch label.
 
 Canonical MIR now owns byte-view construction and equality. Both renderers use
 the addressed `Place.ty` for object size instead of reconstructing it from a

@@ -1124,6 +1124,21 @@ pub const ExecutableExpression = struct {
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
+        /// Virtual call through a checked `*dyn Trait` fat value. The trait
+        /// identity, vtable slot, public method signature, and receiver place
+        /// are semantic MIR data; neither backend may reopen member-call AST
+        /// syntax to recover dispatch behavior.
+        dyn_call: struct {
+            receiver: PlaceId,
+            trait_symbol: SymbolId,
+            method_spelling: []const u8,
+            method_index: usize,
+            signature: ExecutableCallSignature,
+            arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
+            argument_count: usize = 0,
+            representation_source: ?SourcePoint = null,
+            representation_span_id: SpanId = .invalid,
+        },
         address_of: struct {
             place: PlaceId,
             representation_source: ?SourcePoint = null,
@@ -1521,6 +1536,9 @@ pub const ExecutableParameter = struct {
     /// and indirect calls without treating every opaque value (for example a
     /// dynamic-trait payload) as an LLVM/C function pointer.
     callable_signature: ?ExecutableCallSignature = null,
+    /// Exact dynamic-trait identity for an opaque two-pointer parameter.
+    /// Mutually exclusive with `callable_signature`.
+    dyn_trait_symbol_id: SymbolId = .invalid,
     /// Payload identity when the source parameter is `atomic<T>` or a direct
     /// pointer to it. This is canonical frontend metadata, not a backend
     /// inference from pointer spelling.
@@ -1552,7 +1570,7 @@ pub const ExecutableAggregateType = struct {
     /// type, but their storage is a fixed two-pointer fat value rather than a
     /// callable pointer. Keep that layout distinction in canonical aggregate
     /// metadata so LLVM never has to recover it from syntax.
-    field_dyn_traits: [max_executable_operands]bool = [_]bool{false} ** max_executable_operands,
+    field_dyn_trait_symbols: [max_executable_operands]SymbolId = [_]SymbolId{.invalid} ** max_executable_operands,
     /// Whether codegen has every nested layout needed to spell this field's
     /// storage type mechanically. This is currently meaningful for fixed-array
     /// fields: producers set it only after interning the nested layout. The
@@ -1616,6 +1634,52 @@ pub fn executableCallablePlace(
             aggregate.field_types[selection.field_index] != .value or
             !aggregate.field_type_ids[selection.field_index].eql(place.type_id)) continue;
         return aggregate.field_callable_signatures[selection.field_index];
+    }
+    return null;
+}
+
+/// Resolve the exact trait carried by a dynamic receiver place. This first
+/// slice deliberately admits direct dynamic parameters and fields projected
+/// through a typed aggregate parameter; both shapes are fully described by
+/// executable parameter/layout metadata.
+pub fn executableDynTraitPlace(body: *const ExecutableBody, place: ExecutablePlace) ?SymbolId {
+    if (place.storage != .ordinary or place.ty != .value or !place.type_id.isValid()) return null;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return null,
+    };
+    if (place.projection_count == 0) {
+        for (body.parameters) |parameter| if (parameter.local.eql(local) and
+            parameter.type_id.eql(place.type_id) and ValueType.eql(parameter.ty, place.ty) and
+            parameter.dyn_trait_symbol_id.isValid()) return parameter.dyn_trait_symbol_id;
+        return null;
+    }
+    if (!executableParameterProjectedPlace(body, place, false)) return null;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return null,
+    };
+    var aggregate: ?ExecutableAggregateType = null;
+    for (body.aggregate_types) |candidate| if (ValueType.eql(candidate.ty, .{ .struct_ = pointer.child })) {
+        aggregate = candidate;
+        break;
+    };
+    var current = aggregate orelse return null;
+    for (place.projections[1..place.projection_count], 0..) |projection, ordinal| {
+        const field_index = switch (projection) {
+            .field => |index| index,
+            .deref, .index => return null,
+        };
+        if (field_index >= current.field_count) return null;
+        if (ordinal + 2 == place.projection_count)
+            return if (current.field_dyn_trait_symbols[field_index].isValid()) current.field_dyn_trait_symbols[field_index] else null;
+        const next_id = current.field_type_ids[field_index];
+        var next: ?ExecutableAggregateType = null;
+        for (body.aggregate_types) |candidate| if (candidate.type_id.eql(next_id)) {
+            next = candidate;
+            break;
+        };
+        current = next orelse return null;
     }
     return null;
 }
@@ -3207,7 +3271,7 @@ pub const TypeIdentity = struct {
 pub const SymbolIdentity = struct {
     id: SymbolId,
     spelling: []const u8,
-    kind: enum { unknown, function, global } = .unknown,
+    kind: enum { unknown, function, global, trait } = .unknown,
     mutable: bool = false,
     /// Exact function-value shape when this symbol is used as a first-class
     /// callable rather than only as a direct-call target.
