@@ -306,6 +306,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
                 return error.InvalidMmioAccess;
         },
+        .mmio_map_checked => |operation| {
+            try verifyOperand(body, value, operation.address);
+            const address = expression(body, operation.address) orelse return error.InvalidExpressionReference;
+            if (body.complete and (!operation.unsafe_authorized or
+                !sameValueType(address.result_ty, .{ .address = .paddr }) or
+                !sameValueType(value.result_ty, .{ .address = .mmio_ptr }) or
+                ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
+                ownedTrapCount(body, .{ .expression = value.id }, .Unwrap, .unwrap) != 1))
+                return error.InvalidBuiltinCall;
+        },
         .literal => |literal| switch (literal) {
             .float => |float| if (!mir.executableFloatMatchesType(float, value.result_ty)) return error.InvalidLiteral,
             .signed_integer => switch (value.result_ty) {
@@ -800,6 +810,14 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     .try_unwrap => |operand_id| {
                         const operand = expression(body, operand_id) orelse return error.InvalidTrapEdge;
                         if (!tryUnwrapPayloadValid(body, owner, operand) or
+                            edge.kind != .Unwrap or edge.source != .unwrap)
+                            return error.InvalidTrapEdge;
+                    },
+                    .mmio_map_checked => |operation| {
+                        const address = expression(body, operation.address) orelse return error.InvalidTrapEdge;
+                        if (!operation.unsafe_authorized or
+                            !sameValueType(address.result_ty, .{ .address = .paddr }) or
+                            !sameValueType(owner.result_ty, .{ .address = .mmio_ptr }) or
                             edge.kind != .Unwrap or edge.source != .unwrap)
                             return error.InvalidTrapEdge;
                     },

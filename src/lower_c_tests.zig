@@ -8443,7 +8443,9 @@ test "lower-c MMIO map consumes MIR identity and complete types" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null);
-        try std.testing.expect(std.mem.indexOf(u8, output.items, "((Device volatile *)pa)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "((void volatile *)((uintptr_t)mc_exec_tmp_0))") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_exec_tmp_1 == NULL) mc_trap_NullUnwrap();") != null);
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});

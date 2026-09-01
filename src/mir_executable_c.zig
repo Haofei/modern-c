@@ -949,6 +949,11 @@ fn emitExpressionOperation(
             try emitExpression(allocator, out, body, operand_id, depth + 1);
             try out.appendSlice(allocator, ".payload.ok)");
         },
+        .mmio_map_checked => |operation| {
+            try out.appendSlice(allocator, "((void volatile *)((uintptr_t)");
+            try emitExpression(allocator, out, body, operation.address, depth + 1);
+            try out.appendSlice(allocator, "))");
+        },
         .result => |result| {
             const shape = resultType(body, expression.type_id) orelse return error.InvalidExpression;
             if (!resultConstructionSupported(body, expression.*, result)) return error.InvalidExpression;
@@ -1296,6 +1301,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
+        .mmio_map_checked => |operation| mmioMapCheckedSupported(body, expression, operation),
         .result => |result| resultConstructionSupported(body, expression, result),
         .index => |index| indexSupported(body, expression, index),
         .range_slice => |range| rangeSliceSupported(body, expression, range),
@@ -1374,6 +1380,18 @@ fn tryPropagateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     const shape = resultType(body, operand.type_id) orelse return false;
     return sameValueType(shape.ty, operand.result_ty) and
         sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
+}
+
+fn mmioMapCheckedSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "mmio_map_checked"),
+) bool {
+    const address = expressionById(body, operation.address) orelse return false;
+    return operation.unsafe_authorized and
+        sameValueType(address.result_ty, .{ .address = .paddr }) and
+        sameValueType(expression.result_ty, .{ .address = .mmio_ptr }) and
+        mmioMapTrapEdge(body, expression) != null;
 }
 
 fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -3077,6 +3095,7 @@ fn expressionHasExactTrapEdges(body: *const mir.ExecutableBody, expression: mir.
         else
             representationOperationHasExactTrapEdge(body, expression),
         .try_unwrap => tryUnwrapTrapEdge(body, expression) != null,
+        .mmio_map_checked => mmioMapTrapEdge(body, expression) != null,
         .index => |operation| operation.checked and indexTrapEdge(body, expression) != null,
         .range_slice => |operation| operation.checked and rangeSliceTrapEdge(body, expression) != null,
         else => false,
@@ -3171,6 +3190,20 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
 
 fn tryUnwrapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
     if (expression.operation != .try_unwrap or ownedTrapEdgeCount(body, expression.id) != 1) return null;
+    for (body.trap_edges) |edge| {
+        if (!edgeOwnedByExpression(edge, expression.id)) continue;
+        if (!edge.from_block.eql(expression.block_id) or edge.kind != .Unwrap or edge.source != .unwrap) return null;
+        const trap = terminatorByBlock(body, edge.trap_block) orelse return null;
+        return switch (trap.operation) {
+            .trap_ => |kind| if (kind == .Unwrap) edge else null,
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn mmioMapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    if (expression.operation != .mmio_map_checked or ownedTrapEdgeCount(body, expression.id) != 1) return null;
     for (body.trap_edges) |edge| {
         if (!edgeOwnedByExpression(edge, expression.id)) continue;
         if (!edge.from_block.eql(expression.block_id) or edge.kind != .Unwrap or edge.source != .unwrap) return null;
@@ -3537,6 +3570,11 @@ fn prepareStatementExpressions(
         }
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
+        if (mmioMapTrapEdge(body, expression) != null) {
+            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeIndent(allocator, out, indent);
+            try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_NullUnwrap();\n", .{expression.id.raw});
+        }
         switch (expression.operation) {
             .mmio_read => |read| if (read.ordering == .acquire) {
                 try writeIndent(allocator, out, indent);
@@ -3982,7 +4020,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             try out.appendSlice(allocator, child);
             try out.appendSlice(allocator, if (shape.mutability == .mut) " *" else " const *");
         },
-        .address => try out.appendSlice(allocator, "uintptr_t"),
+        .address => |class| try out.appendSlice(allocator, if (class == .mmio_ptr) "void volatile *" else "uintptr_t"),
         .array => {
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
             if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or shape.array_length == null) return error.UnsupportedType;

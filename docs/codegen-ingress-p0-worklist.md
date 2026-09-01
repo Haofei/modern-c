@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 160/160 canonical | 160/160 canonical |
-| broad sweep | 1540/1825 admitted | 1582/1879 admitted |
-| AST fallback | 285 | 297 |
+| broad sweep | 1541/1825 admitted | 1583/1879 admitted |
+| AST fallback | 284 | 296 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -21,10 +21,12 @@ propagation is a separate verified `try_propagate` operation: it returns the
 already evaluated Result unchanged on error and exposes the success payload on
 the continuation. Producer, verifier, C, and LLVM consume the same typed Result
 layout and preserve expression order for assignments, calls, and multiple
-unwraps. These slices retired nineteen broad-corpus fallbacks per backend in
-total. The remaining five `unsupported_try` entries are mapped error/unsafe
-MMIO cases; the cleanup case is separately classified `defer_cleanup` and stays
-fail-closed until cleanup edges own propagation.
+unwraps. Checked `mmio.map<T>(PAddr)?` is a separate pointer-niche operation
+whose unsafe authorization, address/result classes, and exact `Unwrap` edge are
+verified before either renderer runs. These slices retired twenty broad-corpus
+fallbacks per backend in total. The remaining four `unsupported_try` entries
+are mapped-error cases; the cleanup case is separately classified
+`defer_cleanup` and stays fail-closed until cleanup edges own propagation.
 
 Guarded aggregate dereferences and mutable aggregate globals now carry their
 memory-access class in executable MIR. Declared structs, value optionals, and

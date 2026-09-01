@@ -1057,6 +1057,15 @@ pub const ExecutableExpression = struct {
             value: ExprId,
             ordering: ExecutableMmioOrdering,
         },
+        /// Checked `mmio.map<T>(PAddr)?` lowered as one machine operation.
+        /// The nullable source representation is a pointer niche, not the
+        /// ordinary tagged value-optional layout. The operation therefore
+        /// owns its exact Unwrap edge and yields the non-null MMIO address
+        /// class directly.
+        mmio_map_checked: struct {
+            address: ExprId,
+            unsafe_authorized: bool,
+        },
         literal: ExecutableLiteral,
         unary: struct { op: ExecutableUnaryOp, operand: ExprId },
         binary: struct {

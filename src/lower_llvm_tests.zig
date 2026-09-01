@@ -9204,7 +9204,9 @@ test "LLVM MMIO map consumes MIR identity and complete types" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_mmio_map_facts.mc", .{}, false, .riscv64, null);
-        try std.testing.expect(std.mem.indexOf(u8, output.items, "inttoptr i64 %pa to ptr") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "; canonical executable MIR") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "inttoptr i64 %mc_arg_0 to ptr") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "icmp eq ptr %mc_expr_tmp_0, null") != null);
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});

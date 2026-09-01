@@ -7145,6 +7145,7 @@ const FunctionBuilder = struct {
                 sameValueType(self.executable_expressions.items[operand.index()].result_ty, expression.result_ty) and
                 self.executable_expressions.items[operand.index()].type_id.eql(expression.type_id),
             .atomic_update => |update| self.executableAtomicUpdateComplete(expression, update),
+            .mmio_map_checked => |operation| self.executableMmioMapComplete(expression, operation),
             .literal => |literal| switch (literal) {
                 .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
                 .string, .uninit, .enum_value => false,
@@ -7183,6 +7184,20 @@ const FunctionBuilder = struct {
             return sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
         }
         return false;
+    }
+
+    fn executableMmioMapComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "mmio_map_checked"),
+    ) bool {
+        if (!operation.unsafe_authorized or !operation.address.isValid() or
+            operation.address.index() >= expression.id.index() or
+            operation.address.index() >= self.executable_expressions.items.len)
+            return false;
+        const address = self.executable_expressions.items[operation.address.index()];
+        return sameValueType(address.result_ty, .{ .address = .paddr }) and
+            sameValueType(expression.result_ty, .{ .address = .mmio_ptr });
     }
 
     fn executableUncheckedBinaryComplete(
@@ -9670,6 +9685,21 @@ const FunctionBuilder = struct {
                 // distinct canonical operations so backends never infer the
                 // meaning of postfix `?` from source syntax.
                 if (node.mapped != null) break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                const mmio_map_call = switch (node.operand.*.kind) {
+                    .call => |call| try self.mmioMapCallTarget(call),
+                    else => null,
+                };
+                if (mmio_map_call) |target| {
+                    const call = node.operand.*.kind.call;
+                    if (!self.active_unsafe or call.args.len != 1 or
+                        !sameValueType(result_ty, target.payload_ty) or
+                        !try self.internExecutableTypeExpr(target.payload_ty, target.payload_type_expr))
+                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    break :unwrap .{ .mmio_map_checked = .{
+                        .address = try self.ensureExecutableExprAsType(call.args[0], target.source_ty, target.source_type_expr),
+                        .unsafe_authorized = true,
+                    } };
+                }
                 const operand_type_expr = self.typeExprForExpr(node.operand.*) orelse
                     break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                 const payload_type_expr = tryPayloadTypeExprAlias(operand_type_expr, self.aliases) orelse
@@ -14518,6 +14548,12 @@ const FunctionBuilder = struct {
                         break;
                     },
                     .try_unwrap => {
+                        if (kind == .Unwrap and source == .unwrap) {
+                            owner = expression.id;
+                            break;
+                        }
+                    },
+                    .mmio_map_checked => {
                         if (kind == .Unwrap and source == .unwrap) {
                             owner = expression.id;
                             break;

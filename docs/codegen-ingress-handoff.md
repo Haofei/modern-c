@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 160/160 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1540/1825 C functions and 1582/1879 LLVM functions.
-  The remaining 285 C and 297 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1541/1825 C functions and 1583/1879 LLVM functions.
+  The remaining 284 C and 296 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
 backend fallback branches.
@@ -19,10 +19,13 @@ same-type Result early-return contract: verifier admission requires the exact
 enclosing Result type, C returns the already evaluated operand on error, and
 LLVM emits the corresponding conditional return before extracting the success
 payload. Assignment, expression-statement, nested-call, and multiple-`?`
-evaluation order now use this operation. The two slices retired nineteen
+evaluation order now use this operation. Checked `mmio.map<T>(PAddr)?` is also
+one explicit pointer-niche MIR operation: lexical unsafe admission, exact
+`Unwrap` edge, address-to-pointer conversion, and null trapping are verified
+once and rendered mechanically by both backends. These slices retired twenty
 broad-corpus fallbacks per backend in total and reduced `unsupported_try` from
-26 to 5. Mapped `#[error_from]`, mapped `? else`, unsafe MMIO result handling,
-and cleanup-edge integration remain fail-closed. The census runner refreshes
+26 to 4. Mapped `#[error_from]`, mapped `? else`, and cleanup-edge integration
+remain fail-closed. The census runner refreshes
 the default installed compiler before measuring, closing a stale-binary hole.
 
 The latest cutover added canonical `for_each` and `for_step` terminators. MIR

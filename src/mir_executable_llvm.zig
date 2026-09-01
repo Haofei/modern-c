@@ -187,6 +187,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                     },
                     .atomic_load, .atomic_update, .representation_check => if (!representationTrapEdgeIsExact(body, owner)) return false,
                     .try_unwrap => if (!tryUnwrapTrapEdgeIsExact(body, owner)) return false,
+                    .mmio_map_checked => if (!mmioMapTrapEdgeIsExact(body, owner)) return false,
                     .index => |operation| if (!operation.checked or !indexTrapEdgeIsExact(body, owner)) return false,
                     .range_slice => |operation| if (!operation.checked or !rangeSliceTrapEdgeIsExact(body, owner)) return false,
                     .builtin_call => |call| if (call.kind == .conversion_trap_from) {
@@ -941,6 +942,7 @@ const Renderer = struct {
             .variant_payload => |operation| try self.emitVariant(expression, operation.operand, operation.kind, true),
             .try_unwrap => |operand| try self.emitTryUnwrap(expression, operand),
             .try_propagate => |operand| try self.emitTryPropagate(expression, operand),
+            .mmio_map_checked => |operation| try self.emitMmioMapChecked(expression, operation),
             .result => |result| try self.emitResult(expression, result),
             .address_of => |address| try self.emitAddressOf(expression, address),
             .cast => |cast| try self.emitCast(expression, cast),
@@ -1072,6 +1074,22 @@ const Renderer = struct {
         const payload_ty = try self.typeText(expression.result_ty);
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, operand.ty, operand.spelling });
         return .{ .ty = payload_ty, .spelling = payload };
+    }
+
+    fn emitMmioMapChecked(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operation: @FieldType(mir.ExecutableExpression.Operation, "mmio_map_checked"),
+    ) RenderError!Value {
+        if (!mmioMapCheckedSupported(self.body, expression, operation)) return error.InvalidBody;
+        const address = try self.emitExpression(operation.address);
+        if (!std.mem.eql(u8, address.ty, "i64")) return error.InvalidBody;
+        const pointer = try self.temp();
+        try self.output.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ pointer, address.spelling });
+        const edge = mmioMapTrapEdge(self.body, expression) orelse return error.InvalidBody;
+        const continuation = try std.fmt.allocPrint(self.allocator, "mc_mmio_map_ready_{d}", .{expression.id.raw});
+        try self.emitPointerRepresentationGuard(pointer, edge, continuation);
+        return .{ .ty = "ptr", .spelling = pointer };
     }
 
     fn emitOptional(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
@@ -3370,7 +3388,7 @@ fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
         .nullable_pointer => |shape| if (shape.kind == .slice) null else "ptr",
         .cstr => "ptr",
         .slice => "{ ptr, i64 }",
-        .address => "i64",
+        .address => |class| if (class == .mmio_ptr) "ptr" else "i64",
         else => null,
     };
 }
@@ -3530,6 +3548,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
+        .mmio_map_checked => |operation| mmioMapCheckedSupported(body, expression, operation),
         .result => |result| resultConstructionSupported(body, expression, result),
         .range_slice => |range| rangeSliceSupported(body, expression, range),
         .unsupported => false,
@@ -3600,6 +3619,19 @@ fn tryPropagateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     const shape = resultType(body, operand.type_id) orelse return false;
     return sameValueType(shape.ty, operand.result_ty) and
         sameValueType(expression.result_ty, shape.ok_ty) and expression.type_id.eql(shape.ok_type_id);
+}
+
+fn mmioMapCheckedSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "mmio_map_checked"),
+) bool {
+    if (!expressionValid(body, operation.address)) return false;
+    const address = body.expressions[operation.address.index()];
+    return operation.unsafe_authorized and
+        sameValueType(address.result_ty, .{ .address = .paddr }) and
+        sameValueType(expression.result_ty, .{ .address = .mmio_ptr }) and
+        mmioMapTrapEdgeIsExact(body, expression);
 }
 
 fn optionalConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: ?mir.ExprId) bool {
@@ -5037,6 +5069,10 @@ fn tryUnwrapTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.Exe
     return tryUnwrapTrapEdge(body, expression) != null;
 }
 
+fn mmioMapTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
+    return mmioMapTrapEdge(body, expression) != null;
+}
+
 fn indexTrapEdgeIsExact(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     return indexTrapEdge(body, expression) != null;
 }
@@ -5148,6 +5184,24 @@ fn rangeSliceTrapEdge(body: *const mir.ExecutableBody, expression: mir.Executabl
 
 fn tryUnwrapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
     if (expression.operation != .try_unwrap or ownedExpressionTrapCount(body, expression.id) != 1) return null;
+    var found: ?mir.ExecutableTrapEdge = null;
+    for (body.trap_edges) |edge| {
+        const owner = edge.owner.expressionId() orelse continue;
+        if (!owner.eql(expression.id)) continue;
+        if (found != null or !edge.from_block.eql(expression.block_id) or edge.kind != .Unwrap or edge.source != .unwrap)
+            return null;
+        const trap = terminatorForBlock(body, edge.trap_block) orelse return null;
+        switch (trap.operation) {
+            .trap_ => |kind| if (kind != .Unwrap) return null,
+            else => return null,
+        }
+        found = edge;
+    }
+    return found;
+}
+
+fn mmioMapTrapEdge(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.ExecutableTrapEdge {
+    if (expression.operation != .mmio_map_checked or ownedExpressionTrapCount(body, expression.id) != 1) return null;
     var found: ?mir.ExecutableTrapEdge = null;
     for (body.trap_edges) |edge| {
         const owner = edge.owner.expressionId() orelse continue;
