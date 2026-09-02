@@ -9310,7 +9310,7 @@ const FunctionBuilder = struct {
                     if (result_ty == .unknown or result_ty == .value or
                         std.meta.activeTag(expected) == std.meta.activeTag(result_ty)) result_ty = expected;
                 }
-                const operand_ty = if (mirIsComparisonBinary(node.op)) comparison_operand: {
+                var operand_ty = if (mirIsComparisonBinary(node.op)) comparison_operand: {
                     const left_ty = self.executableComparisonOperandType(node.left.*);
                     const right_ty = self.executableComparisonOperandType(node.right.*);
                     if (executableComparisonPointerType(left_ty, right_ty)) |pointer_ty|
@@ -9322,12 +9322,28 @@ const FunctionBuilder = struct {
                     try self.ensureExecutablePointerCoercedExpr(node.left.*, operand_ty)
                 else
                     try self.ensureExecutableExprAs(node.left.*, operand_ty);
+                if (mirIsComparisonBinary(node.op) and operand_ty == .integer and
+                    std.mem.eql(u8, operand_ty.integer, "comptime_int"))
+                {
+                    const actual_left = self.executable_expressions.items[left.index()].result_ty;
+                    if (actual_left != .unknown and actual_left != .value and
+                        !(actual_left == .integer and std.mem.eql(u8, actual_left.integer, "comptime_int")))
+                        operand_ty = actual_left;
+                }
                 const right = if (node.op == .shl or node.op == .shr)
                     try self.ensureExecutableCoercedExpr(node.right.*, operand_ty)
                 else if (mirIsComparisonBinary(node.op))
                     try self.ensureExecutablePointerCoercedExpr(node.right.*, operand_ty)
                 else
                     try self.ensureExecutableExprAs(node.right.*, operand_ty);
+                if (mirIsComparisonBinary(node.op) and operand_ty == .integer and
+                    std.mem.eql(u8, operand_ty.integer, "comptime_int"))
+                {
+                    const actual_right = self.executable_expressions.items[right.index()].result_ty;
+                    if (actual_right != .unknown and actual_right != .value and
+                        !(actual_right == .integer and std.mem.eql(u8, actual_right.integer, "comptime_int")))
+                        operand_ty = actual_right;
+                }
                 const optimized_safe_div_mod = (node.op == .div or node.op == .mod) and self.optimize and self.divModProvablySafe(node);
                 const arithmetic_domain = self.binaryArithmeticDomain(node);
                 const arithmetic: mir_model.ExecutableArithmeticSemantics = if (arithmetic_domain == .wrap)
