@@ -666,6 +666,30 @@ fn emitExpression(
     try emitExpressionOperation(allocator, out, body, expression, depth);
 }
 
+fn emitRacePairLoad(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    place: mir.PlaceId,
+    id: mir.ExprId,
+    kind: enum { dyn_value, slice },
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.print(allocator, "({{ __auto_type mc_pair_ptr_{d} = ", .{id.raw});
+    try emitPlaceAddress(allocator, out, body, place);
+    switch (kind) {
+        .dyn_value => try out.print(
+            allocator,
+            "; (__typeof__(*mc_pair_ptr_{0d})){{ .data = __atomic_load_n(&(mc_pair_ptr_{0d}->data), __ATOMIC_RELAXED), .vtable = __atomic_load_n(&(mc_pair_ptr_{0d}->vtable), __ATOMIC_RELAXED) }}; }})",
+            .{id.raw},
+        ),
+        .slice => try out.print(
+            allocator,
+            "; (__typeof__(*mc_pair_ptr_{0d})){{ .ptr = __atomic_load_n(&(mc_pair_ptr_{0d}->ptr), __ATOMIC_RELAXED), .len = (size_t)mc_race_load_usize(&(mc_pair_ptr_{0d}->len)) }}; }})",
+            .{id.raw},
+        ),
+    }
+}
+
 fn emitExpressionOperation(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -682,6 +706,14 @@ fn emitExpressionOperation(
                 if (mir.executableAggregateCopyAlignment(expression.result_ty) != null) {
                     var projections: [mir.max_executable_projections]CLeafProjection = undefined;
                     try emitRaceAggregateLoad(allocator, out, body, load.place, expression.result_ty, expression.type_id, &projections, 0);
+                    return;
+                }
+                if (dynLoadTargetSupported(body, expression.*, load)) {
+                    try emitRacePairLoad(allocator, out, body, load.place, expression.id, .dyn_value);
+                    return;
+                }
+                if (sliceLoadTargetSupported(body, expression.*, load)) {
+                    try emitRacePairLoad(allocator, out, body, load.place, expression.id, .slice);
                     return;
                 }
                 if (expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load) and
@@ -1241,7 +1273,13 @@ fn memoryLoadUnsupportedReason(
     const callable = callableLoadTargetSupported(body, expression, load);
     if (!callable and mir.executableAggregateCopyAlignment(expression.result_ty) == null and
         scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null)
-        return "load_type";
+        return switch (expression.result_ty) {
+            .value => "load_type_value",
+            .slice => "load_type_slice",
+            .pointer => |shape| if (shape.kind == .slice) "load_type_slice_pointer" else "load_type_pointer",
+            .nullable_value => "load_type_nullable_value",
+            else => "load_type_other",
+        };
     if (load.access.alignment != mir.executableMemoryAlignment(body.enum_types, expression.result_ty)) return "load_alignment";
     const place = placeById(body, load.place) orelse return "load_place";
     if (place.storage != .ordinary) return "load_storage";
@@ -1512,6 +1550,7 @@ fn opaqueValueExpressionSupported(body: *const mir.ExecutableBody, expression: m
         .local => |local| localById(body, local) != null and (dynLocal(body, local) or dynTraitParameter(body, local)),
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
+        .load => |load| dynLoadTargetSupported(body, expression, load) and memoryLoadSupported(body, expression, load),
         else => false,
     };
 }
@@ -1687,6 +1726,26 @@ fn callableLoadTargetSupported(
         .symbol => |id| if (symbolById(body, id)) |symbol| symbol.kind == .global else false,
         .local, .value => false,
     };
+}
+
+fn dynLoadTargetSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    load: @FieldType(mir.ExecutableExpression.Operation, "load"),
+) bool {
+    if (expression.result_ty != .value) return false;
+    const place = placeById(body, load.place) orelse return false;
+    return mir.executableDynTraitPlace(body, place.*) != null;
+}
+
+fn sliceLoadTargetSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    load: @FieldType(mir.ExecutableExpression.Operation, "load"),
+) bool {
+    if (!isSliceType(expression.result_ty)) return false;
+    const place = placeById(body, load.place) orelse return false;
+    return sameValueType(place.ty, expression.result_ty);
 }
 
 fn callableParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
@@ -2795,8 +2854,10 @@ fn memoryLoadSupported(
     }
     const aggregate_copy = mir.executableAggregateCopyAlignment(expression.result_ty) != null;
     const callable = callableLoadTargetSupported(body, expression, load);
+    const dyn_value = dynLoadTargetSupported(body, expression, load);
+    const slice_value = sliceLoadTargetSupported(body, expression, load);
     if (!aggregate_copy and scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null and
-        !callable) return false;
+        !callable and !dyn_value and !slice_value) return false;
     if (load.access.alignment != mir.executableMemoryAlignment(body.enum_types, expression.result_ty)) return false;
     if (aggregate_copy and load.access.kind == .race_unordered and
         !mir.executableRaceAggregateTypeSupported(body, expression.type_id, expression.result_ty)) return false;
@@ -2826,7 +2887,7 @@ fn memoryLoadSupported(
                 else
                     ownedTrapEdgeCount(body, expression.id) == @as(usize, @intFromBool(indexed.parameter_pointee));
         }
-        if (callable) {
+        if (callable or dyn_value or slice_value) {
             const projected_through_pointer = switch (place.root_ty) {
                 .pointer, .nullable_pointer => true,
                 else => place.projections[0] == .deref,
@@ -3908,6 +3969,7 @@ fn supportsParameterType(body: *const mir.ExecutableBody, ty: mir.ValueType) boo
 fn isSliceType(ty: mir.ValueType) bool {
     return switch (ty) {
         .pointer => |shape| shape.kind == .slice,
+        .slice => true,
         else => false,
     };
 }

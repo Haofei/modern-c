@@ -353,8 +353,16 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueTy
 
 fn memoryLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) []const u8 {
     if (!placeValid(body, load.place)) return "load_place";
-    const callable = callableLoadTargetSupported(body, expression, load);
-    if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false, callable)) return "load_access";
+    const composite = callableLoadTargetSupported(body, expression, load) or
+        dynLoadTargetSupported(body, expression, load) or
+        sliceLoadTargetSupported(body, expression, load);
+    if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false, composite)) return switch (expression.result_ty) {
+        .value => "load_access_value",
+        .slice => "load_access_slice",
+        .pointer => |shape| if (shape.kind == .slice) "load_access_slice_pointer" else "load_access_pointer",
+        .nullable_value => "load_access_nullable_value",
+        else => "load_access_other",
+    };
     const place = body.places[load.place.index()];
     if (place.projection_count == 0) return "load_direct";
     if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return "load_type_id";
@@ -625,9 +633,11 @@ const Renderer = struct {
                 .load => |load| load_callable: {
                     if (local.ty != .value) break :load_callable;
                     if (!placeValid(self.body, load.place)) return error.InvalidBody;
+                    const place = self.body.places[load.place.index()];
+                    if (mir.executableDynTraitPlace(self.body, place) != null) return "{ ptr, ptr }";
                     const signature = mir.executableCallablePlace(
                         self.body.aggregate_types,
-                        self.body.places[load.place.index()],
+                        place,
                     ) orelse return error.InvalidBody;
                     return self.callableStorageType(local.ty, signature);
                 },
@@ -1075,9 +1085,11 @@ const Renderer = struct {
                     if (callableHasEnvironment(self.body, expression.id)) |has_environment|
                         break :blk if (has_environment) "{ ptr, ptr }" else "ptr";
                     if (placeValid(self.body, load.place)) {
+                        const place = self.body.places[load.place.index()];
+                        if (mir.executableDynTraitPlace(self.body, place) != null) break :blk "{ ptr, ptr }";
                         const signature = mir.executableCallablePlace(
                             self.body.aggregate_types,
-                            self.body.places[load.place.index()],
+                            place,
                         ) orelse break :blk try self.typeText(expression.result_ty);
                         break :blk if (signature.has_environment) "{ ptr, ptr }" else "ptr";
                     }
@@ -2970,13 +2982,15 @@ const Renderer = struct {
     }
 
     fn emitMemoryLoad(self: *Renderer, expression: mir.ExecutableExpression, load: anytype) RenderError!Value {
+        const dyn_value = dynLoadTargetSupported(self.body, expression, load);
+        const slice_value = sliceLoadTargetSupported(self.body, expression, load);
         if (!memoryAccessSupported(
             self.body,
             load.place,
             expression.result_ty,
             load.access,
             false,
-            callableLoadTargetSupported(self.body, expression, load),
+            callableLoadTargetSupported(self.body, expression, load) or dyn_value or slice_value,
         )) return error.InvalidBody;
         const place = self.body.places[load.place.index()];
         const callable_has_environment = if (expression.result_ty == .value)
@@ -3021,6 +3035,8 @@ const Renderer = struct {
         if (callable_has_environment orelse false) {
             return self.emitClosureLoad(pointer, load.access);
         }
+        if (dyn_value) return self.emitClosureLoad(pointer, load.access);
+        if (slice_value) return self.emitSliceLoad(pointer, load.access);
         const byte_sized_bool = expression.result_ty == .bool and
             (placeIsGlobal(self.body, load.place) or load.access.kind == .race_unordered);
         const storage_ty: []const u8 = if (byte_sized_bool) "i8" else value_ty;
@@ -3232,6 +3248,35 @@ const Renderer = struct {
             .{ with_code, code, result, with_code, environment },
         );
         return .{ .ty = "{ ptr, ptr }", .spelling = result };
+    }
+
+    fn emitSliceLoad(
+        self: *Renderer,
+        pointer: []const u8,
+        access: mir.ExecutableMemoryAccess,
+    ) RenderError!Value {
+        if (access.alignment != 8) return error.InvalidBody;
+        const data = try self.temp();
+        const length_pointer = try self.temp();
+        const length = try self.temp();
+        const with_data = try self.temp();
+        const result = try self.temp();
+        switch (access.kind) {
+            .plain => try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}, align 8\n", .{ data, pointer }),
+            .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic ptr, ptr {s} unordered, align 8\n", .{ data, pointer }),
+        }
+        try self.output.print(self.allocator, "  {s} = getelementptr {{ ptr, i64 }}, ptr {s}, i32 0, i32 1\n", .{ length_pointer, pointer });
+        switch (access.kind) {
+            .plain => try self.output.print(self.allocator, "  {s} = load i64, ptr {s}, align 8\n", .{ length, length_pointer }),
+            .race_unordered => try self.output.print(self.allocator, "  {s} = load atomic i64, ptr {s} unordered, align 8\n", .{ length, length_pointer }),
+        }
+        try self.output.print(
+            self.allocator,
+            "  {s} = insertvalue {{ ptr, i64 }} zeroinitializer, ptr {s}, 0\n" ++
+                "  {s} = insertvalue {{ ptr, i64 }} {s}, i64 {s}, 1\n",
+            .{ with_data, data, result, with_data, length },
+        );
+        return .{ .ty = "{ ptr, i64 }", .spelling = result };
     }
 
     fn emitRaceAggregateLoad(
@@ -4458,6 +4503,24 @@ fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.
     };
 }
 
+fn dynLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
+    if (expression.result_ty != .value or !placeValid(body, load.place)) return false;
+    return mir.executableDynTraitPlace(body, body.places[load.place.index()]) != null;
+}
+
+fn sliceLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
+    if (!sliceValueType(expression.result_ty) or !placeValid(body, load.place)) return false;
+    return sameValueType(body.places[load.place.index()].ty, expression.result_ty);
+}
+
+fn sliceValueType(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .pointer => |shape| shape.kind == .slice,
+        .slice => true,
+        else => false,
+    };
+}
+
 fn callableParameter(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
     return callableParameterSignature(body, local) != null;
 }
@@ -5385,13 +5448,16 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
 }
 
 fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
+    const composite = callableLoadTargetSupported(body, expression, load) or
+        dynLoadTargetSupported(body, expression, load) or
+        sliceLoadTargetSupported(body, expression, load);
     if (!memoryAccessSupported(
         body,
         load.place,
         expression.result_ty,
         load.access,
         false,
-        callableLoadTargetSupported(body, expression, load),
+        composite,
     )) return false;
     const place = body.places[load.place.index()];
     if (place.projection_count == 0) {
@@ -5798,7 +5864,7 @@ fn packedFieldStoreSupported(
     };
 }
 
-fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool, allow_unordered_value: bool) bool {
+fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId, ty: mir.ValueType, access: mir.ExecutableMemoryAccess, is_store: bool, allow_unordered_composite: bool) bool {
     if (!placeValid(body, place_id)) return false;
     const place = body.places[place_id.index()];
     if (place.storage != .ordinary) return false;
@@ -5808,7 +5874,7 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
     if (aggregate_copy and access.kind == .race_unordered and
         !mir.executableRaceAggregateTypeSupported(body, place.type_id, place.ty)) return false;
     if (access.kind == .race_unordered and !unorderedMemoryTypeSupported(body, ty) and
-        !aggregate_copy and !(allow_unordered_value and ty == .value)) return false;
+        !aggregate_copy and !(allow_unordered_composite and (ty == .value or sliceValueType(ty)))) return false;
     if (place.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, place)) |indexed| {
             const expected_kind: mir.ExecutableMemoryAccessKind = if (indexed.parameter_pointee)
@@ -5875,6 +5941,7 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
             else
                 scalarAccessPlaceSupported(body, place) or
                     parameterCallableProjectedPlaceSupported(body, place, false) or
+                    (allow_unordered_composite and mir.executableParameterProjectedPlace(body, place, false)) or
                     (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place, false));
     }
     return switch (place.root) {
