@@ -6814,6 +6814,7 @@ const FunctionBuilder = struct {
         // instead of treating the harmless construction-order difference as
         // an unsupported executable body.
         try self.resolveExecutableCheckedTrapEdges(trap_edges);
+        try self.resolveExecutableBoundsTrapEdges(trap_edges);
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
         for (self.executable_parameters.items) |*parameter| {
             parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
@@ -8232,6 +8233,84 @@ const FunctionBuilder = struct {
                 .span_id = legacy.typed_span_id,
             });
         }
+    }
+
+    /// Assignment targets and projected loads are materialized before the
+    /// source-shaped fact walk records their bounds edge. Bind those edges
+    /// after the complete place table exists. The match is deliberately by
+    /// typed block + checked projection SpanId and must be unique; a missing
+    /// or ambiguous owner leaves the body incomplete.
+    fn resolveExecutableBoundsTrapEdges(self: *FunctionBuilder, legacy_edges: []const TrapEdge) !void {
+        for (legacy_edges) |legacy| {
+            if (legacy.kind != .Bounds or legacy.source != .bounds_check) continue;
+            var already_present = false;
+            for (self.executable_trap_edges.items) |edge| {
+                if (self.executableTrapEdgeMatchesLegacy(edge, legacy)) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (already_present) continue;
+
+            var owner: ?mir_model.ExecutableTrapOwner = null;
+            var ambiguous = false;
+            for (self.executable_expressions.items) |expression| {
+                if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                const owns_edge = switch (expression.operation) {
+                    .index => |operation| operation.checked and expression.span_id.eql(legacy.typed_span_id),
+                    .range_slice => |operation| operation.checked and expression.span_id.eql(legacy.typed_span_id),
+                    .load => |load| self.executableCheckedIndexProjectionSpanMatches(load.place, legacy.typed_span_id),
+                    .address_of => |address| self.executableCheckedIndexProjectionSpanMatches(address.place, legacy.typed_span_id),
+                    else => false,
+                };
+                if (!owns_edge) continue;
+                if (owner != null) {
+                    ambiguous = true;
+                    break;
+                }
+                owner = .{ .expression = expression.id };
+            }
+            if (!ambiguous) for (self.executable_statements.items) |statement| {
+                if (!statement.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                const owns_edge = switch (statement.operation) {
+                    .store => |store| self.executableCheckedIndexProjectionSpanMatches(store.place, legacy.typed_span_id),
+                    else => false,
+                };
+                if (!owns_edge) continue;
+                if (owner != null) {
+                    ambiguous = true;
+                    break;
+                }
+                owner = .{ .statement = statement.id };
+            };
+            if (ambiguous or owner == null) continue;
+            try self.executable_trap_edges.append(self.allocator, .{
+                .owner = owner.?,
+                .from_block = BlockId.fromIndex(legacy.from_block),
+                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .kind = legacy.kind,
+                .source = legacy.source,
+                .span_id = legacy.typed_span_id,
+            });
+        }
+    }
+
+    fn executableCheckedIndexProjectionSpanMatches(self: *const FunctionBuilder, place_id: PlaceId, span_id: SpanId) bool {
+        if (!place_id.isValid() or place_id.index() >= self.executable_places.items.len) return false;
+        const place = self.executable_places.items[place_id.index()];
+        const body: mir_model.ExecutableBody = .{
+            .parameters = self.executable_parameters.items,
+            .locals = self.executable_locals.items,
+            .symbols = self.executable_symbols.items,
+            .statements = self.executable_statements.items,
+            .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
+            .aggregate_types = self.executable_aggregate_types.items,
+            .enum_types = self.executable_enum_types.items,
+        };
+        if (mir_model.executableFixedArrayProjectionForSpan(&body, place, span_id) != null) return true;
+        const slice = mir_model.executableSliceIndexPlace(&body, place) orelse return false;
+        return slice.span_id.eql(span_id);
     }
 
     fn resolveExecutableRepresentationTrapEdges(
@@ -10053,6 +10132,19 @@ const FunctionBuilder = struct {
                         else => null,
                     },
                     .load => .nonnull_pointer,
+                    // A safe `*mut T` -> `*const T` narrowing preserves the
+                    // pointer bits but still owns the target non-null
+                    // representation obligation recorded by semantic MIR.
+                    // Materialize that obligation as the ordinary checked
+                    // wrapper instead of leaving codegen to rediscover cast
+                    // syntax or dropping the exact trap edge.
+                    .cast => switch (expr.kind) {
+                        .cast => if (isViewConstNarrowCast(result_ty, self.executable_expressions.items[operation.cast.operand.index()].result_ty))
+                            .nonnull_pointer
+                        else
+                            null,
+                        else => null,
+                    },
                     .direct_call, .indirect_call => switch (expr.kind) {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .nonnull_pointer else null,
                         else => null,
@@ -11214,21 +11306,35 @@ const FunctionBuilder = struct {
                 break :projection true;
             },
             .index => |node| projection: {
-                const base_ty = self.exprType(node.base.*);
+                var base_ty = self.exprType(node.base.*);
+                if (base_ty == .unknown or base_ty == .value) if (node.base.kind == .member) {
+                    base_ty = self.memberType(node.base.kind.member);
+                };
+                if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(node.base.*)) |resolved_base| {
+                    base_ty = valueTypeFromTypeAlias(resolved_base, self.enums, self.structs, self.packed_bits, self.aliases);
+                };
                 const kind: mir_model.ExecutableIndexKind = switch (base_ty) {
                     .array => .fixed_array,
                     .pointer => |shape| if (shape.kind == .slice) .slice else break :projection false,
                     .slice => .slice,
                     else => break :projection false,
                 };
+                const base_type_expr = if (kind == .fixed_array) self.typeExprForExpr(node.base.*) else null;
+                if (base_ty == .array and base_ty.array.length == null) {
+                    const resolved_base = aggregateTargetTypeAlias(base_type_expr orelse break :projection false, self.aliases);
+                    const array = switch (resolved_base.kind) {
+                        .array => |value| value,
+                        else => break :projection false,
+                    };
+                    base_ty.array.length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse break :projection false;
+                }
                 const bound: ?usize = switch (base_ty) {
                     .array => |shape| shape.length,
                     else => null,
                 };
                 if (kind == .fixed_array) {
                     if (bound == null) break :projection false;
-                    const base_type_expr = self.typeExprForExpr(node.base.*) orelse break :projection false;
-                    if (!try self.internExecutableTypeExpr(base_ty, base_type_expr)) break :projection false;
+                    if (!try self.internExecutableTypeExpr(base_ty, base_type_expr orelse break :projection false)) break :projection false;
                 }
                 var base_expr = node.base.*;
                 while (base_expr.kind == .grouped or base_expr.kind == .move_expr) base_expr = switch (base_expr.kind) {
@@ -18527,12 +18633,7 @@ const FunctionBuilder = struct {
     fn typeExprForAssignmentTarget(self: *FunctionBuilder, target: ast.Expr) ?ast.TypeExpr {
         return switch (target.kind) {
             .ident => |ident| self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text),
-            .member => |node| blk: {
-                if (self.enumVariantPathTypeExpr(node)) |ty| break :blk ty;
-                const base_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
-                const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse break :blk null;
-                break :blk self.structFieldTypeExpr(struct_name, node.name.text);
-            },
+            .member => |node| self.memberTypeExpr(node, target.span),
             .deref => |inner| if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .slice => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null,
@@ -18544,16 +18645,7 @@ const FunctionBuilder = struct {
     fn typeExprForExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text),
-            .member => |node| blk: {
-                if (self.enumVariantPathTypeExpr(node)) |ty| break :blk ty;
-                const base_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
-                const resolved_base = aggregateTargetTypeAlias(base_ty, self.aliases);
-                if ((resolved_base.kind == .slice or resolved_base.kind == .array) and std.mem.eql(u8, node.name.text, "len")) {
-                    break :blk ast_query.simpleNameType("usize", expr.span);
-                }
-                const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse break :blk null;
-                break :blk self.structFieldTypeExpr(struct_name, node.name.text);
-            },
+            .member => |node| self.memberTypeExpr(node, expr.span),
             .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
                 self.reflectionOrByteViewCallTypeExpr(node) orelse
                 (if (self.enumRawCallTarget(node)) |target| target.result_type_expr else null) orelse
@@ -18782,6 +18874,28 @@ const FunctionBuilder = struct {
             .pointer, .nullable_pointer => |shape| self.structFieldType(shape.child, node.name.text) orelse .value,
             else => .value,
         };
+    }
+
+    fn memberTypeExpr(self: *FunctionBuilder, node: anytype, span: ast.Span) ?ast.TypeExpr {
+        if (self.enumVariantPathTypeExpr(node)) |ty| return ty;
+        if (self.typeExprForExpr(node.base.*)) |base_ty| {
+            const resolved_base = aggregateTargetTypeAlias(base_ty, self.aliases);
+            if ((resolved_base.kind == .slice or resolved_base.kind == .array) and
+                std.mem.eql(u8, node.name.text, "len"))
+                return ast_query.simpleNameType("usize", span);
+            if (structTypeNameAlias(base_ty, self.aliases)) |struct_name|
+                return self.structFieldTypeExpr(struct_name, node.name.text);
+        }
+        // Lightweight expression classification already resolves pointer
+        // pointees even when the transitional type-expression table has no
+        // entry for an implicit member auto-deref (`h.free`). Recover the
+        // declared field type from that canonical pointee identity.
+        const struct_name: []const u8 = switch (self.exprType(node.base.*)) {
+            .struct_ => |name| name,
+            .pointer, .nullable_pointer => |shape| shape.child,
+            else => return null,
+        };
+        return self.structFieldTypeExpr(struct_name, node.name.text);
     }
 
     fn memberFieldIndex(self: *FunctionBuilder, node: anytype) ?usize {

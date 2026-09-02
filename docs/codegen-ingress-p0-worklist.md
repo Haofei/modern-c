@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 168/168 canonical | 168/168 canonical |
-| broad sweep | 1578/1818 admitted | 1627/1872 admitted |
-| AST fallback | 240 | 245 |
+| broad sweep | 1584/1818 admitted | 1634/1872 admitted |
+| AST fallback | 234 | 238 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -125,6 +125,17 @@ array or a by-value parameter array. The two renderers consume the same typed
 array shapes and checked bounds edges; `aggregate_ordering.mc` is 8/8
 canonical, is covered by the strict ratchet, and retires one broad fallback per
 backend.
+
+Fixed-array member places behind an implicit pointer auto-deref now resolve
+their declaration type and symbolic constant length before place admission.
+Bounds edges are attached in a final bijective pass using the verifier's exact
+fixed/slice-index predicate, so incomplete aggregate projections remain
+closed. Safe mutable-to-const pointer casts use the existing checked
+representation wrapper, and switch-arm terminal traps are projected from any
+typed case target. This retires six C and seven LLVM broad fallbacks. One
+`InvalidCompletionClaim` remains (`packet_init`), requiring a canonical proof
+for a reassigned local pointer generation before its fixed-array field can be
+opened.
 
 ## Ranked next slices
 

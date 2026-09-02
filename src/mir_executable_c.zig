@@ -4174,7 +4174,7 @@ fn emitLiteral(
     literal: mir.ExecutableLiteral,
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (literal) {
-        .integer => |magnitude| try out.print(allocator, "{d}", .{magnitude}),
+        .integer => |magnitude| try emitUnsignedIntegerLiteral(allocator, out, magnitude),
         .signed_integer => |value| try out.print(allocator, "{d}", .{value}),
         .float => |value| switch (value) {
             .f32_bits => |bits| try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits}),
@@ -4187,6 +4187,29 @@ fn emitLiteral(
         .uninit => return error.UnsupportedOperation,
         .enum_value => return error.UnsupportedOperation,
     }
+}
+
+fn emitUnsignedIntegerLiteral(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    magnitude: u128,
+) std.mem.Allocator.Error!void {
+    if (magnitude <= std.math.maxInt(i64)) {
+        try out.print(allocator, "{d}", .{magnitude});
+        return;
+    }
+    if (magnitude <= std.math.maxInt(u64)) {
+        try out.print(allocator, "{d}ULL", .{magnitude});
+        return;
+    }
+
+    const high: u64 = @truncate(magnitude >> 64);
+    const low: u64 = @truncate(magnitude);
+    try out.print(
+        allocator,
+        "((((unsigned __int128){d}ULL) << 64) | ((unsigned __int128){d}ULL))",
+        .{ high, low },
+    );
 }
 
 fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
@@ -5845,5 +5868,27 @@ test "executable C renderer validates a slice once with an exact representation 
         expressions[0].result_ty = rejected;
         expressions[1].result_ty = rejected;
         try std.testing.expect(!canEmitBody(&body));
+    }
+}
+
+test "executable C renderer emits unsigned integer boundaries without implicit unsigned literals" {
+    const cases = [_]struct {
+        value: u128,
+        expected: []const u8,
+    }{
+        .{ .value = std.math.maxInt(i64), .expected = "9223372036854775807" },
+        .{ .value = @as(u128, std.math.maxInt(i64)) + 1, .expected = "9223372036854775808ULL" },
+        .{ .value = std.math.maxInt(u64), .expected = "18446744073709551615ULL" },
+        .{
+            .value = std.math.maxInt(u128),
+            .expected = "((((unsigned __int128)18446744073709551615ULL) << 64) | ((unsigned __int128)18446744073709551615ULL))",
+        },
+    };
+
+    for (cases) |case| {
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try emitLiteral(std.testing.allocator, &output, .{ .integer = case.value });
+        try std.testing.expectEqualStrings(case.expected, output.items);
     }
 }

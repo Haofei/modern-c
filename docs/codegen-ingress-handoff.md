@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 168/168 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1578/1818 C functions and 1627/1872 LLVM functions.
-  The remaining 240 C and 245 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1584/1818 C functions and 1634/1872 LLVM functions.
+  The remaining 234 C and 238 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -86,6 +86,18 @@ not from a source spelling that may also name a global. The
 The shared memory model also records 16-byte alignment for direct local
 `u128`/`i128` values while leaving unsupported shared C access fail-closed;
 `numeric_literal_boundaries.wide_assignment` is canonical in both backends.
+
+Fixed-array fields reached through an implicit pointer member dereference now
+retain their declared type expression and resolve symbolic constant lengths
+before the canonical place is constructed. A final typed bounds-edge resolver
+binds source-walk edges only to places accepted by the same fixed/slice-index
+predicate as the verifier. Safe mutable-to-const pointer casts reuse the
+ordinary representation-check wrapper, and terminal traps in any switch arm
+are recognized rather than only the default arm. Broad admission gained six C
+and seven LLVM bodies; `InvalidCompletionClaim` fell to one and
+`InvalidPlaceType` from thirteen to seven. The remaining `packet_init` case is
+a local pointer-generation plus fixed-array projection and stays fail-closed
+until that generation has a canonical pointee proof.
 
 ## Next work
 

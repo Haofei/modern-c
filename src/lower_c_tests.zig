@@ -16295,9 +16295,9 @@ test "lower-c aggregate whole-element access lowers recursively" {
     defer slice_store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_slice_aggregate_store.mc", slice_store_source, &slice_store_output);
     const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_cell_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, Cell value)");
-    try expectContains(slice_store_body, "Cell * mc_ptr");
-    try expectContains(slice_store_body, "Cell mc_tmp");
-    try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
+    try expectContains(slice_store_body, "/* canonical executable MIR */");
+    try expectContains(slice_store_body, "Cell mc_exec_tmp_");
+    try expectContains(slice_store_body, ".ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, "mc_race_store_u32");
 
     const pointer_array_source =

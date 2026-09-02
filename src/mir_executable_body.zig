@@ -1057,12 +1057,17 @@ fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.Trap
     const body = &function.executable_body;
     const source = executableTerminator(body, mir.BlockId.fromIndex(legacy.from_block)) orelse return false;
     const target = executableTerminator(body, mir.BlockId.fromIndex(legacy.trap_block)) orelse return false;
-    const destination = switch (source.operation) {
-        .jump => |block| block,
-        .switch_ => |switch_| switch_.default_block,
-        else => return false,
+    const trap_block = mir.BlockId.fromIndex(legacy.trap_block);
+    const reaches_trap = switch (source.operation) {
+        .jump => |block| block.eql(trap_block),
+        .switch_ => |switch_| reaches: {
+            if (switch_.default_block.eql(trap_block)) break :reaches true;
+            for (switch_.cases[0..switch_.case_count]) |case| if (case.target.eql(trap_block)) break :reaches true;
+            break :reaches false;
+        },
+        else => false,
     };
-    if (!destination.eql(mir.BlockId.fromIndex(legacy.trap_block))) return false;
+    if (!reaches_trap) return false;
     const kind = switch (target.operation) {
         .trap_ => |value| value,
         else => return false,
