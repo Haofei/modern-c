@@ -342,6 +342,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 else => return error.InvalidLiteral,
             },
             .string => if (!stringLiteralType(value.result_ty)) return error.InvalidLiteral,
+            .uninit => if (body.complete and !mir.executableUninitLocalInitializer(body, value) and
+                !mir.executableUninitAggregateOperand(body, value)) return error.InvalidLiteral,
             else => {},
         },
         .unsupported => {},
@@ -1554,7 +1556,9 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
             if (!mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return true;
         },
         .literal => |literal| switch (literal) {
-            .uninit, .enum_value => return true,
+            .uninit => if (!mir.executableUninitLocalInitializer(body, value) and
+                !mir.executableUninitAggregateOperand(body, value)) return true,
+            .enum_value => return true,
             else => {},
         },
         else => {},

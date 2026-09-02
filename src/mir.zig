@@ -7237,7 +7237,8 @@ const FunctionBuilder = struct {
                     .slice => |child| std.mem.eql(u8, child, "u8"),
                     else => false,
                 },
-                .uninit, .enum_value => false,
+                .uninit => true,
+                .enum_value => false,
                 else => true,
             },
             .binary => |binary| if (binary.arithmetic == .unchecked)
@@ -9198,6 +9199,12 @@ const FunctionBuilder = struct {
             .pointer, .nullable_pointer => result_ty = expected,
             else => {},
         };
+        // Generated state-machine aggregates use `uninit` as contextual
+        // zeroed dormant storage.  Preserve the declared field type instead
+        // of leaking the parser's untyped placeholder into executable MIR.
+        if (expr.kind == .uninit_literal) {
+            if (expected_ty) |expected| result_ty = expected;
+        }
         if (expr.kind == .address_of or expr.kind == .borrow_expr) if (expected_ty) |expected| switch (expected) {
             .pointer => result_ty = expected,
             else => {},

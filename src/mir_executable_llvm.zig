@@ -1625,6 +1625,7 @@ const Renderer = struct {
             .null => if (std.mem.eql(u8, ty, "ptr")) .{ .ty = ty, .spelling = "null" } else error.Unsupported,
             .void => .{ .ty = "void", .spelling = "" },
             .string => |bytes| self.stringLiteralValue(expression, ty, bytes),
+            .uninit => .{ .ty = ty, .spelling = "zeroinitializer" },
             else => error.Unsupported,
         };
     }
@@ -4006,7 +4007,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
             .integer, .signed_integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
             .string => stringLiteralTypeSupported(expression.result_ty),
-            .uninit => mir.executableUninitLocalInitializer(body, expression),
+            .uninit => mir.executableUninitLocalInitializer(body, expression) or
+                mir.executableUninitAggregateOperand(body, expression),
             else => false,
         },
         .unary => |unary| unarySupported(body, expression, unary),

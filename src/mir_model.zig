@@ -1002,6 +1002,27 @@ pub fn executableUninitLocalInitializer(body: *const ExecutableBody, expression:
     return owner_count == 1;
 }
 
+/// Generated aggregate state machines use `uninit` fields as zeroed dormant
+/// storage, matching the established lowering contract. Keep that use
+/// distinct from a standalone uninitialized local, whose declaration emits no
+/// initializer at all.
+pub fn executableUninitAggregateOperand(body: *const ExecutableBody, expression: ExecutableExpression) bool {
+    switch (expression.operation) {
+        .literal => |literal| if (literal != .uninit) return false,
+        else => return false,
+    }
+    var owners: usize = 0;
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .struct_ => |aggregate| for (aggregate.operands[0..aggregate.operand_count]) |operand| {
+            if (!operand.eql(expression.id)) continue;
+            owners += 1;
+            if (owners > 1) return false;
+        },
+        else => {},
+    };
+    return owners == 1;
+}
+
 /// Canonical IEEE payload selected at the literal's checked semantic width.
 /// Raw spelling remains syntax/source-map data and never reaches codegen.
 pub const ExecutableFloatLiteral = union(enum) {

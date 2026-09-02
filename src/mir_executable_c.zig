@@ -1313,7 +1313,8 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .mmio_write => |write| mmioWriteSupported(body, expression, write),
         .literal => |literal| switch (literal) {
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
-            .uninit => mir.executableUninitLocalInitializer(body, expression),
+            .uninit => mir.executableUninitLocalInitializer(body, expression) or
+                mir.executableUninitAggregateOperand(body, expression),
             .string => stringLiteralTypeSupported(expression.result_ty),
             .enum_value => false,
             else => true,
@@ -4395,7 +4396,11 @@ fn emitLiteral(
         .boolean => |value| try out.appendSlice(allocator, if (value) "true" else "false"),
         .null => try out.appendSlice(allocator, "NULL"),
         .void => try out.appendSlice(allocator, "((void)0)"),
-        .uninit => return error.UnsupportedOperation,
+        .uninit => {
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, ty);
+            try out.appendSlice(allocator, "){0})");
+        },
         .enum_value => return error.UnsupportedOperation,
     }
 }
