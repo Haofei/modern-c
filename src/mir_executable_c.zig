@@ -1721,7 +1721,8 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
     if (expression.result_ty != .value) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null and
-            (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
+            (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local) or
+                callableClosureLocalPassedToDirectCall(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
         .load => |load| (expressionUsedAsIndirectCallee(body, expression.id) or expressionReturned(body, expression.id) or
             callableProducerInitializesUsedLocal(body, expression.id)) and memoryLoadSupported(body, expression, load),
@@ -1731,6 +1732,33 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .closure_bind => |bind| closureBindSupported(body, expression, bind),
         else => false,
     };
+}
+
+/// A closure stored in an immutable local keeps the exact callable signature
+/// of its canonical `closure_bind` initializer. Direct calls already carry a
+/// checked argument contract; admitting this local avoids treating the
+/// source-level binding name as a second callable-type authority.
+fn callableClosureLocalPassedToDirectCall(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
+    const init = localInit(body, local) orelse return false;
+    if (init.mutable or init.ty != .value) return false;
+    const initializer_id = init.value orelse return false;
+    const initializer = expressionById(body, initializer_id) orelse return false;
+    const bind = switch (initializer.operation) {
+        .closure_bind => |value| value,
+        else => return false,
+    };
+    if (!closureBindSupported(body, initializer.*, bind)) return false;
+    for (body.expressions) |candidate| switch (candidate.operation) {
+        .direct_call => |call| for (call.arguments[0..call.argument_count]) |argument_id| {
+            const argument = expressionById(body, argument_id) orelse continue;
+            switch (argument.operation) {
+                .local => |argument_local| if (argument_local.eql(local)) return true,
+                else => {},
+            }
+        },
+        else => {},
+    };
+    return false;
 }
 
 fn expressionUsedAsIndirectCallee(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
@@ -1888,20 +1916,57 @@ fn emitClosureBind(
     bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind"),
     depth: usize,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    try out.appendSlice(allocator, "((struct { ");
-    try appendCType(allocator, out, body, bind.signature.return_ty);
-    try out.appendSlice(allocator, " (*code)(void *");
-    for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| {
-        try out.appendSlice(allocator, ", ");
-        try appendCType(allocator, out, body, ty);
+    if (closureTypeNameSupported(bind.signature)) {
+        try out.appendSlice(allocator, "((");
+        try appendClosureTypeName(allocator, out, bind.signature);
+        try out.appendSlice(allocator, "){ .code = (");
+    } else {
+        try out.appendSlice(allocator, "((struct { ");
+        try appendCType(allocator, out, body, bind.signature.return_ty);
+        try out.appendSlice(allocator, " (*code)(void *");
+        for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| {
+            try out.appendSlice(allocator, ", ");
+            try appendCType(allocator, out, body, ty);
+        }
+        try out.appendSlice(allocator, "); void *env; }){ .code = (");
     }
-    try out.appendSlice(allocator, "); void *env; }){ .code = (");
     try appendClosureCodePointerType(allocator, out, body, bind.signature);
     try out.append(allocator, ')');
     try appendSymbol(allocator, out, body, bind.target);
     try out.appendSlice(allocator, ", .env = (void *)");
     try emitExpression(allocator, out, body, bind.capture, depth + 1);
     try out.appendSlice(allocator, " })");
+}
+
+fn closureTypeNameSupported(signature: mir.ExecutableCallSignature) bool {
+    if (!cTypeSuffixSupported(signature.return_ty)) return false;
+    for (signature.parameter_types[0..signature.parameter_count]) |ty|
+        if (!cTypeSuffixSupported(ty)) return false;
+    return true;
+}
+
+fn cTypeSuffixSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .bool, .integer, .float, .address, .struct_, .closed_enum, .open_enum => true,
+        else => false,
+    };
+}
+
+fn appendClosureTypeName(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    signature: mir.ExecutableCallSignature,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.appendSlice(allocator, "mc_closure");
+    var suffix: std.ArrayList(u8) = .empty;
+    defer suffix.deinit(allocator);
+    try appendCTypeSuffix(allocator, &suffix, signature.return_ty);
+    try out.print(allocator, "_{d}_{s}", .{ suffix.items.len, suffix.items });
+    for (signature.parameter_types[0..signature.parameter_count]) |ty| {
+        suffix.clearRetainingCapacity();
+        try appendCTypeSuffix(allocator, &suffix, ty);
+        try out.print(allocator, "_{d}_{s}", .{ suffix.items.len, suffix.items });
+    }
 }
 
 fn indirectCallSupported(
