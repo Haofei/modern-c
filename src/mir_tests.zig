@@ -726,6 +726,15 @@ test "executable MIR classifies mixed-sign and narrowing integer resizing" {
     try std.testing.expectEqual(mir.ExecutableCastKind.integer_resize, mir.ExecutableCastKind.classify(.{ .integer = "i64" }, .{ .integer = "i8" }).?);
 }
 
+test "executable MIR classifies bool to integer casts without widening other domains" {
+    try std.testing.expectEqual(
+        mir.ExecutableCastKind.bool_to_integer,
+        mir.ExecutableCastKind.classify(.bool, .{ .integer = "u32" }).?,
+    );
+    try std.testing.expect(mir.ExecutableCastKind.classify(.bool, .{ .float = "f32" }) == null);
+    try std.testing.expect(mir.ExecutableCastKind.classify(.bool, .{ .address = .paddr }) == null);
+}
+
 test "executable MIR owns and verifies packed-bits storage metadata" {
     const source =
         \\packed bits Flags: u8 { ready: bool, busy: bool }
