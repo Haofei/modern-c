@@ -224,6 +224,20 @@ fn emitStatement(
                         try out.appendSlice(allocator, ").vtable, __ATOMIC_RELAXED);\n");
                         return;
                     }
+                    if (isSliceType(store.ty)) {
+                        try out.print(allocator, "__auto_type mc_store_tmp_{d} = ", .{statement.id.raw});
+                        try emitExpression(allocator, out, body, store.value, 0);
+                        try out.appendSlice(allocator, ";\n");
+                        try writeIndent(allocator, out, indent);
+                        try out.appendSlice(allocator, "__atomic_store_n(&(");
+                        try emitPlace(allocator, out, body, store.place);
+                        try out.print(allocator, ".ptr), mc_store_tmp_{d}.ptr, __ATOMIC_RELAXED);\n", .{statement.id.raw});
+                        try writeIndent(allocator, out, indent);
+                        try out.appendSlice(allocator, "mc_race_store_usize(&(");
+                        try emitPlace(allocator, out, body, store.place);
+                        try out.print(allocator, ".len), (uintptr_t)mc_store_tmp_{d}.len);\n", .{statement.id.raw});
+                        return;
+                    }
                     if (mir.executableAggregateCopyAlignment(store.ty) != null) {
                         var projections: [mir.max_executable_projections]CLeafProjection = undefined;
                         var first = true;
@@ -3493,7 +3507,7 @@ fn memoryStoreSupported(
     if (aggregate_copy and store.access.kind == .race_unordered and
         !mir.executableRaceAggregateTypeSupported(body, place.type_id, place.ty)) return false;
     if (place.projection_count != 0) {
-        if (!aggregate_copy and scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
+        if (!aggregate_copy and !isSliceType(store.ty) and scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
             mir.executableCallablePlace(body.aggregate_types, place.*) == null and !dyn_store) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
             const access_ok = if (indexed.parameter_pointee)
@@ -3557,6 +3571,9 @@ fn memoryStoreSupported(
                 ownedStatementTrapEdgeCount(body, statement.id) == 0;
         }
         return (parameterScalarAccessPlaceSupported(body, place.*) or
+            (scalarMemoryInfo(store.ty) != null and
+                mir.executableParameterProjectedPlace(body, place.*, true)) or
+            (isSliceType(store.ty) and mir.executableParameterProjectedPlace(body, place.*, true)) or
             (dyn_store and mir.executableParameterProjectedPlace(body, place.*, true)) or local_alias or
             mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
             (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true)) or

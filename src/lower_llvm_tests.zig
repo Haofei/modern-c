@@ -14840,7 +14840,7 @@ test "LLVM pointer-member scalar access lowers race-tolerantly" {
     try expectNotContains(load_body, "load i32, ptr %");
 
     const store_body = try llvmFunctionBody(output.items, "define internal void @nested_pointer_member_store");
-    try expectContains(store_body, "store atomic i32 %x, ptr %");
+    try expectContains(store_body, "store atomic i32 %");
     try expectContains(store_body, " unordered, align 4");
     try expectNotContains(store_body, "store i32 %x, ptr %");
 

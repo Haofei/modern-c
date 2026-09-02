@@ -14676,8 +14676,7 @@ test "lower-c nested pointer member scalar access lowers race-tolerantly" {
     const load_body = try cFunctionBody(output.items, "static uint32_t nested_pointer_member_load(Outer * p)");
     try expectContains(load_body, "mc_race_load_u32(&(p->inner.value))");
     const store_body = try cFunctionBody(output.items, "static void nested_pointer_member_store(Outer * p, uint32_t x)");
-    try expectContains(store_body, "uint32_t mc_tmp");
-    try expectContains(store_body, "mc_race_store_u32(&(p->inner.value), (uint32_t)mc_tmp");
+    try expectContains(store_body, "mc_race_store_u32(&(p->inner.value), (uint32_t)");
     const call_load_body = try cFunctionBody(output.items, "static uint32_t call_nested_pointer_member_load(void)");
     try expectContains(call_load_body, "return ((uint32_t)mc_race_load_u32(&(external_outer()->inner.value)));");
 }

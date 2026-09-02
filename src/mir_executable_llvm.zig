@@ -3185,6 +3185,7 @@ const Renderer = struct {
             if (signature.has_environment) return self.emitClosureStore(pointer, value, access);
             if (!std.mem.eql(u8, value.ty, "ptr")) return error.InvalidBody;
         }
+        if (sliceValueType(place.ty)) return self.emitSliceStore(pointer, value, access);
         if (mir.executableAggregateCopyAlignment(place.ty) != null and access.kind == .race_unordered) {
             return self.emitRaceAggregateStore(pointer, place.ty, place.type_id, value, null);
         }
@@ -3199,6 +3200,34 @@ const Renderer = struct {
         switch (access.kind) {
             .plain => try self.output.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}\n", .{ storage_ty, stored, pointer, access.alignment }),
             .race_unordered => try self.output.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}\n", .{ storage_ty, stored, pointer, access.alignment }),
+        }
+    }
+
+    fn emitSliceStore(self: *Renderer, pointer: []const u8, value: Value, access: mir.ExecutableMemoryAccess) RenderError!void {
+        if (!std.mem.eql(u8, value.ty, "{ ptr, i64 }") or access.alignment != 8) return error.InvalidBody;
+        const data = try self.temp();
+        const length = try self.temp();
+        const length_pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n" ++
+                "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n" ++
+                "  {s} = getelementptr {{ ptr, i64 }}, ptr {s}, i32 0, i32 1\n",
+            .{ data, value.spelling, length, value.spelling, length_pointer, pointer },
+        );
+        switch (access.kind) {
+            .plain => try self.output.print(
+                self.allocator,
+                "  store ptr {s}, ptr {s}, align 8\n" ++
+                    "  store i64 {s}, ptr {s}, align 8\n",
+                .{ data, pointer, length, length_pointer },
+            ),
+            .race_unordered => try self.output.print(
+                self.allocator,
+                "  store atomic ptr {s}, ptr {s} unordered, align 8\n" ++
+                    "  store atomic i64 {s}, ptr {s} unordered, align 8\n",
+                .{ data, pointer, length, length_pointer },
+            ),
         }
     }
 
@@ -3846,6 +3875,9 @@ const Renderer = struct {
         const place = self.body.places[place_id.index()];
         if (!parameterScalarAccessStorePlaceSupported(self.body, place) and
             !parameterCallableProjectedPlaceSupported(self.body, place, true) and
+            !(projectedScalarStoreTypeSupported(place.ty) and
+                mir.executableParameterProjectedPlace(self.body, place, true)) and
+            !(sliceValueType(place.ty) and mir.executableParameterProjectedPlace(self.body, place, true)) and
             !(mir.executableAggregateCopyAlignment(place.ty) != null and
                 mir.executableParameterProjectedPlace(self.body, place, true)) and
             !(mir.executableDynTraitPlace(self.body, place) != null and
@@ -3856,10 +3888,15 @@ const Renderer = struct {
             .symbol, .value => return error.InvalidBody,
         };
         const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
-        if (local.addressable or !std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+        var root_pointer = local.storage;
+        if (local.addressable) {
+            if (!std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+            root_pointer = try self.temp();
+            try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ root_pointer, local.storage });
+        } else if (!std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_representation_store_ready_{d}", .{statement.id.raw});
-        try self.emitPointerRepresentationGuard(local.storage, edge, continuation);
-        return self.emitParameterAccessPointer(place, local.storage);
+        try self.emitPointerRepresentationGuard(root_pointer, edge, continuation);
+        return self.emitParameterAccessPointer(place, root_pointer);
     }
 
     fn emitGuardedLocalAddressAliasPointer(self: *Renderer, expression: mir.ExecutableExpression, place_id: mir.PlaceId) RenderError![]const u8 {
@@ -5798,7 +5835,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     if (!expressionValid(body, store.value)) return false;
     const place = body.places[store.place.index()];
     const value = body.expressions[store.value.index()];
-    const special_value_store = callableStoreTargetSupported(body, place, value) or dynStoreTargetSupported(body, place, value);
+    const special_value_store = callableStoreTargetSupported(body, place, value) or
+        dynStoreTargetSupported(body, place, value) or sliceValueType(store.ty);
     if (!memoryAccessSupported(body, store.place, store.ty, store.access, true, special_value_store)) return false;
     if (!sameValueType(store.ty, value.result_ty)) return false;
     if (place.projection_count == 0) {
@@ -5848,6 +5886,9 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             statementRepresentationTrapEdge(body, statement) == null;
     }
     return (parameterScalarAccessStorePlaceSupported(body, place) or
+        (projectedScalarStoreTypeSupported(store.ty) and
+            mir.executableParameterProjectedPlace(body, place, true)) or
+        (sliceValueType(store.ty) and mir.executableParameterProjectedPlace(body, place, true)) or
         (mir.executableAggregateCopyAlignment(store.ty) != null and
             mir.executableParameterProjectedPlace(body, place, true)) or
         mir.executableLocalAddressDerefPlace(body, place, true) or
@@ -5982,6 +6023,9 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
         return sameValueType(place.ty, ty) and access.kind == expected_kind and
             if (is_store)
                 parameterScalarAccessStorePlaceSupported(body, place) or
+                    (projectedScalarStoreTypeSupported(ty) and
+                        mir.executableParameterProjectedPlace(body, place, true)) or
+                    (sliceValueType(ty) and mir.executableParameterProjectedPlace(body, place, true)) or
                     parameterCallableProjectedPlaceSupported(body, place, true) or
                     (mir.executableDynTraitPlace(body, place) != null and
                         mir.executableParameterProjectedPlace(body, place, true)) or
@@ -6010,6 +6054,13 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
         else
             false,
         .value => false,
+    };
+}
+
+fn projectedScalarStoreTypeSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .bool, .integer, .domain_integer, .float, .address => mir.ExecutableMemoryAccess.scalarAlignment(ty) != null,
+        else => false,
     };
 }
 
