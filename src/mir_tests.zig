@@ -5499,7 +5499,14 @@ test "MIR owns DMA call identities and complete types" {
 
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
-    const function = functionByName(typed_mir, "dma_cycle").?;
+    const function = functionByNameMut(&typed_mir, "dma_cycle").?;
+    try mir_executable_body.verify(function);
+    try std.testing.expect(function.executable_body.isComplete());
+    try std.testing.expectEqual(@as(usize, 1), function.executable_body.parameters.len);
+    const dma_parameter = &function.executable_body.parameters[0];
+    try std.testing.expectEqual(mir_model.ExecutableDmaBufferMode.noncoherent, dma_parameter.dma_mode.?);
+    try std.testing.expectEqualStrings("Packet", dma_parameter.dma_payload_ty.name());
+    try std.testing.expect(dma_parameter.dma_payload_type_id.isValid());
     try std.testing.expectEqual(@as(usize, 4), function.call_target_facts.len);
 
     var clean = false;
@@ -5554,6 +5561,11 @@ test "MIR owns DMA call identities and complete types" {
     try std.testing.expectEqual(@as(usize, 1), slice_results);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    dma_parameter.dma_mode = .coherent;
+    try std.testing.expectError(error.InvalidBuiltinCall, mir_executable_body.verify(function));
+    dma_parameter.dma_mode = .noncoherent;
+    try mir_executable_body.verify(function);
 }
 
 test "MIR owns value reflection call target facts" {

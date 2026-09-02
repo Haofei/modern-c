@@ -7247,12 +7247,14 @@ test "lower-c DMA calls consume MIR identities and complete types" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(buf), mc_barrier_release_before())") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(buf), mc_barrier_acquire_after())") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before()") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after()") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((uintptr_t)(") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, ".len = 1") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_mut_mc_type_struct_6_Packet") != null);
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});

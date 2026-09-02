@@ -701,6 +701,16 @@ const Renderer = struct {
         };
     }
 
+    fn dmaBufferValue(self: *Renderer, local: mir.LocalId) RenderError!Value {
+        _ = mir.executableDmaBufferParameter(self.body, local) orelse return error.InvalidBody;
+        const stored = self.locals.get(local.raw) orelse return error.InvalidBody;
+        if (!std.mem.eql(u8, stored.ty, "i64")) return error.InvalidBody;
+        if (!stored.addressable) return .{ .ty = "i64", .spelling = stored.storage };
+        const value = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ value, stored.storage });
+        return .{ .ty = "i64", .spelling = value };
+    }
+
     fn emit(self: *Renderer) RenderError!void {
         if (self.values.len != self.body.expressions.len) return error.OutOfMemory;
         for (self.body.parameters) |parameter| {
@@ -710,6 +720,8 @@ const Renderer = struct {
                 "{ ptr, ptr }"
             else if (parameter.ty == .value and parameter.atomic_payload_type_id.isValid())
                 try self.typeText(parameter.atomic_payload_ty)
+            else if (parameter.ty == .value and parameter.dma_payload_type_id.isValid())
+                "i64"
             else
                 try self.typeText(parameter.ty);
             const argument = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw});
@@ -2763,6 +2775,27 @@ const Renderer = struct {
                 if (!std.mem.eql(u8, result_ty, "void") or call.argument_count != 1) return error.InvalidBody;
                 return .{ .ty = "void", .spelling = "" };
             },
+            .dma_cache_clean, .dma_cache_invalidate => {
+                _ = try self.dmaBufferValue(call.dma_buffer);
+                try self.output.print(self.allocator, "  fence {s}\n", .{if (call.kind == .dma_cache_clean) "release" else "acquire"});
+                return .{ .ty = "void", .spelling = "" };
+            },
+            .dma_addr => {
+                const buffer = try self.dmaBufferValue(call.dma_buffer);
+                if (!std.mem.eql(u8, result_ty, "i64")) return error.InvalidBody;
+                return buffer;
+            },
+            .dma_as_slice => {
+                const buffer = try self.dmaBufferValue(call.dma_buffer);
+                if (!std.mem.eql(u8, result_ty, "{ ptr, i64 }")) return error.InvalidBody;
+                const pointer = try self.temp();
+                const with_pointer = try self.temp();
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ pointer, buffer.spelling });
+                try self.output.print(self.allocator, "  {s} = insertvalue {{ ptr, i64 }} zeroinitializer, ptr {s}, 0\n", .{ with_pointer, pointer });
+                try self.output.print(self.allocator, "  {s} = insertvalue {{ ptr, i64 }} {s}, i64 1, 1\n", .{ result, with_pointer });
+                return .{ .ty = result_ty, .spelling = result };
+            },
             .va_start => return error.InvalidBody,
             .va_arg => {
                 const cursor = try self.vaListCursorPointer(call.vararg_cursor);
@@ -4394,7 +4427,9 @@ fn parameterTypeSupported(body: *const mir.ExecutableBody, parameter: mir.Execut
     if (llvmTypeSupported(body, parameter.ty)) return true;
     if (parameter.ty != .value) return false;
     if (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)) return true;
-    return parameter.atomic_payload_type_id.isValid() and llvmTypeSupported(body, parameter.atomic_payload_ty);
+    if (parameter.atomic_payload_type_id.isValid()) return llvmTypeSupported(body, parameter.atomic_payload_ty);
+    return parameter.dma_mode != null and parameter.dma_payload_type_id.isValid() and
+        llvmTypeSupported(body, parameter.dma_payload_ty);
 }
 
 fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
@@ -5298,7 +5333,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice, .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -5309,10 +5344,21 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
     switch (call.kind) {
-        .va_start => if (call.vararg_cursor.isValid() or mir.executableVaStartLocal(body, expression.id) == null or
+        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice => {
+            const parameter = mir.executableDmaBufferParameter(body, call.dma_buffer) orelse return false;
+            if (call.vararg_cursor.isValid()) return false;
+            if ((call.kind == .dma_cache_clean or call.kind == .dma_cache_invalidate) and
+                parameter.dma_mode.? != .noncoherent) return false;
+            if (call.kind == .dma_as_slice) switch (expression.result_ty) {
+                .pointer => |shape| if (!std.mem.eql(u8, shape.child, parameter.dma_payload_ty.name())) return false,
+                .slice => |child| if (!std.mem.eql(u8, child, parameter.dma_payload_ty.name())) return false,
+                else => return false,
+            };
+        },
+        .va_start => if (call.dma_buffer.isValid() or call.vararg_cursor.isValid() or mir.executableVaStartLocal(body, expression.id) == null or
             !body.is_variadic or !body.last_named_parameter.isValid()) return false,
-        .va_arg, .va_end => if (!mir.executableVaListLocal(body, call.vararg_cursor)) return false,
-        else => if (call.vararg_cursor.isValid()) return false,
+        .va_arg, .va_end => if (call.dma_buffer.isValid() or !mir.executableVaListLocal(body, call.vararg_cursor)) return false,
+        else => if (call.vararg_cursor.isValid() or call.dma_buffer.isValid()) return false,
     }
     if (call.kind == .reduce_sum_checked and !reduceCheckedResultSupported(body, expression, call)) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;

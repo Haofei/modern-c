@@ -570,6 +570,11 @@ pub const ExecutableCastKind = enum {
 
 pub const ExecutableIntegerInfo = struct { signed: bool, bits: u16 };
 
+pub const ExecutableDmaBufferMode = enum {
+    coherent,
+    noncoherent,
+};
+
 pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, operands: []const ValueType) bool {
     return switch (kind) {
         .const_get => operands.len == 1 and switch (operands[0]) {
@@ -737,6 +742,16 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         // still carries the operand so both mechanical renderers must evaluate
         // it exactly once before discarding the resulting value.
         .forget_unchecked => operands.len == 1 and result == .void,
+        .dma_cache_clean, .dma_cache_invalidate => operands.len == 0 and result == .void,
+        .dma_addr => operands.len == 0 and switch (result) {
+            .address => |class| class == .dma_addr,
+            else => false,
+        },
+        .dma_as_slice => operands.len == 0 and switch (result) {
+            .pointer => |shape| shape.kind == .slice and shape.mutability == .mut,
+            .slice => true,
+            else => false,
+        },
         .va_start => operands.len == 0 and result == .value,
         .va_arg => operands.len == 0 and executableVaArgPayloadType(result),
         .va_end => operands.len == 0 and result == .void,
@@ -1215,6 +1230,10 @@ pub const ExecutableExpression = struct {
             /// is tied to its local-init owner instead. Keeping a LocalId here
             /// avoids rebuilding `&ap` from call syntax in codegen.
             vararg_cursor: LocalId = .invalid,
+            /// Canonical source buffer for DMA operations. The parameter owns
+            /// its payload and coherence metadata; codegen never reopens the
+            /// generic source type or call syntax.
+            dma_buffer: LocalId = .invalid,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
@@ -1726,6 +1745,11 @@ pub const ExecutableParameter = struct {
     /// inference from pointer spelling.
     atomic_payload_ty: ValueType = .unknown,
     atomic_payload_type_id: TypeId = .invalid,
+    /// Payload/coherence identity for an otherwise opaque `DmaBuf<T, mode>`
+    /// parameter. Mutually exclusive with the other `.value` refinements.
+    dma_payload_ty: ValueType = .unknown,
+    dma_payload_type_id: TypeId = .invalid,
+    dma_mode: ?ExecutableDmaBufferMode = null,
     source: SourcePoint,
     span_id: SpanId = .invalid,
 };
@@ -2138,6 +2162,16 @@ pub const ExecutableBody = struct {
 pub fn executableVaListLocal(body: *const ExecutableBody, id: LocalId) bool {
     return id.isValid() and id.index() < body.locals.len and
         body.locals[id.index()].id.eql(id) and body.locals[id.index()].is_va_list;
+}
+
+pub fn executableDmaBufferParameter(body: *const ExecutableBody, id: LocalId) ?ExecutableParameter {
+    for (body.parameters) |parameter| {
+        if (!parameter.local.eql(id)) continue;
+        if (parameter.ty != .value or parameter.dma_mode == null or
+            parameter.dma_payload_ty == .unknown or !parameter.dma_payload_type_id.isValid()) return null;
+        return parameter;
+    }
+    return null;
 }
 
 pub fn executableVaStartLocal(body: *const ExecutableBody, expression: ExprId) ?LocalId {

@@ -174,10 +174,14 @@ pub fn verify(function: *const mir.Function) !void {
         try verifySpan(function, parameter.span_id, parameter.source);
         try verifyType(function, parameter.type_id, parameter.ty, body.complete);
         if (parameter.callable_signature) |signature| {
-            if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid() or parameter.atomic_payload_type_id.isValid()) return error.InvalidFunctionSignature;
+            if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid() or parameter.atomic_payload_type_id.isValid() or
+                parameter.dma_payload_type_id.isValid() or parameter.dma_payload_ty != .unknown or
+                parameter.dma_mode != null) return error.InvalidFunctionSignature;
             try verifyCallableSignature(function, signature, body.complete);
         } else if (parameter.dyn_trait_symbol_id.isValid()) {
-            if (parameter.ty != .value or parameter.atomic_payload_type_id.isValid()) return error.InvalidFunctionSignature;
+            if (parameter.ty != .value or parameter.atomic_payload_type_id.isValid() or
+                parameter.dma_payload_type_id.isValid() or parameter.dma_payload_ty != .unknown or
+                parameter.dma_mode != null) return error.InvalidFunctionSignature;
             const trait = symbol(body, parameter.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
             if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
         } else if (parameter.atomic_payload_type_id.isValid()) {
@@ -185,9 +189,17 @@ pub fn verify(function: *const mir.Function) !void {
                 .pointer => |shape| shape.kind == .single,
                 else => false,
             };
-            if (!atomic_container or parameter.atomic_payload_ty == .unknown or parameter.atomic_payload_ty == .value)
+            if (!atomic_container or parameter.atomic_payload_ty == .unknown or parameter.atomic_payload_ty == .value or
+                parameter.dma_payload_type_id.isValid() or parameter.dma_payload_ty != .unknown or
+                parameter.dma_mode != null)
                 return error.InvalidFunctionSignature;
             try verifyType(function, parameter.atomic_payload_type_id, parameter.atomic_payload_ty, body.complete);
+        } else if (parameter.dma_payload_type_id.isValid()) {
+            if (parameter.ty != .value or parameter.dma_payload_ty == .unknown or parameter.dma_payload_ty == .value or
+                parameter.dma_mode == null) return error.InvalidFunctionSignature;
+            try verifyType(function, parameter.dma_payload_type_id, parameter.dma_payload_ty, body.complete);
+        } else if (parameter.dma_payload_ty != .unknown or parameter.dma_mode != null) {
+            return error.InvalidFunctionSignature;
         } else if (body.complete and parameter.ty == .value) return error.InvalidFunctionSignature;
     }
 
@@ -677,14 +689,25 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) {
                 if (!mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return error.InvalidBuiltinCall;
                 switch (call.kind) {
+                    .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice => {
+                        const parameter = mir.executableDmaBufferParameter(body, call.dma_buffer) orelse return error.InvalidBuiltinCall;
+                        if (call.vararg_cursor.isValid()) return error.InvalidBuiltinCall;
+                        if ((call.kind == .dma_cache_clean or call.kind == .dma_cache_invalidate) and
+                            parameter.dma_mode.? != .noncoherent) return error.InvalidBuiltinCall;
+                        if (call.kind == .dma_as_slice) switch (value.result_ty) {
+                            .pointer => |shape| if (!std.mem.eql(u8, shape.child, parameter.dma_payload_ty.name())) return error.InvalidBuiltinCall,
+                            .slice => |child| if (!std.mem.eql(u8, child, parameter.dma_payload_ty.name())) return error.InvalidBuiltinCall,
+                            else => return error.InvalidBuiltinCall,
+                        };
+                    },
                     .va_start => {
-                        if (call.vararg_cursor.isValid() or !body.is_variadic or
+                        if (call.dma_buffer.isValid() or call.vararg_cursor.isValid() or !body.is_variadic or
                             mir.executableVaStartLocal(body, value.id) == null)
                             return error.InvalidBuiltinCall;
                     },
-                    .va_arg, .va_end => if (!mir.executableVaListLocal(body, call.vararg_cursor))
+                    .va_arg, .va_end => if (call.dma_buffer.isValid() or !mir.executableVaListLocal(body, call.vararg_cursor))
                         return error.InvalidBuiltinCall,
-                    else => if (call.vararg_cursor.isValid()) return error.InvalidBuiltinCall,
+                    else => if (call.vararg_cursor.isValid() or call.dma_buffer.isValid()) return error.InvalidBuiltinCall,
                 }
                 if (call.kind == .const_get) {
                     const index = call.const_index orelse return error.InvalidBuiltinCall;

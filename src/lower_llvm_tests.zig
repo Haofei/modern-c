@@ -8229,6 +8229,7 @@ test "LLVM DMA calls consume MIR identities and complete types" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_dma_facts.mc", .{}, false, .riscv64, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "; canonical executable MIR") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "fence release") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "fence acquire") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "inttoptr i64") != null);

@@ -2779,7 +2779,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice, .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -2790,14 +2790,25 @@ fn builtinCallSupported(
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
     switch (call.kind) {
-        .va_start => return !call.vararg_cursor.isValid() and
+        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice => {
+            const parameter = mir.executableDmaBufferParameter(body, call.dma_buffer) orelse return false;
+            if (call.vararg_cursor.isValid()) return false;
+            if ((call.kind == .dma_cache_clean or call.kind == .dma_cache_invalidate) and
+                parameter.dma_mode.? != .noncoherent) return false;
+            if (call.kind == .dma_as_slice) switch (expression.result_ty) {
+                .pointer => |shape| if (!std.mem.eql(u8, shape.child, parameter.dma_payload_ty.name())) return false,
+                .slice => |child| if (!std.mem.eql(u8, child, parameter.dma_payload_ty.name())) return false,
+                else => return false,
+            };
+        },
+        .va_start => return !call.dma_buffer.isValid() and !call.vararg_cursor.isValid() and
             mir.executableVaStartLocal(body, expression.id) != null and
             body.is_variadic and body.last_named_parameter.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0,
-        .va_arg, .va_end => return mir.executableVaListLocal(body, call.vararg_cursor) and
+        .va_arg, .va_end => return !call.dma_buffer.isValid() and mir.executableVaListLocal(body, call.vararg_cursor) and
             call.representation_source == null and !call.representation_span_id.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0,
-        else => if (call.vararg_cursor.isValid()) return false,
+        else => if (call.vararg_cursor.isValid() or call.dma_buffer.isValid()) return false,
     }
     if (call.kind == .reduce_sum_checked and !reduceCheckedResultSupported(body, expression, call)) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
@@ -3202,6 +3213,28 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, "((void)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
+        },
+        .dma_cache_clean, .dma_cache_invalidate => {
+            try out.appendSlice(allocator, "((void)(");
+            try appendLocal(allocator, out, body, call.dma_buffer);
+            try out.appendSlice(allocator, if (call.kind == .dma_cache_clean)
+                "), mc_barrier_release_before())"
+            else
+                "), mc_barrier_acquire_after())");
+        },
+        .dma_addr => {
+            try out.appendSlice(allocator, "((uintptr_t)(");
+            try appendLocal(allocator, out, body, call.dma_buffer);
+            try out.appendSlice(allocator, "))");
+        },
+        .dma_as_slice => {
+            const parameter = mir.executableDmaBufferParameter(body, call.dma_buffer) orelse return error.InvalidExpression;
+            try out.appendSlice(allocator, "((");
+            try out.appendSlice(allocator, "mc_slice_mut_");
+            try appendCTypeSuffix(allocator, out, parameter.dma_payload_ty);
+            try out.appendSlice(allocator, "){ .ptr = ");
+            try appendLocal(allocator, out, body, call.dma_buffer);
+            try out.appendSlice(allocator, ", .len = 1 })");
         },
         .va_start => return error.InvalidExpression,
         .va_arg => {
@@ -4500,7 +4533,9 @@ fn supportsParameter(body: *const mir.ExecutableBody, parameter: mir.ExecutableP
     if (supportsParameterType(body, parameter.ty)) return true;
     if (parameter.ty != .value) return false;
     if (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)) return true;
-    return parameter.atomic_payload_type_id.isValid() and supportsType(body, parameter.atomic_payload_ty);
+    if (parameter.atomic_payload_type_id.isValid()) return supportsType(body, parameter.atomic_payload_ty);
+    return parameter.dma_mode != null and parameter.dma_payload_type_id.isValid() and
+        supportsType(body, parameter.dma_payload_ty);
 }
 
 fn isSliceType(ty: mir.ValueType) bool {

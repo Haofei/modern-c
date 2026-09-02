@@ -6460,6 +6460,15 @@ const FunctionBuilder = struct {
         }
         for (fn_decl.params) |param| {
             const param_ty = canonicalExecutableValueType(param.ty, enums, structs, unions, packed_bits, aliases, const_fns, const_globals);
+            const dma_buffer_info = builder.dmaBufTypeInfo(param.ty);
+            const dma_payload_ty: ?ValueType = if (dma_buffer_info) |info|
+                valueTypeFromTypeAlias(info.payload_type_expr, enums, structs, packed_bits, aliases)
+            else
+                null;
+            const dma_mode: ?mir_model.ExecutableDmaBufferMode = if (dma_buffer_info) |info|
+                std.meta.stringToEnum(mir_model.ExecutableDmaBufferMode, info.mode)
+            else
+                null;
             if (!try builder.internExecutableEnumType(param_ty)) builder.executable_supported = false;
             if (param_ty == .nullable_value and !try builder.internExecutableValueOptionalType(param_ty))
                 builder.executable_supported = false;
@@ -6486,7 +6495,16 @@ const FunctionBuilder = struct {
                 try builder.internExecutableTraitSymbol(trait_name)
             else
                 SymbolId.invalid;
-            if (param_ty == .value and callable_signature == null and !dyn_trait_symbol_id.isValid() and atomic_payload_ty == null)
+            if (dma_payload_ty) |payload| switch (payload) {
+                .struct_ => |name| if (structs.get(name)) |summary| {
+                    if (!try builder.internExecutableAggregateType(payload, executableAggregateConstruction(summary), summary.fields))
+                        builder.executable_supported = false;
+                },
+                else => {},
+            };
+            if (dma_buffer_info != null and dma_mode == null) builder.executable_supported = false;
+            if (param_ty == .value and callable_signature == null and !dyn_trait_symbol_id.isValid() and
+                atomic_payload_ty == null and dma_payload_ty == null)
                 builder.executable_supported = false;
             try builder.executable_parameters.append(allocator, .{
                 .local = executable_local,
@@ -6496,6 +6514,9 @@ const FunctionBuilder = struct {
                 .dyn_trait_symbol_id = dyn_trait_symbol_id,
                 .atomic_payload_ty = atomic_payload_ty orelse .unknown,
                 .atomic_payload_type_id = if (atomic_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
+                .dma_payload_ty = dma_payload_ty orelse .unknown,
+                .dma_payload_type_id = if (dma_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
+                .dma_mode = dma_mode,
                 .source = parameter_source,
                 .span_id = try builder.internSpanId(parameter_source),
             });
@@ -8374,14 +8395,24 @@ const FunctionBuilder = struct {
         }
         if (!mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
         switch (call.kind) {
+            .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice => {
+                const parameter = self.executableDmaBufferParameter(call.dma_buffer) orelse return false;
+                if ((call.kind == .dma_cache_clean or call.kind == .dma_cache_invalidate) and
+                    parameter.dma_mode.? != .noncoherent) return false;
+                if (call.kind == .dma_as_slice) switch (expression.result_ty) {
+                    .pointer => |shape| if (!std.mem.eql(u8, shape.child, parameter.dma_payload_ty.name())) return false,
+                    .slice => |child| if (!std.mem.eql(u8, child, parameter.dma_payload_ty.name())) return false,
+                    else => return false,
+                };
+            },
             .va_start => {
-                if (call.vararg_cursor.isValid() or !self.is_variadic or self.executable_parameters.items.len == 0 or
+                if (call.dma_buffer.isValid() or call.vararg_cursor.isValid() or !self.is_variadic or self.executable_parameters.items.len == 0 or
                     !self.executableBuiltinInitializesVaList(expression)) return false;
             },
             .va_arg, .va_end => {
-                if (!self.executableVaListLocal(call.vararg_cursor)) return false;
+                if (call.dma_buffer.isValid() or !self.executableVaListLocal(call.vararg_cursor)) return false;
             },
-            else => if (call.vararg_cursor.isValid()) return false,
+            else => if (call.vararg_cursor.isValid() or call.dma_buffer.isValid()) return false,
         }
         if (call.kind == .enum_raw and !self.executableEnumRawComplete(expression, call)) return false;
         return if (call.kind == .raw_ptr)
@@ -8396,6 +8427,15 @@ const FunctionBuilder = struct {
         return local.isValid() and local.index() < self.executable_locals.items.len and
             self.executable_locals.items[local.index()].id.eql(local) and
             self.executable_locals.items[local.index()].is_va_list;
+    }
+
+    fn executableDmaBufferParameter(self: *const FunctionBuilder, local: LocalId) ?ExecutableParameter {
+        for (self.executable_parameters.items) |parameter| {
+            if (!parameter.local.eql(local)) continue;
+            return if (parameter.ty == .value and parameter.dma_mode != null and
+                parameter.dma_payload_ty != .unknown and parameter.dma_payload_type_id.isValid()) parameter else null;
+        }
+        return null;
     }
 
     fn executableBuiltinInitializesVaList(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
@@ -10138,6 +10178,7 @@ const FunctionBuilder = struct {
                     const byte_view_target = self.byteViewCallTarget(node);
                     const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                     const va_target = try self.vaCallTarget(node);
+                    const dma_target = self.dmaCallTarget(node);
                     const result_target_type = if (kind == .result_ok or kind == .result_err)
                         (expected_type_expr orelse self.assignment_target_type_expr)
                     else
@@ -10178,6 +10219,8 @@ const FunctionBuilder = struct {
                         result_ty = target.result_ty;
                     } else if (va_target) |target| {
                         result_ty = target.result_ty;
+                    } else if (dma_target) |target| {
+                        result_ty = target.result_ty;
                     } else if (kind == .forget_unchecked or kind == .cpu_pause or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
@@ -10213,7 +10256,12 @@ const FunctionBuilder = struct {
                             break :call self.unsupportedExecutableExpression(.unsupported_call)
                     else
                         LocalId.invalid;
-                    const stored_argument_count = if (kind == .va_arg or kind == .va_end) 0 else argument_count;
+                    const dma_buffer = if (dma_target) |target|
+                        self.executableDmaBufferCallLocal(node, target.kind) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call)
+                    else
+                        LocalId.invalid;
+                    const stored_argument_count = if (kind == .va_arg or kind == .va_end or dma_target != null) 0 else argument_count;
                     if (stored_argument_count > mir_model.max_executable_operands)
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
@@ -10225,6 +10273,7 @@ const FunctionBuilder = struct {
                         .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
                         .const_index = if (const_get_target) |target| target.index else null,
                         .vararg_cursor = vararg_cursor,
+                        .dma_buffer = dma_buffer,
                         .argument_count = stored_argument_count,
                     };
                     var argument_index: usize = 0;
@@ -10233,7 +10282,7 @@ const FunctionBuilder = struct {
                         argument_index = 1;
                     }
                     for (node.args, 0..) |argument, source_index| {
-                        if (kind == .va_arg or kind == .va_end) break;
+                        if (kind == .va_arg or kind == .va_end or dma_target != null) break;
                         call_value.arguments[argument_index] = if (kind == .result_ok or kind == .result_err) result_arg: {
                             const target_type = result_target_type orelse
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
@@ -10704,7 +10753,12 @@ const FunctionBuilder = struct {
                         else => null,
                     },
                     .builtin_call => switch (expr.kind) {
-                        .call => |call| if (self.byteViewCallTarget(call) != null) .valid_slice else null,
+                        .call => |call| if (self.byteViewCallTarget(call) != null)
+                            .valid_slice
+                        else if (self.dmaCallTarget(call)) |target|
+                            if (target.kind == .dma_as_slice) .valid_slice else null
+                        else
+                            null,
                         else => null,
                     },
                     else => null,
@@ -15465,6 +15519,29 @@ const FunctionBuilder = struct {
         if (local.index() >= self.executable_locals.items.len or
             !self.executable_locals.items[local.index()].is_va_list) return null;
         return local;
+    }
+
+    fn executableDmaBufferCallLocal(self: *FunctionBuilder, call: anytype, kind: CallTargetKind) ?LocalId {
+        const input = if (kind == .dma_cache_clean or kind == .dma_cache_invalidate)
+            if (call.args.len == 1) call.args[0] else return null
+        else
+            (memberExpr(call.callee.*) orelse return null).base.*;
+        var expression = input;
+        while (expression.kind == .grouped) expression = expression.kind.grouped.*;
+        const name = switch (expression.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        };
+        const local = self.executable_local_ids.get(name) orelse return null;
+        for (self.executable_parameters.items) |parameter| {
+            if (!parameter.local.eql(local)) continue;
+            if (parameter.dma_mode == null or parameter.dma_payload_ty == .unknown or
+                !parameter.dma_payload_type_id.isValid()) return null;
+            if ((kind == .dma_cache_clean or kind == .dma_cache_invalidate) and
+                parameter.dma_mode.? != .noncoherent) return null;
+            return local;
+        }
+        return null;
     }
 
     fn executableTypeExprIsVaList(self: *const FunctionBuilder, ty: ast.TypeExpr) bool {
