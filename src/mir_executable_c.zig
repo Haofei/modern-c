@@ -1887,11 +1887,31 @@ fn closureBindSupported(
     if (expression.result_ty != .value or !bind.signature.has_environment or
         bind.signature.parameter_count > mir.max_executable_operands) return false;
     const target = symbolById(body, bind.target) orelse return false;
+    const code = symbolById(body, bind.code) orelse return false;
     const capture = expressionById(body, bind.capture) orelse return false;
-    if (target.kind != .function or std.meta.activeTag(capture.result_ty) != .pointer or
+    if (target.kind != .function or code.kind != .function or
+        !closureCaptureEncodingSupported(capture.result_ty, bind.capture_encoding) or
+        (switch (bind.capture_encoding) {
+            .pointer => !bind.code.eql(bind.target),
+            .integer => bind.code.eql(bind.target),
+        }) or
         !supportsType(body, bind.signature.return_ty)) return false;
     for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| if (!supportsType(body, ty)) return false;
     return true;
+}
+
+fn closureCaptureEncodingSupported(ty: mir.ValueType, encoding: mir.ExecutableClosureCaptureEncoding) bool {
+    return switch (encoding) {
+        .pointer => switch (ty) {
+            .pointer => |shape| shape.kind != .slice,
+            else => false,
+        },
+        .integer => switch (ty) {
+            .integer => |name| (scalar_repr.integer(name) orelse return false).bits <= 64,
+            .domain_integer => |shape| (scalar_repr.integer(shape.child) orelse return false).bits <= 64,
+            else => false,
+        },
+    };
 }
 
 fn callableExpressionMatches(
@@ -1952,8 +1972,9 @@ fn emitClosureBind(
     }
     try appendClosureCodePointerType(allocator, out, body, bind.signature);
     try out.append(allocator, ')');
-    try appendSymbol(allocator, out, body, bind.target);
+    try appendSymbol(allocator, out, body, bind.code);
     try out.appendSlice(allocator, ", .env = (void *)");
+    if (bind.capture_encoding == .integer) try out.appendSlice(allocator, "(uintptr_t)");
     try emitExpression(allocator, out, body, bind.capture, depth + 1);
     try out.appendSlice(allocator, " })");
 }

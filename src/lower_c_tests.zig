@@ -63,6 +63,26 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     });
 }
 
+test "lower-c canonical MIR renders scalar closure capture through a thunk" {
+    const source =
+        \\fn add_scalar(env: u32, x: u32) -> u32 { return env + x; }
+        \\fn scalar_bind() -> u32 {
+        \\    let cb: closure(u32) -> u32 = bind(10, add_scalar);
+        \\    return cb(5);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_closure.mc", source, &output);
+
+    try expectContains(output.items, "static MC_UNUSED uint32_t mc_envthunk_add_scalar(void *mc_env, uint32_t mc_a0)");
+    try expectContains(output.items, "add_scalar((uint32_t)(uintptr_t)mc_env, mc_a0)");
+    const body = try cFunctionBody(output.items, "static uint32_t scalar_bind");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, ".code = (uint32_t (*)(void *, uint32_t))mc_envthunk_add_scalar");
+    try expectContains(body, ".env = (void *)(uintptr_t)");
+}
+
 test "lower-c canonical MIR maps propagated Result errors" {
     const source =
         \\enum LowErr { Failed }

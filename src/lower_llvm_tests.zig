@@ -10,6 +10,26 @@ const mir = @import("mir.zig");
 const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM canonical MIR renders scalar closure capture through a thunk" {
+    const source =
+        \\fn add_scalar(env: u32, x: u32) -> u32 { return env + x; }
+        \\fn scalar_bind() -> u32 {
+        \\    let cb: closure(u32) -> u32 = bind(10, add_scalar);
+        \\    return cb(5);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_closure.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @scalar_bind");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "inttoptr i32 10 to ptr");
+    try expectContains(body, "insertvalue { ptr, ptr } zeroinitializer, ptr @mc_envthunk_add_scalar, 0");
+    try expectContains(output.items, "define i32 @mc_envthunk_add_scalar(ptr %env, i32 %a0)");
+    try expectContains(output.items, "ptrtoint ptr %env to i32");
+}
+
 test "LLVM canonical MIR maps propagated Result errors" {
     const source =
         \\enum LowErr { Failed }

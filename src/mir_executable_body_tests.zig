@@ -112,6 +112,78 @@ test "callable parameter signatures are verified executable facts" {
     try executable.verify(function);
 }
 
+test "closure bind owns scalar capture encoding and thunk identity" {
+    const source =
+        \\struct Env { base: u32 }
+        \\fn add_pointer(env: *Env, x: u32) -> u32 { return env.base + x; }
+        \\fn add_scalar(env: u32, x: u32) -> u32 { return env + x; }
+        \\fn add_wide(env: u128, x: u32) -> u32 { return (env as u32) + x; }
+        \\fn pointer_bind(env: *Env) -> u32 {
+        \\    let cb: closure(u32) -> u32 = bind(env, add_pointer);
+        \\    return cb(1);
+        \\}
+        \\fn scalar_bind() -> u32 {
+        \\    let cb: closure(u32) -> u32 = bind(10, add_scalar);
+        \\    return cb(5);
+        \\}
+        \\fn wide_bind() -> u32 {
+        \\    let cb: closure(u32) -> u32 = bind(1_u128, add_wide);
+        \\    return cb(2);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_closure_bind.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const pointer_function = &module.functions[3];
+    try executable.verify(pointer_function);
+    try std.testing.expect(executable.isComplete(pointer_function));
+    var saw_pointer = false;
+    for (pointer_function.executable_body.expressions) |expression| switch (expression.operation) {
+        .closure_bind => |bind| {
+            try std.testing.expectEqual(mir_model.ExecutableClosureCaptureEncoding.pointer, bind.capture_encoding);
+            try std.testing.expect(bind.code.eql(bind.target));
+            saw_pointer = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_pointer);
+
+    const scalar_function = &module.functions[4];
+    try executable.verify(scalar_function);
+    try std.testing.expect(executable.isComplete(scalar_function));
+    var scalar_bind: ?*mir_model.ExecutableExpression = null;
+    for (scalar_function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .closure_bind => scalar_bind = expression,
+        else => {},
+    };
+    try std.testing.expect(scalar_bind != null);
+    const bind_expression = scalar_bind.?;
+    const original = bind_expression.operation.closure_bind;
+    try std.testing.expectEqual(mir_model.ExecutableClosureCaptureEncoding.integer, original.capture_encoding);
+    try std.testing.expect(!original.code.eql(original.target));
+
+    bind_expression.operation.closure_bind.capture_encoding = .pointer;
+    try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(scalar_function));
+    bind_expression.operation.closure_bind = original;
+    bind_expression.operation.closure_bind.code = original.target;
+    try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(scalar_function));
+    bind_expression.operation.closure_bind = original;
+    try executable.verify(scalar_function);
+
+    const wide_function = &module.functions[5];
+    try executable.verify(wide_function);
+    try std.testing.expect(!executable.isComplete(wide_function));
+    try std.testing.expectEqual(mir_model.ExecutableIncompleteReason.unsupported_call, wide_function.executable_body.incomplete_reason);
+}
+
 fn findTypeId(function: *const mir.Function, ty: mir_model.ValueType) !mir_model.TypeId {
     for (function.type_identities, 0..) |identity, index| if (identity.matches(ty))
         return .fromIndex(index);

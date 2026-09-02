@@ -2311,16 +2311,28 @@ const Renderer = struct {
     }
 
     fn emitClosureBind(self: *Renderer, bind: @FieldType(mir.ExecutableExpression.Operation, "closure_bind")) RenderError!Value {
-        const target = symbolSpelling(self.body, bind.target) orelse return error.InvalidBody;
+        const code = symbolSpelling(self.body, bind.code) orelse return error.InvalidBody;
         const capture = try self.emitExpression(bind.capture);
-        if (!std.mem.eql(u8, capture.ty, "ptr")) return error.InvalidBody;
+        const environment = switch (bind.capture_encoding) {
+            .pointer => if (std.mem.eql(u8, capture.ty, "ptr"))
+                capture.spelling
+            else
+                return error.InvalidBody,
+            .integer => blk: {
+                if (captureIntegerBits(self.body.expressions[bind.capture.index()].result_ty) == null)
+                    return error.InvalidBody;
+                const widened = try self.temp();
+                try self.output.print(self.allocator, "  {s} = inttoptr {s} {s} to ptr\n", .{ widened, capture.ty, capture.spelling });
+                break :blk widened;
+            },
+        };
         const with_code = try self.temp();
         const value = try self.temp();
         try self.output.print(
             self.allocator,
             "  {s} = insertvalue {{ ptr, ptr }} zeroinitializer, ptr @{s}, 0\n" ++
                 "  {s} = insertvalue {{ ptr, ptr }} {s}, ptr {s}, 1\n",
-            .{ with_code, target, value, with_code, capture.spelling },
+            .{ with_code, code, value, with_code, environment },
         );
         return .{ .ty = "{ ptr, ptr }", .spelling = value };
     }
@@ -4634,11 +4646,34 @@ fn closureBindSupported(
 ) bool {
     if (expression.result_ty != .value or !bind.signature.has_environment or
         bind.signature.parameter_count > mir.max_executable_operands or
-        symbolSpelling(body, bind.target) == null or !expressionValid(body, bind.capture)) return false;
+        symbolSpelling(body, bind.target) == null or symbolSpelling(body, bind.code) == null or
+        !expressionValid(body, bind.capture)) return false;
     const capture = body.expressions[bind.capture.index()];
-    if (std.meta.activeTag(capture.result_ty) != .pointer or !llvmTypeSupported(body, bind.signature.return_ty)) return false;
+    if (!closureCaptureEncodingSupported(capture.result_ty, bind.capture_encoding) or
+        (switch (bind.capture_encoding) {
+            .pointer => !bind.code.eql(bind.target),
+            .integer => bind.code.eql(bind.target),
+        }) or !llvmTypeSupported(body, bind.signature.return_ty)) return false;
     for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| if (!llvmTypeSupported(body, ty)) return false;
     return true;
+}
+
+fn captureIntegerBits(ty: mir.ValueType) ?u16 {
+    return switch (ty) {
+        .integer => |name| (scalar_repr.integer(name) orelse return null).bits,
+        .domain_integer => |shape| (scalar_repr.integer(shape.child) orelse return null).bits,
+        else => null,
+    };
+}
+
+fn closureCaptureEncodingSupported(ty: mir.ValueType, encoding: mir.ExecutableClosureCaptureEncoding) bool {
+    return switch (encoding) {
+        .pointer => switch (ty) {
+            .pointer => |shape| shape.kind != .slice,
+            else => false,
+        },
+        .integer => if (captureIntegerBits(ty)) |bits| bits <= 64 else false,
+    };
 }
 
 fn functionSymbolExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {

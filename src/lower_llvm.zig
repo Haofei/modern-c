@@ -9237,6 +9237,25 @@ const LlvmEmitter = struct {
     //   define RET @mc_envthunk_f(ptr %env, P...) { %i = ptrtoint ptr %env to <iN>; ... call @f(<iN> %i, P...) ... }
     // The first parameter is genuinely `ptr`, matching the closure's code-pointer slot.
     fn emitBindThunks(self: *LlvmEmitter) !void {
+        // Canonical executable MIR names the generated scalar-env thunk in the
+        // closure-bind operation. Collect those module-scope definitions
+        // mechanically before rendering the inventory; legacy body lowering
+        // may already have registered additional entries in the same map.
+        for (self.mir_module.functions) |function| {
+            if (!function.executable_body.complete or function.executable_body.expressions.len == 0) continue;
+            for (function.executable_body.expressions) |expression| switch (expression.operation) {
+                .closure_bind => |bind| if (bind.capture_encoding == .integer) {
+                    const target = executableClosureSymbol(&function.executable_body, bind.target) orelse
+                        return error.UnsupportedLlvmEmission;
+                    const code = executableClosureSymbol(&function.executable_body, bind.code) orelse
+                        return error.UnsupportedLlvmEmission;
+                    const sig = self.fn_sigs.get(target) orelse return error.UnsupportedLlvmEmission;
+                    if (sig.params.len == 0 or sig.is_variadic) return error.UnsupportedLlvmEmission;
+                    if (!self.bind_thunks.contains(code)) try self.bind_thunks.put(code, .{ .fname = target, .sig = sig });
+                },
+                else => {},
+            };
+        }
         var it = self.bind_thunks.iterator();
         while (it.next()) |entry| {
             const thunk = entry.value_ptr.*;
@@ -9279,6 +9298,12 @@ const LlvmEmitter = struct {
             }
             try self.out.appendSlice(self.allocator, "}\n\n");
         }
+    }
+
+    fn executableClosureSymbol(body: *const mir.ExecutableBody, id: mir.SymbolId) ?[]const u8 {
+        if (!id.isValid() or id.index() >= body.symbols.len) return null;
+        const identity = body.symbols[id.index()];
+        return if (identity.id.eql(id) and identity.kind == .function) identity.spelling else null;
     }
 
     fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast_bridge.TypeExpr) ![]const u8 {

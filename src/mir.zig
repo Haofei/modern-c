@@ -8846,6 +8846,27 @@ const FunctionBuilder = struct {
         return id;
     }
 
+    fn internExecutableClosureThunkSymbol(self: *FunctionBuilder, target: []const u8) !?SymbolId {
+        const spelling = try std.fmt.allocPrint(self.allocator, "mc_envthunk_{s}", .{target});
+        if (self.summaries.contains(spelling)) {
+            self.allocator.free(spelling);
+            return null;
+        }
+        if (self.executable_symbol_ids.get(spelling)) |id| {
+            self.allocator.free(spelling);
+            const identity = &self.executable_symbols.items[id.index()];
+            if (identity.kind != .function or identity.callable_signature != null) return null;
+            return id;
+        }
+        self.executable_owned_bytes.append(self.allocator, spelling) catch |err| {
+            self.allocator.free(spelling);
+            return err;
+        };
+        const id = try self.internExecutableSymbol(spelling);
+        self.executable_symbols.items[id.index()].kind = .function;
+        return id;
+    }
+
     fn executableFunctionSummarySignature(
         self: *FunctionBuilder,
         summary: FunctionSummary,
@@ -9963,18 +9984,22 @@ const FunctionBuilder = struct {
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
                     }
                     const capture_ty = valueTypeFromTypeAlias(target.params[0].ty, self.enums, self.structs, self.packed_bits, self.aliases);
-                    // The canonical closure representation stores an erased
-                    // environment pointer. Scalar captures still require the
-                    // legacy boxing path and must leave this body incomplete
-                    // instead of constructing unverifiable executable MIR.
-                    if (std.meta.activeTag(capture_ty) != .pointer) {
+                    const capture_encoding = executableClosureCaptureEncoding(capture_ty) orelse {
                         _ = try self.ensureExecutableExprAsType(node.args[0], capture_ty, target.params[0].ty);
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
-                    }
+                    };
+                    const target_symbol = try self.internExecutableFunctionSymbol(target_name);
+                    const code_symbol = switch (capture_encoding) {
+                        .pointer => target_symbol,
+                        .integer => (try self.internExecutableClosureThunkSymbol(target_name)) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call),
+                    };
                     result_ty = .value;
                     break :call .{ .closure_bind = .{
-                        .target = try self.internExecutableFunctionSymbol(target_name),
+                        .target = target_symbol,
+                        .code = code_symbol,
                         .capture = try self.ensureExecutableExprAsType(node.args[0], capture_ty, target.params[0].ty),
+                        .capture_encoding = capture_encoding,
                         .signature = signature,
                     } };
                 }
@@ -19984,6 +20009,15 @@ fn executableAtomicPayloadSupported(ty: ValueType) bool {
         .bool => true,
         .integer => mir_model.ExecutableMemoryAccess.scalarAlignment(ty) != null,
         else => false,
+    };
+}
+
+fn executableClosureCaptureEncoding(ty: ValueType) ?mir_model.ExecutableClosureCaptureEncoding {
+    return switch (ty) {
+        .pointer => |shape| if (shape.kind == .slice) null else .pointer,
+        .integer => |name| if ((scalar_repr.integer(name) orelse return null).bits <= 64) .integer else null,
+        .domain_integer => |shape| if ((scalar_repr.integer(shape.child) orelse return null).bits <= 64) .integer else null,
+        else => null,
     };
 }
 

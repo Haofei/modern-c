@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const mir = @import("mir_model.zig");
+const scalar_repr = @import("scalar_repr.zig");
 
 pub fn isComplete(function: *const mir.Function) bool {
     verify(function) catch return false;
@@ -490,12 +491,19 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .closure_bind => |bind| {
             try verifyOperand(body, value, bind.capture);
             try verifySymbol(body, bind.target);
+            try verifySymbol(body, bind.code);
             try verifyCallableSignature(function, bind.signature, body.complete);
             if (body.complete) {
                 const target = symbol(body, bind.target) orelse return error.InvalidSymbolReference;
+                const code = symbol(body, bind.code) orelse return error.InvalidSymbolReference;
                 const capture = expression(body, bind.capture) orelse return error.InvalidExpressionReference;
                 if (value.result_ty != .value or !bind.signature.has_environment or target.kind != .function or
-                    std.meta.activeTag(capture.result_ty) != .pointer or
+                    code.kind != .function or !closureBindTargetSignatureValid(target, capture.*, bind.signature) or
+                    !closureCaptureEncodingValid(capture.result_ty, bind.capture_encoding) or
+                    (switch (bind.capture_encoding) {
+                        .pointer => !bind.code.eql(bind.target),
+                        .integer => bind.code.eql(bind.target) or code.callable_signature != null,
+                    }) or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                     return error.InvalidFunctionSignature;
             }
@@ -1553,6 +1561,42 @@ fn verifyCallableSignature(function: *const mir.Function, signature: mir.Executa
         return error.InvalidFunctionSignature;
     for (signature.parameter_type_ids[signature.parameter_count..]) |id| if (id.isValid())
         return error.InvalidFunctionSignature;
+}
+
+fn closureCaptureEncodingValid(ty: mir.ValueType, encoding: mir.ExecutableClosureCaptureEncoding) bool {
+    return switch (encoding) {
+        .pointer => switch (ty) {
+            .pointer => |shape| shape.kind != .slice,
+            else => false,
+        },
+        .integer => switch (ty) {
+            .integer => |name| (scalar_repr.integer(name) orelse return false).bits <= 64,
+            .domain_integer => |shape| (scalar_repr.integer(shape.child) orelse return false).bits <= 64,
+            else => false,
+        },
+    };
+}
+
+fn closureBindTargetSignatureValid(
+    target: mir.SymbolIdentity,
+    capture: mir.ExecutableExpression,
+    closure: mir.ExecutableCallSignature,
+) bool {
+    const signature = target.callable_signature orelse return false;
+    if (signature.has_environment or signature.parameter_count != closure.parameter_count + 1 or
+        !sameValueType(signature.return_ty, closure.return_ty) or
+        !signature.return_type_id.eql(closure.return_type_id) or
+        !sameValueType(signature.parameter_types[0], capture.result_ty) or
+        !signature.parameter_type_ids[0].eql(capture.type_id)) return false;
+    for (
+        signature.parameter_types[1..signature.parameter_count],
+        signature.parameter_type_ids[1..signature.parameter_count],
+        closure.parameter_types[0..closure.parameter_count],
+        closure.parameter_type_ids[0..closure.parameter_count],
+    ) |target_ty, target_id, closure_ty, closure_id| {
+        if (!sameValueType(target_ty, closure_ty) or !target_id.eql(closure_id)) return false;
+    }
+    return true;
 }
 
 fn verifyStatementExpr(body: *const mir.ExecutableBody, owner: mir.ExecutableStatement, id: mir.ExprId) !void {

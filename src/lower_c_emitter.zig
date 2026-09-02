@@ -521,7 +521,25 @@ pub const CEmitter = struct {
         for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
             for (fn_mir.bind_thunk_facts) |fact| try self.collectBindThunkFact(fact);
+            for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
+                .closure_bind => |bind| if (bind.capture_encoding == .integer) {
+                    const target = executableSymbolSpelling(&fn_mir.executable_body, bind.target) orelse
+                        return error.UnsupportedCEmission;
+                    const code = executableSymbolSpelling(&fn_mir.executable_body, bind.code) orelse
+                        return error.UnsupportedCEmission;
+                    const info = self.functions.get(target) orelse return error.UnsupportedCEmission;
+                    if (info.params.len == 0 or info.is_extern) return error.UnsupportedCEmission;
+                    if (!self.bind_thunks.contains(code)) try self.bind_thunks.put(code, .{ .fname = target, .info = info });
+                },
+                else => {},
+            };
         }
+    }
+
+    fn executableSymbolSpelling(body: *const mir.ExecutableBody, id: mir.SymbolId) ?[]const u8 {
+        if (!id.isValid() or id.index() >= body.symbols.len) return null;
+        const identity = body.symbols[id.index()];
+        return if (identity.id.eql(id) and identity.kind == .function) identity.spelling else null;
     }
 
     fn emitModule(self: *CEmitter, early_metadata: CodegenDeclArtifacts, function_bodies: CodegenFunctionBodyArtifacts) anyerror!void {

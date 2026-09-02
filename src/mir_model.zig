@@ -1148,12 +1148,18 @@ pub const ExecutableExpression = struct {
             argument_count: usize = 0,
         },
         /// Construct a closure fat value from a checked function target and
-        /// one captured environment pointer. The public call signature omits
-        /// the erased environment parameter; codegen represents the value as
-        /// `{ code, env }` and an indirect call supplies `env` first.
+        /// one captured environment. The public call signature omits the
+        /// erased environment parameter; codegen represents the value as
+        /// `{ code, env }` and an indirect call supplies `env` first. Scalar
+        /// captures use a producer-owned widening thunk selected by `code`.
         closure_bind: struct {
+            /// Source function whose first parameter is the captured value.
             target: SymbolId,
+            /// Callable stored in the closure code slot. This equals `target`
+            /// for pointer captures and names a generated thunk for scalars.
+            code: SymbolId,
             capture: ExprId,
+            capture_encoding: ExecutableClosureCaptureEncoding,
             signature: ExecutableCallSignature,
         },
         builtin_call: struct {
@@ -1316,6 +1322,14 @@ pub const ExecutableCallSignature = struct {
             if (!left_id.eql(right_id)) return false;
         return true;
     }
+};
+
+/// Representation of a captured closure environment in the erased pointer
+/// slot. Integer captures are limited by the producer to the qualified
+/// pointer width and always call through a generated narrowing thunk.
+pub const ExecutableClosureCaptureEncoding = enum {
+    pointer,
+    integer,
 };
 
 /// Typed exceptional control-flow owned by one executable operation.  The
