@@ -574,6 +574,23 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             .address => |class| class == .paddr and unsignedIntegerAtLeast(operands[0], 64),
             else => false,
         },
+        .reduce_sum_checked => reduce_checked: {
+            if (operands.len != 1) break :reduce_checked false;
+            const element = executableSliceElementName(operands[0]) orelse break :reduce_checked false;
+            const info = ExecutableCastKind.integerInfo(.{ .integer = element }) orelse break :reduce_checked false;
+            if (info.bits > 64) break :reduce_checked false;
+            break :reduce_checked switch (result) {
+                .result => |shape| std.mem.eql(u8, shape.ok, element) and std.mem.eql(u8, shape.err, "Overflow"),
+                else => false,
+            };
+        },
+        .reduce_sum_left, .reduce_sum_fast => operands.len == 1 and switch (result) {
+            .float => |name| if (executableSliceElementName(operands[0])) |element|
+                std.mem.eql(u8, name, element) and ExecutableCastKind.floatBits(name) != null
+            else
+                false,
+            else => false,
+        },
         .wrapping_add => wrapping: {
             if (operands.len != 2) break :wrapping false;
             if (!ValueType.eql(result, operands[0]) or !ValueType.eql(result, operands[1])) break :wrapping false;
@@ -711,6 +728,14 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         .forget_unchecked => operands.len == 1 and result == .void,
         .cpu_pause, .fence_full, .fence_release, .fence_acquire => operands.len == 0 and result == .void,
         else => false,
+    };
+}
+
+fn executableSliceElementName(ty: ValueType) ?[]const u8 {
+    return switch (ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape.child else null,
+        .slice => |child| child,
+        else => null,
     };
 }
 

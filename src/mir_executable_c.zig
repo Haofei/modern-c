@@ -2119,7 +2119,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -2129,6 +2129,7 @@ fn builtinCallSupported(
         operand_types[index] = operand.result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    if (call.kind == .reduce_sum_checked and !reduceCheckedResultSupported(body, expression, call)) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
@@ -2142,6 +2143,24 @@ fn builtinCallSupported(
     else
         call.representation_source == null and !call.representation_span_id.isValid() and
             ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn reduceCheckedResultSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call"),
+) bool {
+    if (call.argument_count != 1) return false;
+    const source = expressionById(body, call.arguments[0]) orelse return false;
+    const element_name = switch (source.result_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
+        .slice => |child| child,
+        else => return false,
+    };
+    const shape = resultType(body, expression.type_id) orelse return false;
+    return sameValueType(shape.ty, expression.result_ty) and
+        sameValueType(shape.ok_ty, .{ .integer = element_name }) and
+        sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn conversionTryResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
@@ -2208,6 +2227,64 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, "((uintptr_t)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
+        },
+        .reduce_sum_checked => {
+            const source = expressionById(body, call.arguments[0]) orelse return error.InvalidExpression;
+            const element_name = switch (source.result_ty) {
+                .pointer => |shape| if (shape.kind == .slice) shape.child else return error.UnsupportedType,
+                .slice => |child| child,
+                else => return error.UnsupportedType,
+            };
+            const element_ty: mir.ValueType = .{ .integer = element_name };
+            const info = mir.ExecutableCastKind.integerInfo(element_ty) orelse return error.UnsupportedType;
+            if (info.bits > 64) return error.UnsupportedType;
+            const range = integerCRange(element_name) orelse return error.UnsupportedType;
+            const shape = resultType(body, expression.type_id) orelse return error.UnsupportedType;
+            const id = expression.id.raw;
+            try out.print(allocator, "({{ __auto_type mc_reduce_xs_{d} = ", .{id});
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.print(allocator, "; __int128 mc_acc_{d} = 0; for (uintptr_t mc_reduce_i_{d} = 0; mc_reduce_i_{d} < mc_reduce_xs_{d}.len; ++mc_reduce_i_{d}) mc_acc_{d} += (__int128)mc_reduce_xs_{d}.ptr[mc_reduce_i_{d}]; (mc_acc_{d} < (__int128)({s}) || mc_acc_{d} > (__int128)({s})) ? (", .{
+                id,
+                id,
+                id,
+                id,
+                id,
+                id,
+                id,
+                id,
+                id,
+                range.minimum,
+                id,
+                range.maximum,
+            });
+            try appendCType(allocator, out, body, expression.result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = (");
+            try appendCType(allocator, out, body, shape.err_ty);
+            try out.appendSlice(allocator, ")0 } : (");
+            try appendCType(allocator, out, body, expression.result_ty);
+            try out.appendSlice(allocator, "){ .is_ok = true, .payload.ok = (");
+            try appendCType(allocator, out, body, shape.ok_ty);
+            try out.print(allocator, ")mc_acc_{d} }}; }})", .{id});
+        },
+        .reduce_sum_left, .reduce_sum_fast => {
+            const element_name = switch (expression.result_ty) {
+                .float => |name| name,
+                else => return error.UnsupportedType,
+            };
+            const element_c = primitiveType(element_name) orelse return error.UnsupportedType;
+            const id = expression.id.raw;
+            try out.print(allocator, "({{ __auto_type mc_reduce_xs_{d} = ", .{id});
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.print(allocator, "; {s} mc_acc_{d} = ({s})0; ", .{ element_c, id, element_c });
+            if (call.kind == .reduce_sum_fast) {
+                try out.appendSlice(allocator, "/* MC_SUM_FAST: reassociation/vectorization opt-in */\n#if defined(__clang__)\n{\n#pragma clang fp reassociate(on)\n#pragma clang loop vectorize(enable) interleave(enable)\n");
+                try out.print(allocator, "for (uintptr_t mc_reduce_i_{d} = 0; mc_reduce_i_{d} < mc_reduce_xs_{d}.len; ++mc_reduce_i_{d}) mc_acc_{d} = ({s})(mc_acc_{d} + mc_reduce_xs_{d}.ptr[mc_reduce_i_{d}]);\n", .{ id, id, id, id, id, element_c, id, id, id });
+                try out.appendSlice(allocator, "}\n#else\n");
+                try out.print(allocator, "for (uintptr_t mc_reduce_i_{d} = 0; mc_reduce_i_{d} < mc_reduce_xs_{d}.len; ++mc_reduce_i_{d}) mc_acc_{d} = ({s})(mc_acc_{d} + mc_reduce_xs_{d}.ptr[mc_reduce_i_{d}]);\n#endif\n", .{ id, id, id, id, id, element_c, id, id, id });
+            } else {
+                try out.print(allocator, "for (uintptr_t mc_reduce_i_{d} = 0; mc_reduce_i_{d} < mc_reduce_xs_{d}.len; ++mc_reduce_i_{d}) mc_acc_{d} = ({s})(mc_acc_{d} + mc_reduce_xs_{d}.ptr[mc_reduce_i_{d}]); ", .{ id, id, id, id, id, element_c, id, id, id });
+            }
+            try out.print(allocator, "mc_acc_{d}; }})", .{id});
         },
         .byte_view_as_bytes => {
             if (call.argument_count != 1) return error.InvalidExpression;
@@ -4556,6 +4633,30 @@ fn primitiveType(name: []const u8) ?[]const u8 {
         .{ .mc = "usize", .c = "uintptr_t" }, .{ .mc = "isize", .c = "intptr_t" }, .{ .mc = "f32", .c = "float" },    .{ .mc = "f64", .c = "double" },   .{ .mc = "bool", .c = "bool" },
     };
     for (entries) |entry| if (std.mem.eql(u8, name, entry.mc)) return entry.c;
+    return null;
+}
+
+const IntegerCRange = struct {
+    minimum: []const u8,
+    maximum: []const u8,
+};
+
+fn integerCRange(name: []const u8) ?IntegerCRange {
+    const Entry = struct { name: []const u8, minimum: []const u8, maximum: []const u8 };
+    const entries = [_]Entry{
+        .{ .name = "u8", .minimum = "0", .maximum = "UINT8_MAX" },
+        .{ .name = "u16", .minimum = "0", .maximum = "UINT16_MAX" },
+        .{ .name = "u32", .minimum = "0", .maximum = "UINT32_MAX" },
+        .{ .name = "u64", .minimum = "0", .maximum = "UINT64_MAX" },
+        .{ .name = "usize", .minimum = "0", .maximum = "UINTPTR_MAX" },
+        .{ .name = "i8", .minimum = "INT8_MIN", .maximum = "INT8_MAX" },
+        .{ .name = "i16", .minimum = "INT16_MIN", .maximum = "INT16_MAX" },
+        .{ .name = "i32", .minimum = "INT32_MIN", .maximum = "INT32_MAX" },
+        .{ .name = "i64", .minimum = "INT64_MIN", .maximum = "INT64_MAX" },
+        .{ .name = "isize", .minimum = "INTPTR_MIN", .maximum = "INTPTR_MAX" },
+    };
+    for (entries) |entry| if (std.mem.eql(u8, name, entry.name))
+        return .{ .minimum = entry.minimum, .maximum = entry.maximum };
     return null;
 }
 

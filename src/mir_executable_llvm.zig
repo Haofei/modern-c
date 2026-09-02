@@ -2231,6 +2231,8 @@ const Renderer = struct {
                 if (!std.mem.eql(u8, operand.ty, result_ty)) return error.Unsupported;
                 return .{ .ty = result_ty, .spelling = operand.spelling };
             },
+            .reduce_sum_checked => return self.emitReduceSumChecked(expression, operands[0]),
+            .reduce_sum_left, .reduce_sum_fast => return self.emitReduceSumFloat(expression, operands[0], call.kind == .reduce_sum_fast),
             .wrapping_add => {
                 const left = operands[0];
                 const right = operands[1];
@@ -2368,6 +2370,116 @@ const Renderer = struct {
             },
             else => return error.Unsupported,
         };
+    }
+
+    fn emitReduceSumChecked(self: *Renderer, expression: mir.ExecutableExpression, source: Value) RenderError!Value {
+        if (!std.mem.eql(u8, source.ty, "{ ptr, i64 }")) return error.InvalidBody;
+        const shape = resultType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const info = mir.ExecutableCastKind.integerInfo(shape.ok_ty) orelse return error.InvalidBody;
+        if (info.bits > 64) return error.Unsupported;
+        const element_ty = try self.typeText(shape.ok_ty);
+        const result_ty = try self.typeText(expression.result_ty);
+        const pointer = try self.temp();
+        const length = try self.temp();
+        const index_slot = try self.temp();
+        const accumulator_slot = try self.temp();
+        const index = try self.temp();
+        const in_range = try self.temp();
+        const element_pointer = try self.temp();
+        const element = try self.temp();
+        const widened = try self.temp();
+        const accumulator = try self.temp();
+        const next_accumulator = try self.temp();
+        const next_index = try self.temp();
+        const final_accumulator = try self.temp();
+        const below = try self.temp();
+        const above = try self.temp();
+        const overflow = try self.temp();
+        const ok = try self.temp();
+        const narrowed = try self.temp();
+        const selected_payload = try self.temp();
+        const tagged = try self.temp();
+        const result = try self.temp();
+        const id = expression.id.raw;
+        try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n" ++
+            "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n" ++
+            "  {s} = alloca i64\n" ++
+            "  {s} = alloca i128\n" ++
+            "  store i64 0, ptr {s}\n" ++
+            "  store i128 0, ptr {s}\n" ++
+            "  br label %mc_reduce_cond_{d}\n" ++
+            "mc_reduce_cond_{d}:\n", .{
+            pointer,    source.spelling,  length,     source.spelling,
+            index_slot, accumulator_slot, index_slot, accumulator_slot,
+            id,         id,
+        });
+        try self.output.print(self.allocator, "  {s} = load i64, ptr {s}\n" ++
+            "  {s} = icmp ult i64 {s}, {s}\n" ++
+            "  br i1 {s}, label %mc_reduce_body_{d}, label %mc_reduce_done_{d}\n" ++
+            "mc_reduce_body_{d}:\n", .{ index, index_slot, in_range, index, length, in_range, id, id, id });
+        try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n" ++
+            "  {s} = load {s}, ptr {s}\n" ++
+            "  {s} = {s} {s} {s} to i128\n" ++
+            "  {s} = load i128, ptr {s}\n", .{ element_pointer, element_ty, pointer, index, element, element_ty, element_pointer, widened, if (info.signed) "sext" else "zext", element_ty, element, accumulator, accumulator_slot });
+        try self.output.print(self.allocator, "  {s} = add i128 {s}, {s}\n" ++
+            "  store i128 {s}, ptr {s}\n" ++
+            "  {s} = add i64 {s}, 1\n" ++
+            "  store i64 {s}, ptr {s}\n" ++
+            "  br label %mc_reduce_cond_{d}\n" ++
+            "mc_reduce_done_{d}:\n", .{ next_accumulator, accumulator, widened, next_accumulator, accumulator_slot, next_index, index, next_index, index_slot, id, id });
+        try self.output.print(self.allocator, "  {s} = load i128, ptr {s}\n", .{ final_accumulator, accumulator_slot });
+        try self.output.print(self.allocator, "  {s} = icmp slt i128 {s}, {d}\n", .{ below, final_accumulator, if (info.signed) signedMinimum(info.bits) else @as(i128, 0) });
+        try self.output.print(self.allocator, "  {s} = icmp sgt i128 {s}, {d}\n", .{ above, final_accumulator, if (info.signed) @as(u128, @intCast(signedMaximum(info.bits))) else unsignedMaximum(info.bits) });
+        try self.output.print(self.allocator, "  {s} = or i1 {s}, {s}\n  {s} = xor i1 {s}, true\n", .{ overflow, below, above, ok, overflow });
+        try self.output.print(self.allocator, "  {s} = trunc i128 {s} to {s}\n", .{ narrowed, final_accumulator, element_ty });
+        try self.output.print(self.allocator, "  {s} = select i1 {s}, {s} 0, {s} {s}\n", .{ selected_payload, overflow, element_ty, element_ty, narrowed });
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, ok });
+        try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ result, result_ty, tagged, element_ty, selected_payload });
+        return .{ .ty = result_ty, .spelling = result };
+    }
+
+    fn emitReduceSumFloat(self: *Renderer, expression: mir.ExecutableExpression, source: Value, fast: bool) RenderError!Value {
+        if (!std.mem.eql(u8, source.ty, "{ ptr, i64 }") or expression.result_ty != .float) return error.InvalidBody;
+        const result_ty = try self.typeText(expression.result_ty);
+        const pointer = try self.temp();
+        const length = try self.temp();
+        const index_slot = try self.temp();
+        const accumulator_slot = try self.temp();
+        const index = try self.temp();
+        const in_range = try self.temp();
+        const element_pointer = try self.temp();
+        const element = try self.temp();
+        const accumulator = try self.temp();
+        const next_accumulator = try self.temp();
+        const next_index = try self.temp();
+        const result = try self.temp();
+        const id = expression.id.raw;
+        try self.output.print(self.allocator, "  {s} = extractvalue {{ ptr, i64 }} {s}, 0\n" ++
+            "  {s} = extractvalue {{ ptr, i64 }} {s}, 1\n" ++
+            "  {s} = alloca i64\n" ++
+            "  {s} = alloca {s}\n" ++
+            "  store i64 0, ptr {s}\n" ++
+            "  store {s} 0.000000e+00, ptr {s}\n" ++
+            "  br label %mc_reduce_float_cond_{d}\n" ++
+            "mc_reduce_float_cond_{d}:\n", .{
+            pointer,   source.spelling, length,    source.spelling,  index_slot, accumulator_slot,
+            result_ty, index_slot,      result_ty, accumulator_slot, id,         id,
+        });
+        try self.output.print(self.allocator, "  {s} = load i64, ptr {s}\n" ++
+            "  {s} = icmp ult i64 {s}, {s}\n" ++
+            "  br i1 {s}, label %mc_reduce_float_body_{d}, label %mc_reduce_float_done_{d}\n" ++
+            "mc_reduce_float_body_{d}:\n", .{ index, index_slot, in_range, index, length, in_range, id, id, id });
+        try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n" ++
+            "  {s} = load {s}, ptr {s}\n" ++
+            "  {s} = load {s}, ptr {s}\n" ++
+            "  {s} = {s} {s} {s}, {s}\n", .{ element_pointer, result_ty, pointer, index, element, result_ty, element_pointer, accumulator, result_ty, accumulator_slot, next_accumulator, if (fast) "fadd reassoc" else "fadd", result_ty, accumulator, element });
+        try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n" ++
+            "  {s} = add i64 {s}, 1\n" ++
+            "  store i64 {s}, ptr {s}\n" ++
+            "  br label %mc_reduce_float_cond_{d}\n" ++
+            "mc_reduce_float_done_{d}:\n" ++
+            "  {s} = load {s}, ptr {s}\n", .{ result_ty, next_accumulator, accumulator_slot, next_index, index, next_index, index_slot, id, id, result, result_ty, accumulator_slot });
+        return .{ .ty = result_ty, .spelling = result };
     }
 
     fn emitIntegerConversion(
@@ -4535,7 +4647,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -4545,6 +4657,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         operand_types[index] = body.expressions[id.index()].result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    if (call.kind == .reduce_sum_checked and !reduceCheckedResultSupported(body, expression, call)) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
@@ -4559,6 +4672,20 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
         (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
+}
+
+fn reduceCheckedResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
+    if (call.argument_count != 1 or !expressionValid(body, call.arguments[0])) return false;
+    const source = body.expressions[call.arguments[0].index()];
+    const element_name = switch (source.result_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
+        .slice => |child| child,
+        else => return false,
+    };
+    const shape = resultType(body, expression.type_id) orelse return false;
+    return sameValueType(shape.ty, expression.result_ty) and
+        sameValueType(shape.ok_ty, .{ .integer = element_name }) and
+        sameValueType(shape.err_ty, .{ .integer = "u8" });
 }
 
 fn conversionTryResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
