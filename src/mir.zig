@@ -10275,7 +10275,7 @@ const FunctionBuilder = struct {
                         .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
                         else => null,
                     },
-                    .load => .nonnull_pointer,
+                    .load, .member => .nonnull_pointer,
                     // A safe `*mut T` -> `*const T` narrowing preserves the
                     // pointer bits but still owns the target non-null
                     // representation obligation recorded by semantic MIR.
