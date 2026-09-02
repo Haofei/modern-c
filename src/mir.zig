@@ -10264,7 +10264,7 @@ const FunctionBuilder = struct {
                 .raw_many => null,
             },
             .closed_enum => switch (operation) {
-                .local, .symbol, .load, .member, .direct_call, .indirect_call => .valid_closed_enum,
+                .local, .symbol, .load, .member, .index, .direct_call, .indirect_call => .valid_closed_enum,
                 else => null,
             },
             else => null,

@@ -4465,6 +4465,15 @@ fn appendArrayElementTypeSuffix(
         if (trait.kind != .trait or !isSafeIdentifier(trait.spelling)) return error.UnsupportedType;
         return out.print(allocator, "mc_type_dyn_n_{d}_{s}", .{ trait.spelling.len, trait.spelling });
     }
+    // Array wrapper names are shared with the module-level declaration
+    // collector.  Non-builtin nominal names use the framed source-type suffix
+    // there, including enums; reproduce that syntax-free encoding from the
+    // verified nominal identity so the canonical body names the typedef that
+    // was actually emitted.
+    switch (ty) {
+        .closed_enum, .open_enum => |name| return out.print(allocator, "mc_type_name_{d}_{s}", .{ name.len, name }),
+        else => {},
+    }
     if (ty != .array) return appendCTypeSuffix(allocator, out, ty);
     const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
     if (shape.array_length == null or shape.array_length.? == 0 or shape.field_count == 0) return error.UnsupportedType;
