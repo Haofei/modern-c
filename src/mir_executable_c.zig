@@ -742,6 +742,12 @@ fn emitExpressionOperation(
                     try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
                     return;
                 }
+                if (expression.result_ty == .pointer) {
+                    try out.appendSlice(allocator, "__atomic_load_n(");
+                    try emitPlaceAddress(allocator, out, body, load.place);
+                    try out.appendSlice(allocator, ", __ATOMIC_RELAXED)");
+                    return;
+                }
                 const scalar = scalarMemoryInfo(expression.result_ty) orelse return error.UnsupportedType;
                 try out.print(allocator, "(({s})mc_race_load_{s}(", .{ scalar.c_type, scalar.helper_suffix });
                 try emitPlaceAddress(allocator, out, body, load.place);
@@ -3009,12 +3015,16 @@ fn memoryLoadSupported(
     const callable = callableLoadTargetSupported(body, expression, load);
     const dyn_value = dynLoadTargetSupported(body, expression, load);
     const slice_value = sliceLoadTargetSupported(body, expression, load);
+    const place = placeById(body, load.place) orelse return false;
+    const pointer_value = expression.result_ty == .pointer and sameValueType(place.ty, expression.result_ty) and
+        place.type_id.eql(expression.type_id) and
+        (mir.executableAggregatePointerFieldDerefPlace(body, place.*, false) != null or
+            mir.executableParameterProjectedPlace(body, place.*, false));
     if (!aggregate_copy and scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null and
-        !callable and !dyn_value and !slice_value) return false;
+        !callable and !dyn_value and !slice_value and !pointer_value) return false;
     if (load.access.alignment != mir.executableMemoryAlignment(body.enum_types, expression.result_ty)) return false;
     if (aggregate_copy and load.access.kind == .race_unordered and
         !mir.executableRaceAggregateTypeSupported(body, expression.type_id, expression.result_ty)) return false;
-    const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
