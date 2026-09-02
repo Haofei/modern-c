@@ -419,6 +419,33 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 !sameValueType(operand.result_ty, value.result_ty) or !operand.type_id.eql(value.type_id) or
                 ownedTrapCountAll(body, .{ .expression = value.id }) != 0)) return error.InvalidAtomicLoad;
         },
+        .maybe_uninit_write => |operation| {
+            try verifyLocal(body, operation.local);
+            try verifyOperand(body, value, operation.value);
+            if (body.complete) {
+                const operand = expression(body, operation.value) orelse return error.InvalidExpressionReference;
+                if (value.result_ty != .void or
+                    !mir.executableMaybeUninitLocal(body, operation.local, operand.result_ty, operand.type_id) or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                    return error.InvalidMemoryAccessType;
+            }
+        },
+        .maybe_uninit_assume_init => |operation| {
+            try verifyLocal(body, operation.local);
+            if (body.complete and
+                (!mir.executableMaybeUninitLocal(body, operation.local, value.result_ty, value.type_id) or
+                    ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
+                return error.InvalidMemoryAccessType;
+            const write = expression(body, operation.initialized_by) orelse return error.InvalidExpressionReference;
+            const write_operation = switch (write.operation) {
+                .maybe_uninit_write => |candidate| candidate,
+                else => return error.InvalidMemoryAccessType,
+            };
+            if (!write.block_id.eql(value.block_id) or
+                write.owner_statement.index() >= value.owner_statement.index() or
+                !write_operation.local.eql(operation.local))
+                return error.InvalidMemoryAccessType;
+        },
         .atomic_update => |operation| {
             const target = place(body, operation.place) orelse return error.InvalidPlaceReference;
             if (target.root == .value) try verifyOperand(body, value, target.root.value);

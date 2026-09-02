@@ -1103,6 +1103,22 @@ pub const ExecutableExpression = struct {
         /// checked initialization boundary explicit without exposing generic
         /// source syntax to codegen.
         atomic_init: ExprId,
+        /// Store the first initialized payload into a source-level
+        /// `MaybeUninit<T>` local. The wrapper is representation-erased to
+        /// `T`; the local identity records that this access is authorized.
+        maybe_uninit_write: struct {
+            local: LocalId,
+            value: ExprId,
+        },
+        /// Read the initialized payload from a source-level `MaybeUninit<T>`
+        /// local after semantic analysis has discharged the initialization
+        /// obligation.
+        maybe_uninit_assume_init: struct {
+            local: LocalId,
+            /// Earlier write in the same CFG block that establishes the
+            /// initialized state consumed by this load.
+            initialized_by: ExprId,
+        },
         atomic_update: struct {
             kind: ExecutableAtomicUpdateKind,
             place: PlaceId,
@@ -1703,6 +1719,10 @@ pub const ExecutableLocalIdentity = struct {
     is_va_list: bool = false,
     /// Exact dynamic-trait identity for an opaque local fat value.
     dyn_trait_symbol_id: SymbolId = .invalid,
+    /// Payload identity for representation-erased `MaybeUninit<T>` storage.
+    /// This is invalid for ordinary locals, preventing a renderer from
+    /// treating an arbitrary uninitialized `T` as an admitted wrapper access.
+    maybe_uninit_payload_type_id: TypeId = .invalid,
 };
 
 pub const ExecutableAggregateType = struct {
@@ -2114,6 +2134,30 @@ pub fn executableVaStartLocal(body: *const ExecutableBody, expression: ExprId) ?
         else => return null,
     };
     return if (executableVaListLocal(body, local)) local else null;
+}
+
+/// Validate the representation-erased storage backing a canonical
+/// `MaybeUninit<T>` operation. The source wrapper is admitted once by the
+/// frontend and recorded on the local identity; codegen only sees `T`.
+pub fn executableMaybeUninitLocal(
+    body: *const ExecutableBody,
+    local_id: LocalId,
+    payload_ty: ValueType,
+    payload_type_id: TypeId,
+) bool {
+    if (!local_id.isValid() or local_id.index() >= body.locals.len or !payload_type_id.isValid()) return false;
+    const identity = body.locals[local_id.index()];
+    if (!identity.id.eql(local_id) or !identity.maybe_uninit_payload_type_id.eql(payload_type_id)) return false;
+
+    var declarations: usize = 0;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local_id)) {
+            if (!ValueType.eql(init.ty, payload_ty) or !init.type_id.eql(payload_type_id) or init.value != null) return false;
+            declarations += 1;
+        },
+        else => {},
+    };
+    return declarations == 1;
 }
 
 /// A canonical MMIO base is either a function parameter or a local storage

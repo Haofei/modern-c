@@ -1213,6 +1213,8 @@ const Renderer = struct {
             .load => |load| try self.emitMemoryLoad(expression, load),
             .atomic_load => |load| try self.emitAtomicLoad(expression, load),
             .atomic_init => |operand| try self.emitExpression(operand),
+            .maybe_uninit_write => |operation| try self.emitMaybeUninitWrite(expression, operation),
+            .maybe_uninit_assume_init => |operation| try self.emitMaybeUninitAssumeInit(expression, operation),
             .atomic_update => |update| try self.emitAtomicUpdate(expression, update),
             .mmio_read => |read| try self.emitMmioRead(expression, read),
             .mmio_write => |write| try self.emitMmioWrite(expression, write),
@@ -3341,6 +3343,34 @@ const Renderer = struct {
         return .{ .ty = "i1", .spelling = converted };
     }
 
+    fn emitMaybeUninitWrite(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operation: @FieldType(mir.ExecutableExpression.Operation, "maybe_uninit_write"),
+    ) RenderError!Value {
+        if (!maybeUninitWriteSupported(self.body, expression, operation)) return error.InvalidBody;
+        const operand = try self.emitExpression(operation.value);
+        const local = self.locals.get(operation.local.raw) orelse return error.InvalidBody;
+        if (!local.addressable or !std.mem.eql(u8, local.ty, operand.ty)) return error.InvalidBody;
+        try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ operand.ty, operand.spelling, local.storage });
+        return .{ .ty = "void", .spelling = "" };
+    }
+
+    fn emitMaybeUninitAssumeInit(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        operation: @FieldType(mir.ExecutableExpression.Operation, "maybe_uninit_assume_init"),
+    ) RenderError!Value {
+        if (!maybeUninitAssumeInitSupported(self.body, expression, operation))
+            return error.InvalidBody;
+        const local = self.locals.get(operation.local.raw) orelse return error.InvalidBody;
+        const ty = try self.typeText(expression.result_ty);
+        if (!local.addressable or !std.mem.eql(u8, local.ty, ty)) return error.InvalidBody;
+        const loaded = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ loaded, ty, local.storage });
+        return .{ .ty = ty, .spelling = loaded };
+    }
+
     fn emitMmioRead(self: *Renderer, expression: mir.ExecutableExpression, read: anytype) RenderError!Value {
         if (!mmioReadSupported(self.body, expression, read)) return error.InvalidBody;
         const storage_ty = try self.typeText(read.storage_ty);
@@ -4497,6 +4527,8 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .atomic_init => |operand| atomicInitSupported(body, expression, operand),
+        .maybe_uninit_write => |operation| maybeUninitWriteSupported(body, expression, operation),
+        .maybe_uninit_assume_init => |operation| maybeUninitAssumeInitSupported(body, expression, operation),
         .atomic_update => |update| atomicUpdateSupported(body, expression, update),
         .mmio_read => |read| mmioReadSupported(body, expression, read),
         .mmio_write => |write| mmioWriteSupported(body, expression, write),
@@ -5945,6 +5977,36 @@ fn atomicInitSupported(body: *const mir.ExecutableBody, expression: mir.Executab
     const operand = body.expressions[operand_id.index()];
     return atomicPayloadTypeSupported(expression.result_ty) and sameValueType(operand.result_ty, expression.result_ty) and
         operand.type_id.eql(expression.type_id) and ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn maybeUninitWriteSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "maybe_uninit_write"),
+) bool {
+    if (!expressionValid(body, operation.value)) return false;
+    const operand = body.expressions[operation.value.index()];
+    return expression.result_ty == .void and
+        mir.executableMaybeUninitLocal(body, operation.local, operand.result_ty, operand.type_id) and
+        ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn maybeUninitAssumeInitSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "maybe_uninit_assume_init"),
+) bool {
+    if (!expressionValid(body, operation.initialized_by)) return false;
+    const write = body.expressions[operation.initialized_by.index()];
+    const write_operation = switch (write.operation) {
+        .maybe_uninit_write => |candidate| candidate,
+        else => return false,
+    };
+    return write.block_id.eql(expression.block_id) and
+        write.owner_statement.index() < expression.owner_statement.index() and
+        write_operation.local.eql(operation.local) and
+        mir.executableMaybeUninitLocal(body, operation.local, expression.result_ty, expression.type_id) and
+        ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
 fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) bool {

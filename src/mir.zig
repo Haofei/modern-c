@@ -7310,6 +7310,8 @@ const FunctionBuilder = struct {
                 operand.index() < self.executable_expressions.items.len and
                 sameValueType(self.executable_expressions.items[operand.index()].result_ty, expression.result_ty) and
                 self.executable_expressions.items[operand.index()].type_id.eql(expression.type_id),
+            .maybe_uninit_write => |operation| self.executableMaybeUninitComplete(expression, operation.local, operation.value),
+            .maybe_uninit_assume_init => |operation| self.executableMaybeUninitAssumeInitComplete(expression, operation),
             .atomic_update => |update| self.executableAtomicUpdateComplete(expression, update),
             .mmio_map_checked => |operation| self.executableMmioMapComplete(expression, operation),
             .literal => |literal| switch (literal) {
@@ -8047,6 +8049,67 @@ const FunctionBuilder = struct {
             .statement => {},
         };
         return owned == @as(usize, @intFromBool(guarded));
+    }
+
+    fn executableMaybeUninitComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        local_id: LocalId,
+        value_id: ?ExprId,
+    ) bool {
+        const payload_ty: ValueType = if (value_id) |operand_id| payload: {
+            if (!operand_id.isValid() or operand_id.index() >= expression.id.index() or
+                operand_id.index() >= self.executable_expressions.items.len or expression.result_ty != .void)
+                return false;
+            const operand = self.executable_expressions.items[operand_id.index()];
+            break :payload operand.result_ty;
+        } else expression.result_ty;
+        const payload_type_id: TypeId = if (value_id) |operand_id|
+            self.executable_expressions.items[operand_id.index()].type_id
+        else
+            expression.type_id;
+        const body: mir_model.ExecutableBody = .{
+            .locals = self.executable_locals.items,
+            .statements = self.executable_statements.items,
+        };
+        if (!mir_model.executableMaybeUninitLocal(&body, local_id, payload_ty, payload_type_id)) return false;
+        for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
+            .expression => |owner| if (owner.eql(expression.id)) return false,
+            .statement => {},
+        };
+        return true;
+    }
+
+    fn executableMaybeUninitAssumeInitComplete(
+        self: *const FunctionBuilder,
+        expression: ExecutableExpression,
+        operation: @FieldType(ExecutableExpression.Operation, "maybe_uninit_assume_init"),
+    ) bool {
+        if (!operation.initialized_by.isValid() or operation.initialized_by.index() >= expression.id.index() or
+            operation.initialized_by.index() >= self.executable_expressions.items.len)
+            return false;
+        const write = self.executable_expressions.items[operation.initialized_by.index()];
+        if (!write.block_id.eql(expression.block_id) or write.owner_statement.index() >= expression.owner_statement.index()) return false;
+        const write_operation = switch (write.operation) {
+            .maybe_uninit_write => |value| value,
+            else => return false,
+        };
+        if (!write_operation.local.eql(operation.local)) return false;
+        return self.executableMaybeUninitComplete(expression, operation.local, null);
+    }
+
+    fn executableMaybeUninitWriteForLocal(self: *const FunctionBuilder, local_id: LocalId) ?ExprId {
+        var index = self.executable_expressions.items.len;
+        while (index != 0) {
+            index -= 1;
+            const expression = self.executable_expressions.items[index];
+            if (!expression.block_id.eql(BlockId.fromIndex(self.current))) continue;
+            switch (expression.operation) {
+                .maybe_uninit_write => |operation| if (operation.local.eql(local_id)) return expression.id,
+                else => {},
+            }
+        }
+        return null;
     }
 
     fn executableAtomicUpdateComplete(
@@ -9854,6 +9917,46 @@ const FunctionBuilder = struct {
                         .case_index = @intCast(constructor.case_index),
                         .payload = payload,
                     } };
+                }
+                if (self.maybeUninitCallTargetKind(node.callee.*)) |kind| {
+                    const member = memberExpr(node.callee.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const local_name = calleeIdentName(member.base.*) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const local_id = self.executable_local_ids.get(local_name) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const payload_type_expr = self.maybeUninitCallPayloadTypeExpr(node) orelse
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const payload_ty = self.executableValueType(payload_type_expr);
+                    if (payload_ty == .unknown or payload_ty == .value or
+                        !try self.internExecutableTypeExpr(payload_ty, payload_type_expr))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const payload_type_id = try self.internTypeId(payload_ty);
+                    if (!self.executable_locals.items[local_id.index()].maybe_uninit_payload_type_id.eql(payload_type_id))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    switch (kind) {
+                        .maybe_uninit_write => {
+                            if (node.args.len != 1)
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                            result_ty = .void;
+                            break :call .{ .maybe_uninit_write = .{
+                                .local = local_id,
+                                .value = try self.ensureExecutableExprAsType(node.args[0], payload_ty, payload_type_expr),
+                            } };
+                        },
+                        .maybe_uninit_assume_init => {
+                            if (node.args.len != 0)
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                            const initialized_by = self.executableMaybeUninitWriteForLocal(local_id) orelse
+                                break :call self.unsupportedExecutableExpression(.unsupported_call);
+                            result_ty = payload_ty;
+                            break :call .{ .maybe_uninit_assume_init = .{
+                                .local = local_id,
+                                .initialized_by = initialized_by,
+                            } };
+                        },
+                        else => unreachable,
+                    }
                 }
                 // Reflection is a compile-time semantic operation.  Legalize it
                 // before the generic builtin path so executable MIR owns the
@@ -12269,13 +12372,18 @@ const FunctionBuilder = struct {
                     self.exprType(init_expr)
                 else
                     .unknown;
-                // `atomic<T>` is a source-level access discipline whose
-                // runtime storage is exactly `T`. Canonical executable MIR
-                // records that storage type and carries atomicity on each
-                // place operation, so neither backend has to rediscover the
-                // generic wrapper from syntax.
+                // `atomic<T>` and `MaybeUninit<T>` are source-level access
+                // disciplines whose runtime storage is exactly `T`.
+                // Canonical executable MIR records that storage type and the
+                // admitted access kind, so neither backend has to rediscover
+                // a generic wrapper from syntax.
+                const maybe_uninit_payload_type_expr = if (ty_expr) |declared|
+                    maybeUninitPayloadTypeExprAlias(declared, self.aliases)
+                else
+                    null;
                 const executable_ty_expr = if (ty_expr) |declared|
-                    atomicPayloadTypeExprAlias(declared, self.aliases) orelse declared
+                    atomicPayloadTypeExprAlias(declared, self.aliases) orelse
+                        maybe_uninit_payload_type_expr orelse declared
                 else
                     null;
                 var executable_ty = if (executable_ty_expr) |storage_type|
@@ -12333,6 +12441,10 @@ const FunctionBuilder = struct {
                     if (executable_ty_expr) |declared_ty| {
                         if (self.executableTypeExprIsVaList(declared_ty))
                             self.executable_locals.items[executable_local.index()].is_va_list = true;
+                    }
+                    if (maybe_uninit_payload_type_expr != null) {
+                        self.executable_locals.items[executable_local.index()].maybe_uninit_payload_type_id =
+                            try self.internTypeId(executable_ty);
                     }
                     if (executable_ty_expr) |declared_ty| if (dynTraitNameFromTypeAlias(declared_ty, self.aliases)) |trait_name| {
                         self.executable_locals.items[executable_local.index()].dyn_trait_symbol_id =

@@ -897,6 +897,14 @@ fn emitExpressionOperation(
             try out.print(allocator, ", {s}))", .{cAtomicOrdering(load.ordering)});
         },
         .atomic_init => |operand| try emitExpression(allocator, out, body, operand, depth + 1),
+        .maybe_uninit_write => |operation| {
+            try out.append(allocator, '(');
+            try appendLocal(allocator, out, body, operation.local);
+            try out.appendSlice(allocator, " = ");
+            try emitExpression(allocator, out, body, operation.value, depth + 1);
+            try out.appendSlice(allocator, ", (void)0)");
+        },
+        .maybe_uninit_assume_init => |operation| try appendLocal(allocator, out, body, operation.local),
         .atomic_update => |update| {
             const scalar = scalarMemoryInfo((placeById(body, update.place) orelse return error.InvalidPlace).ty) orelse
                 return error.UnsupportedType;
@@ -1699,6 +1707,8 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .load => |load| memoryLoadSupported(body, expression, load),
         .atomic_load => |load| atomicLoadSupported(body, expression, load),
         .atomic_init => |operand| atomicInitSupported(body, expression, operand),
+        .maybe_uninit_write => |operation| maybeUninitWriteSupported(body, expression, operation),
+        .maybe_uninit_assume_init => |operation| maybeUninitAssumeInitSupported(body, expression, operation),
         .atomic_update => |update| atomicUpdateSupported(body, expression, update),
         .mmio_read => |read| mmioReadSupported(body, expression, read),
         .mmio_write => |write| mmioWriteSupported(body, expression, write),
@@ -3445,6 +3455,34 @@ fn atomicInitSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         operand.type_id.eql(expression.type_id) and ownedTrapEdgeCount(body, expression.id) == 0;
 }
 
+fn maybeUninitWriteSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "maybe_uninit_write"),
+) bool {
+    const operand = expressionById(body, operation.value) orelse return false;
+    return expression.result_ty == .void and
+        mir.executableMaybeUninitLocal(body, operation.local, operand.result_ty, operand.type_id) and
+        ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn maybeUninitAssumeInitSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "maybe_uninit_assume_init"),
+) bool {
+    const write = expressionById(body, operation.initialized_by) orelse return false;
+    const write_operation = switch (write.operation) {
+        .maybe_uninit_write => |candidate| candidate,
+        else => return false,
+    };
+    return write.block_id.eql(expression.block_id) and
+        write.owner_statement.index() < expression.owner_statement.index() and
+        write_operation.local.eql(operation.local) and
+        mir.executableMaybeUninitLocal(body, operation.local, expression.result_ty, expression.type_id) and
+        ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
 fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) bool {
     const target = placeById(body, update.place) orelse return false;
     const operand = expressionById(body, update.value) orelse return false;
@@ -4689,10 +4727,11 @@ fn expressionDependsOn(body: *const mir.ExecutableBody, root: mir.ExprId, candid
     if (root.eql(candidate)) return true;
     const expression = body.expressions[root.index()];
     return switch (expression.operation) {
-        .local, .symbol, .literal, .mmio_read, .optional_none, .unsupported => false,
+        .local, .symbol, .literal, .mmio_read, .maybe_uninit_assume_init, .optional_none, .unsupported => false,
         .load => |load| placeDependsOn(body, load.place, candidate, depth + 1),
         .atomic_load => |load| placeDependsOn(body, load.place, candidate, depth + 1),
         .atomic_init => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
+        .maybe_uninit_write => |operation| expressionDependsOn(body, operation.value, candidate, depth + 1),
         .atomic_update => |update| expressionDependsOn(body, update.value, candidate, depth + 1) or
             placeDependsOn(body, update.place, candidate, depth + 1),
         .mmio_write => |write| expressionDependsOn(body, write.value, candidate, depth + 1),

@@ -7604,6 +7604,50 @@ test "MIR records typed call target facts for MaybeUninit member calls" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "executable MIR verifies MaybeUninit initialization witness" {
+    const source =
+        \\struct Node { value: u32 }
+        \\
+        \\fn maybe_uninit_ops() -> u32 {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    slot.write(.{ .value = 7 });
+        \\    let value: Node = slot.assume_init();
+        \\    return value.value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_maybe_uninit_executable.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "maybe_uninit_ops") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.executable_body.isComplete());
+    try mir_executable_body.verify(function);
+
+    var found_assume = false;
+    for (function.executable_body.expressions) |*expression_value| switch (expression_value.operation) {
+        .maybe_uninit_assume_init => |operation| {
+            found_assume = true;
+            expression_value.operation = .{ .maybe_uninit_assume_init = .{
+                .local = operation.local,
+                .initialized_by = .invalid,
+            } };
+            try std.testing.expectError(error.InvalidExpressionReference, mir_executable_body.verify(function));
+            expression_value.operation = .{ .maybe_uninit_assume_init = operation };
+        },
+        else => {},
+    };
+    try std.testing.expect(found_assume);
+    try mir_executable_body.verify(function);
+}
+
 test "MIR owns inferred local types for atomic and MaybeUninit result calls" {
     const source =
         \\struct Node { value: u32 }

@@ -10529,7 +10529,8 @@ test "LLVM inferred local atomic and MaybeUninit calls require MIR types" {
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "atomicrmw add") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "load atomic") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%value") != null);
+    try expectContains(complete_output.items, "store { i32 }");
+    try expectContains(complete_output.items, "load { i32 }");
 
     for ([_][]const u8{ "atomic_inferred_locals", "maybe_uninit_inferred_local" }) |name| {
         var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
