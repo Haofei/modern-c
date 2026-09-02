@@ -9023,6 +9023,13 @@ const FunctionBuilder = struct {
 
     fn appendExecutableValueOptional(self: *FunctionBuilder, input: ast.Expr, target_ty: ValueType, operand: ?ExprId) !ExprId {
         if (!try self.internExecutableValueOptionalType(target_ty)) self.executable_supported = false;
+        if (operand) |payload| {
+            const payload_ty = switch (target_ty) {
+                .nullable_value => |name| valueTypeFromTypeNameAlias(name, self.enums, self.structs, self.packed_bits),
+                else => .unknown,
+            };
+            if (payload_ty != .unknown) try self.contextualizeExecutableLiteral(payload, payload_ty);
+        }
         const source = self.sourcePoint(input.span);
         const id = ExprId.fromIndex(self.executable_expressions.items.len);
         try self.executable_expressions.append(self.allocator, .{
@@ -10373,6 +10380,7 @@ const FunctionBuilder = struct {
     }
 
     fn internExecutableTypeExpr(self: *FunctionBuilder, ty: ValueType, type_expr: ast.TypeExpr) anyerror!bool {
+        if (ty == .nullable_value) return self.internExecutableValueOptionalType(ty);
         const resolved = aggregateTargetTypeAlias(type_expr, self.aliases);
         switch (resolved.kind) {
             .array => |array| {
