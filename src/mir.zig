@@ -9551,12 +9551,14 @@ const FunctionBuilder = struct {
                 const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (!sameValueType(result_ty, field_ty))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
+                const callable_field = field_ty == .value and
+                    (try self.executableCallableSignature(summary.fields[field_index].ty)) != null;
                 const projected_through_pointer = self.executablePlaceHasDeref(node.base.*);
                 const direct_named_storage = pointer_shape == null and !projected_through_pointer and
                     (self.executablePlaceRootIsGlobal(node.base.*) or
                         self.executablePlaceRootIsMaterializedLocal(node.base.*));
                 if (direct_named_storage and
-                    mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null)
+                    (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null or callable_field))
                 {
                     break :member .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
@@ -9573,7 +9575,7 @@ const FunctionBuilder = struct {
                     // pointer-result and storage representation edges.
                     if (shape.kind != .single or
                         (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null and
-                            mir_model.executableAggregateCopyAlignment(result_ty) == null))
+                            mir_model.executableAggregateCopyAlignment(result_ty) == null and !callable_field))
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
                     break :member .{ .load = .{
@@ -9585,7 +9587,7 @@ const FunctionBuilder = struct {
                 }
                 if (projected_through_pointer) {
                     if (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null and
-                        mir_model.executableAggregateCopyAlignment(result_ty) == null)
+                        mir_model.executableAggregateCopyAlignment(result_ty) == null and !callable_field)
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.executableDerefOperandSource(node.base.*) orelse
                         break :member self.unsupportedExecutableExpression(.unsupported_member);

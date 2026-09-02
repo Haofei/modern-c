@@ -1173,7 +1173,10 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
     for (body.parameters) |parameter| if (!(supportsParameterType(body, parameter.ty) or
         (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))) or
         localById(body, parameter.local) == null) return "parameter";
-    for (body.expressions) |expression| if (!supportsExpression(body, expression)) return @tagName(expression.operation);
+    for (body.expressions) |expression| if (!supportsExpression(body, expression)) return switch (expression.operation) {
+        .load => |load| memoryLoadUnsupportedReason(body, expression, load),
+        else => @tagName(expression.operation),
+    };
     for (body.trap_edges) |edge| switch (edge.owner) {
         .expression => |owner_id| {
             const owner = expressionById(body, owner_id) orelse return "trap_owner";
@@ -1228,6 +1231,72 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
         .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return "switch_terminator",
     };
     return "renderer_invariant";
+}
+
+fn memoryLoadUnsupportedReason(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    load: @FieldType(mir.ExecutableExpression.Operation, "load"),
+) []const u8 {
+    const callable = callableLoadTargetSupported(body, expression, load);
+    if (!callable and mir.executableAggregateCopyAlignment(expression.result_ty) == null and
+        scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null)
+        return "load_type";
+    if (load.access.alignment != mir.executableMemoryAlignment(body.enum_types, expression.result_ty)) return "load_alignment";
+    const place = placeById(body, load.place) orelse return "load_place";
+    if (place.storage != .ordinary) return "load_storage";
+    if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
+        const expected_kind: mir.ExecutableMemoryAccessKind = if (indexed.parameter_pointee)
+            .race_unordered
+        else switch (place.root) {
+            .local => .plain,
+            .symbol => |id| if (symbolById(body, id)) |symbol|
+                if (symbol.kind == .global) if (symbol.mutable) .race_unordered else .plain else return "load_fixed_array_root"
+            else
+                return "load_fixed_array_root",
+            .value => return "load_fixed_array_root",
+        };
+        if (load.access.kind != expected_kind) return "load_fixed_array_access";
+        if (indexed.parameter_pointee != (load.representation_source != null and load.representation_span_id.isValid()))
+            return "load_fixed_array_representation";
+        if (mir.executableFixedArrayCheckedProjectionCount(place.*) != 0 and fixedArrayLoadBoundsTrapEdge(body, expression) == null)
+            return "load_fixed_array_trap";
+        const expected_traps = mir.executableFixedArrayCheckedProjectionCount(place.*) +
+            @as(usize, @intFromBool(indexed.parameter_pointee));
+        if (ownedTrapEdgeCount(body, expression.id) != expected_traps) return "load_fixed_array_trap_count";
+        return "load_fixed_array_invariant";
+    }
+    if (callable) {
+        const projected_through_pointer = switch (place.root_ty) {
+            .pointer, .nullable_pointer => true,
+            else => place.projections[0] == .deref,
+        };
+        if (projected_through_pointer) {
+            if (load.access.kind != .race_unordered) return "load_callable_pointer_access";
+            if (!representationOperationHasExactTrapEdge(body, expression)) return "load_callable_pointer_trap";
+            return "load_callable_pointer_invariant";
+        }
+        const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
+            .local => .plain,
+            .symbol => |id| if (symbolById(body, id)) |symbol|
+                if (symbol.kind == .global) if (symbol.mutable) .race_unordered else .plain else return "load_callable_root"
+            else
+                return "load_callable_root",
+            .value => return "load_callable_root",
+        };
+        if (load.access.kind != expected_kind) return "load_callable_access";
+        if (load.representation_source != null or load.representation_span_id.isValid()) return "load_callable_representation";
+        if (ownedTrapEdgeCount(body, expression.id) != 0) return "load_callable_trap_count";
+        return "load_callable_invariant";
+    }
+    if (place.projection_count != 0) {
+        if (!scalarAccessPlaceSupported(body, place.*) and
+            !(mir.executableAggregateCopyAlignment(expression.result_ty) != null and
+                mir.executableGuardedLocalAggregateDerefPlace(body, place.*, false))) return "load_projected_place";
+        if (mir.executablePointerDerefAccessKind(body, place.*) == null) return "load_pointer_access";
+        return "load_representation";
+    }
+    return if (place.root == .local) "load_local" else "load_global";
 }
 
 fn preciseAsmSupported(body: *const mir.ExecutableBody, asm_value: mir.ExecutablePreciseAsm) bool {
@@ -1568,13 +1637,12 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .local => |local| localById(body, local) != null and
             (callableParameter(body, local) or callableLocalUsedAsIndirectCallee(body, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
-        .load => |load| (expressionUsedAsIndirectCallee(body, expression.id) or expressionReturned(body, expression.id)) and
-            memoryLoadSupported(body, expression, load),
+        .load => |load| (expressionUsedAsIndirectCallee(body, expression.id) or expressionReturned(body, expression.id) or
+            callableProducerInitializesUsedLocal(body, expression.id)) and memoryLoadSupported(body, expression, load),
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
-        .closure_bind => |bind| closureBindSupported(body, expression, bind) and
-            callableProducerInitializesUsedLocal(body, expression.id),
+        .closure_bind => |bind| closureBindSupported(body, expression, bind),
         else => false,
     };
 }
@@ -1609,7 +1677,8 @@ fn callableLoadTargetSupported(
     load: @FieldType(mir.ExecutableExpression.Operation, "load"),
 ) bool {
     if (expression.result_ty != .value or
-        (!expressionUsedAsIndirectCallee(body, expression.id) and !expressionReturned(body, expression.id))) return false;
+        (!expressionUsedAsIndirectCallee(body, expression.id) and !expressionReturned(body, expression.id) and
+            !callableProducerInitializesUsedLocal(body, expression.id))) return false;
     const place = placeById(body, load.place) orelse return false;
     if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
     if (mir.executableCallablePlace(body.aggregate_types, place.*) != null) return true;
@@ -1669,6 +1738,26 @@ fn closureBindSupported(
         !supportsType(body, bind.signature.return_ty)) return false;
     for (bind.signature.parameter_types[0..bind.signature.parameter_count]) |ty| if (!supportsType(body, ty)) return false;
     return true;
+}
+
+fn callableExpressionMatches(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    expected: mir.ExecutableCallSignature,
+) bool {
+    const actual = switch (expression.operation) {
+        .symbol => |id| (symbolById(body, id) orelse return false).callable_signature orelse return false,
+        .local => |id| for (body.parameters) |parameter| {
+            if (parameter.local.eql(id)) break parameter.callable_signature orelse return false;
+        } else return false,
+        .closure_bind => |bind| bind.signature,
+        .load => |load| blk: {
+            const place = placeById(body, load.place) orelse return false;
+            break :blk mir.executableCallablePlace(body.aggregate_types, place.*) orelse return false;
+        },
+        else => return false,
+    };
+    return actual.eql(expected);
 }
 
 fn appendClosureCodePointerType(
@@ -2098,7 +2187,10 @@ fn structConstructionSupported(
         if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
             !operand.type_id.eql(shape.field_type_ids[field_index]) or
             !(supportsType(body, operand.result_ty) or functionSymbolExpressionSupported(body, operand.*) or
-                (shape.field_dyn_trait_symbols[field_index].isValid() and dynBindSupported(body, operand.*)))) return false;
+                if (shape.field_callable_signatures[field_index]) |signature|
+                    callableExpressionMatches(body, operand.*, signature)
+                else
+                    shape.field_dyn_trait_symbols[field_index].isValid() and dynBindSupported(body, operand.*))) return false;
     }
     for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;
@@ -2121,7 +2213,10 @@ fn arrayConstructionSupported(
         if (!sameValueType(operand.result_ty, shape.field_types[metadata_index]) or
             !operand.type_id.eql(shape.field_type_ids[metadata_index]) or
             !(supportsType(body, operand.result_ty) or
-                (shape.field_dyn_trait_symbols[metadata_index].isValid() and dynBindSupported(body, operand.*)))) return false;
+                if (shape.field_callable_signatures[metadata_index]) |signature|
+                    callableExpressionMatches(body, operand.*, signature)
+                else
+                    shape.field_dyn_trait_symbols[metadata_index].isValid() and dynBindSupported(body, operand.*))) return false;
     }
     return true;
 }
@@ -2699,8 +2794,9 @@ fn memoryLoadSupported(
         };
     }
     const aggregate_copy = mir.executableAggregateCopyAlignment(expression.result_ty) != null;
+    const callable = callableLoadTargetSupported(body, expression, load);
     if (!aggregate_copy and scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null and
-        !callableLoadTargetSupported(body, expression, load)) return false;
+        !callable) return false;
     if (load.access.alignment != mir.executableMemoryAlignment(body.enum_types, expression.result_ty)) return false;
     if (aggregate_copy and load.access.kind == .race_unordered and
         !mir.executableRaceAggregateTypeSupported(body, expression.type_id, expression.result_ty)) return false;
@@ -2729,6 +2825,27 @@ fn memoryLoadSupported(
                             @as(usize, @intFromBool(indexed.parameter_pointee))
                 else
                     ownedTrapEdgeCount(body, expression.id) == @as(usize, @intFromBool(indexed.parameter_pointee));
+        }
+        if (callable) {
+            const projected_through_pointer = switch (place.root_ty) {
+                .pointer, .nullable_pointer => true,
+                else => place.projections[0] == .deref,
+            };
+            if (projected_through_pointer)
+                return load.access.kind == .race_unordered and representationOperationHasExactTrapEdge(body, expression);
+            const expected_kind: mir.ExecutableMemoryAccessKind = switch (place.root) {
+                .local => .plain,
+                .symbol => |id| if (symbolById(body, id)) |symbol|
+                    if (symbol.kind == .global)
+                        if (symbol.mutable) .race_unordered else .plain
+                    else
+                        return false
+                else
+                    return false,
+                .value => return false,
+            };
+            return load.access.kind == expected_kind and load.representation_source == null and
+                !load.representation_span_id.isValid() and ownedTrapEdgeCount(body, expression.id) == 0;
         }
         if (mir.executableAggregateFieldPlace(
             body.locals,

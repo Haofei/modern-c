@@ -300,7 +300,10 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueTy
         if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
             (!llvmTypeSupported(body, expression.result_ty) and !functionSymbolExpressionSupported(body, expression) and
                 !callableValueExpressionSupported(body, expression))) return "expression_type";
-        if (!operationSupported(body, expression)) return @tagName(expression.operation);
+        if (!operationSupported(body, expression)) return switch (expression.operation) {
+            .load => |load| memoryLoadUnsupportedReason(body, expression, load),
+            else => @tagName(expression.operation),
+        };
     }
     for (body.trap_edges) |edge| switch (edge.owner) {
         .expression => |owner_id| if (!expressionValid(body, owner_id)) return "trap_owner",
@@ -346,6 +349,26 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueTy
         .unreachable_ => {},
     };
     return "renderer_invariant";
+}
+
+fn memoryLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) []const u8 {
+    if (!placeValid(body, load.place)) return "load_place";
+    const callable = callableLoadTargetSupported(body, expression, load);
+    if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false, callable)) return "load_access";
+    const place = body.places[load.place.index()];
+    if (place.projection_count == 0) return "load_direct";
+    if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return "load_type_id";
+    if (mir.executableFixedArrayIndexPlace(body, place)) |indexed| {
+        if (indexed.parameter_pointee != (load.representation_source != null and load.representation_span_id.isValid()))
+            return "load_fixed_array_representation";
+        if (mir.executableFixedArrayCheckedProjectionCount(place) != 0 and fixedArrayLoadBoundsTrapEdge(body, expression) == null)
+            return "load_fixed_array_trap";
+        return "load_fixed_array";
+    }
+    if (mir.executableAggregateFieldPlace(body.locals, body.statements, body.aggregate_types, place, false))
+        return "load_aggregate_field";
+    if (computedRawManyDerefPlaceSupported(body, place, false)) return "load_raw_many";
+    return "load_representation";
 }
 
 fn stringLiteralTypeSupported(ty: mir.ValueType) bool {
@@ -598,6 +621,15 @@ const Renderer = struct {
                 .direct_call => if (self.call_abi_plan) |plan| {
                     const abi = directCallAbiFor(plan.*, expression.id) orelse return error.InvalidBody;
                     return self.callableStorageType(local.ty, abi.result_callable_signature);
+                },
+                .load => |load| load_callable: {
+                    if (local.ty != .value) break :load_callable;
+                    if (!placeValid(self.body, load.place)) return error.InvalidBody;
+                    const signature = mir.executableCallablePlace(
+                        self.body.aggregate_types,
+                        self.body.places[load.place.index()],
+                    ) orelse return error.InvalidBody;
+                    return self.callableStorageType(local.ty, signature);
                 },
                 else => {},
             }
@@ -1038,10 +1070,17 @@ const Renderer = struct {
                 "{ ptr, ptr }"
             else
                 try self.typeText(expression.result_ty),
-            .load => blk: {
+            .load => |load| blk: {
                 if (expression.result_ty == .value) {
                     if (callableHasEnvironment(self.body, expression.id)) |has_environment|
                         break :blk if (has_environment) "{ ptr, ptr }" else "ptr";
+                    if (placeValid(self.body, load.place)) {
+                        const signature = mir.executableCallablePlace(
+                            self.body.aggregate_types,
+                            self.body.places[load.place.index()],
+                        ) orelse break :blk try self.typeText(expression.result_ty);
+                        break :blk if (signature.has_environment) "{ ptr, ptr }" else "ptr";
+                    }
                 }
                 break :blk try self.typeText(expression.result_ty);
             },
@@ -4345,8 +4384,8 @@ fn callableValueExpressionSupported(body: *const mir.ExecutableBody, expression:
         .local => |local| localExists(body, local) and
             (callableLocalUsedAsIndirectCallee(body, local) or callableLocalUsedAsStoreValue(body, expression.id, local)),
         .symbol => functionSymbolExpressionSupported(body, expression),
-        .load => |load| (expressionUsedAsIndirectCallee(body, expression.id) or expressionReturned(body, expression.id)) and
-            memoryLoadSupported(body, expression, load),
+        .load => |load| (expressionUsedAsIndirectCallee(body, expression.id) or expressionReturned(body, expression.id) or
+            callableProducerInitializesUsedLocal(body, expression.id)) and memoryLoadSupported(body, expression, load),
         .direct_call => |call| call.argument_count <= mir.max_executable_operands and
             symbolSpelling(body, call.callee) != null and expressionListValid(body, call.arguments[0..call.argument_count]) and
             callableProducerInitializesUsedLocal(body, expression.id),
@@ -4406,7 +4445,8 @@ fn callableHasEnvironment(body: *const mir.ExecutableBody, id: mir.ExprId) ?bool
 
 fn callableLoadTargetSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) bool {
     if (expression.result_ty != .value or
-        (!expressionUsedAsIndirectCallee(body, expression.id) and !expressionReturned(body, expression.id)) or
+        (!expressionUsedAsIndirectCallee(body, expression.id) and !expressionReturned(body, expression.id) and
+            !callableProducerInitializesUsedLocal(body, expression.id)) or
         !placeValid(body, load.place)) return false;
     const place = body.places[load.place.index()];
     if (place.storage != .ordinary or !sameValueType(place.ty, .value)) return false;
