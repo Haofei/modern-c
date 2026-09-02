@@ -1207,6 +1207,8 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
         localById(body, parameter.local) == null) return "parameter";
     for (body.expressions) |expression| if (!supportsExpression(body, expression)) return switch (expression.operation) {
         .load => |load| memoryLoadUnsupportedReason(body, expression, load),
+        .atomic_load => |load| atomicLoadUnsupportedReason(body, expression, load),
+        .atomic_update => |update| atomicUpdateUnsupportedReason(body, expression, update),
         else => @tagName(expression.operation),
     };
     for (body.trap_edges) |edge| switch (edge.owner) {
@@ -2971,6 +2973,16 @@ fn atomicLoadSupported(
         ownedTrapEdgeCount(body, expression.id) == 0;
 }
 
+fn atomicLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) []const u8 {
+    if (!load.ordering.validForLoad()) return "atomic_load_ordering";
+    const target = placeById(body, load.place) orelse return "atomic_load_place";
+    if (!atomicPlaceSupported(body, target.*)) return "atomic_load_place_shape";
+    if (!sameValueType(target.ty, expression.result_ty) or !target.type_id.eql(expression.type_id)) return "atomic_load_type";
+    if (placeNeedsRepresentationGuard(target.*))
+        return if (representationOperationHasExactTrapEdge(body, expression)) "atomic_load_invariant" else "atomic_load_trap";
+    return "atomic_load_direct";
+}
+
 fn atomicInitSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
     const operand = expressionById(body, operand_id) orelse return false;
     return scalarMemoryInfo(expression.result_ty) != null and sameValueType(operand.result_ty, expression.result_ty) and
@@ -2992,6 +3004,16 @@ fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     if (placeNeedsRepresentationGuard(target.*)) return representationOperationHasExactTrapEdge(body, expression);
     return update.representation_source == null and !update.representation_span_id.isValid() and
         ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn atomicUpdateUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) []const u8 {
+    const target = placeById(body, update.place) orelse return "atomic_update_place";
+    const operand = expressionById(body, update.value) orelse return "atomic_update_operand";
+    if (!atomicPlaceSupported(body, target.*)) return "atomic_update_place_shape";
+    if (!sameValueType(target.ty, operand.result_ty) or !target.type_id.eql(operand.type_id)) return "atomic_update_type";
+    if (placeNeedsRepresentationGuard(target.*))
+        return if (representationOperationHasExactTrapEdge(body, expression)) "atomic_update_invariant" else "atomic_update_trap";
+    return "atomic_update_direct";
 }
 
 fn mmioReadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, read: anytype) bool {
@@ -3053,7 +3075,7 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
     if (place.projection_count == 2) {
         var ordinary = place;
         ordinary.storage = .ordinary;
-        return parameterScalarAccessPlaceSupported(body, ordinary);
+        return mir.executableParameterProjectedPlace(body, ordinary, false);
     }
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local = switch (place.root) {
