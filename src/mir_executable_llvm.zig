@@ -264,7 +264,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
                 asm_value.clobber_count > mir.max_executable_operands) return false,
             .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,
             .control_transfer => {},
-            .defer_cleanup, .unsupported => return false,
+            .defer_register, .cleanup_run => {},
+            .unsupported => return false,
         }
     }
     for (body.terminators) |terminator| {
@@ -334,7 +335,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueTy
         .guard => {},
         .return_ => |value| if (value) |result| if (!expressionValid(body, result)) return "return",
         .opaque_asm, .precise_asm, .control_transfer => {},
-        .defer_cleanup => return "defer_cleanup",
+        .defer_register, .cleanup_run => {},
         .unsupported => return "unsupported_statement",
     };
     for (body.terminators) |terminator| switch (terminator.operation) {
@@ -807,7 +808,27 @@ const Renderer = struct {
             // The verified CFG terminator owns the actual break/continue
             // edge; the statement only preserves its source identity.
             .control_transfer => {},
-            .defer_cleanup, .unsupported => return error.Unsupported,
+            .defer_register => {},
+            .cleanup_run => |actions| try self.emitCleanupActions(actions),
+            .unsupported => return error.Unsupported,
+        }
+    }
+
+    fn emitCleanupActions(self: *Renderer, actions: []const mir.CleanupActionId) RenderError!void {
+        for (actions) |id| {
+            if (!id.isValid() or id.index() >= self.body.cleanup_actions.len) return error.InvalidBody;
+            const action = self.body.cleanup_actions[id.index()];
+            if (!action.id.eql(id)) return error.InvalidBody;
+            // A deferred graph may be reached from several runtime exits.
+            // Invalidate only its registration-owned values so each edge
+            // emits the call without re-evaluating unrelated operands.
+            for (self.body.expressions) |expression| {
+                if (expression.owner_statement.eql(action.registration)) self.values[expression.id.index()] = null;
+            }
+            for (action.roots) |root| {
+                const value = try self.emitExpression(root);
+                if (!std.mem.eql(u8, value.ty, "void")) return error.InvalidBody;
+            }
         }
     }
 
@@ -940,7 +961,10 @@ const Renderer = struct {
 
     fn emitTerminator(self: *Renderer, terminator: mir.ExecutableTerminator) RenderError!void {
         switch (terminator.operation) {
-            .jump => |target| try self.output.print(self.allocator, "  br label %mc_block_{d}\n", .{target.raw}),
+            .jump => |target| {
+                try self.emitCleanupActions(terminator.exit_cleanup_actions);
+                try self.output.print(self.allocator, "  br label %mc_block_{d}\n", .{target.raw});
+            },
             .branch => |branch| {
                 const condition = try self.emitExpression(branch.condition);
                 if (!std.mem.eql(u8, condition.ty, "i1")) return error.InvalidBody;
@@ -950,6 +974,7 @@ const Renderer = struct {
             .for_step => |step| try self.emitForStepTerminator(step),
             .return_ => {
                 const value = self.returns.get(terminator.block_id.raw) orelse null;
+                try self.emitCleanupActions(terminator.exit_cleanup_actions);
                 if (std.mem.eql(u8, self.return_ty, "void")) {
                     if (value != null) return error.InvalidBody;
                     try self.output.appendSlice(self.allocator, "  ret void\n");
@@ -1162,7 +1187,7 @@ const Renderer = struct {
             .tagged_union_tag => |operand| try self.emitTaggedUnionTag(expression, operand),
             .tagged_union_payload => |operation| try self.emitTaggedUnionPayload(expression, operation),
             .try_unwrap => |operand| try self.emitTryUnwrap(expression, operand),
-            .try_propagate => |operand| try self.emitTryPropagate(expression, operand),
+            .try_propagate => |operation| try self.emitTryPropagate(expression, operation.operand),
             .try_map_error => |operation| try self.emitTryMapError(expression, operation),
             .mmio_map_checked => |operation| try self.emitMmioMapChecked(expression, operation),
             .result => |result| try self.emitResult(expression, result),
@@ -1364,11 +1389,13 @@ const Renderer = struct {
         const continuation = try std.fmt.allocPrint(self.allocator, "mc_propagate_ok_{d}", .{expression.id.raw});
         const failure = try std.fmt.allocPrint(self.allocator, "mc_propagate_err_{d}", .{expression.id.raw});
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ present, operand.ty, operand.spelling });
-        try self.output.print(
-            self.allocator,
-            "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  ret {s} {s}\n{s}:\n",
-            .{ present, continuation, failure, failure, operand.ty, operand.spelling, continuation },
-        );
+        try self.output.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ present, continuation, failure, failure });
+        const cleanup_actions = switch (expression.operation) {
+            .try_propagate => |operation| operation.error_cleanup_actions,
+            else => return error.InvalidBody,
+        };
+        try self.emitCleanupActions(cleanup_actions);
+        try self.output.print(self.allocator, "  ret {s} {s}\n{s}:\n", .{ operand.ty, operand.spelling, continuation });
         const payload = try self.temp();
         const payload_ty = try self.typeText(expression.result_ty);
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, operand.ty, operand.spelling });
@@ -1419,6 +1446,7 @@ const Renderer = struct {
             mapped_error.ty,
             mapped_error.spelling,
         });
+        try self.emitCleanupActions(operation.error_cleanup_actions);
         try self.output.print(self.allocator, "  ret {s} {s}\n{s}:\n", .{ target_ty, propagated, continuation });
         const payload = try self.temp();
         const payload_ty = try self.typeText(expression.result_ty);
@@ -4377,7 +4405,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .tagged_union_tag => |operand| taggedUnionTagSupported(body, expression, operand),
         .tagged_union_payload => |operation| taggedUnionPayloadSupported(body, expression, operation),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
-        .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
+        .try_propagate => |operation| tryPropagateSupported(body, expression, operation.operand),
         .try_map_error => |operation| tryMapErrorSupported(body, expression, operation),
         .mmio_map_checked => |operation| mmioMapCheckedSupported(body, expression, operation),
         .result => |result| resultConstructionSupported(body, expression, result),

@@ -6903,9 +6903,11 @@ test "MIR records forget events for no-drop move resources" {
 
 test "MIR cleanup cfg records ordinary defer cleanup actions" {
     const source =
-        \\fn cleanup() -> void {}
+        \\fn cleanup_a() -> void {}
+        \\fn cleanup_b() -> void {}
         \\fn use_defer() -> void {
-        \\    defer cleanup();
+        \\    defer cleanup_a();
+        \\    defer cleanup_b();
         \\}
     ;
     var parsed = try test_support.parseModule("mir_cleanup_cfg_defer.mc", source);
@@ -6925,11 +6927,36 @@ test "MIR cleanup cfg records ordinary defer cleanup actions" {
     const scope_cleanup_edge = for (cleanup_cfg.edges) |edge| {
         if (edge.kind == .scope_exit) break edge;
     } else return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 1), scope_cleanup_edge.actions.len);
-    switch (scope_cleanup_edge.actions[0]) {
-        .defer_cleanup => |action| try std.testing.expectEqual(@as(usize, 0), action.instruction_index),
-        .ownership => return error.TestUnexpectedResult,
+    try std.testing.expectEqual(@as(usize, 2), scope_cleanup_edge.actions.len);
+
+    const mutable_function = functionByNameMut(&module_mir, "use_defer") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mutable_function.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 2), mutable_function.executable_body.cleanup_actions.len);
+    try mir_executable_body.verify(mutable_function);
+
+    var cleanup_statement_index: ?usize = null;
+    var original: []const mir.CleanupActionId = &.{};
+    for (mutable_function.executable_body.statements, 0..) |statement, index| {
+        switch (statement.operation) {
+            .cleanup_run => |actions| if (actions.len == 2) {
+                cleanup_statement_index = index;
+                original = actions;
+                break;
+            },
+            else => {},
+        }
     }
+    const index = cleanup_statement_index orelse return error.TestUnexpectedResult;
+    try std.testing.expect(original[0].eql(mir.CleanupActionId.fromIndex(1)));
+    try std.testing.expect(original[1].eql(mir.CleanupActionId.fromIndex(0)));
+
+    var wrong_order = [_]mir.CleanupActionId{
+        mir.CleanupActionId.fromIndex(0),
+        mir.CleanupActionId.fromIndex(1),
+    };
+    mutable_function.executable_body.statements[index].operation = .{ .cleanup_run = &wrong_order };
+    defer mutable_function.executable_body.statements[index].operation = .{ .cleanup_run = original };
+    try std.testing.expectError(error.InvalidCleanupOrder, mir_executable_body.verify(mutable_function));
 }
 
 test "MIR ownership authority does not let forget authorize auto-drop registration" {

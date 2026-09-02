@@ -40,7 +40,7 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
     };
     for (body.statements) |statement_value| switch (statement_value.operation) {
         .unsupported => return "unsupported_statement",
-        .defer_cleanup => return "defer_cleanup",
+        .defer_register, .cleanup_run => {},
         .guard => |guard| if (guard.kind == .assert_ and
             !assertGuardHasExactTrapEdge(body, statement_value, guard)) return "assert_guard",
         else => {},
@@ -192,6 +192,27 @@ pub fn verify(function: *const mir.Function) !void {
         try verifyType(function, value.type_id, value.result_ty, body.complete);
         try verifyExpression(function, value);
     }
+    for (body.cleanup_actions, 0..) |action, index| {
+        if (!action.id.isValid() or action.id.index() != index or
+            !action.registration.isValid() or action.registration.index() >= body.statements.len or
+            !blockExists(function, action.block_id)) return error.InvalidCleanupActionIdentity;
+        try verifySpan(function, action.span_id, action.source);
+        const registration = body.statements[action.registration.index()];
+        if (!registration.id.eql(action.registration) or !registration.block_id.eql(action.block_id))
+            return error.InvalidCleanupRegistration;
+        switch (registration.operation) {
+            .defer_register => |id| if (!id.eql(action.id)) return error.InvalidCleanupRegistration,
+            else => return error.InvalidCleanupRegistration,
+        }
+        if (body.complete and action.roots.len == 0) return error.InvalidCleanupExpression;
+        for (action.roots) |root| {
+            const value = expression(body, root) orelse return error.InvalidExpressionReference;
+            if (!value.owner_statement.eql(action.registration) or !value.block_id.eql(action.block_id))
+                return error.InvalidCleanupExpression;
+            if (body.complete and (value.result_ty != .void or value.operation != .direct_call))
+                return error.InvalidCleanupExpression;
+        }
+    }
     try verifyTrapEdges(function);
 
     for (body.places, 0..) |value, index| {
@@ -226,7 +247,101 @@ pub fn verify(function: *const mir.Function) !void {
         try verifyTerminator(function, terminator);
     }
 
+    if (body.complete) try verifyExecutableCleanupCfg(function);
+
     if (body.complete and containsIncompleteOperation(body)) return error.InvalidCompletionClaim;
+}
+
+fn cleanupAction(body: *const mir.ExecutableBody, id: mir.CleanupActionId) ?mir.ExecutableCleanupAction {
+    if (!id.isValid() or id.index() >= body.cleanup_actions.len) return null;
+    const action = body.cleanup_actions[id.index()];
+    return if (action.id.eql(id)) action else null;
+}
+
+fn cleanupListPops(stack: []mir.CleanupActionId, depth: *usize, actions: []const mir.CleanupActionId) bool {
+    if (actions.len > depth.*) return false;
+    for (actions, 0..) |action, index| {
+        if (!stack[depth.* - 1 - index].eql(action)) return false;
+    }
+    depth.* -= actions.len;
+    return true;
+}
+
+fn cleanupStackEql(left: []const mir.CleanupActionId, right: []const mir.CleanupActionId) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |a, b| if (!a.eql(b)) return false;
+    return true;
+}
+
+fn terminatorByBlock(body: *const mir.ExecutableBody, id: mir.BlockId) ?*const mir.ExecutableTerminator {
+    if (!id.isValid() or id.index() >= body.terminators.len) return null;
+    const terminator = &body.terminators[id.index()];
+    return if (terminator.block_id.eql(id)) terminator else null;
+}
+
+fn verifyCleanupSuccessor(body: *const mir.ExecutableBody, target: mir.BlockId, stack: []const mir.CleanupActionId) !void {
+    const successor = terminatorByBlock(body, target) orelse return error.InvalidBlockReference;
+    if (!cleanupStackEql(stack, successor.entry_cleanup_stack)) return error.InvalidCleanupSuccessorState;
+}
+
+fn verifyExecutableCleanupCfg(function: *const mir.Function) !void {
+    const body = &function.executable_body;
+    if (body.terminators.len == 0) return;
+    if (body.terminators[0].entry_cleanup_stack.len != 0) return error.InvalidCleanupSuccessorState;
+    const stack = try std.heap.page_allocator.alloc(mir.CleanupActionId, body.cleanup_actions.len);
+    defer std.heap.page_allocator.free(stack);
+    for (body.terminators) |terminator| {
+        var depth = terminator.entry_cleanup_stack.len;
+        if (depth > stack.len) return error.InvalidCleanupOrder;
+        @memcpy(stack[0..depth], terminator.entry_cleanup_stack);
+        for (body.statements) |statement_value| {
+            if (!statement_value.block_id.eql(terminator.block_id)) continue;
+            for (body.expressions) |value| {
+                if (!value.owner_statement.eql(statement_value.id)) continue;
+                const actions = switch (value.operation) {
+                    .try_propagate => |operation| operation.error_cleanup_actions,
+                    .try_map_error => |operation| operation.error_cleanup_actions,
+                    else => continue,
+                };
+                var failure_depth = depth;
+                if (!cleanupListPops(stack, &failure_depth, actions) or failure_depth != 0)
+                    return error.InvalidCleanupOrder;
+            }
+            switch (statement_value.operation) {
+                .defer_register => |id| {
+                    const action = cleanupAction(body, id) orelse return error.InvalidCleanupActionIdentity;
+                    if (!action.registration.eql(statement_value.id) or depth >= stack.len)
+                        return error.InvalidCleanupRegistration;
+                    stack[depth] = id;
+                    depth += 1;
+                },
+                .cleanup_run => |actions| if (!cleanupListPops(stack, &depth, actions))
+                    return error.InvalidCleanupOrder,
+                else => {},
+            }
+        }
+        if (!cleanupListPops(stack, &depth, terminator.exit_cleanup_actions)) return error.InvalidCleanupOrder;
+        const remaining = stack[0..depth];
+        switch (terminator.operation) {
+            .return_ => if (depth != 0) return error.InvalidCleanupOrder,
+            .jump => |target| try verifyCleanupSuccessor(body, target, remaining),
+            .branch => |branch| {
+                try verifyCleanupSuccessor(body, branch.true_block, remaining);
+                try verifyCleanupSuccessor(body, branch.false_block, remaining);
+            },
+            .for_each => |loop| {
+                try verifyCleanupSuccessor(body, loop.body_block, remaining);
+                try verifyCleanupSuccessor(body, loop.after_block, remaining);
+            },
+            .for_step => |step| try verifyCleanupSuccessor(body, step.header_block, remaining),
+            .switch_ => |switch_| {
+                try verifyCleanupSuccessor(body, switch_.default_block, remaining);
+                for (switch_.cases[0..switch_.case_count]) |case| try verifyCleanupSuccessor(body, case.target, remaining);
+            },
+            .trap_, .unreachable_ => {},
+            .fallthrough => return error.InvalidBlockReference,
+        }
+    }
 }
 
 fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpression) !void {
@@ -726,9 +841,9 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidAggregateConstruction;
             }
         },
-        .try_propagate => |operand_id| {
-            try verifyOperand(body, value, operand_id);
-            const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+        .try_propagate => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
             if (body.complete and (!tryPropagatePayloadValid(body, &value, operand) or
                 ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
                 return error.InvalidAggregateConstruction;
@@ -1095,7 +1210,7 @@ fn tryPropagationProjectionMatches(function: *const mir.Function, legacy: mir.Tr
     }
     const value = match orelse return false;
     const operand_id = switch (value.operation) {
-        .try_propagate => |id| id,
+        .try_propagate => |operation| operation.operand,
         .try_map_error => |operation| operation.operand,
         else => return false,
     };
@@ -1416,7 +1531,7 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                     return error.InvalidStatementIdentity;
             }
         },
-        .control_transfer, .defer_cleanup, .unsupported => {},
+        .control_transfer, .defer_register, .cleanup_run, .unsupported => {},
     }
 }
 
@@ -1651,7 +1766,8 @@ fn containsIncompleteOperation(body: *const mir.ExecutableBody) bool {
             mir.executableSliceIndexPlace(body, value) == null) return true;
     }
     for (body.statements) |value| switch (value.operation) {
-        .unsupported, .defer_cleanup => return true,
+        .unsupported => return true,
+        .defer_register, .cleanup_run => {},
         else => {},
     };
     for (body.terminators) |value| switch (value.operation) {

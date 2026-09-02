@@ -743,6 +743,7 @@ pub const InstId = mir_model.InstId;
 pub const ExprId = mir_model.ExprId;
 pub const LocalId = mir_model.LocalId;
 pub const PlaceId = mir_model.PlaceId;
+pub const CleanupActionId = mir_model.CleanupActionId;
 pub const ExecutableParameter = mir_model.ExecutableParameter;
 pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
 pub const ExecutableExpression = mir_model.ExecutableExpression;
@@ -756,6 +757,7 @@ pub const ExecutableAggregatePointerFieldDeref = mir_model.ExecutableAggregatePo
 pub const executableAggregatePointerFieldDerefPlace = mir_model.executableAggregatePointerFieldDerefPlace;
 pub const ExecutableStatement = mir_model.ExecutableStatement;
 pub const ExecutableTerminator = mir_model.ExecutableTerminator;
+pub const ExecutableCleanupAction = mir_model.ExecutableCleanupAction;
 pub const ExecutableBody = mir_model.ExecutableBody;
 pub const executableCheckedBinaryTrapRequirements = mir_model.executableCheckedBinaryTrapRequirements;
 pub const CallableKind = mir_model.CallableKind;
@@ -1249,7 +1251,12 @@ fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) erro
         errdefer cleanup_plan.deinit(allocator);
         function.cleanup_cfg = try buildCleanupCfg(allocator, module.*, function.*, cleanup_plan);
         function.ownership_cleanup_plan = cleanup_plan;
-        if (function.ownership_cleanup_plan.actions.len != 0 or cleanupCfgHasActions(function.cleanup_cfg)) {
+        // Deferred expressions are now represented by executable cleanup
+        // actions and explicit CFG execution points. Ownership drop glue is a
+        // separate migration and remains outside the canonical body boundary.
+        if (function.ownership_cleanup_plan.actions.len != 0 or
+            (cleanupCfgHasActions(function.cleanup_cfg) and function.executable_body.cleanup_actions.len == 0))
+        {
             function.executable_body.complete = false;
         }
     }
@@ -6183,6 +6190,13 @@ const ValueTypeContext = struct {
 
 const TypeIdMap = std.HashMap(ValueType, TypeId, ValueTypeContext, std.hash_map.default_max_load_percentage);
 
+const ExecutableLoopTarget = struct {
+    label: ?[]const u8,
+    break_block: usize,
+    continue_block: usize,
+    cleanup_depth: usize,
+};
+
 const FunctionBuilder = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -6247,8 +6261,13 @@ const FunctionBuilder = struct {
     executable_places: std.ArrayList(ExecutablePlace),
     executable_statements: std.ArrayList(ExecutableStatement),
     executable_terminators: std.ArrayList(ExecutableTerminator),
+    executable_cleanup_actions: std.ArrayList(ExecutableCleanupAction),
     executable_owned_bytes: std.ArrayList([]const u8),
     executable_owned_expr_id_slices: std.ArrayList([]const ExprId),
+    executable_owned_cleanup_action_id_slices: std.ArrayList([]const CleanupActionId),
+    active_executable_cleanups: std.ArrayList(CleanupActionId),
+    executable_block_cleanup_entries: std.ArrayList([]const CleanupActionId),
+    executable_terminator_cleanups: std.AutoHashMap(usize, []const CleanupActionId),
     executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
     executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
@@ -6298,8 +6317,7 @@ const FunctionBuilder = struct {
     local_address_origin: std.StringHashMap(void),
     wrap_values: std.StringHashMap(void),
     sat_values: std.StringHashMap(void),
-    break_targets: std.ArrayList(usize),
-    continue_targets: std.ArrayList(usize),
+    executable_loop_targets: std.ArrayList(ExecutableLoopTarget),
     current: usize,
     // Fact-gated optimizer toggle (annex E); set from BuildOptions. Off by default so
     // the standard pipeline emits identical MIR.
@@ -6392,8 +6410,13 @@ const FunctionBuilder = struct {
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
+            .executable_cleanup_actions = .empty,
             .executable_owned_bytes = .empty,
             .executable_owned_expr_id_slices = .empty,
+            .executable_owned_cleanup_action_id_slices = .empty,
+            .active_executable_cleanups = .empty,
+            .executable_block_cleanup_entries = .empty,
+            .executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(allocator),
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -6417,10 +6440,10 @@ const FunctionBuilder = struct {
             .local_address_origin = std.StringHashMap(void).init(allocator),
             .wrap_values = std.StringHashMap(void).init(allocator),
             .sat_values = std.StringHashMap(void).init(allocator),
-            .break_targets = .empty,
-            .continue_targets = .empty,
+            .executable_loop_targets = .empty,
             .current = 0,
         };
+        try builder.executable_block_cleanup_entries.append(allocator, &.{});
         if (!try builder.internExecutableEnumType(builder.return_ty)) builder.executable_supported = false;
         if (builder.return_ty == .nullable_value and !try builder.internExecutableValueOptionalType(builder.return_ty))
             builder.executable_supported = false;
@@ -6549,8 +6572,13 @@ const FunctionBuilder = struct {
             .executable_places = .empty,
             .executable_statements = .empty,
             .executable_terminators = .empty,
+            .executable_cleanup_actions = .empty,
             .executable_owned_bytes = .empty,
             .executable_owned_expr_id_slices = .empty,
+            .executable_owned_cleanup_action_id_slices = .empty,
+            .active_executable_cleanups = .empty,
+            .executable_block_cleanup_entries = .empty,
+            .executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(allocator),
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -6574,10 +6602,10 @@ const FunctionBuilder = struct {
             .local_address_origin = std.StringHashMap(void).init(allocator),
             .wrap_values = std.StringHashMap(void).init(allocator),
             .sat_values = std.StringHashMap(void).init(allocator),
-            .break_targets = .empty,
-            .continue_targets = .empty,
+            .executable_loop_targets = .empty,
             .current = 0,
         };
+        try builder.executable_block_cleanup_entries.append(allocator, &.{});
         const value_ty = valueTypeFromTypeAlias(ty, enums, structs, packed_bits, aliases);
         try builder.addInstr(.local, name, value_ty, span);
         try builder.local_types.put(name, value_ty);
@@ -6631,10 +6659,16 @@ const FunctionBuilder = struct {
         self.executable_places.deinit(self.allocator);
         self.executable_statements.deinit(self.allocator);
         self.executable_terminators.deinit(self.allocator);
+        self.executable_cleanup_actions.deinit(self.allocator);
         for (self.executable_owned_bytes.items) |bytes| self.allocator.free(bytes);
         self.executable_owned_bytes.deinit(self.allocator);
         for (self.executable_owned_expr_id_slices.items) |ids| self.allocator.free(ids);
         self.executable_owned_expr_id_slices.deinit(self.allocator);
+        for (self.executable_owned_cleanup_action_id_slices.items) |ids| self.allocator.free(ids);
+        self.executable_owned_cleanup_action_id_slices.deinit(self.allocator);
+        self.active_executable_cleanups.deinit(self.allocator);
+        self.executable_block_cleanup_entries.deinit(self.allocator);
+        self.executable_terminator_cleanups.deinit();
         self.executable_for_each_terminators.deinit();
         self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
@@ -6658,8 +6692,7 @@ const FunctionBuilder = struct {
         self.local_address_origin.deinit();
         self.wrap_values.deinit();
         self.sat_values.deinit();
-        self.break_targets.deinit(self.allocator);
-        self.continue_targets.deinit(self.allocator);
+        self.executable_loop_targets.deinit(self.allocator);
     }
 
     fn finish(self: *FunctionBuilder) !Function {
@@ -6805,10 +6838,14 @@ const FunctionBuilder = struct {
         self.wrap_values = std.StringHashMap(void).init(self.allocator);
         self.sat_values.deinit();
         self.sat_values = std.StringHashMap(void).init(self.allocator);
-        self.break_targets.deinit(self.allocator);
-        self.break_targets = .empty;
-        self.continue_targets.deinit(self.allocator);
-        self.continue_targets = .empty;
+        self.active_executable_cleanups.deinit(self.allocator);
+        self.active_executable_cleanups = .empty;
+        self.executable_block_cleanup_entries.deinit(self.allocator);
+        self.executable_block_cleanup_entries = .empty;
+        self.executable_terminator_cleanups.deinit();
+        self.executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(self.allocator);
+        self.executable_loop_targets.deinit(self.allocator);
+        self.executable_loop_targets = .empty;
         self.generated_type_expr_nodes = .empty;
         self.generated_type_expr_args = .empty;
 
@@ -7019,9 +7056,14 @@ const FunctionBuilder = struct {
                         if (!input.type_id.isValid()) complete = false;
                     }
                 },
-                .unsupported, .defer_cleanup => complete = false,
+                .unsupported => complete = false,
+                .defer_register, .cleanup_run => {},
                 else => {},
             }
+        }
+        for (self.executable_cleanup_actions.items) |*action| {
+            action.span_id = self.span_ids.get(action.source) orelse .invalid;
+            if (!action.span_id.isValid() or action.roots.len == 0) complete = false;
         }
         // Representation facts are recorded by the source-shaped walk after
         // recursively visiting some assignment/call operands. Resolve any
@@ -7094,6 +7136,11 @@ const FunctionBuilder = struct {
                 .block_id = BlockId.fromIndex(block.id),
                 .source = terminator_source.source,
                 .span_id = terminator_source.span_id,
+                .entry_cleanup_stack = if (block.id < self.executable_block_cleanup_entries.items.len)
+                    self.executable_block_cleanup_entries.items[block.id]
+                else
+                    &.{},
+                .exit_cleanup_actions = self.executable_terminator_cleanups.get(block.id) orelse &.{},
                 .operation = operation,
             });
         }
@@ -7128,6 +7175,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(statements);
         const terminators = try self.executable_terminators.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(terminators);
+        const cleanup_actions = try self.executable_cleanup_actions.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(cleanup_actions);
         const owned_bytes = try self.executable_owned_bytes.toOwnedSlice(self.allocator);
         errdefer {
             for (owned_bytes) |bytes| self.allocator.free(bytes);
@@ -7137,6 +7186,11 @@ const FunctionBuilder = struct {
         errdefer {
             for (owned_expr_id_slices) |ids| self.allocator.free(ids);
             self.allocator.free(owned_expr_id_slices);
+        }
+        const owned_cleanup_action_id_slices = try self.executable_owned_cleanup_action_id_slices.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_cleanup_action_id_slices) |ids| self.allocator.free(ids);
+            self.allocator.free(owned_cleanup_action_id_slices);
         }
         self.executable_local_ids.deinit();
         self.executable_local_ids = std.StringHashMap(LocalId).init(self.allocator);
@@ -7159,8 +7213,10 @@ const FunctionBuilder = struct {
             .places = places,
             .statements = statements,
             .terminators = terminators,
+            .cleanup_actions = cleanup_actions,
             .owned_bytes = owned_bytes,
             .owned_expr_id_slices = owned_expr_id_slices,
+            .owned_cleanup_action_id_slices = owned_cleanup_action_id_slices,
         };
     }
 
@@ -7204,7 +7260,7 @@ const FunctionBuilder = struct {
             .tagged_union_tag => |operand| self.executableTaggedUnionTagComplete(expression, operand),
             .tagged_union_payload => |operation| self.executableTaggedUnionPayloadComplete(expression, operation),
             .try_unwrap => |operand_id| self.executableTryUnwrapComplete(expression, operand_id),
-            .try_propagate => |operand_id| self.executableTryPropagateComplete(expression, operand_id),
+            .try_propagate => |operation| self.executableTryPropagateComplete(expression, operation.operand),
             .try_map_error => |operation| self.executableTryMapErrorComplete(expression, operation),
             .result => |operation| result: {
                 if (!operation.payload.isValid() or operation.payload.index() >= expression.id.index() or
@@ -10356,7 +10412,10 @@ const FunctionBuilder = struct {
                     if (!try self.internExecutableResultType(self.return_ty, return_type_expr))
                         break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                     if (node.mapped == null and sameValueType(self.return_ty, operand_ty))
-                        break :unwrap .{ .try_propagate = operand_id };
+                        break :unwrap .{ .try_propagate = .{
+                            .operand = operand_id,
+                            .error_cleanup_actions = try self.reverseExecutableCleanupSuffix(0),
+                        } };
                     if (!std.mem.eql(u8, operand_ty.result.ok, self.return_ty.result.ok))
                         break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                     const source_error_ty = valueTypeFromTypeNameAlias(operand_ty.result.err, self.enums, self.structs, self.packed_bits);
@@ -10394,7 +10453,11 @@ const FunctionBuilder = struct {
                             .signature = signature,
                         } };
                     };
-                    break :unwrap .{ .try_map_error = .{ .operand = operand_id, .mapper = mapper } };
+                    break :unwrap .{ .try_map_error = .{
+                        .operand = operand_id,
+                        .mapper = mapper,
+                        .error_cleanup_actions = try self.reverseExecutableCleanupSuffix(0),
+                    } };
                 }
                 break :unwrap .{ .try_unwrap = operand_id };
             },
@@ -11385,6 +11448,91 @@ const FunctionBuilder = struct {
         });
     }
 
+    fn ownExecutableCleanupIds(self: *FunctionBuilder, ids: []const CleanupActionId) ![]const CleanupActionId {
+        if (ids.len == 0) return &.{};
+        const owned = try self.allocator.dupe(CleanupActionId, ids);
+        errdefer self.allocator.free(owned);
+        try self.executable_owned_cleanup_action_id_slices.append(self.allocator, owned);
+        return owned;
+    }
+
+    fn reverseExecutableCleanupSuffix(self: *FunctionBuilder, mark: usize) ![]const CleanupActionId {
+        if (mark > self.active_executable_cleanups.items.len) return error.InvalidExecutableCleanupDepth;
+        const count = self.active_executable_cleanups.items.len - mark;
+        if (count == 0) return &.{};
+        const owned = try self.allocator.alloc(CleanupActionId, count);
+        errdefer self.allocator.free(owned);
+        for (0..count) |index| {
+            owned[index] = self.active_executable_cleanups.items[self.active_executable_cleanups.items.len - 1 - index];
+        }
+        try self.executable_owned_cleanup_action_id_slices.append(self.allocator, owned);
+        return owned;
+    }
+
+    fn appendExecutableCleanupRun(self: *FunctionBuilder, mark: usize, source: SourcePoint) !void {
+        const actions = try self.reverseExecutableCleanupSuffix(mark);
+        if (actions.len != 0) try self.appendExecutableStatement(source, .{ .cleanup_run = actions });
+    }
+
+    fn setExecutableTerminatorCleanup(self: *FunctionBuilder, mark: usize) !void {
+        const actions = try self.reverseExecutableCleanupSuffix(mark);
+        if (actions.len != 0) try self.executable_terminator_cleanups.put(self.current, actions);
+    }
+
+    fn appendExecutableCleanupAction(self: *FunctionBuilder, expr: ast.Expr, stmt_span: ast.Span) !CleanupActionId {
+        var roots: std.ArrayList(ExprId) = .empty;
+        defer roots.deinit(self.allocator);
+        var supported = true;
+        switch (expr.kind) {
+            .block => |block| for (block.items) |item| switch (item.kind) {
+                .expr => |root_expr| {
+                    const root = try self.ensureExecutableExpr(root_expr);
+                    try roots.append(self.allocator, root);
+                },
+                else => supported = false,
+            },
+            else => try roots.append(self.allocator, try self.ensureExecutableExpr(expr)),
+        }
+        if (roots.items.len == 0) supported = false;
+        for (roots.items) |root| {
+            if (!root.isValid() or root.index() >= self.executable_expressions.items.len) {
+                supported = false;
+                continue;
+            }
+            const value = self.executable_expressions.items[root.index()];
+            if (value.result_ty != .void or value.operation != .direct_call) supported = false;
+        }
+        if (!supported) self.executable_supported = false;
+        const owned_roots = if (roots.items.len == 0) &.{} else roots: {
+            const owned = try roots.toOwnedSlice(self.allocator);
+            errdefer self.allocator.free(owned);
+            try self.executable_owned_expr_id_slices.append(self.allocator, owned);
+            break :roots owned;
+        };
+        const id = CleanupActionId.fromIndex(self.executable_cleanup_actions.items.len);
+        const source = self.sourcePoint(stmt_span);
+        try self.executable_cleanup_actions.append(self.allocator, .{
+            .id = id,
+            .registration = InstId.fromIndex(self.executable_statements.items.len),
+            .block_id = BlockId.fromIndex(self.current),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .roots = owned_roots,
+        });
+        return id;
+    }
+
+    fn executableLoopTarget(self: *const FunctionBuilder, label: ?ast.Ident) ?ExecutableLoopTarget {
+        var index = self.executable_loop_targets.items.len;
+        while (index > 0) {
+            index -= 1;
+            const target = self.executable_loop_targets.items[index];
+            if (label == null) return target;
+            if (target.label) |candidate| if (std.mem.eql(u8, candidate, label.?.text)) return target;
+        }
+        return null;
+    }
+
     fn ownExecutableStringLiteral(self: *FunctionBuilder, literal: []const u8) ![]const u8 {
         const scratch = try self.allocator.alloc(u8, literal.len);
         defer self.allocator.free(scratch);
@@ -12008,6 +12156,8 @@ const FunctionBuilder = struct {
         // (valid=false) intentionally persist — keeping a check that is still live is always sound.
         const facts_save = self.proven_facts.items.len;
         defer self.proven_facts.items.len = facts_save;
+        const cleanup_mark = self.active_executable_cleanups.items.len;
+        defer self.active_executable_cleanups.items.len = cleanup_mark;
         for (block.items) |stmt| {
             if (try self.buildStmt(stmt)) {
                 try self.addUnhandledResultChecksForBlock(block);
@@ -12015,6 +12165,7 @@ const FunctionBuilder = struct {
             }
         }
         try self.addUnhandledResultChecksForBlock(block);
+        try self.appendExecutableCleanupRun(cleanup_mark, self.sourcePoint(block.span));
         return false;
     }
 
@@ -12352,6 +12503,7 @@ const FunctionBuilder = struct {
                 if (executable_return) |value| try self.contextualizeExecutableLiteral(value, self.return_ty);
                 if (terminal_trap == null) {
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
+                    try self.setExecutableTerminatorCleanup(0);
                 }
                 if (maybe) |expr| {
                     if (self.addressOriginIsLocal(expr)) {
@@ -12385,26 +12537,28 @@ const FunctionBuilder = struct {
                 self.setTerminator(.{ .return_ = self.return_ty });
                 return true;
             },
-            .@"break" => {
+            .@"break" => |label| {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .control_transfer = .break_ });
                 try self.addInstr(.control_transfer, "break", .void, stmt.span);
-                if (self.break_targets.items.len > 0) {
-                    const target = self.break_targets.items[self.break_targets.items.len - 1];
-                    try self.addSuccessor(self.current, target);
-                    self.setTerminator(.{ .jump = target });
+                if (self.executableLoopTarget(label)) |target| {
+                    try self.setExecutableTerminatorCleanup(target.cleanup_depth);
+                    try self.addSuccessor(self.current, target.break_block);
+                    self.setTerminator(.{ .jump = target.break_block });
                 } else {
+                    self.executable_supported = false;
                     self.setTerminator(.unreachable_);
                 }
                 return true;
             },
-            .@"continue" => {
+            .@"continue" => |label| {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .control_transfer = .continue_ });
                 try self.addInstr(.control_transfer, "continue", .void, stmt.span);
-                if (self.continue_targets.items.len > 0) {
-                    const target = self.continue_targets.items[self.continue_targets.items.len - 1];
-                    try self.addSuccessor(self.current, target);
-                    self.setTerminator(.{ .jump = target });
+                if (self.executableLoopTarget(label)) |target| {
+                    try self.setExecutableTerminatorCleanup(target.cleanup_depth);
+                    try self.addSuccessor(self.current, target.continue_block);
+                    self.setTerminator(.{ .jump = target.continue_block });
                 } else {
+                    self.executable_supported = false;
                     self.setTerminator(.unreachable_);
                 }
                 return true;
@@ -12425,7 +12579,9 @@ const FunctionBuilder = struct {
                 return false;
             },
             .@"defer" => |expr| {
-                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .defer_cleanup);
+                const action = try self.appendExecutableCleanupAction(expr, stmt.span);
+                try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .defer_register = action });
+                try self.active_executable_cleanups.append(self.allocator, action);
                 try self.addInstr(.defer_cleanup, "cleanup", .void, stmt.span);
                 try self.addDeferCleanupExprFact(expr, stmt.span);
                 try self.addResultDeferCheck(expr);
@@ -13763,8 +13919,12 @@ const FunctionBuilder = struct {
         }
 
         self.current = body_id;
-        try self.break_targets.append(self.allocator, after_id);
-        try self.continue_targets.append(self.allocator, step_id);
+        try self.executable_loop_targets.append(self.allocator, .{
+            .label = if (node.loop_label) |label| label.text else null,
+            .break_block = after_id,
+            .continue_block = step_id,
+            .cleanup_depth = self.active_executable_cleanups.items.len,
+        });
         var had_previous_type = false;
         var previous_type: ValueType = .unknown;
         var had_previous_type_expr = false;
@@ -13824,8 +13984,7 @@ const FunctionBuilder = struct {
             }
             _ = self.executable_local_ids.remove(binding.text);
         }
-        _ = self.break_targets.pop();
-        _ = self.continue_targets.pop();
+        _ = self.executable_loop_targets.pop();
         if (!terminated) {
             // Re-enter through the loop header so the condition (and any
             // observable reads used to compute it) is evaluated on every
@@ -15616,6 +15775,8 @@ const FunctionBuilder = struct {
     fn addBlock(self: *FunctionBuilder, kind: []const u8) !usize {
         const id = self.blocks.items.len;
         try self.blocks.append(self.allocator, .{ .id = id, .kind = kind });
+        const entry = try self.ownExecutableCleanupIds(self.active_executable_cleanups.items);
+        try self.executable_block_cleanup_entries.append(self.allocator, entry);
         return id;
     }
 

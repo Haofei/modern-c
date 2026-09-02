@@ -84,7 +84,6 @@ pub fn emitBodyWithOptions(
         }
         try out.print(allocator, " mc_exec_tmp_{d};\n", .{expression.id.raw});
     }
-
     for (body.terminators) |terminator| {
         if (blockNeedsLabel(body, terminator.block_id)) {
             try writeIndent(allocator, out, indent);
@@ -171,6 +170,14 @@ fn emitStatement(
     indent: usize,
     options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    switch (statement.operation) {
+        .defer_register => return,
+        .cleanup_run => |actions| {
+            try emitExecutableCleanupActions(allocator, out, body, actions, indent, options.source_path);
+            return;
+        },
+        else => {},
+    }
     try prepareStatementExpressions(allocator, out, body, statement, indent, options.source_path);
     if (statementRepresentationGuard(statement)) |guard| {
         try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
@@ -286,18 +293,64 @@ fn emitStatement(
         .opaque_asm => |asm_value| try emitOpaqueAsm(allocator, out, asm_value, indent, options.stub_asm),
         .precise_asm => |asm_value| try emitPreciseAsm(allocator, out, body, asm_value, indent, options.stub_asm),
         .return_ => |value| {
-            try writeIndent(allocator, out, indent);
-            if (value) |expression| {
-                try out.appendSlice(allocator, "return ");
-                try emitExpression(allocator, out, body, expression, 0);
-                try out.appendSlice(allocator, ";\n");
+            if (blockHasExitCleanup(body, statement.block_id)) {
+                if (value) |expression| {
+                    try writeIndent(allocator, out, indent);
+                    try out.print(allocator, "__auto_type mc_exec_return_{d} = ", .{statement.id.raw});
+                    try emitExpression(allocator, out, body, expression, 0);
+                    try out.appendSlice(allocator, ";\n");
+                }
             } else {
-                try out.appendSlice(allocator, "return;\n");
+                try writeIndent(allocator, out, indent);
+                if (value) |expression| {
+                    try out.appendSlice(allocator, "return ");
+                    try emitExpression(allocator, out, body, expression, 0);
+                    try out.appendSlice(allocator, ";\n");
+                } else {
+                    try out.appendSlice(allocator, "return;\n");
+                }
             }
         },
         // The corresponding CFG edge is the authority for these transfers.
         .control_transfer => {},
-        .defer_cleanup, .unsupported => return error.UnsupportedOperation,
+        .defer_register, .cleanup_run => unreachable,
+        .unsupported => return error.UnsupportedOperation,
+    }
+}
+
+fn cleanupActionById(body: *const mir.ExecutableBody, id: mir.CleanupActionId) ?*const mir.ExecutableCleanupAction {
+    if (!id.isValid() or id.index() >= body.cleanup_actions.len) return null;
+    const action = &body.cleanup_actions[id.index()];
+    return if (action.id.eql(id)) action else null;
+}
+
+fn emitExecutableCleanupActions(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    actions: []const mir.CleanupActionId,
+    indent: usize,
+    source_path: ?[]const u8,
+) (RenderError || std.mem.Allocator.Error)!void {
+    for (actions) |id| {
+        const action = cleanupActionById(body, id) orelse return error.InvalidBlock;
+        const registration = statementById(body, action.registration) orelse return error.InvalidBlock;
+        // The same action can appear on several CFG exits. Give each emitted
+        // occurrence a C scope so `__auto_type` temporaries owned by the
+        // deferred expression never collide across those exits.
+        try writeIndent(allocator, out, indent);
+        try out.appendSlice(allocator, "{\n");
+        // A block-form defer has its own source span in addition to the spans
+        // of the expressions inside it. Preserve that registration origin in
+        // the generated map even though registration has no runtime work.
+        try writeSourceLineDirective(allocator, out, source_path, action.source);
+        try writeIndent(allocator, out, indent + 1);
+        try out.appendSlice(allocator, "/* canonical defer cleanup */\n");
+        for (action.roots) |root| {
+            try prepareExpressionSet(allocator, out, body, registration.*, root, indent + 1, source_path);
+        }
+        try writeIndent(allocator, out, indent);
+        try out.appendSlice(allocator, "}\n");
     }
 }
 
@@ -450,6 +503,7 @@ fn emitTerminator(
         .fallthrough => return error.UnsupportedOperation,
         .jump => |target| {
             if (!hasBlock(body, target)) return error.InvalidBlock;
+            try emitExecutableCleanupActions(allocator, out, body, terminator.exit_cleanup_actions, indent, source_path);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "goto mc_bb_{d};\n", .{target.raw});
         },
@@ -496,7 +550,21 @@ fn emitTerminator(
         // terminator only closes paths whose statement stream has no explicit
         // return operation.
         .return_ => {
-            if (!blockHasReturn(body, terminator.block_id)) {
+            try emitExecutableCleanupActions(allocator, out, body, terminator.exit_cleanup_actions, indent, source_path);
+            if (terminator.exit_cleanup_actions.len != 0) {
+                if (returnStatementForBlock(body, terminator.block_id)) |statement| {
+                    if (statement.operation.return_ != null) {
+                        try writeIndent(allocator, out, indent);
+                        try out.print(allocator, "return mc_exec_return_{d};\n", .{statement.id.raw});
+                    } else {
+                        try writeIndent(allocator, out, indent);
+                        try out.appendSlice(allocator, "return;\n");
+                    }
+                } else {
+                    try writeIndent(allocator, out, indent);
+                    try out.appendSlice(allocator, "return;\n");
+                }
+            } else if (!blockHasReturn(body, terminator.block_id)) {
                 try writeIndent(allocator, out, indent);
                 try out.appendSlice(allocator, "return;\n");
             }
@@ -533,6 +601,21 @@ fn emitTerminator(
             try out.appendSlice(allocator, "}\n");
         },
     }
+}
+
+fn returnStatementForBlock(body: *const mir.ExecutableBody, block_id: mir.BlockId) ?*const mir.ExecutableStatement {
+    for (body.statements) |*statement| {
+        if (!statement.block_id.eql(block_id)) continue;
+        if (statement.operation == .return_) return statement;
+    }
+    return null;
+}
+
+fn blockHasExitCleanup(body: *const mir.ExecutableBody, block_id: mir.BlockId) bool {
+    for (body.terminators) |terminator| {
+        if (terminator.block_id.eql(block_id)) return terminator.exit_cleanup_actions.len != 0;
+    }
+    return false;
 }
 
 const CLeafProjection = union(enum) { field: usize, index: usize };
@@ -1065,9 +1148,9 @@ fn emitExpressionOperation(
             }
             try out.append(allocator, ')');
         },
-        .try_propagate => |operand_id| {
+        .try_propagate => |operation| {
             try out.append(allocator, '(');
-            try emitExpression(allocator, out, body, operand_id, depth + 1);
+            try emitExpression(allocator, out, body, operation.operand, depth + 1);
             try out.appendSlice(allocator, ".payload.ok)");
         },
         .try_map_error => |operation| {
@@ -1233,7 +1316,8 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                 asm_value.clobber_count > mir.max_executable_operands) return false,
             .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,
             .control_transfer => {},
-            .defer_cleanup, .unsupported => return false,
+            .defer_register, .cleanup_run => {},
+            .unsupported => return false,
         }
     }
     for (body.terminators) |terminator| switch (terminator.operation) {
@@ -1305,7 +1389,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
         .guard => {},
         .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return "return",
         .opaque_asm, .precise_asm, .control_transfer => {},
-        .defer_cleanup => return "defer_cleanup",
+        .defer_register, .cleanup_run => {},
         .unsupported => return "unsupported_statement",
     };
     for (body.terminators) |terminator| switch (terminator.operation) {
@@ -1576,7 +1660,7 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .tagged_union_tag => |operand| taggedUnionTagSupported(body, expression, operand),
         .tagged_union_payload => |operation| taggedUnionPayloadSupported(body, expression, operation),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
-        .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
+        .try_propagate => |operation| tryPropagateSupported(body, expression, operation.operand),
         .try_map_error => |operation| tryMapErrorSupported(body, expression, operation),
         .mmio_map_checked => |operation| mmioMapCheckedSupported(body, expression, operation),
         .result => |result| resultConstructionSupported(body, expression, result),
@@ -4353,15 +4437,21 @@ fn prepareExpressionSet(
             try out.appendSlice(allocator, ") mc_trap_NullUnwrap();\n");
         }
         if (expression.operation == .try_propagate) {
-            const operand = expression.operation.try_propagate;
+            const operation = expression.operation.try_propagate;
+            const operand = operation.operand;
             if (!tryPropagateSupported(body, expression, operand)) return error.InvalidExpression;
             try writeSourceLineDirective(allocator, out, source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (!");
             try emitExpression(allocator, out, body, operand, 0);
-            try out.appendSlice(allocator, ".is_ok) return ");
+            try out.appendSlice(allocator, ".is_ok) {\n");
+            try emitExecutableCleanupActions(allocator, out, body, operation.error_cleanup_actions, indent + 1, source_path);
+            try writeIndent(allocator, out, indent + 1);
+            try out.appendSlice(allocator, "return ");
             try emitExpression(allocator, out, body, operand, 0);
             try out.appendSlice(allocator, ";\n");
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "}\n");
         }
         if (expression.operation == .try_map_error) {
             const operation = expression.operation.try_map_error;
@@ -4370,8 +4460,11 @@ fn prepareExpressionSet(
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (!");
             try emitExpression(allocator, out, body, operation.operand, 0);
-            try out.appendSlice(allocator, ".is_ok) return ((");
+            try out.appendSlice(allocator, ".is_ok) {\n");
             const target = resultType(body, body.return_type_id) orelse return error.InvalidExpression;
+            try writeIndent(allocator, out, indent + 1);
+            try appendCType(allocator, out, body, target.ty);
+            try out.print(allocator, " mc_exec_propagated_{d} = ((", .{expression.id.raw});
             try appendCType(allocator, out, body, target.ty);
             try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = ");
             switch (operation.mapper) {
@@ -4384,6 +4477,11 @@ fn prepareExpressionSet(
                 .literal => |literal| try emitExpression(allocator, out, body, literal, 0),
             }
             try out.appendSlice(allocator, " });\n");
+            try emitExecutableCleanupActions(allocator, out, body, operation.error_cleanup_actions, indent + 1, source_path);
+            try writeIndent(allocator, out, indent + 1);
+            try out.print(allocator, "return mc_exec_propagated_{d};\n", .{expression.id.raw});
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "}\n");
         }
         switch (expression.operation) {
             .binary => |binary| if (binary.arithmetic == .unchecked) {
@@ -4499,7 +4597,8 @@ fn expressionDependsOn(body: *const mir.ExecutableBody, root: mir.ExprId, candid
             expressionListDependsOn(body, call.arguments[0..call.argument_count], candidate, depth + 1),
         .dyn_bind => |bind| expressionDependsOn(body, bind.source, candidate, depth + 1),
         .address_of => |address| placeDependsOn(body, address.place, candidate, depth + 1),
-        .deref, .slice_length, .optional_some, .try_unwrap, .try_propagate => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
+        .deref, .slice_length, .optional_some, .try_unwrap => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
+        .try_propagate => |operation| expressionDependsOn(body, operation.operand, candidate, depth + 1),
         .index => |index| expressionDependsOn(body, index.base, candidate, depth + 1) or
             expressionDependsOn(body, index.index, candidate, depth + 1),
         .range_slice => |range| expressionDependsOn(body, range.base, candidate, depth + 1) or

@@ -109,7 +109,7 @@ test "lower-c canonical MIR maps propagated Result errors" {
 
     const mapped = try cFunctionBody(output.items, "static mc_result_u32_mc_type_name_7_HighErr mapped");
     try expectContains(mapped, "/* canonical executable MIR */");
-    try expectContains(mapped, "if (!mc_exec_tmp_0.is_ok) return");
+    try expectContains(mapped, "if (!mc_exec_tmp_0.is_ok) {");
     try expectContains(mapped, ".payload.err = mc_exec_tmp_1");
 }
 
@@ -14191,7 +14191,7 @@ test "lower-c emits Result try in local initializers" {
     const body = try cFunctionBody(output.items, "static mc_result_u32_Error add_one(void)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "make_result()");
-    try expectContains(body, ".is_ok) return mc_exec_tmp_");
+    try expectContains(body, ".is_ok) {");
     try expectContains(body, ".payload.ok");
     try expectContains(body, "mc_checked_add_u32");
     try expectContains(body, ".is_ok = true");
@@ -14254,7 +14254,7 @@ test "lower-c emits Result try in return statements" {
     const propagate_body = try cFunctionBody(output.items, "static mc_result_u32_Error propagate(mc_result_u32_Error result)");
     try expectContains(propagate_body, "/* canonical executable MIR */");
     try expectContains(propagate_body, "if (!mc_exec_tmp_");
-    try expectContains(propagate_body, ".is_ok) return mc_exec_tmp_");
+    try expectContains(propagate_body, ".is_ok) {");
     try expectContains(propagate_body, ".payload.ok");
 }
 
@@ -14417,7 +14417,7 @@ test "lower-c emits try in local initializer call arguments" {
     const result_body = try cFunctionBody(output.items, "static mc_result_u32_Error local_result_try(void)");
     try expectContains(result_body, "/* canonical executable MIR */");
     try expectContains(result_body, "make_result()");
-    try expectContains(result_body, ".is_ok) return mc_exec_tmp_");
+    try expectContains(result_body, ".is_ok) {");
     try expectContains(result_body, ".payload.ok");
     try expectContains(result_body, "box_value(mc_exec_tmp_");
     const nullable_body = try cFunctionBody(output.items, "static uint8_t const * local_nullable_try(void)");
@@ -14471,11 +14471,11 @@ test "lower-c emits try in assignment and expression statements" {
 
     const assign_result = try cFunctionBody(output.items, "static mc_result_u32_Error assign_result_try(void)");
     try expectContains(assign_result, "/* canonical executable MIR */");
-    try expectContains(assign_result, ".is_ok) return mc_exec_tmp_");
+    try expectContains(assign_result, ".is_ok) {");
     try expectContains(assign_result, ".payload.ok");
     try expectContains(assign_result, "mc_race_store_u32");
     const expr_result = try cFunctionBody(output.items, "static mc_result_u32_Error expr_result_try(void)");
-    try expectContains(expr_result, ".is_ok) return mc_exec_tmp_");
+    try expectContains(expr_result, ".is_ok) {");
     try expectContains(expr_result, "consume(mc_exec_tmp_");
     const assign_nullable = try cFunctionBody(output.items, "static uint8_t const * assign_nullable_try(void)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, assign_nullable, "ptr = "));
@@ -20740,11 +20740,24 @@ test "lower-c emits lexical defer cleanup before return" {
     try appendCTest("emit_c_defer.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_a(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_b(void);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_lexical_cleanup(void) {\n    close_b();\n    close_a();\n    return;\n}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_block_cleanup(void) {\n    {\n        close_a();\n    }\n    return;\n}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_break(bool flag) {\n    while (flag) {\n        close_a();\n        goto mc_break_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_continue(bool flag) {\n    while (flag) {\n        close_a();\n        goto mc_continue_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_on_fallthrough(void) {\n    close_a();\n}") != null);
+    const lexical = try cFunctionBody(output.items, "MC_UNUSED static void accept_lexical_cleanup(void)");
+    try expectContains(lexical, "/* canonical executable MIR */");
+    const close_b = std.mem.indexOf(u8, lexical, "close_b();") orelse return error.TestUnexpectedResult;
+    const close_a = std.mem.indexOfPos(u8, lexical, close_b + 1, "close_a();") orelse return error.TestUnexpectedResult;
+    const return_pos = std.mem.indexOfPos(u8, lexical, close_a + 1, "return;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(close_b < close_a and close_a < return_pos);
+
+    const block_cleanup = try cFunctionBody(output.items, "MC_UNUSED static void accept_block_cleanup(void)");
+    try expectContains(block_cleanup, "/* canonical executable MIR */");
+    try expectContains(block_cleanup, "close_a();");
+    const break_cleanup = try cFunctionBody(output.items, "MC_UNUSED static void accept_cleanup_before_break(bool flag)");
+    try expectContains(break_cleanup, "close_a();");
+    try expectContains(break_cleanup, "goto mc_bb_");
+    const continue_cleanup = try cFunctionBody(output.items, "MC_UNUSED static void accept_cleanup_before_continue(bool flag)");
+    try expectContains(continue_cleanup, "close_a();");
+    try expectContains(continue_cleanup, "goto mc_bb_");
+    const fallthrough_cleanup = try cFunctionBody(output.items, "MC_UNUSED static void accept_cleanup_on_fallthrough(void)");
+    try expectContains(fallthrough_cleanup, "close_a();");
 }
 
 test "lower-c emits deferred drop-attribute pointer release before return" {
@@ -20864,7 +20877,7 @@ test "lower-c ordinary defer rejects unsupported expression fallback" {
     try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_expression_fallback.mc", .{}, false, null));
 }
 
-test "lower-c ordinary direct defer requires MIR call marker" {
+test "lower-c canonical ordinary defer ignores legacy call spelling" {
     const source =
         \\extern fn close_a() -> void;
         \\fn ordinary_defer_call_marker() -> void {
@@ -20893,10 +20906,11 @@ test "lower-c ordinary direct defer requires MIR call marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_call_marker.mc", .{}, false, null));
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_call_marker.mc", .{}, false, null);
+    try expectContains(output.items, "close_a();");
 }
 
-test "lower-c ordinary direct defer with arguments requires MIR call marker" {
+test "lower-c canonical ordinary defer with arguments ignores legacy call spelling" {
     const source =
         \\extern fn takes_u32(value: u32) -> void;
         \\fn ordinary_defer_arg_call_marker(x: u32) -> void {
@@ -20925,10 +20939,11 @@ test "lower-c ordinary direct defer with arguments requires MIR call marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_call_marker.mc", .{}, false, null));
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_call_marker.mc", .{}, false, null);
+    try expectContains(output.items, "takes_u32(");
 }
 
-test "lower-c ordinary direct defer with arguments requires MIR argument facts" {
+test "lower-c canonical ordinary defer with arguments ignores legacy argument facts" {
     const source =
         \\extern fn takes_u32(value: u32) -> void;
         \\fn ordinary_defer_arg_fact(x: u32) -> void {
@@ -20963,7 +20978,8 @@ test "lower-c ordinary direct defer with arguments requires MIR argument facts" 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_fact.mc", .{}, false, null));
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_fact.mc", .{}, false, null);
+    try expectContains(output.items, "takes_u32(");
 }
 
 test "lower-c ordinary direct defer with discarded result requires MIR result fact" {

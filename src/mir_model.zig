@@ -41,6 +41,7 @@ pub const InstId = TypedIndex("InstId");
 pub const ExprId = TypedIndex("ExprId");
 pub const LocalId = TypedIndex("LocalId");
 pub const PlaceId = TypedIndex("PlaceId");
+pub const CleanupActionId = TypedIndex("CleanupActionId");
 
 pub const CallableKind = enum {
     function,
@@ -1261,13 +1262,17 @@ pub const ExecutableExpression = struct {
         /// Extract the success payload of a Result while returning the exact
         /// operand unchanged on its error edge. Admission requires the
         /// enclosing function to return the same canonical Result type.
-        try_propagate: ExprId,
+        try_propagate: struct {
+            operand: ExprId,
+            error_cleanup_actions: []const CleanupActionId = &.{},
+        },
         /// Propagate a Result error after converting it to the enclosing
         /// function's error type. The success payload remains the value of the
         /// expression; the error edge returns from the current function.
         try_map_error: struct {
             operand: ExprId,
             mapper: ExecutableTryErrorMapper,
+            error_cleanup_actions: []const CleanupActionId = &.{},
         },
         result: struct {
             is_ok: bool,
@@ -1501,6 +1506,18 @@ pub const ExecutablePlace = struct {
     };
 };
 
+/// A deferred expression graph registered by one executable statement.
+/// Roots are evaluated in source order only when a cleanup execution point
+/// names this action; registration itself has no runtime effect.
+pub const ExecutableCleanupAction = struct {
+    id: CleanupActionId,
+    registration: InstId,
+    block_id: BlockId,
+    source: SourcePoint,
+    span_id: SpanId = .invalid,
+    roots: []const ExprId = &.{},
+};
+
 pub const ExecutableStatement = struct {
     id: InstId,
     block_id: BlockId,
@@ -1534,7 +1551,8 @@ pub const ExecutableStatement = struct {
         control_transfer: enum { break_, continue_ },
         opaque_asm: ExecutableOpaqueAsm,
         precise_asm: ExecutablePreciseAsm,
-        defer_cleanup,
+        defer_register: CleanupActionId,
+        cleanup_run: []const CleanupActionId,
         unsupported,
     };
 };
@@ -1917,6 +1935,12 @@ pub const ExecutableTerminator = struct {
     block_id: BlockId,
     source: SourcePoint = .{ .line = 0, .column = 0 },
     span_id: SpanId = .invalid,
+    /// Cleanup stack live on entry to this block, in registration order.
+    /// The verifier uses it to check joins and loop back-edges without
+    /// reconstructing source scopes.
+    entry_cleanup_stack: []const CleanupActionId = &.{},
+    /// Actions executed immediately before this terminator, in LIFO order.
+    exit_cleanup_actions: []const CleanupActionId = &.{},
     operation: union(enum) {
         fallthrough,
         jump: BlockId,
@@ -1972,6 +1996,7 @@ pub const ExecutableBody = struct {
     places: []ExecutablePlace = &.{},
     statements: []ExecutableStatement = &.{},
     terminators: []ExecutableTerminator = &.{},
+    cleanup_actions: []ExecutableCleanupAction = &.{},
     /// Allocations referenced by syntax-free executable operations. Keeping
     /// ownership on the body makes operation payloads self-contained without
     /// embedding AST nodes or source-literal spellings.
@@ -1980,6 +2005,7 @@ pub const ExecutableBody = struct {
     /// fixed-array construction. Keeping ownership here avoids an arbitrary
     /// language limit inherited from call/asm inline storage.
     owned_expr_id_slices: []const []const ExprId = &.{},
+    owned_cleanup_action_id_slices: []const []const CleanupActionId = &.{},
 
     pub fn isComplete(self: *const ExecutableBody) bool {
         return self.complete;
@@ -1998,10 +2024,13 @@ pub const ExecutableBody = struct {
         if (self.places.len != 0) allocator.free(self.places);
         if (self.statements.len != 0) allocator.free(self.statements);
         if (self.terminators.len != 0) allocator.free(self.terminators);
+        if (self.cleanup_actions.len != 0) allocator.free(self.cleanup_actions);
         for (self.owned_bytes) |bytes| allocator.free(bytes);
         if (self.owned_bytes.len != 0) allocator.free(self.owned_bytes);
         for (self.owned_expr_id_slices) |ids| allocator.free(ids);
         if (self.owned_expr_id_slices.len != 0) allocator.free(self.owned_expr_id_slices);
+        for (self.owned_cleanup_action_id_slices) |ids| allocator.free(ids);
+        if (self.owned_cleanup_action_id_slices.len != 0) allocator.free(self.owned_cleanup_action_id_slices);
         self.* = .{};
     }
 };

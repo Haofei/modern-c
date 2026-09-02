@@ -96,11 +96,38 @@ fn defer_break_labeled() -> u32 {
     return g_defer;                // 1 + 100 + 1000 = 1101
 }
 
+// Cleanup is LIFO, and a return expression is captured before cleanup runs.
+// `defer_return_lifo` therefore returns 0 while leaving g_defer at 21.
+fn defer_return_lifo() -> u32 {
+    g_defer = 0;
+    defer dadd(1);
+    defer dadd(20);
+    return g_defer;
+}
+
+// Every continue edge leaves the loop-body scope and must run that
+// iteration's cleanup before jumping back to the loop header.
+fn defer_continue() -> u32 {
+    g_defer = 0;
+    var i: u32 = 0;
+    while i < 3 {
+        defer dadd(1);
+        i = i + 1;
+        continue;
+    }
+    return g_defer;
+}
+
 export fn run() -> u32 {
+    let return_before_cleanup: u32 = defer_return_lifo();
+    let lifo_order: u32 = g_defer;
     return break_labeled()          // 2
         + break_bare()              // 8
         + continue_labeled()        // 3
         + continue_bare()           // 306
-        + defer_break_labeled();    // 1101
-    // expect 2 + 8 + 3 + 306 + 1101 = 1420
+        + defer_break_labeled()     // 1101
+        + return_before_cleanup     // 0: captured before cleanup
+        + lifo_order                // 21: LIFO (20, then 1)
+        + defer_continue();         // 3: cleanup on each continue
+    // expect 2 + 8 + 3 + 306 + 1101 + 0 + 21 + 3 = 1444
 }

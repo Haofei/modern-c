@@ -7058,7 +7058,7 @@ test "LLVM ordinary defer rejects unsupported expression fallback" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_expression_fallback.mc", .{}, false, .riscv64, null));
 }
 
-test "LLVM ordinary direct defer requires MIR call marker" {
+test "LLVM canonical ordinary defer ignores legacy call spelling" {
     const source =
         \\extern fn close_a() -> void;
         \\fn ordinary_defer_call_marker() -> void {
@@ -7087,10 +7087,11 @@ test "LLVM ordinary direct defer requires MIR call marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_requires_call_marker.mc", .{}, false, .riscv64, null));
+    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_requires_call_marker.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @close_a()") != null);
 }
 
-test "LLVM ordinary direct defer with arguments requires MIR call marker" {
+test "LLVM canonical ordinary defer with arguments ignores legacy call spelling" {
     const source =
         \\extern fn takes_u32(value: u32) -> void;
         \\fn ordinary_defer_arg_call_marker(x: u32) -> void {
@@ -7119,10 +7120,11 @@ test "LLVM ordinary direct defer with arguments requires MIR call marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_arg_requires_call_marker.mc", .{}, false, .riscv64, null));
+    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_arg_requires_call_marker.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @takes_u32(") != null);
 }
 
-test "LLVM ordinary direct defer with arguments requires MIR argument facts" {
+test "LLVM canonical ordinary defer with arguments ignores legacy argument facts" {
     const source =
         \\extern fn takes_u32(value: u32) -> void;
         \\fn ordinary_defer_arg_fact(x: u32) -> void {
@@ -7157,7 +7159,8 @@ test "LLVM ordinary direct defer with arguments requires MIR argument facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_arg_requires_fact.mc", .{}, false, .riscv64, null));
+    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_ordinary_defer_arg_requires_fact.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @takes_u32(") != null);
 }
 
 test "LLVM ordinary direct defer with discarded result requires MIR result fact" {

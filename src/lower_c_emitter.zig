@@ -1471,7 +1471,9 @@ pub const CEmitter = struct {
         // fail-closed until ownership cleanup is itself represented by
         // executable-body statements/blocks.
         if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return false;
-        for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
+        if (function.executable_body.cleanup_actions.len == 0) {
+            for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
+        }
         const body = &function.executable_body;
         // The canonical renderer does not yet consume aggregate-return
         // pointer provenance. Keep those bodies on the qualified path until

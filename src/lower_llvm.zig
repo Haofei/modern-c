@@ -1446,10 +1446,10 @@ const LlvmEmitter = struct {
     fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
         if (render_attrs.naked) return self.emitExecutableMirNakedFunction(function, fn_mir, render_attrs);
         const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
-            fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
-            for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
-            break :cleanup_edges true;
-        };
+            fn_mir.ownership_cleanup_plan.cancellations.len == 0;
+        if (fn_mir.executable_body.cleanup_actions.len == 0) {
+            for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
+        }
         if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(fn_mir)) return false;
 
         const call_abi_plan = (try self.buildExecutableDirectCallAbiPlan(fn_mir)) orelse return false;
