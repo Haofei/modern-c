@@ -20217,6 +20217,24 @@ test "LLVM omits checked comptime blocks from canonical runtime bodies" {
     try expectNotContains(body, "mc_trap_Assert");
 }
 
+test "LLVM renders canonical string bytes without body fallback" {
+    const source =
+        \\fn escaped() -> cstr { return "line\nquote\""; }
+        \\fn bytes() -> []const u8 { return "A\0B"; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_string_bytes.mc", source, &output);
+    const escaped_body = try llvmFunctionBody(output.items, "define internal ptr @escaped");
+    try expectContains(escaped_body, "; canonical executable MIR");
+    try expectContains(escaped_body, "getelementptr [12 x i8], ptr @.str.");
+    const bytes_body = try llvmFunctionBody(output.items, "define internal { ptr, i64 } @bytes");
+    try expectContains(bytes_body, "; canonical executable MIR");
+    try expectContains(bytes_body, "insertvalue { ptr, i64 }");
+    try expectContains(output.items, "c\"line\\0Aquote\\22\\00\"");
+    try expectContains(output.items, "c\"A\\00B\\00\"");
+}
+
 test "LLVM proven-local wide-scalar deref stays plain" {
     // A positive locality proof (live MIR local_storage fact) keeps the deref
     // on the plain path, so u128 lowers fine without any atomic form.

@@ -137,6 +137,17 @@ pub fn llvmStringLiteralBytes(allocator: std.mem.Allocator, literal: []const u8)
     return .{ .escaped = try escaped.toOwnedSlice(allocator), .len = len };
 }
 
+/// Encode already-decoded MIR string bytes for an LLVM `c"..."` global and
+/// append the language-mandated trailing NUL. Unlike
+/// `llvmStringLiteralBytes`, this function never parses source syntax.
+pub fn llvmCanonicalStringBytes(allocator: std.mem.Allocator, bytes: []const u8) !LlvmStringBytes {
+    var escaped: std.ArrayList(u8) = .empty;
+    errdefer escaped.deinit(allocator);
+    for (bytes) |byte| try appendLlvmStringByte(allocator, &escaped, byte);
+    try appendLlvmStringByte(allocator, &escaped, 0);
+    return .{ .escaped = try escaped.toOwnedSlice(allocator), .len = bytes.len + 1 };
+}
+
 fn stringLiteralText(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
     var escaped: std.ArrayList(u8) = .empty;
     try appendLlvmStringLiteralBody(allocator, &escaped, literal, null);

@@ -90,6 +90,7 @@ const llvmOpaqueAsmTemplate = lower_llvm_text.llvmOpaqueAsmTemplate;
 const llvmPreciseAsmConstraints = lower_llvm_text.llvmPreciseAsmConstraints;
 const llvmPreciseAsmTemplate = lower_llvm_text.llvmPreciseAsmTemplate;
 const llvmStringLiteralBytes = lower_llvm_text.llvmStringLiteralBytes;
+const llvmCanonicalStringBytes = lower_llvm_text.llvmCanonicalStringBytes;
 
 const NullableRepresentation = enum {
     pointer,
@@ -1448,8 +1449,21 @@ const LlvmEmitter = struct {
         if (!cleanup_free or !mir_executable_body.isComplete(&fn_mir) or !self.mirExecutableBodySupported(fn_mir)) return false;
 
         const call_abi_plan = (try self.buildExecutableDirectCallAbiPlan(fn_mir)) orelse return false;
+        var string_symbols: std.ArrayList(mir_executable_llvm.StringLiteralSymbol) = .empty;
+        defer string_symbols.deinit(self.allocator);
+        for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
+            .literal => |literal| switch (literal) {
+                .string => |bytes| {
+                    const global = try self.internCanonicalStringLiteral(bytes);
+                    try string_symbols.append(self.allocator, .{ .expression = expression.id, .spelling = global.name });
+                },
+                else => {},
+            },
+            else => {},
+        };
         const rendered = mir_executable_llvm.renderWithCallAbiAndOptions(self.scratch.allocator(), &fn_mir.executable_body, fn_mir.return_ty, call_abi_plan, .{
             .stub_asm = self.stub_asm,
+            .string_literals = string_symbols.items,
         }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported, error.InvalidBody => return false,
@@ -10800,6 +10814,18 @@ const LlvmEmitter = struct {
 
     fn internStringLiteral(self: *LlvmEmitter, literal: []const u8) !StringLiteralGlobal {
         const bytes = try llvmStringLiteralBytes(self.scratch.allocator(), literal);
+        const name = try std.fmt.allocPrint(self.scratch.allocator(), ".str.{d}", .{self.string_literals.items.len});
+        const global: StringLiteralGlobal = .{
+            .name = name,
+            .escaped_bytes = bytes.escaped,
+            .len = bytes.len,
+        };
+        try self.string_literals.append(self.allocator, global);
+        return global;
+    }
+
+    fn internCanonicalStringLiteral(self: *LlvmEmitter, bytes_value: []const u8) !StringLiteralGlobal {
+        const bytes = try llvmCanonicalStringBytes(self.scratch.allocator(), bytes_value);
         const name = try std.fmt.allocPrint(self.scratch.allocator(), ".str.{d}", .{self.string_literals.items.len});
         const global: StringLiteralGlobal = .{
             .name = name,

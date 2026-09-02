@@ -945,6 +945,9 @@ pub const ExecutableLiteral = union(enum) {
     /// Ordinary negative expressions remain `unary.neg(integer)`.
     signed_integer: i128,
     float: ExecutableFloatLiteral,
+    /// Decoded source bytes without the implicit trailing NUL. The body owns
+    /// this slice through `ExecutableBody.owned_bytes`; renderers must encode
+    /// these bytes mechanically and never parse source-literal spelling.
     string: []const u8,
     boolean: bool,
     null,

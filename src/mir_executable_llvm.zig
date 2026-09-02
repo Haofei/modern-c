@@ -12,6 +12,15 @@ pub const RenderError = error{ Unsupported, InvalidBody, OutOfMemory };
 
 pub const RenderOptions = struct {
     stub_asm: bool = false,
+    string_literals: []const StringLiteralSymbol = &.{},
+};
+
+/// Module-scope storage assigned by the LLVM composition layer to one
+/// canonical byte-string expression. The MIR owns bytes and type; this plan
+/// supplies only the backend spelling required by LLVM's global namespace.
+pub const StringLiteralSymbol = struct {
+    expression: mir.ExprId,
+    spelling: []const u8,
 };
 
 /// Target ABI facts needed by the syntax-free renderer.  This is deliberately
@@ -276,6 +285,42 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
     return true;
 }
 
+fn stringLiteralTypeSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .cstr => true,
+        .pointer => |shape| std.mem.eql(u8, shape.child, "u8"),
+        .slice => |child| std.mem.eql(u8, child, "u8"),
+        else => false,
+    };
+}
+
+fn stringLiteralPlanValid(body: *const mir.ExecutableBody, options: RenderOptions) bool {
+    var expected: usize = 0;
+    for (body.expressions) |expression| switch (expression.operation) {
+        .literal => |literal| switch (literal) {
+            .string => {
+                expected += 1;
+                var matches: usize = 0;
+                for (options.string_literals) |entry| {
+                    if (entry.expression.eql(expression.id) and entry.spelling.len != 0) matches += 1;
+                }
+                if (matches != 1) return false;
+            },
+            else => {},
+        },
+        else => {},
+    };
+    if (expected != options.string_literals.len) return false;
+    for (options.string_literals) |entry| {
+        if (!entry.expression.isValid() or entry.expression.index() >= body.expressions.len) return false;
+        switch (body.expressions[entry.expression.index()].operation) {
+            .literal => |literal| if (std.meta.activeTag(literal) != .string) return false,
+            else => return false,
+        }
+    }
+    return true;
+}
+
 fn localInit(body: *const mir.ExecutableBody, id: mir.LocalId) ?@FieldType(mir.ExecutableStatement.Operation, "local_init") {
     var found: ?@FieldType(mir.ExecutableStatement.Operation, "local_init") = null;
     for (body.statements) |statement| switch (statement.operation) {
@@ -348,7 +393,7 @@ pub fn renderWithCallAbiAndOptions(
     plan: CallAbiPlan,
     options: RenderOptions,
 ) RenderError![]u8 {
-    if (!supportsWithCallAbi(body, return_ty, plan)) return error.Unsupported;
+    if (!supportsWithCallAbi(body, return_ty, plan) or !stringLiteralPlanValid(body, options)) return error.Unsupported;
     return renderValidated(allocator, body, return_ty, &plan, options);
 }
 
@@ -929,7 +974,7 @@ const Renderer = struct {
             .atomic_update => |update| try self.emitAtomicUpdate(expression, update),
             .mmio_read => |read| try self.emitMmioRead(expression, read),
             .mmio_write => |write| try self.emitMmioWrite(expression, write),
-            .literal => |literal| try self.literalValue(ty, literal),
+            .literal => |literal| try self.literalValue(expression, ty, literal),
             .unary => |unary| try self.emitUnary(expression, ty, unary),
             .binary => |binary| try self.emitBinary(expression, ty, binary),
             .direct_call => |call| try self.emitDirectCall(expression, ty, call),
@@ -1535,7 +1580,7 @@ const Renderer = struct {
         return .{ .ty = "{ ptr, i64 }", .spelling = result };
     }
 
-    fn literalValue(self: *Renderer, ty: []const u8, literal: mir.ExecutableLiteral) RenderError!Value {
+    fn literalValue(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, literal: mir.ExecutableLiteral) RenderError!Value {
         return switch (literal) {
             .integer => |magnitude| .{ .ty = ty, .spelling = try std.fmt.allocPrint(self.allocator, "{d}", .{magnitude}) },
             .signed_integer => |value| .{ .ty = ty, .spelling = try std.fmt.allocPrint(self.allocator, "{d}", .{value}) },
@@ -1552,8 +1597,40 @@ const Renderer = struct {
             },
             .null => if (std.mem.eql(u8, ty, "ptr")) .{ .ty = ty, .spelling = "null" } else error.Unsupported,
             .void => .{ .ty = "void", .spelling = "" },
+            .string => |bytes| self.stringLiteralValue(expression, ty, bytes),
             else => error.Unsupported,
         };
+    }
+
+    fn stringLiteralValue(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, bytes: []const u8) RenderError!Value {
+        const symbol = for (self.options.string_literals) |entry| {
+            if (entry.expression.eql(expression.id)) break entry.spelling;
+        } else return error.InvalidBody;
+        const pointer = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = getelementptr [{d} x i8], ptr @{s}, i64 0, i64 0\n",
+            .{ pointer, bytes.len + 1, symbol },
+        );
+        const slice = switch (expression.result_ty) {
+            .pointer => |shape| shape.kind == .slice,
+            .slice => true,
+            else => false,
+        };
+        if (!slice) {
+            if (!std.mem.eql(u8, ty, "ptr")) return error.InvalidBody;
+            return .{ .ty = ty, .spelling = pointer };
+        }
+        if (!std.mem.eql(u8, ty, "{ ptr, i64 }")) return error.InvalidBody;
+        const with_pointer = try self.temp();
+        const result = try self.temp();
+        try self.output.print(
+            self.allocator,
+            "  {s} = insertvalue {{ ptr, i64 }} zeroinitializer, ptr {s}, 0\n" ++
+                "  {s} = insertvalue {{ ptr, i64 }} {s}, i64 {d}, 1\n",
+            .{ with_pointer, pointer, result, with_pointer, bytes.len },
+        );
+        return .{ .ty = ty, .spelling = result };
     }
 
     fn emitUnary(self: *Renderer, expression: mir.ExecutableExpression, ty: []const u8, unary: anytype) RenderError!Value {
@@ -3750,6 +3827,7 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .literal => |literal| switch (literal) {
             .integer, .signed_integer, .boolean, .null, .void => true,
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
+            .string => stringLiteralTypeSupported(expression.result_ty),
             .uninit => mir.executableUninitLocalInitializer(body, expression),
             else => false,
         },

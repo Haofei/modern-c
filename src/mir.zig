@@ -7166,7 +7166,13 @@ const FunctionBuilder = struct {
             .mmio_map_checked => |operation| self.executableMmioMapComplete(expression, operation),
             .literal => |literal| switch (literal) {
                 .float => |value| mir_model.executableFloatMatchesType(value, expression.result_ty),
-                .string, .uninit, .enum_value => false,
+                .string => switch (expression.result_ty) {
+                    .cstr => true,
+                    .pointer => |shape| std.mem.eql(u8, shape.child, "u8"),
+                    .slice => |child| std.mem.eql(u8, child, "u8"),
+                    else => false,
+                },
+                .uninit, .enum_value => false,
                 else => true,
             },
             .binary => |binary| if (binary.arithmetic == .unchecked)
@@ -9102,6 +9108,10 @@ const FunctionBuilder = struct {
         if (expr.kind == .char_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
             result_ty = expected;
         };
+        if (expr.kind == .string_literal) if (expected_ty) |expected| switch (expected) {
+            .cstr, .pointer, .slice => result_ty = expected,
+            else => {},
+        };
         // `null` is contextual in pointer comparisons and nullable-pointer
         // construction. Preserve the checked operand type so renderers receive
         // one structural pointer identity instead of comparing `*T` with the
@@ -9156,7 +9166,7 @@ const FunctionBuilder = struct {
                 };
                 break :float_literal .{ .literal = .{ .float = value } };
             },
-            .string_literal => |literal| .{ .literal = .{ .string = literal } },
+            .string_literal => |literal| .{ .literal = .{ .string = try self.ownExecutableStringLiteral(literal) } },
             .char_literal => |literal| character: {
                 const magnitude = numeric.parseCharLiteral(literal) orelse {
                     break :character self.unsupportedExecutableExpression(.unsupported_character_literal);

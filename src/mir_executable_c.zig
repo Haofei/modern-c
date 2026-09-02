@@ -750,7 +750,7 @@ fn emitExpressionOperation(
             try emitExpression(allocator, out, body, write.value, depth + 1);
             try out.appendSlice(allocator, "))");
         },
-        .literal => |literal| try emitLiteral(allocator, out, literal),
+        .literal => |literal| try emitLiteral(allocator, out, body, expression.result_ty, literal),
         .unary => |unary| {
             if (unary.op == .neg and integerSuffix(expression.result_ty) != null) {
                 try out.print(allocator, "mc_checked_neg_{s}(", .{integerSuffix(expression.result_ty).?});
@@ -1308,11 +1308,9 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .mmio_write => |write| mmioWriteSupported(body, expression, write),
         .literal => |literal| switch (literal) {
             .float => |value| mir.executableFloatMatchesType(value, expression.result_ty),
-            // Raw source string spelling is not a canonical byte payload and
-            // must not cross the syntax-free boundary. Character literals
-            // have already become canonical integer magnitudes in MIR.
             .uninit => mir.executableUninitLocalInitializer(body, expression),
-            .string, .enum_value => false,
+            .string => stringLiteralTypeSupported(expression.result_ty),
+            .enum_value => false,
             else => true,
         },
         .unary => |unary| expressionById(body, unary.operand) != null and
@@ -4165,6 +4163,8 @@ fn emitArguments(
 fn emitLiteral(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    ty: mir.ValueType,
     literal: mir.ExecutableLiteral,
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (literal) {
@@ -4174,13 +4174,72 @@ fn emitLiteral(
             .f32_bits => |bits| try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits}),
             .f64_bits => |bits| try out.print(allocator, "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))", .{bits}),
         },
-        .string => |spelling| try out.appendSlice(allocator, spelling),
+        .string => |bytes| try emitStringLiteral(allocator, out, body, ty, bytes),
         .boolean => |value| try out.appendSlice(allocator, if (value) "true" else "false"),
         .null => try out.appendSlice(allocator, "NULL"),
         .void => try out.appendSlice(allocator, "((void)0)"),
         .uninit => return error.UnsupportedOperation,
         .enum_value => return error.UnsupportedOperation,
     }
+}
+
+fn stringLiteralTypeSupported(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .cstr => true,
+        .pointer => |shape| std.mem.eql(u8, shape.child, "u8"),
+        .slice => |child| std.mem.eql(u8, child, "u8"),
+        else => false,
+    };
+}
+
+fn emitStringLiteral(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    ty: mir.ValueType,
+    bytes: []const u8,
+) (RenderError || std.mem.Allocator.Error)!void {
+    switch (ty) {
+        .pointer => |shape| if (shape.kind == .slice) {
+            try out.appendSlice(allocator, "((");
+            try appendSliceCType(allocator, out, ty);
+            try out.appendSlice(allocator, "){ .ptr = (");
+            try out.appendSlice(allocator, primitiveType(shape.child) orelse return error.UnsupportedType);
+            try out.appendSlice(allocator, if (shape.mutability == .@"const") " const *)" else " *)");
+            try emitCStringBytes(allocator, out, bytes);
+            try out.print(allocator, ", .len = {d} }})", .{bytes.len});
+            return;
+        },
+        else => {},
+    }
+    if (!stringLiteralTypeSupported(ty)) return error.UnsupportedType;
+    try out.appendSlice(allocator, "((");
+    try appendCType(allocator, out, body, ty);
+    try out.appendSlice(allocator, ")");
+    try emitCStringBytes(allocator, out, bytes);
+    try out.append(allocator, ')');
+}
+
+fn emitCStringBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) std.mem.Allocator.Error!void {
+    try out.append(allocator, '"');
+    for (bytes) |byte| switch (byte) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\'' => try out.appendSlice(allocator, "\\'"),
+        '?' => try out.appendSlice(allocator, "\\?"),
+        0 => try out.appendSlice(allocator, "\\000"),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        32...33, 35...38, 40...62, 64...91, 93...126 => try out.append(allocator, byte),
+        else => {
+            try out.append(allocator, '\\');
+            try out.append(allocator, '0' + ((byte >> 6) & 0x07));
+            try out.append(allocator, '0' + ((byte >> 3) & 0x07));
+            try out.append(allocator, '0' + (byte & 0x07));
+        },
+    };
+    try out.append(allocator, '"');
 }
 
 fn emitUnsignedIntegerLiteral(
@@ -5882,7 +5941,7 @@ test "executable C renderer emits unsigned integer boundaries without implicit u
     for (cases) |case| {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try emitLiteral(std.testing.allocator, &output, .{ .integer = case.value });
+        try emitUnsignedIntegerLiteral(std.testing.allocator, &output, case.value);
         try std.testing.expectEqualStrings(case.expected, output.items);
     }
 }

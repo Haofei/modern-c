@@ -27,7 +27,6 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
         .member => return "unlowered_member",
         .array => return "unlowered_array",
         .literal => |literal| switch (literal) {
-            .string => return "noncanonical_string_literal",
             .uninit => return "noncanonical_uninit_literal",
             .enum_value => return "noncanonical_enum_literal",
             else => {},
@@ -342,6 +341,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 .closed_enum, .open_enum, .integer => {},
                 else => return error.InvalidLiteral,
             },
+            .string => if (!stringLiteralType(value.result_ty)) return error.InvalidLiteral,
             else => {},
         },
         .unsupported => {},
@@ -729,6 +729,15 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) try verifyStructConstruction(function, value, operation);
         },
     }
+}
+
+fn stringLiteralType(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .cstr => true,
+        .pointer => |shape| std.mem.eql(u8, shape.child, "u8"),
+        .slice => |child| std.mem.eql(u8, child, "u8"),
+        else => false,
+    };
 }
 
 fn fixedArrayAddressableRoot(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {

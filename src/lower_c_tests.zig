@@ -21973,6 +21973,22 @@ test "lower-c omits pure comptime blocks from C runtime output" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(true))") == null);
 }
 
+test "lower-c renders canonical string bytes without body fallback" {
+    const source =
+        \\fn escaped() -> cstr { return "tri??/line\nquote\""; }
+        \\fn bytes() -> []const u8 { return "A\0B"; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_string_bytes.mc", source, &output);
+    const escaped_body = try cFunctionBody(output.items, "static char const * escaped(void)");
+    try expectContains(escaped_body, "/* canonical executable MIR */");
+    try expectContains(escaped_body, "tri\\?\\?/line\\nquote\\\"");
+    const bytes_body = try cFunctionBody(output.items, "static mc_slice_const_u8 bytes(void)");
+    try expectContains(bytes_body, "/* canonical executable MIR */");
+    try expectContains(bytes_body, "\\000B\", .len = 3");
+}
+
 test "lower-c emits explicit traps and unreachable" {
     const source =
         \\fn trap_as_value() -> u32 { return trap(.Bounds); }
