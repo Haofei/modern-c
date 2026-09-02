@@ -3409,6 +3409,7 @@ test "LLVM canonical executable MIR keeps ordinary len fields distinct from slic
 
 test "LLVM emits simple array literal returns from MIR" {
     const source =
+        \\const WIDE_LENGTH: usize = 20;
         \\fn array_direct(a: u32, b: u32) -> [2]u32 {
         \\    return .{ a, b };
         \\}
@@ -3421,7 +3422,7 @@ test "LLVM emits simple array literal returns from MIR" {
         \\    out = .{ b, a };
         \\    return out;
         \\}
-        \\fn array_wide(value: u32) -> [20]u32 {
+        \\fn array_wide(value: u32) -> [WIDE_LENGTH]u32 {
         \\    return .{ value, value, value, value, value, value, value, value, value, value,
         \\        value, value, value, value, value, value, value, value, value, value };
         \\}

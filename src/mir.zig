@@ -999,6 +999,39 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .reflect_ctx = &reflect_env,
     });
 
+    // `ValueType` deliberately does not evaluate arbitrary array-length
+    // expressions. Once the module const environment exists, normalize the
+    // callable/global facts used by executable MIR so a named or const-fn
+    // length has the same structural identity as a literal length.
+    for (decl_items) |item| {
+        const decl = declFromBuildItem(item);
+        switch (decl.kind) {
+            .fn_decl, .extern_fn => |fn_decl| if (fn_decl.return_type) |return_type| {
+                if (summaries.getPtr(fn_decl.name.text)) |summary| summary.return_ty = canonicalExecutableValueType(
+                    return_type,
+                    &enums,
+                    &structs,
+                    &packed_bits,
+                    &aliases,
+                    &const_fns,
+                    &const_globals,
+                );
+            },
+            .global_decl => |global| if (global.ty) |global_type| {
+                if (globals.getPtr(global.name.text)) |global_ty| global_ty.* = canonicalExecutableValueType(
+                    global_type,
+                    &enums,
+                    &structs,
+                    &packed_bits,
+                    &aliases,
+                    &const_fns,
+                    &const_globals,
+                );
+            },
+            else => {},
+        }
+    }
+
     // This deliberately covers only the unambiguous internal form `return &global`.
     // Callers receive ordinary pointer-provenance facts, so backend lowering does not
     // need to rediscover this provenance from the AST.
@@ -1078,7 +1111,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .source_id = typed_source_id,
                         .body_id = BodyId.fromIndex(checked_callables.items.len),
                         .kind = .function,
-                        .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
+                        .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
                         .param_count = fn_decl.params.len,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
                         .is_variadic = fn_decl.is_variadic,
@@ -1107,14 +1140,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .source_id = typed_source_id,
                         .body_id = .invalid,
                         .kind = .extern_function,
-                        .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
+                        .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
                         .param_count = fn_decl.params.len,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
                         .is_variadic = fn_decl.is_variadic,
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
-                    const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &packed_bits, &aliases);
+                    const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &packed_bits, &aliases, &const_fns, &const_globals);
                     var param_types_unowned = true;
                     errdefer if (param_types_unowned and param_types.len != 0) allocator.free(param_types);
                     const ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params);
@@ -1367,12 +1400,33 @@ fn functionParamValueTypes(
     structs: *const std.StringHashMap(StructSummary),
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
 ) ![]ValueType {
     const types = try allocator.alloc(ValueType, params.len);
     for (params, 0..) |parameter, index| {
-        types[index] = valueTypeFromTypeAlias(parameter.ty, enums, structs, packed_bits, aliases);
+        types[index] = canonicalExecutableValueType(parameter.ty, enums, structs, packed_bits, aliases, const_fns, const_globals);
     }
     return types;
+}
+
+fn canonicalExecutableValueType(
+    type_expr: ast.TypeExpr,
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+) ValueType {
+    var ty = valueTypeFromTypeAlias(type_expr, enums, structs, packed_bits, aliases);
+    if (ty == .array and ty.array.length == null) {
+        const resolved = aggregateTargetTypeAlias(type_expr, aliases);
+        if (resolved.kind == .array) {
+            ty.array.length = parseArrayLen(resolved.kind.array.len, const_fns, const_globals);
+        }
+    }
+    return ty;
 }
 
 fn buildFfiParamContracts(
@@ -6268,7 +6322,7 @@ const FunctionBuilder = struct {
             .allocator = allocator,
             .name = fn_decl.name.text,
             .source_file_id = fn_decl.name.span.file_id,
-            .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, enums, structs, packed_bits, aliases) else .void,
+            .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, enums, structs, packed_bits, aliases, const_fns, const_globals) else .void,
             .return_type_expr = fn_decl.return_type,
             .param_count = fn_decl.params.len,
             .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(attrs, "mc_abi")),
@@ -6369,7 +6423,7 @@ const FunctionBuilder = struct {
                 builder.return_dyn_trait_symbol_id = try builder.internExecutableTraitSymbol(trait_name);
         }
         for (fn_decl.params) |param| {
-            const param_ty = valueTypeFromTypeAlias(param.ty, enums, structs, packed_bits, aliases);
+            const param_ty = canonicalExecutableValueType(param.ty, enums, structs, packed_bits, aliases, const_fns, const_globals);
             if (!try builder.internExecutableEnumType(param_ty)) builder.executable_supported = false;
             if (param_ty == .nullable_value and !try builder.internExecutableValueOptionalType(param_ty))
                 builder.executable_supported = false;
