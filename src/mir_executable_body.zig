@@ -2394,6 +2394,15 @@ fn verifyMemoryAccess(
 }
 
 fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) !void {
+    if (target.root_nonnull_proven) {
+        if (target.root != .local or target.projection_count == 0 or target.projections[0] != .deref or
+            !mir.executableLocalInitializedByOptionalPresentPayload(body, target.root.local))
+            return error.InvalidPlaceType;
+        switch (target.root_ty) {
+            .pointer => |shape| if (shape.kind != .single) return error.InvalidPlaceType,
+            else => return error.InvalidPlaceType,
+        }
+    }
     if (target.pointer_provenance != .unknown) {
         if (target.root != .local or target.projection_count == 0 or target.projections[0] != .deref)
             return error.InvalidPlaceType;
@@ -2476,6 +2485,7 @@ fn isScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.ExecutablePl
 
 fn placeNeedsRepresentationGuard(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
     if (target.projection_count == 0) return false;
+    if (target.root_nonnull_proven) return false;
     if (mir.executableAggregatePointerFieldDerefPlace(body, target, false) != null) return true;
     return switch (target.root_ty) {
         .pointer => |shape| shape.kind == .single,

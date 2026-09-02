@@ -11746,6 +11746,7 @@ const FunctionBuilder = struct {
             const local_id = place.root.local;
             if (local_id.isValid() and local_id.index() < self.executable_locals.items.len) {
                 const spelling = self.executable_locals.items[local_id.index()].spelling;
+                place.root_nonnull_proven = self.proven_nonnull_bindings.contains(spelling);
                 if (self.livePointerProvenanceForDirectLocal(spelling)) |live| {
                     place.pointer_provenance = live.provenance;
                 }
@@ -11843,6 +11844,7 @@ const FunctionBuilder = struct {
 
     fn executablePlaceNeedsRepresentationGuard(self: *const FunctionBuilder, place: ExecutablePlace) bool {
         if (place.projection_count == 0) return false;
+        if (place.root_nonnull_proven) return false;
         const transient_body: mir_model.ExecutableBody = .{
             .locals = self.executable_locals.items,
             .aggregate_types = self.executable_aggregate_types.items,

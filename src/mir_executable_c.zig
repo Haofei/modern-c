@@ -3331,6 +3331,10 @@ fn memoryLoadSupported(
             return load.representation_source == null and !load.representation_span_id.isValid() and
                 ownedTrapEdgeCount(body, expression.id) == 0;
         }
+        if (!placeNeedsRepresentationGuard(place.*)) {
+            return load.representation_source == null and !load.representation_span_id.isValid() and
+                ownedTrapEdgeCount(body, expression.id) == 0;
+        }
         return representationOperationHasExactTrapEdge(body, expression);
     }
     const symbol = switch (place.root) {
@@ -3487,6 +3491,7 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
 
 fn placeNeedsRepresentationGuard(place: mir.ExecutablePlace) bool {
     if (place.projection_count == 0) return false;
+    if (place.root_nonnull_proven) return false;
     return switch (place.root_ty) {
         .pointer => |shape| shape.kind == .single,
         .nullable_pointer => true,

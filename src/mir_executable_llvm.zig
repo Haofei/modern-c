@@ -809,6 +809,8 @@ const Renderer = struct {
                 const value = try self.emitExpression(store.value);
                 const pointer = indexed_pointer orelse if (computedRawManyDerefPlaceSupported(self.body, place, true))
                     try self.emitComputedRawManyDerefPointer(place)
+                else if (place.root_nonnull_proven)
+                    try self.localPointerValue(place)
                 else if (mir.executableGlobalPointerDerefPlace(self.body, place, true))
                     try self.emitGuardedGlobalPointerStorePointer(statement, store.place)
                 else if (mir.executableLocalAddressDerefPlace(self.body, place, true))
@@ -3173,6 +3175,8 @@ const Renderer = struct {
             try self.emitFixedArrayIndexPlacePointer(place, .{ .expression = expression.id })
         else if (computedRawManyDerefPlaceSupported(self.body, place, false))
             try self.emitComputedRawManyDerefPointer(place)
+        else if (place.root_nonnull_proven)
+            try self.localPointerValue(place)
         else if (mir.executableGlobalPointerDerefPlace(self.body, place, false))
             try self.emitGuardedGlobalPointer(expression, load.place)
         else if (mir.executableLocalAddressDerefPlace(self.body, place, false))
@@ -4698,6 +4702,7 @@ fn dynCallSupported(
 
 fn placeNeedsRepresentationGuard(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     if (place.projection_count == 0) return false;
+    if (place.root_nonnull_proven) return false;
     if (mir.executableAggregatePointerFieldDerefPlace(body, place, false) != null) return true;
     return switch (place.root_ty) {
         .pointer => |shape| shape.kind == .single,
@@ -5800,6 +5805,10 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
     )) return load.representation_source == null and
         !load.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
     if (computedRawManyDerefPlaceSupported(body, place, false)) {
+        return load.representation_source == null and !load.representation_span_id.isValid() and
+            ownedExpressionTrapCount(body, expression.id) == 0;
+    }
+    if (!placeNeedsRepresentationGuard(body, place)) {
         return load.representation_source == null and !load.representation_span_id.isValid() and
             ownedExpressionTrapCount(body, expression.id) == 0;
     }

@@ -1503,6 +1503,11 @@ pub const ExecutablePlace = struct {
     /// on the canonical place prevents codegen from consulting the legacy
     /// string-keyed pointer-fact log to choose plain versus unordered access.
     pointer_provenance: PointerProvenance = .unknown,
+    /// The root pointer was produced by unwrapping the present arm of an
+    /// optional. This is an executable-MIR proof, not a request for codegen
+    /// to rediscover source control flow. Complete bodies may set it only for
+    /// locals whose initializer is an `optional_present` payload operation.
+    root_nonnull_proven: bool = false,
     projections: [max_executable_projections]Projection = [_]Projection{.deref} ** max_executable_projections,
     projection_count: usize = 0,
 
@@ -1522,6 +1527,28 @@ pub const ExecutablePlace = struct {
         deref,
     };
 };
+
+pub fn executableLocalInitializedByOptionalPresentPayload(
+    body: *const ExecutableBody,
+    local_id: LocalId,
+) bool {
+    var initializer: ?ExprId = null;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local_id)) {
+            if (initializer != null or init.mutable or init.value == null) return false;
+            initializer = init.value.?;
+        },
+        else => {},
+    };
+    const id = initializer orelse return false;
+    if (!id.isValid() or id.index() >= body.expressions.len) return false;
+    const expression = body.expressions[id.index()];
+    if (!expression.id.eql(id)) return false;
+    return switch (expression.operation) {
+        .variant_payload => |payload| payload.kind == .optional_present,
+        else => false,
+    };
+}
 
 /// A deferred expression graph registered by one executable statement.
 /// Roots are evaluated in source order only when a cleanup execution point
