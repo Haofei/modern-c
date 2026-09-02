@@ -160,8 +160,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             !(return_ty == .value and body.return_dyn_trait_symbol_id.isValid())))
         return false;
     for (body.parameters) |parameter| {
-        if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
-            (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))))
+        if (!parameter.local.isValid() or !parameterTypeSupported(body, parameter))
             return false;
     }
     for (body.expressions) |expression| {
@@ -293,8 +292,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueTy
     if (body.terminators.len == 0) return "missing_terminator";
     if (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty) and
         !(return_ty == .value and body.return_dyn_trait_symbol_id.isValid())) return "return_type";
-    for (body.parameters) |parameter| if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
-        (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))))
+    for (body.parameters) |parameter| if (!parameter.local.isValid() or !parameterTypeSupported(body, parameter))
         return "parameter";
     for (body.expressions) |expression| {
         if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
@@ -656,10 +654,12 @@ const Renderer = struct {
                 if (signature.has_environment) "{ ptr, ptr }" else try self.typeText(parameter.ty)
             else if (parameter.dyn_trait_symbol_id.isValid())
                 "{ ptr, ptr }"
+            else if (parameter.ty == .value and parameter.atomic_payload_type_id.isValid())
+                try self.typeText(parameter.atomic_payload_ty)
             else
                 try self.typeText(parameter.ty);
             const argument = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw});
-            if (parameterAddressTaken(self.body, parameter.local)) {
+            if (parameterAddressTaken(self.body, parameter.local) or directAtomicParameterAddressRequired(self.body, parameter.local)) {
                 const slot = try std.fmt.allocPrint(self.allocator, "%mc_parameter_{d}", .{parameter.local.raw});
                 try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
                     slot,
@@ -3117,7 +3117,7 @@ const Renderer = struct {
         const loaded = try self.temp();
         try self.output.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ loaded, storage_ty, pointer });
         if (read.ordering == .acquire) try self.output.appendSlice(self.allocator, "  fence acquire\n");
-        return .{ .ty = storage_ty, .spelling = loaded };
+        return .{ .ty = try self.typeText(expression.result_ty), .spelling = loaded };
     }
 
     fn emitMmioWrite(self: *Renderer, expression: mir.ExecutableExpression, write: anytype) RenderError!Value {
@@ -3134,10 +3134,15 @@ const Renderer = struct {
     fn emitMmioPointer(self: *Renderer, base: mir.LocalId, byte_offset: u64) RenderError![]const u8 {
         if (!mmioBaseSupported(self.body, base)) return error.InvalidBody;
         const local = self.locals.get(base.raw) orelse return error.InvalidBody;
-        if (local.addressable) return error.InvalidBody;
-        if (byte_offset == 0) return local.storage;
+        var base_pointer = local.storage;
+        if (local.addressable) {
+            if (!std.mem.eql(u8, local.ty, "ptr")) return error.InvalidBody;
+            base_pointer = try self.temp();
+            try self.output.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ base_pointer, local.storage });
+        }
+        if (byte_offset == 0) return base_pointer;
         const pointer = try self.temp();
-        try self.output.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {d}\n", .{ pointer, local.storage, byte_offset });
+        try self.output.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {d}\n", .{ pointer, base_pointer, byte_offset });
         return pointer;
     }
 
@@ -4065,6 +4070,13 @@ fn scalarLlvmType(ty: mir.ValueType) ?[]const u8 {
 
 fn llvmTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
     return llvmTypeSupportedDepth(body, ty, 0);
+}
+
+fn parameterTypeSupported(body: *const mir.ExecutableBody, parameter: mir.ExecutableParameter) bool {
+    if (llvmTypeSupported(body, parameter.ty)) return true;
+    if (parameter.ty != .value) return false;
+    if (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)) return true;
+    return parameter.atomic_payload_type_id.isValid() and llvmTypeSupported(body, parameter.atomic_payload_ty);
 }
 
 fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
@@ -5588,8 +5600,15 @@ fn atomicUpdateUnsupportedReason(body: *const mir.ExecutableBody, expression: mi
 
 fn mmioReadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, read: anytype) bool {
     return read.ordering.validForRead() and mmioBaseSupported(body, read.base) and
-        mmioStorageSupported(read.storage_ty) and sameValueType(expression.result_ty, read.storage_ty) and
-        expression.type_id.eql(read.storage_type_id) and ownedExpressionTrapCount(body, expression.id) == 0;
+        mmioStorageSupported(read.storage_ty) and mmioReadResultSupported(body, expression, read.storage_ty, read.storage_type_id) and
+        ownedExpressionTrapCount(body, expression.id) == 0;
+}
+
+fn mmioReadResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, storage_ty: mir.ValueType, storage_type_id: mir.TypeId) bool {
+    if (sameValueType(expression.result_ty, storage_ty) and expression.type_id.eql(storage_type_id)) return true;
+    const aggregate = aggregateType(body, expression.type_id) orelse return false;
+    return aggregate.construction == .packed_bits and sameValueType(aggregate.ty, expression.result_ty) and
+        sameValueType(aggregate.storage_ty, storage_ty) and aggregate.storage_type_id.eql(storage_type_id);
 }
 
 fn mmioWriteSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, write: anytype) bool {
@@ -5602,14 +5621,7 @@ fn mmioWriteSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
 }
 
 fn mmioBaseSupported(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
-    for (body.parameters) |parameter| {
-        if (!parameter.local.eql(id)) continue;
-        return switch (parameter.ty) {
-            .address => |class| class == .mmio_ptr,
-            else => false,
-        };
-    }
-    return false;
+    return mir.executableMmioBase(body, id);
 }
 
 fn mmioStorageSupported(ty: mir.ValueType) bool {
@@ -5635,7 +5647,7 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
         .integer => if (mir.ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false,
         else => return false,
     }
-    if (place.projection_count == 0) return switch (place.root) {
+    if (place.projection_count == 0) return mir.executableDirectAtomicParameterPlace(body.parameters, place) or switch (place.root) {
         .local => |id| local_storage: {
             for (body.statements) |statement| switch (statement.operation) {
                 .local_init => |init| if (init.local.eql(id)) {
@@ -5759,6 +5771,14 @@ fn parameterAddressTaken(body: *const mir.ExecutableBody, id: mir.LocalId) bool 
             }
         },
         else => {},
+    };
+    return false;
+}
+
+fn directAtomicParameterAddressRequired(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
+    for (body.places) |place| switch (place.root) {
+        .local => |root| if (root.eql(id) and mir.executableDirectAtomicParameterPlace(body.parameters, place)) return true,
+        .symbol, .value => {},
     };
     return false;
 }

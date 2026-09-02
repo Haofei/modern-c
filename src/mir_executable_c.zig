@@ -770,7 +770,9 @@ fn emitExpressionOperation(
         },
         .mmio_read => |read| {
             const scalar = scalarMemoryInfo(read.storage_ty) orelse return error.UnsupportedType;
-            try out.print(allocator, "(({s})mc_mmio_read_{s}(", .{ scalar.c_type, scalar.helper_suffix });
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, expression.result_ty);
+            try out.print(allocator, ")mc_mmio_read_{s}(", .{scalar.helper_suffix});
             try emitMmioPointer(allocator, out, body, read.base, read.byte_offset, read.storage_ty, false);
             try out.appendSlice(allocator, "))");
         },
@@ -1106,8 +1108,7 @@ fn emitExpressionOperation(
 /// consults source text, spans, or declaration ASTs.
 pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     if (!body.isComplete() or body.terminators.len == 0) return false;
-    for (body.parameters) |parameter| if (!(supportsParameterType(body, parameter.ty) or
-        (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))) or
+    for (body.parameters) |parameter| if (!supportsParameter(body, parameter) or
         localById(body, parameter.local) == null)
         return false;
     for (body.expressions) |expression| if (!supportsExpression(body, expression)) return false;
@@ -1202,8 +1203,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
     if (canEmitBody(body)) return "complete";
     if (!body.isComplete()) return "incomplete_body";
     if (body.terminators.len == 0) return "missing_terminator";
-    for (body.parameters) |parameter| if (!(supportsParameterType(body, parameter.ty) or
-        (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))) or
+    for (body.parameters) |parameter| if (!supportsParameter(body, parameter) or
         localById(body, parameter.local) == null) return "parameter";
     for (body.expressions) |expression| if (!supportsExpression(body, expression)) return switch (expression.operation) {
         .load => |load| memoryLoadUnsupportedReason(body, expression, load),
@@ -3018,8 +3018,15 @@ fn atomicUpdateUnsupportedReason(body: *const mir.ExecutableBody, expression: mi
 
 fn mmioReadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, read: anytype) bool {
     return read.ordering.validForRead() and mmioBaseSupported(body, read.base) and
-        mmioStorageSupported(read.storage_ty) and sameValueType(expression.result_ty, read.storage_ty) and
-        expression.type_id.eql(read.storage_type_id) and ownedTrapEdgeCount(body, expression.id) == 0;
+        mmioStorageSupported(read.storage_ty) and mmioReadResultSupported(body, expression, read.storage_ty, read.storage_type_id) and
+        ownedTrapEdgeCount(body, expression.id) == 0;
+}
+
+fn mmioReadResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, storage_ty: mir.ValueType, storage_type_id: mir.TypeId) bool {
+    if (sameValueType(expression.result_ty, storage_ty) and expression.type_id.eql(storage_type_id)) return true;
+    const aggregate = aggregateType(body, expression.type_id) orelse return false;
+    return aggregate.construction == .packed_bits and sameValueType(aggregate.ty, expression.result_ty) and
+        sameValueType(aggregate.storage_ty, storage_ty) and aggregate.storage_type_id.eql(storage_type_id);
 }
 
 fn mmioWriteSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, write: anytype) bool {
@@ -3031,14 +3038,7 @@ fn mmioWriteSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
 }
 
 fn mmioBaseSupported(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
-    for (body.parameters) |parameter| {
-        if (!parameter.local.eql(id)) continue;
-        return switch (parameter.ty) {
-            .address => |class| class == .mmio_ptr,
-            else => false,
-        };
-    }
-    return false;
+    return mir.executableMmioBase(body, id);
 }
 
 fn mmioStorageSupported(ty: mir.ValueType) bool {
@@ -3056,7 +3056,7 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
         .bool, .integer => {},
         else => return false,
     }
-    if (place.projection_count == 0) return switch (place.root) {
+    if (place.projection_count == 0) return mir.executableDirectAtomicParameterPlace(body.parameters, place) or switch (place.root) {
         .local => |id| local_storage: {
             for (body.statements) |statement| switch (statement.operation) {
                 .local_init => |init| if (init.local.eql(id)) {
@@ -3986,6 +3986,13 @@ fn supportsParameterType(body: *const mir.ExecutableBody, ty: mir.ValueType) boo
         .pointer => |shape| shape.kind == .single and std.mem.eql(u8, shape.child, "?"),
         else => false,
     };
+}
+
+fn supportsParameter(body: *const mir.ExecutableBody, parameter: mir.ExecutableParameter) bool {
+    if (supportsParameterType(body, parameter.ty)) return true;
+    if (parameter.ty != .value) return false;
+    if (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)) return true;
+    return parameter.atomic_payload_type_id.isValid() and supportsType(body, parameter.atomic_payload_ty);
 }
 
 fn isSliceType(ty: mir.ValueType) bool {

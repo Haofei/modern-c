@@ -20,8 +20,12 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
     const body = &function.executable_body;
     if (body.complete) return "complete";
     if (body.expressions.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return "empty_body";
+    // A producer-owned reason identifies the first operation that failed to
+    // canonicalize. Prefer it over scanning otherwise valid operations: a
+    // supported member/range/array may precede the actual unsupported node.
+    if (body.incomplete_reason != .none) return @tagName(body.incomplete_reason);
     for (body.expressions) |expression_value| switch (expression_value.operation) {
-        .unsupported => return if (body.incomplete_reason == .none) "unsupported_expression" else @tagName(body.incomplete_reason),
+        .unsupported => return "unsupported_expression",
         .deref => return "unlowered_deref",
         .range_slice => return "unlowered_range_slice",
         .member => return "unlowered_member",
@@ -54,7 +58,6 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
         .fallthrough => return "invalid_fallthrough",
         else => {},
     };
-    if (body.incomplete_reason != .none) return @tagName(body.incomplete_reason);
     // When every operation has a canonical shape but the producer declined to
     // mark the body complete, ask the verifier which invariant would fail if it
     // did. This keeps migration telemetry actionable without duplicating the
@@ -158,12 +161,20 @@ pub fn verify(function: *const mir.Function) !void {
         try verifySpan(function, parameter.span_id, parameter.source);
         try verifyType(function, parameter.type_id, parameter.ty, body.complete);
         if (parameter.callable_signature) |signature| {
-            if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid()) return error.InvalidFunctionSignature;
+            if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid() or parameter.atomic_payload_type_id.isValid()) return error.InvalidFunctionSignature;
             try verifyCallableSignature(function, signature, body.complete);
         } else if (parameter.dyn_trait_symbol_id.isValid()) {
-            if (parameter.ty != .value) return error.InvalidFunctionSignature;
+            if (parameter.ty != .value or parameter.atomic_payload_type_id.isValid()) return error.InvalidFunctionSignature;
             const trait = symbol(body, parameter.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
             if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
+        } else if (parameter.atomic_payload_type_id.isValid()) {
+            const atomic_container = parameter.ty == .value or switch (parameter.ty) {
+                .pointer => |shape| shape.kind == .single,
+                else => false,
+            };
+            if (!atomic_container or parameter.atomic_payload_ty == .unknown or parameter.atomic_payload_ty == .value)
+                return error.InvalidFunctionSignature;
+            try verifyType(function, parameter.atomic_payload_type_id, parameter.atomic_payload_ty, body.complete);
         } else if (body.complete and parameter.ty == .value) return error.InvalidFunctionSignature;
     }
 
@@ -315,8 +326,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete and (!operation.ordering.validForRead() or
                 !mmioBaseSupported(body, operation.base) or
                 !mmioStorageSupported(operation.storage_ty) or
-                !sameValueType(value.result_ty, operation.storage_ty) or
-                !value.type_id.eql(operation.storage_type_id) or
+                !mmioReadResultSupported(body, value, operation.storage_ty, operation.storage_type_id) or
                 ownedTrapCountAll(body, .{ .expression = value.id }) != 0))
                 return error.InvalidMmioAccess;
         },
@@ -2202,7 +2212,7 @@ fn isParameterScalarAccessPlace(body: *const mir.ExecutableBody, target: mir.Exe
 fn atomicPlaceSupported(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
     if (target.storage != .atomic or !target.root_type_id.isValid() or !target.type_id.isValid() or
         !atomicPayloadSupported(target.ty)) return false;
-    if (target.projection_count == 0) return switch (target.root) {
+    if (target.projection_count == 0) return mir.executableDirectAtomicParameterPlace(body.parameters, target) or switch (target.root) {
         .local => |id| local_storage: {
             for (body.statements) |statement_value| switch (statement_value.operation) {
                 .local_init => |init| if (init.local.eql(id)) {
@@ -2260,15 +2270,20 @@ fn mmioStorageSupported(ty: mir.ValueType) bool {
     };
 }
 
+fn mmioReadResultSupported(
+    body: *const mir.ExecutableBody,
+    value: mir.ExecutableExpression,
+    storage_ty: mir.ValueType,
+    storage_type_id: mir.TypeId,
+) bool {
+    if (sameValueType(value.result_ty, storage_ty) and value.type_id.eql(storage_type_id)) return true;
+    const aggregate = aggregateType(body, value.type_id) orelse return false;
+    return aggregate.construction == .packed_bits and sameValueType(aggregate.ty, value.result_ty) and
+        sameValueType(aggregate.storage_ty, storage_ty) and aggregate.storage_type_id.eql(storage_type_id);
+}
+
 fn mmioBaseSupported(body: *const mir.ExecutableBody, local_id: mir.LocalId) bool {
-    for (body.parameters) |parameter| {
-        if (!parameter.local.eql(local_id)) continue;
-        return switch (parameter.ty) {
-            .address => |class| class == .mmio_ptr and parameter.type_id.isValid(),
-            else => false,
-        };
-    }
-    return false;
+    return mir.executableMmioBase(body, local_id);
 }
 
 fn verifyExpr(body: *const mir.ExecutableBody, id: mir.ExprId) !void {

@@ -1594,6 +1594,7 @@ pub const ExecutableParameter = struct {
     /// Payload identity when the source parameter is `atomic<T>` or a direct
     /// pointer to it. This is canonical frontend metadata, not a backend
     /// inference from pointer spelling.
+    atomic_payload_ty: ValueType = .unknown,
     atomic_payload_type_id: TypeId = .invalid,
     source: SourcePoint,
     span_id: SpanId = .invalid,
@@ -1946,6 +1947,43 @@ pub const ExecutableBody = struct {
         self.* = .{};
     }
 };
+
+/// A canonical MMIO base is either a function parameter or a local storage
+/// generation whose checked type is `MmioPtr<T>`. The pointee layout and field
+/// offset are already resolved by the producer; renderers only need the
+/// address-valued local identity.
+pub fn executableMmioBase(body: *const ExecutableBody, local: LocalId) bool {
+    for (body.parameters) |parameter| if (parameter.local.eql(local)) return switch (parameter.ty) {
+        .address => |class| class == .mmio_ptr and parameter.type_id.isValid(),
+        else => false,
+    };
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| if (init.local.eql(local)) return switch (init.ty) {
+            .address => |class| class == .mmio_ptr and init.type_id.isValid(),
+            else => false,
+        },
+        else => {},
+    };
+    return false;
+}
+
+/// Recognize a direct `atomic<T>` parameter place. Atomic wrappers are opaque
+/// source types, so their executable parameter identity carries the canonical
+/// payload type separately from the `.value` wrapper representation.
+pub fn executableDirectAtomicParameterPlace(parameters: []const ExecutableParameter, place: ExecutablePlace) bool {
+    if (place.storage != .atomic or place.projection_count != 0 or
+        !place.root_type_id.isValid() or !place.type_id.isValid()) return false;
+    const local = switch (place.root) {
+        .local => |id| id,
+        .symbol, .value => return false,
+    };
+    for (parameters) |parameter| if (parameter.local.eql(local)) {
+        return parameter.ty == .value and ValueType.eql(parameter.atomic_payload_ty, place.root_ty) and
+            parameter.atomic_payload_type_id.eql(place.root_type_id) and ValueType.eql(parameter.atomic_payload_ty, place.ty) and
+            parameter.atomic_payload_type_id.eql(place.type_id);
+    };
+    return false;
+}
 
 /// Return the field index for a direct by-value aggregate local projection.
 /// The local declaration/parameter, aggregate layout, and projected field

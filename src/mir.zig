@@ -6450,7 +6450,7 @@ const FunctionBuilder = struct {
                 try builder.internExecutableTraitSymbol(trait_name)
             else
                 SymbolId.invalid;
-            if (param_ty == .value and callable_signature == null and !dyn_trait_symbol_id.isValid())
+            if (param_ty == .value and callable_signature == null and !dyn_trait_symbol_id.isValid() and atomic_payload_ty == null)
                 builder.executable_supported = false;
             try builder.executable_parameters.append(allocator, .{
                 .local = executable_local,
@@ -6458,6 +6458,7 @@ const FunctionBuilder = struct {
                 .type_id = try builder.internTypeId(param_ty),
                 .callable_signature = callable_signature,
                 .dyn_trait_symbol_id = dyn_trait_symbol_id,
+                .atomic_payload_ty = atomic_payload_ty orelse .unknown,
                 .atomic_payload_type_id = if (atomic_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
                 .source = parameter_source,
                 .span_id = try builder.internSpanId(parameter_source),
@@ -7863,7 +7864,7 @@ const FunctionBuilder = struct {
             .bool, .integer => {},
             else => return false,
         }
-        if (place.projection_count == 0) return switch (place.root) {
+        if (place.projection_count == 0) return mir_model.executableDirectAtomicParameterPlace(self.executable_parameters.items, place) or switch (place.root) {
             .local => |id| local: {
                 for (self.executable_statements.items) |statement| switch (statement.operation) {
                     .local_init => |local_init| if (local_init.local.eql(id)) {
@@ -9634,7 +9635,7 @@ const FunctionBuilder = struct {
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     const base_local = self.executable_local_ids.get(base_name) orelse
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
-                    if (!self.executableLocalIsParameter(base_local))
+                    if (!self.executableLocalIsMmioBase(base_local))
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     const struct_name = switch (target.struct_ty) {
                         .struct_ => |name| name,
@@ -9642,11 +9643,8 @@ const FunctionBuilder = struct {
                     };
                     const byte_offset = self.executableMmioFieldOffset(struct_name, register_member.name.text) orelse
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
-                    // This first canonical slice covers Reg<T>. RegBits has a
-                    // distinct nominal result representation and remains closed
-                    // until that representation is a typed executable fact.
-                    if (!sameValueType(target.storage_ty, target.value_ty) or
-                        !executableMmioStorageSupported(target.storage_ty))
+                    if (!executableMmioStorageSupported(target.storage_ty) or
+                        (target.kind == .mmio_write and !sameValueType(target.storage_ty, target.value_ty)))
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     const storage_type_id = try self.internTypeId(target.storage_ty);
                     const ordering_index: usize = if (target.kind == .mmio_read) 0 else 1;
@@ -9655,7 +9653,9 @@ const FunctionBuilder = struct {
                     if (target.kind == .mmio_read) {
                         if (!ordering.validForRead())
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
-                        result_ty = target.storage_ty;
+                        if (!try self.internExecutableTypeExpr(target.value_ty, target.value_type_expr))
+                            break :call self.unsupportedExecutableExpression(.unsupported_call);
+                        result_ty = target.value_ty;
                         break :call .{ .mmio_read = .{
                             .base = base_local,
                             .byte_offset = byte_offset,
@@ -11349,6 +11349,18 @@ const FunctionBuilder = struct {
         for (self.executable_parameters.items) |parameter| {
             if (parameter.local.eql(local)) return true;
         }
+        return false;
+    }
+
+    fn executableLocalIsMmioBase(self: *const FunctionBuilder, local: LocalId) bool {
+        if (self.executableLocalIsParameter(local)) return true;
+        for (self.executable_statements.items) |statement| switch (statement.operation) {
+            .local_init => |local_decl| if (local_decl.local.eql(local)) return switch (local_decl.ty) {
+                .address => |class| class == .mmio_ptr and local_decl.type_id.isValid(),
+                else => false,
+            },
+            else => {},
+        };
         return false;
     }
 
