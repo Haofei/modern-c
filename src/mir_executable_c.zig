@@ -2053,6 +2053,7 @@ fn indexSupported(
             if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
         } else if (!localArrayIndexBase(body, operation.base) and
             !loadedLocalArrayIndexBase(body, operation.base) and
+            !memberArrayIndexBase(body, operation.base) and
             !projectionRootIsLocalArray(body, operation.base) and
             !parameterArrayIndexBase(body, operation.base) and
             !projectionRootIsDirectCall(body, operation.base)) return false;
@@ -2129,6 +2130,46 @@ fn parameterArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool
     for (body.parameters) |parameter| if (parameter.local.eql(local_id))
         return sameValueType(parameter.ty, expression.result_ty) and parameter.type_id.eql(expression.type_id);
     return false;
+}
+
+fn memberArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    const expression = expressionById(body, id) orelse return false;
+    const array_ty = switch (expression.result_ty) {
+        .array => |shape| shape,
+        else => return false,
+    };
+    const member = switch (expression.operation) {
+        .member => |value| value,
+        else => return false,
+    };
+    const base = expressionById(body, member.base) orelse return false;
+    const local_id = switch (base.operation) {
+        .local => |local| local,
+        else => return false,
+    };
+    if (localById(body, local_id) == null) return false;
+    var exact_root = false;
+    for (body.parameters) |parameter| if (parameter.local.eql(local_id)) {
+        if (exact_root or !sameValueType(parameter.ty, base.result_ty) or !parameter.type_id.eql(base.type_id)) return false;
+        exact_root = true;
+    };
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| if (local.local.eql(local_id)) {
+            if (exact_root or !sameValueType(local.ty, base.result_ty) or !local.type_id.eql(base.type_id)) return false;
+            exact_root = true;
+        },
+        else => {},
+    };
+    if (!exact_root) return false;
+    const owner = aggregateType(body, base.type_id) orelse return false;
+    if (owner.construction != .declared_struct or !sameValueType(owner.ty, base.result_ty) or
+        member.field_index >= owner.field_count or
+        !sameValueType(owner.field_types[member.field_index], expression.result_ty) or
+        !owner.field_type_ids[member.field_index].eql(expression.type_id)) return false;
+    const array = aggregateType(body, expression.type_id) orelse return false;
+    return array.construction == .declared_struct and array.ty == .array and array.array_length != null and
+        array.array_length.? != 0 and array.array_length == array_ty.length and array.field_count != 0 and
+        sameValueType(array.ty, expression.result_ty);
 }
 
 fn rangeSliceSupported(
