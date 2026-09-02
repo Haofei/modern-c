@@ -9103,6 +9103,34 @@ const FunctionBuilder = struct {
         return id;
     }
 
+    /// A fixed-array global used as the base of a range expression is an
+    /// aggregate value, not a scalar load.  Keep that distinction in the
+    /// executable graph just as fixed-array indexing already does.
+    fn ensureExecutableRangeBase(self: *FunctionBuilder, expr: ast.Expr, result_ty: ValueType) !ExprId {
+        const name = calleeIdentName(expr) orelse return self.ensureExecutableExpr(expr);
+        if (!self.globals.contains(name)) return self.ensureExecutableExpr(expr);
+        const type_expr = self.global_type_exprs.get(name) orelse return self.ensureExecutableExpr(expr);
+        const resolved = aggregateTargetTypeAlias(type_expr, self.aliases);
+        const array = switch (resolved.kind) {
+            .array => |value| value,
+            else => return self.ensureExecutableExpr(expr),
+        };
+        var base_ty = valueTypeFromTypeAlias(type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (base_ty != .array) return self.ensureExecutableExpr(expr);
+        if (base_ty.array.length == null)
+            base_ty.array.length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse
+                return self.ensureExecutableExpr(expr);
+        const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
+        const result_child = switch (result_ty) {
+            .pointer => |shape| if (shape.kind == .slice) shape.child else return self.ensureExecutableExpr(expr),
+            .slice => |child| child,
+            else => return self.ensureExecutableExpr(expr),
+        };
+        if (element_ty == .unknown or !std.mem.eql(u8, element_ty.name(), result_child))
+            return self.ensureExecutableExpr(expr);
+        return self.appendExecutableGlobalAggregateValue(name, self.sourcePoint(expr.span), base_ty, type_expr, element_ty);
+    }
+
     fn appendExecutableVariantOperation(
         self: *FunctionBuilder,
         source: SourcePoint,
@@ -9469,7 +9497,7 @@ const FunctionBuilder = struct {
                 } };
             },
             .slice => |node| .{ .range_slice = .{
-                .base = try self.ensureExecutableExpr(node.base.*),
+                .base = try self.ensureExecutableRangeBase(node.base.*, result_ty),
                 .start = try self.ensureExecutableExprAs(node.start.*, .{ .integer = "usize" }),
                 .end = try self.ensureExecutableExprAs(node.end.*, .{ .integer = "usize" }),
                 .checked = !(self.optimize and self.sliceProvablyInBounds(node.base.*, node.start.*, node.end.*)),

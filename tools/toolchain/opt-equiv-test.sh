@@ -102,10 +102,10 @@ grep -q '= mc_checked_div_'               "$W/c0.c"  || { echo "FAIL: opt-equiv-
 grep -q '= mc_checked_div_'               "$W/c1.c"  && { echo "FAIL: opt-equiv-test — --optimize C kept the div check"; exit 1; }
 grep -q 'call void @mc_trap_DivideByZero' "$W/l0.ll" || { echo "FAIL: opt-equiv-test — default LLVM dropped the div check"; exit 1; }
 grep -q 'call void @mc_trap_DivideByZero' "$W/l1.ll" && { echo "FAIL: opt-equiv-test — --optimize LLVM kept the div check"; exit 1; }
-# -- Const-slice construction check (`start <= end <= len`): C emits the `> mc_len` guard, the
+# -- Const-slice construction check (`start <= end <= len`): C emits a `> mc_*len` guard, the
 #    LLVM slice check is one of the `@mc_trap_Bounds` calls already asserted gone above (the
 #    optimized build has zero bounds traps, slice construction included).
-grep -q '> mc_len' "$W/c0.c" || { echo "FAIL: opt-equiv-test — default C dropped the slice bounds check"; exit 1; }
-grep -q '> mc_len' "$W/c1.c" && { echo "FAIL: opt-equiv-test — --optimize C kept the slice bounds check"; exit 1; }
+grep -Eq '> mc_[[:alnum:]_]*len' "$W/c0.c" || { echo "FAIL: opt-equiv-test — default C dropped the slice bounds check"; exit 1; }
+grep -Eq '> mc_[[:alnum:]_]*len' "$W/c1.c" && { echo "FAIL: opt-equiv-test — --optimize C kept the slice bounds check"; exit 1; }
 
 echo "PASS: opt-equiv-test — C and LLVM agree ($EXPECT) across default/--optimize; the elided bounds (const index + slice + guard/while range-fact index) and divide-by-zero checks (const + guard-proven divisor) are behavior-preserving on both backends"

@@ -1812,8 +1812,7 @@ fn rangeSliceSupported(
     const base = expressionById(body, operation.base) orelse return false;
     const start = expressionById(body, operation.start) orelse return false;
     const end = expressionById(body, operation.end) orelse return false;
-    const local_id = rangeSliceBaseLocal(body, operation.base) orelse return false;
-    if (localById(body, local_id) == null or
+    if (!rangeSliceBaseStorageSupported(body, operation.base) or
         !base.block_id.eql(expression.block_id) or !start.block_id.eql(expression.block_id) or
         !end.block_id.eql(expression.block_id) or
         !base.owner_statement.eql(expression.owner_statement) or
@@ -1846,12 +1845,13 @@ fn rangeSliceSupported(
     return start_value <= end_value and end_value <= bound.?;
 }
 
-fn rangeSliceBaseLocal(body: *const mir.ExecutableBody, id: mir.ExprId) ?mir.LocalId {
-    const expression = expressionById(body, id) orelse return null;
+fn rangeSliceBaseStorageSupported(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    const expression = expressionById(body, id) orelse return false;
     return switch (expression.operation) {
-        .local => |local| local,
-        .representation_check => |check| rangeSliceBaseLocal(body, check.operand),
-        else => null,
+        .local => |local| localById(body, local) != null,
+        .symbol => globalAggregateIndexBase(body, id),
+        .representation_check => |check| rangeSliceBaseStorageSupported(body, check.operand),
+        else => false,
     };
 }
 
@@ -1980,6 +1980,7 @@ fn globalAggregateIndexBaseSupported(body: *const mir.ExecutableBody, expression
     for (body.expressions) |candidate| switch (candidate.operation) {
         .index => |index| if (index.base.eql(expression.id) and index.kind == .fixed_array and
             indexFeedsDirectAggregateLocalStore(body, candidate)) return true,
+        .range_slice => |range| if (range.base.eql(expression.id)) return true,
         else => {},
     };
     return false;

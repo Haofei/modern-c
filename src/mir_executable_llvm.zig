@@ -1542,12 +1542,21 @@ const Renderer = struct {
         var element_value_ty: mir.ValueType = undefined;
         switch (base_expression.result_ty) {
             .array => |array| {
-                const local_id = rangeSliceBaseLocal(self.body, operation.base) orelse return error.InvalidBody;
-                const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
-                if (!local.addressable) return error.InvalidBody;
+                pointer = switch (base_expression.operation) {
+                    .local => |local_id| local_storage: {
+                        const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
+                        if (!local.addressable) return error.InvalidBody;
+                        break :local_storage local.storage;
+                    },
+                    .symbol => |symbol_id| global_storage: {
+                        const identity = symbolIdentity(self.body, symbol_id) orelse return error.InvalidBody;
+                        if (identity.kind != .global) return error.InvalidBody;
+                        break :global_storage try std.fmt.allocPrint(self.allocator, "@{s}", .{identity.spelling});
+                    },
+                    else => return error.InvalidBody,
+                };
                 const aggregate = aggregateType(self.body, base_expression.type_id) orelse return error.InvalidBody;
                 if (aggregate.field_count == 0 or array.length == null) return error.InvalidBody;
-                pointer = local.storage;
                 length = try std.fmt.allocPrint(self.allocator, "{d}", .{array.length.?});
                 element_value_ty = aggregate.field_types[0];
             },
@@ -4551,7 +4560,7 @@ fn rangeSliceSupported(
     const base = body.expressions[operation.base.index()];
     const start = body.expressions[operation.start.index()];
     const end = body.expressions[operation.end.index()];
-    if (rangeSliceBaseLocal(body, operation.base) == null or
+    if (!rangeSliceBaseStorageSupported(body, operation.base) or
         !base.block_id.eql(expression.block_id) or !start.block_id.eql(expression.block_id) or
         !end.block_id.eql(expression.block_id) or
         !base.owner_statement.eql(expression.owner_statement) or
@@ -4585,12 +4594,13 @@ fn rangeSliceSupported(
     return start_value <= end_value and end_value <= bound.?;
 }
 
-fn rangeSliceBaseLocal(body: *const mir.ExecutableBody, id: mir.ExprId) ?mir.LocalId {
-    if (!expressionValid(body, id)) return null;
+fn rangeSliceBaseStorageSupported(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
+    if (!expressionValid(body, id)) return false;
     return switch (body.expressions[id.index()].operation) {
-        .local => |local| local,
-        .representation_check => |check| rangeSliceBaseLocal(body, check.operand),
-        else => null,
+        .local => |local| localExists(body, local),
+        .symbol => globalAggregateIndexBase(body, id),
+        .representation_check => |check| rangeSliceBaseStorageSupported(body, check.operand),
+        else => false,
     };
 }
 
