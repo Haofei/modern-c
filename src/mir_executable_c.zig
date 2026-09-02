@@ -1163,6 +1163,73 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
     return true;
 }
 
+/// Stable migration telemetry for the first mechanical renderer boundary that
+/// rejects an otherwise verified body. Admission continues to use
+/// `canEmitBody`; this classifier only makes the fallback census actionable.
+pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
+    if (canEmitBody(body)) return "complete";
+    if (!body.isComplete()) return "incomplete_body";
+    if (body.terminators.len == 0) return "missing_terminator";
+    for (body.parameters) |parameter| if (!(supportsParameterType(body, parameter.ty) or
+        (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))) or
+        localById(body, parameter.local) == null) return "parameter";
+    for (body.expressions) |expression| if (!supportsExpression(body, expression)) return @tagName(expression.operation);
+    for (body.trap_edges) |edge| switch (edge.owner) {
+        .expression => |owner_id| {
+            const owner = expressionById(body, owner_id) orelse return "trap_owner";
+            if (!expressionHasExactTrapEdges(body, owner.*)) return "trap_edge";
+        },
+        .statement => |owner_id| {
+            const owner = statementById(body, owner_id) orelse return "trap_owner";
+            switch (owner.operation) {
+                .store => |store| if (!memoryStoreSupported(body, owner.*, store)) return "store_trap_edge",
+                .guard => |guard| if (!assertGuardHasExactTrapEdge(body, owner.*, guard)) return "guard_trap_edge",
+                else => return "trap_statement",
+            }
+        },
+    };
+    for (body.places) |place| {
+        if (place.storage == .atomic) {
+            if (!atomicPlaceSupported(body, place)) return "atomic_place";
+        } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place) and
+            !mir.executableGuardedLocalAggregateDerefPlace(body, place, false) and
+            !mir.executableParameterProjectedPlace(body, place, false) and
+            mir.executableFixedArrayIndexPlace(body, place) == null and
+            mir.executableSliceIndexPlace(body, place) == null) return "place";
+    }
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| {
+            if (localById(body, local.local) == null) return "local_init";
+            if (local.value) |value| {
+                const expression = expressionById(body, value) orelse return "local_init";
+                if (!sameValueType(local.ty, expression.result_ty) or
+                    !(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
+                        dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
+                        (local.ty == .value and dynLocal(body, local.local)))) return "local_init";
+            } else if (isSliceType(local.ty) or local.ty == .value) return "local_init";
+        },
+        .store => |store| if (!memoryStoreSupported(body, statement, store)) return "store",
+        .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store)) return "packed_field_store",
+        .eval => |value| if (expressionById(body, value) == null) return "eval",
+        .guard => {},
+        .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return "return",
+        .opaque_asm, .precise_asm, .control_transfer => {},
+        .defer_cleanup => return "defer_cleanup",
+        .unsupported => return "unsupported_statement",
+    };
+    for (body.terminators) |terminator| switch (terminator.operation) {
+        .fallthrough => return "fallthrough",
+        .return_, .unreachable_ => {},
+        .trap_ => |kind| if (trapHelper(kind) == null) return "trap_terminator",
+        .jump => |target| if (!hasBlock(body, target)) return "jump_terminator",
+        .branch => |branch| if (expressionById(body, branch.condition) == null or !hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block)) return "branch_terminator",
+        .for_each => |loop| if (!forEachSupported(body, loop)) return "for_each_terminator",
+        .for_step => |step| if (!forStepSupported(body, step)) return "for_step_terminator",
+        .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return "switch_terminator",
+    };
+    return "renderer_invariant";
+}
+
 fn preciseAsmSupported(body: *const mir.ExecutableBody, asm_value: mir.ExecutablePreciseAsm) bool {
     if (asm_value.template_count > mir.max_executable_operands or asm_value.clobber_count > mir.max_executable_operands or
         asm_value.output_count > mir.max_executable_operands or asm_value.input_count > mir.max_executable_operands) return false;

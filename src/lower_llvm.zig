@@ -820,7 +820,11 @@ const LlvmEmitter = struct {
             self.source_path = self.sourcePathForSpan(function.signature.name.span);
             defer self.source_path = previous_source_path;
             const canonical_status = self.canonicalCensusStatus(fn_mir);
-            const canonical_detail = if (canonical_status == .producer_incomplete) mir_executable_body.incompleteReason(&fn_mir) else "";
+            const canonical_detail = switch (canonical_status) {
+                .producer_incomplete => mir_executable_body.incompleteReason(&fn_mir),
+                .renderer_unsupported => mir_executable_llvm.unsupportedReason(&fn_mir.executable_body, fn_mir.return_ty),
+                .ingress_mismatch, .ready => "",
+            };
             var selected_path: fallback_census.SelectedPath = .unsupported;
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs, &selected_path)) {
                 fallback_census.record(.llvm, .admitted, selected_path, canonical_status, canonical_detail, self.source_path, fn_mir);

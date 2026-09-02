@@ -285,6 +285,69 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
     return true;
 }
 
+/// Coarse first-failure classification for fallback census telemetry. The
+/// renderer's admission authority remains `supports`.
+pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueType) []const u8 {
+    if (supports(body, return_ty)) return "complete";
+    if (!body.isComplete()) return "incomplete_body";
+    if (body.terminators.len == 0) return "missing_terminator";
+    if (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty) and
+        !(return_ty == .value and body.return_dyn_trait_symbol_id.isValid())) return "return_type";
+    for (body.parameters) |parameter| if (!parameter.local.isValid() or !(llvmTypeSupported(body, parameter.ty) or
+        (parameter.ty == .value and (callableParameter(body, parameter.local) or dynTraitParameter(body, parameter.local)))))
+        return "parameter";
+    for (body.expressions) |expression| {
+        if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
+            (!llvmTypeSupported(body, expression.result_ty) and !functionSymbolExpressionSupported(body, expression) and
+                !callableValueExpressionSupported(body, expression))) return "expression_type";
+        if (!operationSupported(body, expression)) return @tagName(expression.operation);
+    }
+    for (body.trap_edges) |edge| switch (edge.owner) {
+        .expression => |owner_id| if (!expressionValid(body, owner_id)) return "trap_owner",
+        .statement => |owner_id| if (statementIdentity(body, owner_id) == null) return "trap_owner",
+    };
+    for (body.places) |place| {
+        if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections)
+            return "place_identity";
+        if (place.storage == .atomic) {
+            if (!atomicPlaceSupported(body, place)) return "atomic_place";
+        } else if (place.projection_count == 0) {
+            if (!placeRootValid(body, place)) return "place_root";
+        } else if (!scalarAccessPlaceSupported(body, place) and
+            mir.executableCallablePlace(body.aggregate_types, place) == null and
+            !mir.executableGuardedLocalAggregateDerefPlace(body, place, false) and
+            !mir.executableParameterProjectedPlace(body, place, false) and
+            mir.executableFixedArrayIndexPlace(body, place) == null and
+            mir.executableSliceIndexPlace(body, place) == null) return "place";
+    }
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |local| if (!local.local.isValid() or !(llvmTypeSupported(body, local.ty) or
+            (local.ty == .value and (callableLocalUsedAsIndirectCallee(body, local.local) or dynLocal(body, local.local))))) return "local_init",
+        .store => |store| if (!placeValid(body, store.place) or !expressionValid(body, store.value) or
+            !sameValueType(store.ty, body.expressions[store.value.index()].result_ty) or
+            !memoryStoreSupported(body, statement, store)) return "store",
+        .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store)) return "packed_field_store",
+        .eval => |value| if (!expressionValid(body, value)) return "eval",
+        .guard => {},
+        .return_ => |value| if (value) |result| if (!expressionValid(body, result)) return "return",
+        .opaque_asm, .precise_asm, .control_transfer => {},
+        .defer_cleanup => return "defer_cleanup",
+        .unsupported => return "unsupported_statement",
+    };
+    for (body.terminators) |terminator| switch (terminator.operation) {
+        .fallthrough => return "fallthrough",
+        .jump => |target| if (!blockExists(body, target)) return "jump_terminator",
+        .branch => |branch| if (!expressionValid(body, branch.condition) or !blockExists(body, branch.true_block) or !blockExists(body, branch.false_block)) return "branch_terminator",
+        .for_each => |loop| if (!forEachSupported(body, loop)) return "for_each_terminator",
+        .for_step => |step| if (!forStepSupported(body, step)) return "for_step_terminator",
+        .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return "switch_terminator",
+        .trap_ => |kind| if (trapHelper(kind) == null) return "trap_terminator",
+        .return_ => if (!hasReturnStatement(body, terminator.block_id) and return_ty != .void) return "return_terminator",
+        .unreachable_ => {},
+    };
+    return "renderer_invariant";
+}
+
 fn stringLiteralTypeSupported(ty: mir.ValueType) bool {
     return switch (ty) {
         .cstr => true,
