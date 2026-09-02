@@ -384,7 +384,7 @@ test "LLVM shared structural body plans cover nested, aggregate, workflow, and h
         try expectContains(body, case.needle);
         if (std.mem.eql(u8, case.name, "llvm_plan_aggregate_assignment.mc")) {
             try expectContains(body, "; canonical executable MIR");
-            try expectContains(body, "getelementptr [2 x [2 x i32]], ptr @matrix");
+            try expectContains(body, "getelementptr inbounds [2 x [2 x i32]], ptr @matrix");
         }
     }
 }
@@ -13997,13 +13997,13 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(aggregate_pointer_alias_stack_body, "load atomic i32");
 
     const aggregate_pointer_alias_field_assignment_direct_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_field_assignment_clears_direct_field_fact");
-    try expectContains(aggregate_pointer_alias_field_assignment_direct_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_field_assignment_direct_body, "store ptr %mc_local_0, ptr %");
     try expectContains(aggregate_pointer_alias_field_assignment_direct_body, "load atomic i32, ptr %");
     try expectContains(aggregate_pointer_alias_field_assignment_direct_body, " unordered, align 4");
     try expectNotContains(aggregate_pointer_alias_field_assignment_direct_body, "load i32, ptr %");
 
     const aggregate_pointer_alias_field_assignment_alias_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_field_assignment_establishes_alias_local_fact");
-    try expectContains(aggregate_pointer_alias_field_assignment_alias_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_field_assignment_alias_body, "store ptr %mc_local_0, ptr %");
     try expectContains(aggregate_pointer_alias_field_assignment_alias_body, "load i32, ptr %");
     try expectNotContains(aggregate_pointer_alias_field_assignment_alias_body, "load atomic i32");
 

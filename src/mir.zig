@@ -9444,6 +9444,21 @@ const FunctionBuilder = struct {
                 if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(node.base.*)) |resolved_base| {
                     base_ty = valueTypeFromTypeAlias(resolved_base, self.enums, self.structs, self.packed_bits, self.aliases);
                 };
+                if (base_ty == .array and base_ty.array.length == null) {
+                    const resolved_base = aggregateTargetTypeAlias(
+                        self.typeExprForExpr(node.base.*) orelse
+                            break :index self.unsupportedExecutableExpression(.unsupported_index),
+                        self.aliases,
+                    );
+                    const array = switch (resolved_base.kind) {
+                        .array => |value| value,
+                        else => break :index self.unsupportedExecutableExpression(.unsupported_index),
+                    };
+                    base_ty.array.length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse
+                        break :index self.unsupportedExecutableExpression(.unsupported_index);
+                    if (!try self.internExecutableTypeExpr(base_ty, resolved_base))
+                        break :index self.unsupportedExecutableExpression(.unsupported_index);
+                }
                 const index_kind: mir_model.ExecutableIndexKind = switch (base_ty) {
                     .array => .fixed_array,
                     .pointer => |shape| if (shape.kind == .slice)
@@ -9466,7 +9481,7 @@ const FunctionBuilder = struct {
                         mir_model.executableAggregateCopyAlignment(result_ty) != null);
                 if ((direct_global_storage or indirect_projected_storage) and index_kind == .fixed_array and
                     (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null or
-                        (!self.executable_assignment_rhs and mir_model.executableAggregateCopyAlignment(result_ty) != null)))
+                        mir_model.executableAggregateCopyAlignment(result_ty) != null))
                 {
                     const guard_source = if (indirect_projected_storage)
                         self.executableDerefOperandSource(node.base.*) orelse

@@ -3575,6 +3575,7 @@ fn memoryStoreSupported(
                 mir.executableParameterProjectedPlace(body, place.*, true)) or
             (isSliceType(store.ty) and mir.executableParameterProjectedPlace(body, place.*, true)) or
             (dyn_store and mir.executableParameterProjectedPlace(body, place.*, true)) or local_alias or
+            (scalarMemoryInfo(store.ty) != null and mir.executableParameterProjectedPlace(body, place.*, true)) or
             mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
             (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true)) or
             (aggregate_copy and mir.executableParameterProjectedPlace(body, place.*, true)) or

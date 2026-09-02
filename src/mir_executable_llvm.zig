@@ -3878,6 +3878,8 @@ const Renderer = struct {
             !(projectedScalarStoreTypeSupported(place.ty) and
                 mir.executableParameterProjectedPlace(self.body, place, true)) and
             !(sliceValueType(place.ty) and mir.executableParameterProjectedPlace(self.body, place, true)) and
+            !(mir.ExecutableMemoryAccess.scalarAlignment(place.ty) != null and
+                mir.executableParameterProjectedPlace(self.body, place, true)) and
             !(mir.executableAggregateCopyAlignment(place.ty) != null and
                 mir.executableParameterProjectedPlace(self.body, place, true)) and
             !(mir.executableDynTraitPlace(self.body, place) != null and
@@ -5896,6 +5898,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         (sliceValueType(store.ty) and mir.executableParameterProjectedPlace(body, place, true)) or
         (mir.executableAggregateCopyAlignment(store.ty) != null and
             mir.executableParameterProjectedPlace(body, place, true)) or
+        (mir.ExecutableMemoryAccess.scalarAlignment(store.ty) != null and
+            mir.executableParameterProjectedPlace(body, place, true)) or
         mir.executableLocalAddressDerefPlace(body, place, true) or
         mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
         mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
@@ -6033,6 +6037,8 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
                     (sliceValueType(ty) and mir.executableParameterProjectedPlace(body, place, true)) or
                     parameterCallableProjectedPlaceSupported(body, place, true) or
                     (mir.executableDynTraitPlace(body, place) != null and
+                        mir.executableParameterProjectedPlace(body, place, true)) or
+                    (mir.ExecutableMemoryAccess.scalarAlignment(ty) != null and
                         mir.executableParameterProjectedPlace(body, place, true)) or
                     (aggregate_copy and mir.executableParameterProjectedPlace(body, place, true)) or
                     mir.executableLocalAddressDerefPlace(body, place, true) or
