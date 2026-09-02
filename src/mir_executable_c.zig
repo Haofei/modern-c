@@ -2038,7 +2038,7 @@ fn representationCheckSupported(body: *const mir.ExecutableBody, expression: mir
 fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
     const base = expressionById(body, operation.base) orelse return false;
     const shape = aggregateType(body, base.type_id) orelse return false;
-    const construction_supported = shape.construction == .declared_struct or
+    const construction_supported = shape.construction == .declared_struct or shape.construction == .c_union or
         (shape.construction == .packed_bits and expression.result_ty == .bool and
             mir.ExecutableCastKind.integerInfo(shape.storage_ty) != null);
     return construction_supported and operation.field_index < shape.field_count and
