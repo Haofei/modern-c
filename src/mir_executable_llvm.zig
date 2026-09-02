@@ -584,6 +584,14 @@ const Renderer = struct {
             {
                 try self.output.print(self.allocator, "  %mc_short_slot_{d} = alloca i1\n", .{expression.id.raw});
             },
+            .index => |index| if (index.kind == .fixed_array and indexNeedsScratch(self.body, index)) {
+                const base = self.body.expressions[index.base.index()];
+                try self.output.print(
+                    self.allocator,
+                    "  %mc_index_base_{d} = alloca {s}\n",
+                    .{ expression.id.raw, try self.typeText(base.result_ty) },
+                );
+            },
             else => {},
         };
         try self.output.print(self.allocator, "  br label %mc_block_{d}\n", .{self.body.terminators[0].block_id.raw});
@@ -1446,14 +1454,8 @@ const Renderer = struct {
                 // aggregate values are materialized once because LLVM has no
                 // dynamic `extractvalue` for arrays.
                 const storage = if (global_symbol != null or local_storage != null) base.spelling else storage: {
-                    const slot = try self.temp();
-                    try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
-                        slot,
-                        base.ty,
-                        base.ty,
-                        base.spelling,
-                        slot,
-                    });
+                    const slot = try std.fmt.allocPrint(self.allocator, "%mc_index_base_{d}", .{expression.id.raw});
+                    try self.output.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ base.ty, base.spelling, slot });
                     break :storage slot;
                 };
                 element_pointer = try self.temp();
@@ -4461,15 +4463,6 @@ fn indexSupported(
     expression: mir.ExecutableExpression,
     operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
 ) bool {
-    const global_base = globalAggregateIndexBase(body, operation.base);
-    if (operation.kind == .fixed_array) {
-        if (global_base) {
-            if (!indexFeedsDirectAggregateLocalStore(body, expression)) return false;
-        } else if (!localArrayIndexBase(body, operation.base) and
-            !(expression.block_id.raw == 0 and projectionRootIsLocalArray(body, operation.base)) and
-            !(expression.block_id.raw == 0 and parameterArrayIndexBase(body, operation.base)) and
-            !(expression.block_id.raw == 0 and projectionRootIsDirectCall(body, operation.base))) return false;
-    }
     if (!expressionValid(body, operation.base) or !expressionValid(body, operation.index)) return false;
     const base = body.expressions[operation.base.index()];
     const index = body.expressions[operation.index.index()];
@@ -4479,10 +4472,6 @@ fn indexSupported(
         return false;
     switch (operation.kind) {
         .fixed_array => {
-            // Dynamic array extraction is materialized through an entry-block
-            // alloca. Keep loop/body indexes closed until scratch storage is
-            // hoisted by MIR rather than emitted inside a repeated block.
-            if (expression.block_id.raw != 0 and !localArrayIndexBase(body, operation.base)) return false;
             const bound = operation.bound orelse return false;
             const array = switch (base.result_ty) {
                 .array => |shape| shape,
@@ -4517,6 +4506,14 @@ fn indexSupported(
         },
         else => false,
     };
+}
+
+fn indexNeedsScratch(
+    body: *const mir.ExecutableBody,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) bool {
+    if (!expressionValid(body, operation.base)) return false;
+    return !globalAggregateIndexBase(body, operation.base) and !localArrayIndexBase(body, operation.base);
 }
 
 fn raceAggregateLoadShape(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?*const mir.ExecutableAggregateType {
@@ -4653,13 +4650,7 @@ fn globalAggregateIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) boo
 }
 
 fn globalAggregateIndexBaseSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
-    if (!globalAggregateIndexBase(body, expression.id)) return false;
-    for (body.expressions) |candidate| switch (candidate.operation) {
-        .index => |index| if (index.base.eql(expression.id) and index.kind == .fixed_array and
-            indexFeedsDirectAggregateLocalStore(body, candidate)) return true,
-        else => {},
-    };
-    return false;
+    return globalAggregateIndexBase(body, expression.id);
 }
 
 fn indexFeedsDirectAggregateLocalStore(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
