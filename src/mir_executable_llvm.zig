@@ -5060,8 +5060,13 @@ fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpr
         .pointer_to_integer => operand.result_ty == .pointer and target != null,
         .bool_to_integer => operand.result_ty == .bool and target != null,
         .pointer_to_address => operand.result_ty == .pointer and expression.result_ty == .address,
-        .pointer_to_nullable, .pointer_const_narrow => std.mem.eql(u8, scalarLlvmType(operand.result_ty) orelse return false, "ptr") and
+        .pointer_to_nullable => std.mem.eql(u8, scalarLlvmType(operand.result_ty) orelse return false, "ptr") and
             std.mem.eql(u8, scalarLlvmType(expression.result_ty) orelse return false, "ptr"),
+        .pointer_const_narrow => std.mem.eql(
+            u8,
+            scalarLlvmType(operand.result_ty) orelse return false,
+            scalarLlvmType(expression.result_ty) orelse return false,
+        ),
         .integer_to_open_enum => source != null and target != null and enumTypeForValueType(body, expression.result_ty) != null,
         .enum_to_integer => source != null and target != null and enumTypeForValueType(body, operand.result_ty) != null,
         .unsigned_resize => source != null and target != null and !source.?.signed and !target.?.signed,
