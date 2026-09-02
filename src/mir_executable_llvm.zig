@@ -611,6 +611,14 @@ const Renderer = struct {
         }
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
         if (aggregate.construction == .packed_bits) return self.typeTextDepth(aggregate.storage_ty, depth + 1);
+        if (aggregate.construction == .c_union) {
+            if (aggregate.storage_size == 0 or aggregate.storage_unit_size == 0 or
+                aggregate.storage_size % aggregate.storage_unit_size != 0) return error.Unsupported;
+            return std.fmt.allocPrint(self.allocator, "[{d} x i{d}]", .{
+                aggregate.storage_size / aggregate.storage_unit_size,
+                aggregate.storage_unit_size * 8,
+            });
+        }
         if (aggregate.ty == .array) {
             if (aggregate.field_count == 0 or aggregate.array_length == null) return error.Unsupported;
             const element_ty = if (aggregate.field_dyn_trait_symbols[0].isValid())
@@ -1591,6 +1599,37 @@ const Renderer = struct {
             }
             return .{ .ty = aggregate_ty, .spelling = current };
         }
+        if (shape.construction == .c_union) {
+            const field_index = operation.field_indices[0];
+            const operand = try self.emitExpression(operation.operands[0]);
+            const field_ty = try self.callableStorageType(shape.field_types[field_index], shape.field_callable_signatures[field_index]);
+            if (!std.mem.eql(u8, operand.ty, field_ty)) return error.InvalidBody;
+            const slot = try self.temp();
+            const result = try self.temp();
+            try self.output.print(
+                self.allocator,
+                "  {s} = alloca {s}, align {d}\n" ++
+                    "  call void @llvm.memset.p0.i64(ptr align {d} {s}, i8 0, i64 {d}, i1 false)\n" ++
+                    "  store {s} {s}, ptr {s}\n" ++
+                    "  {s} = load {s}, ptr {s}, align {d}\n",
+                .{
+                    slot,
+                    aggregate_ty,
+                    shape.storage_alignment,
+                    shape.storage_alignment,
+                    slot,
+                    shape.storage_size,
+                    field_ty,
+                    operand.spelling,
+                    slot,
+                    result,
+                    aggregate_ty,
+                    slot,
+                    shape.storage_alignment,
+                },
+            );
+            return .{ .ty = aggregate_ty, .spelling = result };
+        }
         var current: []const u8 = "zeroinitializer";
         for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
             const operand = try self.emitExpression(operand_id);
@@ -1660,6 +1699,29 @@ const Renderer = struct {
                 aggregate_ty,
                 mask,
             });
+            return .{ .ty = result_ty, .spelling = result };
+        }
+        if (shape.construction == .c_union) {
+            const slot = try self.temp();
+            const result = try self.temp();
+            try self.output.print(
+                self.allocator,
+                "  {s} = alloca {s}, align {d}\n" ++
+                    "  store {s} {s}, ptr {s}, align {d}\n" ++
+                    "  {s} = load {s}, ptr {s}\n",
+                .{
+                    slot,
+                    aggregate_ty,
+                    shape.storage_alignment,
+                    aggregate_ty,
+                    base.spelling,
+                    slot,
+                    shape.storage_alignment,
+                    result,
+                    result_ty,
+                    slot,
+                },
+            );
             return .{ .ty = result_ty, .spelling = result };
         }
         const result = try self.temp();
@@ -3663,14 +3725,16 @@ const Renderer = struct {
                 };
                 const aggregate = aggregateType(self.body, current_type_id) orelse return error.InvalidBody;
                 if (field_index >= aggregate.field_count) return error.InvalidBody;
-                const aggregate_ty = try self.typeText(current_ty);
-                const next_pointer = try self.temp();
-                try self.output.print(
-                    self.allocator,
-                    "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
-                    .{ next_pointer, aggregate_ty, field_pointer, field_index },
-                );
-                field_pointer = next_pointer;
+                if (aggregate.construction != .c_union) {
+                    const aggregate_ty = try self.typeText(current_ty);
+                    const next_pointer = try self.temp();
+                    try self.output.print(
+                        self.allocator,
+                        "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                        .{ next_pointer, aggregate_ty, field_pointer, field_index },
+                    );
+                    field_pointer = next_pointer;
+                }
                 current_ty = aggregate.field_types[field_index];
                 current_type_id = aggregate.field_type_ids[field_index];
             }
@@ -3767,14 +3831,16 @@ const Renderer = struct {
             .field => |field_index| {
                 const aggregate = aggregateType(self.body, current_type_id) orelse return error.InvalidBody;
                 if (field_index >= aggregate.field_count) return error.InvalidBody;
-                const aggregate_ty = try self.typeText(current_ty);
-                const next_pointer = try self.temp();
-                try self.output.print(
-                    self.allocator,
-                    "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
-                    .{ next_pointer, aggregate_ty, pointer, field_index },
-                );
-                pointer = next_pointer;
+                if (aggregate.construction != .c_union) {
+                    const aggregate_ty = try self.typeText(current_ty);
+                    const next_pointer = try self.temp();
+                    try self.output.print(
+                        self.allocator,
+                        "  {s} = getelementptr inbounds {s}, ptr {s}, i32 0, i32 {d}\n",
+                        .{ next_pointer, aggregate_ty, pointer, field_index },
+                    );
+                    pointer = next_pointer;
+                }
                 current_ty = aggregate.field_types[field_index];
                 current_type_id = aggregate.field_type_ids[field_index];
             },
@@ -4314,6 +4380,10 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
     const aggregate = aggregateTypeForValueType(body, ty) orelse return false;
     if (aggregate.construction == .packed_bits)
         return llvmTypeSupportedDepth(body, aggregate.storage_ty, depth + 1);
+    if (aggregate.construction == .c_union)
+        return aggregate.field_count != 0 and aggregate.storage_size != 0 and
+            aggregate.storage_alignment != 0 and aggregate.storage_unit_size != 0 and
+            aggregate.storage_size % aggregate.storage_unit_size == 0;
     if (aggregate.construction != .declared_struct or aggregate.field_count == 0) return false;
     for (aggregate.field_types[0..aggregate.field_count], aggregate.field_layout_complete[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count]) |field_ty, layout_complete, dyn_trait_symbol| {
         // Only fixed arrays need the producer's explicit nested-layout bit.
@@ -4382,9 +4452,12 @@ fn resultConstructionSupported(body: *const mir.ExecutableBody, expression: mir.
 
 fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
-    if ((shape.construction != .declared_struct and shape.construction != .packed_bits) or
+    if ((shape.construction != .declared_struct and shape.construction != .c_union and shape.construction != .packed_bits) or
         operation.construction != shape.construction or
-        shape.field_count == 0 or shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
+        shape.field_count == 0 or
+        (shape.construction == .c_union and operation.operand_count != 1) or
+        (shape.construction != .c_union and shape.field_count != operation.operand_count) or
+        !sameValueType(shape.ty, expression.result_ty)) return false;
     var seen = [_]bool{false} ** mir.max_executable_operands;
     for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
         if (field_index >= shape.field_count or seen[field_index] or !expressionValid(body, operand_id)) return false;
@@ -4393,7 +4466,8 @@ fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.
         if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
             !operand.type_id.eql(shape.field_type_ids[field_index]) or !llvmTypeSupported(body, operand.result_ty)) return false;
     }
-    for (seen[0..shape.field_count]) |present| if (!present) return false;
+    if (shape.construction != .c_union)
+        for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;
 }
 
@@ -4933,7 +5007,7 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     if (!expressionValid(body, operation.base)) return false;
     const base = body.expressions[operation.base.index()];
     const shape = aggregateType(body, base.type_id) orelse return false;
-    const construction_supported = shape.construction == .declared_struct or
+    const construction_supported = shape.construction == .declared_struct or shape.construction == .c_union or
         (shape.construction == .packed_bits and expression.result_ty == .bool and
             mir.ExecutableCastKind.integerInfo(shape.storage_ty) != null);
     return construction_supported and operation.field_index < shape.field_count and

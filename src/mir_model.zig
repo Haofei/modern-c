@@ -1713,6 +1713,14 @@ pub const ExecutableAggregateType = struct {
     /// aggregates leave these fields invalid/unknown.
     storage_ty: ValueType = .unknown,
     storage_type_id: TypeId = .invalid,
+    /// Exact byte extent/alignment for union storage. `storage_unit_size` is
+    /// the LLVM array element width used by the module ABI: overlay unions
+    /// retain byte storage, while native C unions encode their alignment in
+    /// the integer element width. Non-union aggregates leave all three zero.
+    storage_size: usize = 0,
+    storage_alignment: usize = 0,
+    storage_unit_size: usize = 0,
+    is_overlay_union: bool = false,
     /// Canonical presentation names for mechanical C member emission. Field
     /// identity is still the dense index; these spellings carry no semantic
     /// authority and LLVM does not consume them.
@@ -2211,7 +2219,8 @@ pub fn executableAggregateFieldPlace(
 ) bool {
     if (place.storage != .ordinary or place.projection_count == 0 or
         !place.root_type_id.isValid() or !place.type_id.isValid() or
-        ExecutableMemoryAccess.scalarAlignment(place.ty) == null) return false;
+        (ExecutableMemoryAccess.scalarAlignment(place.ty) == null and
+            executableAggregateCopyAlignment(place.ty) == null)) return false;
     const local_id: ?LocalId = switch (place.root) {
         .local => |id| id,
         // The owning body carries global mutability; producer/verifier and

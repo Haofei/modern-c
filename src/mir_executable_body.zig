@@ -1837,7 +1837,21 @@ fn verifyAggregateType(function: *const mir.Function, aggregate: mir.ExecutableA
             return error.InvalidAggregateType;
         try verifyType(function, aggregate.storage_type_id, aggregate.storage_ty, body.complete);
         for (aggregate.field_types[0..aggregate.field_count]) |field_ty| if (field_ty != .bool) return error.InvalidAggregateType;
-    } else if (aggregate.storage_ty != .unknown or aggregate.storage_type_id.isValid()) return error.InvalidAggregateType;
+        if (aggregate.storage_size != 0 or aggregate.storage_alignment != 0 or aggregate.storage_unit_size != 0 or aggregate.is_overlay_union)
+            return error.InvalidAggregateType;
+    } else {
+        if (aggregate.storage_ty != .unknown or aggregate.storage_type_id.isValid()) return error.InvalidAggregateType;
+        if (aggregate.construction == .c_union) {
+            if (aggregate.storage_size == 0 or aggregate.storage_alignment == 0 or aggregate.storage_unit_size == 0 or
+                aggregate.storage_size % aggregate.storage_unit_size != 0 or
+                aggregate.storage_unit_size > aggregate.storage_alignment or
+                (aggregate.storage_unit_size != 1 and aggregate.storage_unit_size != 2 and aggregate.storage_unit_size != 4 and
+                    aggregate.storage_unit_size != 8 and aggregate.storage_unit_size != 16))
+                return error.InvalidAggregateType;
+        } else if (aggregate.storage_size != 0 or aggregate.storage_alignment != 0 or aggregate.storage_unit_size != 0 or aggregate.is_overlay_union) {
+            return error.InvalidAggregateType;
+        }
+    }
     if (aggregate.ty == .array and aggregate.construction != .declared_struct) return error.InvalidAggregateType;
     if (aggregate.ty == .nullable_value and (aggregate.construction != .declared_struct or aggregate.field_count != 2 or
         !sameValueType(aggregate.field_types[0], .bool))) return error.InvalidAggregateType;
@@ -2179,10 +2193,12 @@ fn verifyStructConstruction(
 ) !void {
     const body = &function.executable_body;
     const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
-    if ((aggregate.construction != .declared_struct and aggregate.construction != .packed_bits) or
+    if ((aggregate.construction != .declared_struct and aggregate.construction != .c_union and aggregate.construction != .packed_bits) or
         operation.construction != aggregate.construction or
         !sameValueType(aggregate.ty, value.result_ty) or
-        operation.operand_count != aggregate.field_count) return error.InvalidAggregateConstruction;
+        (aggregate.construction == .c_union and operation.operand_count != 1) or
+        (aggregate.construction != .c_union and operation.operand_count != aggregate.field_count))
+        return error.InvalidAggregateConstruction;
     var seen = [_]bool{false} ** mir.max_executable_operands;
     for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
         if (field_index >= aggregate.field_count or seen[field_index]) return error.InvalidAggregateConstruction;
@@ -2191,7 +2207,8 @@ fn verifyStructConstruction(
         if (!sameValueType(operand.result_ty, aggregate.field_types[field_index]) or !operand.type_id.eql(aggregate.field_type_ids[field_index]))
             return error.InvalidAggregateConstruction;
     }
-    for (seen[0..aggregate.field_count]) |present| if (!present) return error.InvalidAggregateConstruction;
+    if (aggregate.construction != .c_union)
+        for (seen[0..aggregate.field_count]) |present| if (!present) return error.InvalidAggregateConstruction;
     for (operation.field_indices[operation.operand_count..]) |field_index| if (field_index != std.math.maxInt(usize))
         return error.InvalidAggregateConstruction;
 }

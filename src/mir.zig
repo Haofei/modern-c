@@ -941,7 +941,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             // Overlay unions share the aggregate summary table during the
             // transition, but their layout is union layout: every field starts
             // at offset zero and the storage is the largest aligned field.
-            .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields, .is_c_union = true }),
+            .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{
+                .fields = overlay_union_decl.fields,
+                .is_c_union = true,
+                .is_overlay_union = true,
+            }),
             .packed_bits_decl => |decl_packed_bits| try packed_bits.put(decl_packed_bits.name.text, .{ .repr = decl_packed_bits.repr, .fields = decl_packed_bits.fields }),
             .type_alias => |alias| try aliases.put(alias.name.text, alias.ty),
             .trait_decl => |trait| try traits.put(trait.name.text, trait),
@@ -10375,32 +10379,39 @@ const FunctionBuilder = struct {
                 }
                 const summary = self.structs.get(struct_name) orelse
                     break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
-                const construction: AggregateConstructionKind = if (summary.is_c_union) .c_union else .declared_struct;
-                // Union and packed-bit construction have storage semantics,
-                // not ordinary field insertion semantics. Keep those closed
-                // until their canonical executable operations exist.
-                if (construction != .declared_struct or fields.len == 0 or fields.len != summary.fields.len or fields.len > mir_model.max_executable_operands)
+                const construction = executableAggregateConstruction(summary);
+                if (fields.len == 0 or fields.len != summary.fields.len or fields.len > mir_model.max_executable_operands)
                     break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                 if (!try self.internExecutableAggregateType(result_ty, construction, summary.fields))
                     break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
 
                 var value: @FieldType(ExecutableExpression.Operation, "struct_") = .{
-                    .operand_count = fields.len,
                     .construction = construction,
                 };
                 var seen = [_]bool{false} ** mir_model.max_executable_operands;
-                for (fields, 0..) |field, source_index| {
+                for (fields) |field| {
                     const field_index = self.structFieldIndex(struct_name, field.name.text) orelse
                         break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                     if (field_index >= summary.fields.len or seen[field_index])
                         break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                     seen[field_index] = true;
-                    value.field_indices[source_index] = field_index;
+                    // A union literal names every arm so inactive storage is
+                    // explicit, but only the one non-`uninit` arm is a value
+                    // operand.  Record that active arm directly in executable
+                    // MIR instead of asking either backend to rediscover it.
+                    if (construction == .c_union and field.value.kind == .uninit_literal) continue;
+                    if (value.operand_count >= mir_model.max_executable_operands)
+                        break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                    value.field_indices[value.operand_count] = field_index;
                     const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
-                    value.operands[source_index] = try self.ensureExecutableExprAsType(field.value, field_ty, summary.fields[field_index].ty);
-                    try self.contextualizeExecutableLiteral(value.operands[source_index], field_ty);
+                    value.operands[value.operand_count] = try self.ensureExecutableExprAsType(field.value, field_ty, summary.fields[field_index].ty);
+                    try self.contextualizeExecutableLiteral(value.operands[value.operand_count], field_ty);
+                    value.operand_count += 1;
                 }
                 for (seen[0..fields.len]) |present| if (!present)
+                    break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
+                if ((construction == .c_union and value.operand_count != 1) or
+                    (construction == .declared_struct and value.operand_count != fields.len))
                     break :aggregate self.unsupportedExecutableExpression(.unsupported_struct_literal);
                 break :aggregate .{ .struct_ = value };
             },
@@ -10916,6 +10927,27 @@ const FunctionBuilder = struct {
             .construction = construction,
             .field_count = fields.len,
         };
+        if (construction == .c_union) {
+            var reflect_env = MirReflectEnv{
+                .enums = self.enums,
+                .structs = self.structs,
+                .unions = self.unions,
+                .packed_bits = self.packed_bits,
+                .aliases = self.aliases,
+            };
+            const layout = mir_reflect.aggregateStorageLayout(&reflect_env, self.structs.get(ty.struct_) orelse return false) orelse return false;
+            aggregate.is_overlay_union = (self.structs.get(ty.struct_) orelse return false).is_overlay_union;
+            const storage_unit_size = if (aggregate.is_overlay_union)
+                1
+            else
+                layout.alignment;
+            if ((storage_unit_size != 1 and storage_unit_size != 2 and storage_unit_size != 4 and
+                storage_unit_size != 8 and storage_unit_size != 16) or
+                layout.size % storage_unit_size != 0) return false;
+            aggregate.storage_size = layout.size;
+            aggregate.storage_alignment = layout.alignment;
+            aggregate.storage_unit_size = storage_unit_size;
+        }
         for (fields, 0..) |field, index| {
             var field_ty = if (directAtomicPayloadTypeExprAlias(field.ty, self.aliases, true)) |payload|
                 self.executableValueType(payload)

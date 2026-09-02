@@ -225,6 +225,28 @@ fn emitStatement(
             try writeIndent(allocator, out, indent);
             switch (store.access.kind) {
                 .plain => {
+                    if (overlayUnionAccessPlace(body, store.place)) |overlay| {
+                        if (overlay.index) |index| {
+                            try out.print(allocator, "uintptr_t mc_overlay_index_{d} = mc_check_index_usize(", .{statement.id.raw});
+                            try emitExpression(allocator, out, body, index.value, 0);
+                            try out.print(allocator, ", {d});\n", .{index.bound.?});
+                            try writeIndent(allocator, out, indent);
+                        }
+                        try out.appendSlice(allocator, "__builtin_memcpy(&(");
+                        try emitPlaceRootValue(allocator, out, body, overlay.place);
+                        try out.appendSlice(allocator, ").storage[");
+                        if (overlay.index != null)
+                            try out.print(allocator, "mc_overlay_index_{d} * sizeof(", .{statement.id.raw})
+                        else
+                            try out.appendSlice(allocator, "0 * sizeof(");
+                        try appendCType(allocator, out, body, store.ty);
+                        try out.appendSlice(allocator, ")], &(");
+                        try emitExpression(allocator, out, body, store.value, 0);
+                        try out.appendSlice(allocator, "), sizeof(");
+                        try appendCType(allocator, out, body, store.ty);
+                        try out.appendSlice(allocator, "));\n");
+                        return;
+                    }
                     try emitPlace(allocator, out, body, store.place);
                     try out.appendSlice(allocator, " = ");
                     try emitExpression(allocator, out, body, store.value, 0);
@@ -812,7 +834,10 @@ fn emitExpressionOperation(
         .local => |local| try appendLocal(allocator, out, body, local),
         .symbol => |symbol| try appendSymbol(allocator, out, body, symbol),
         .load => |load| switch (load.access.kind) {
-            .plain => try emitPlace(allocator, out, body, load.place),
+            .plain => if (overlayUnionAccessPlace(body, load.place)) |overlay|
+                try emitOverlayUnionLoad(allocator, out, body, expression.*, overlay, depth)
+            else
+                try emitPlace(allocator, out, body, load.place),
             .race_unordered => {
                 if (mir.executableAggregateCopyAlignment(expression.result_ty) != null) {
                     var projections: [mir.max_executable_projections]CLeafProjection = undefined;
@@ -1216,6 +1241,32 @@ fn emitExpressionOperation(
                 try out.appendSlice(allocator, "))");
                 return;
             }
+            if (shape.construction == .c_union) {
+                const field_index = aggregate.field_indices[0];
+                if (shape.is_overlay_union) {
+                    try out.appendSlice(allocator, "({ ");
+                    try appendCType(allocator, out, body, shape.ty);
+                    try out.print(allocator, " mc_union_{d} = {{0}}; ", .{expression.id.raw});
+                    try appendCType(allocator, out, body, shape.field_types[field_index]);
+                    try out.print(allocator, " mc_union_field_{d} = ", .{expression.id.raw});
+                    try emitExpression(allocator, out, body, aggregate.operands[0], depth + 1);
+                    try out.print(allocator, "; __builtin_memcpy(mc_union_{d}.storage, &mc_union_field_{d}, sizeof(mc_union_field_{d})); mc_union_{d}; }})", .{
+                        expression.id.raw,
+                        expression.id.raw,
+                        expression.id.raw,
+                        expression.id.raw,
+                    });
+                    return;
+                }
+                try out.append(allocator, '(');
+                try appendCType(allocator, out, body, shape.ty);
+                try out.appendSlice(allocator, "){ .");
+                try appendIdent(allocator, out, shape.field_spellings[field_index]);
+                try out.appendSlice(allocator, " = ");
+                try emitExpression(allocator, out, body, aggregate.operands[0], depth + 1);
+                try out.appendSlice(allocator, " }");
+                return;
+            }
             try out.append(allocator, '(');
             try appendCType(allocator, out, body, shape.ty);
             try out.appendSlice(allocator, "){ ");
@@ -1242,6 +1293,14 @@ fn emitExpressionOperation(
                 try out.appendSlice(allocator, " & (((");
                 try appendCType(allocator, out, body, shape.storage_ty);
                 try out.print(allocator, ")1) << {d})) != 0)", .{member.field_index});
+                return;
+            }
+            if (shape.construction == .c_union and shape.is_overlay_union) {
+                try out.appendSlice(allocator, "({ ");
+                try appendCType(allocator, out, body, expression.result_ty);
+                try out.print(allocator, " mc_overlay_read_{d}; __builtin_memcpy(&mc_overlay_read_{d}, (", .{ expression.id.raw, expression.id.raw });
+                try emitExpression(allocator, out, body, member.base, depth + 1);
+                try out.print(allocator, ").storage, sizeof(mc_overlay_read_{d})); mc_overlay_read_{d}; }})", .{ expression.id.raw, expression.id.raw });
                 return;
             }
             try out.append(allocator, '(');
@@ -2342,7 +2401,8 @@ fn memberArrayIndexBase(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     };
     if (!exact_root) return false;
     const owner = aggregateType(body, base.type_id) orelse return false;
-    if (owner.construction != .declared_struct or !sameValueType(owner.ty, base.result_ty) or
+    if ((owner.construction != .declared_struct and owner.construction != .c_union) or
+        !sameValueType(owner.ty, base.result_ty) or
         member.field_index >= owner.field_count or
         !sameValueType(owner.field_types[member.field_index], expression.result_ty) or
         !owner.field_type_ids[member.field_index].eql(expression.type_id)) return false;
@@ -2568,9 +2628,12 @@ fn structConstructionSupported(
     operation: @FieldType(mir.ExecutableExpression.Operation, "struct_"),
 ) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
-    if ((shape.construction != .declared_struct and shape.construction != .packed_bits) or
+    if ((shape.construction != .declared_struct and shape.construction != .c_union and shape.construction != .packed_bits) or
         operation.construction != shape.construction or
-        shape.field_count == 0 or shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
+        shape.field_count == 0 or
+        (shape.construction == .c_union and operation.operand_count != 1) or
+        (shape.construction != .c_union and shape.field_count != operation.operand_count) or
+        !sameValueType(shape.ty, expression.result_ty)) return false;
     var seen = [_]bool{false} ** mir.max_executable_operands;
     for (operation.operands[0..operation.operand_count], operation.field_indices[0..operation.operand_count]) |operand_id, field_index| {
         if (field_index >= shape.field_count or seen[field_index]) return false;
@@ -2584,7 +2647,8 @@ fn structConstructionSupported(
                 else
                     expressionMatchesDynTrait(body, operand.*, shape.field_dyn_trait_symbols[field_index]))) return false;
     }
-    for (seen[0..shape.field_count]) |present| if (!present) return false;
+    if (shape.construction != .c_union)
+        for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;
 }
 
@@ -4953,6 +5017,73 @@ fn emitPlace(
     }
     if (place.projection_count != 0) return error.UnsupportedOperation;
     try emitPlaceRootValue(allocator, out, body, place.*);
+}
+
+const OverlayUnionAccessPlace = struct {
+    place: mir.ExecutablePlace,
+    index: ?@FieldType(mir.ExecutablePlace.Projection, "index"),
+};
+
+/// Recognize only the exact local `overlay.field` and
+/// `overlay.array_field[index]` forms whose byte-storage ABI is carried by
+/// canonical aggregate metadata. Other projections remain fail-closed.
+fn overlayUnionAccessPlace(body: *const mir.ExecutableBody, id: mir.PlaceId) ?OverlayUnionAccessPlace {
+    const place = placeById(body, id) orelse return null;
+    if (place.storage != .ordinary or place.root != .local or
+        (place.projection_count != 1 and place.projection_count != 2)) return null;
+    const shape = aggregateType(body, place.root_type_id) orelse return null;
+    if (shape.construction != .c_union or !shape.is_overlay_union or
+        shape.storage_size == 0 or shape.storage_alignment == 0) return null;
+    const field_index = switch (place.projections[0]) {
+        .field => |index| index,
+        .deref, .index => return null,
+    };
+    if (field_index >= shape.field_count) return null;
+    if (place.projection_count == 1) {
+        if (!shape.field_type_ids[field_index].eql(place.type_id) or
+            !sameValueType(shape.field_types[field_index], place.ty)) return null;
+        return .{ .place = place.*, .index = null };
+    }
+    const index = switch (place.projections[1]) {
+        .index => |value| value,
+        .field, .deref => return null,
+    };
+    if (!index.checked or index.bound == null) return null;
+    const array = aggregateType(body, shape.field_type_ids[field_index]) orelse return null;
+    if (array.ty != .array or array.array_length == null or array.array_length.? != index.bound.? or
+        array.field_count == 0 or !array.field_type_ids[0].eql(place.type_id) or
+        !sameValueType(array.field_types[0], place.ty)) return null;
+    return .{ .place = place.*, .index = index };
+}
+
+fn emitOverlayUnionLoad(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    overlay: OverlayUnionAccessPlace,
+    depth: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try out.appendSlice(allocator, "({ ");
+    try appendCType(allocator, out, body, expression.result_ty);
+    try out.print(allocator, " mc_overlay_read_{d}; __builtin_memcpy(&mc_overlay_read_{d}, &(", .{
+        expression.id.raw,
+        expression.id.raw,
+    });
+    try emitPlaceRootValue(allocator, out, body, overlay.place);
+    try out.appendSlice(allocator, ").storage[");
+    if (overlay.index) |index| {
+        try out.appendSlice(allocator, "mc_check_index_usize(");
+        try emitExpression(allocator, out, body, index.value, depth + 1);
+        try out.print(allocator, ", {d}) * sizeof(", .{index.bound.?});
+    } else {
+        try out.appendSlice(allocator, "0 * sizeof(");
+    }
+    try appendCType(allocator, out, body, expression.result_ty);
+    try out.print(allocator, ")], sizeof(mc_overlay_read_{d})); mc_overlay_read_{d}; }})", .{
+        expression.id.raw,
+        expression.id.raw,
+    });
 }
 
 fn emitPlaceAddress(

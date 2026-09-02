@@ -23,6 +23,7 @@ pub const EnumSummary = struct {
 pub const StructSummary = struct {
     fields: []const ast.Field,
     is_c_union: bool = false,
+    is_overlay_union: bool = false,
     is_mmio: bool = false,
 };
 

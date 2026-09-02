@@ -186,6 +186,23 @@ const StructLayout = struct {
     field_offset: ?i128,
 };
 
+pub const AggregateStorageLayout = struct {
+    size: usize,
+    alignment: usize,
+};
+
+/// Produce the exact storage extent owned by an aggregate summary.  This is
+/// copied into executable MIR so codegen never has to reopen declaration AST
+/// merely to recover union storage.
+pub fn aggregateStorageLayout(env: *const ReflectEnv, info: StructSummary) ?AggregateStorageLayout {
+    const layout = comptimeStructLayout(env, info, 0, null) orelse return null;
+    if (layout.size <= 0 or layout.alignment <= 0) return null;
+    return .{
+        .size = std.math.cast(usize, layout.size) orelse return null,
+        .alignment = std.math.cast(usize, layout.alignment) orelse return null,
+    };
+}
+
 fn comptimeStructLayout(env: *const ReflectEnv, info: StructSummary, depth: usize, want_field: ?[]const u8) ?StructLayout {
     if (depth > 32) return null;
     if (info.is_c_union) {
