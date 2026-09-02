@@ -13793,8 +13793,8 @@ const FunctionBuilder = struct {
                 } else if (isShiftOp(node.op) and !self.binaryIsNoTrapArithmeticDomain(node)) {
                     try self.addTrapEdge(.InvalidShift, .checked_shift, expr.span);
                 }
-                try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.left.*), node.left.*);
-                try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.right.*), node.right.*);
+                try self.addAggregateRangeFactForUncheckedExpr("binary_operand", node.left.*);
+                try self.addAggregateRangeFactForUncheckedExpr("binary_operand", node.right.*);
                 const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) orelse self.simpleTypeExprForValueType(self.exprType(node.right.*), node.left.*.span) orelse self.assignment_target_type_expr else null;
                 const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) orelse self.simpleTypeExprForValueType(self.exprType(node.left.*), node.right.*.span) orelse self.assignment_target_type_expr else null;
                 try self.buildExprWithTargetType(node.left.*, left_target_ty);
@@ -13822,7 +13822,7 @@ const FunctionBuilder = struct {
                 }
                 try self.addInstr(.expr, "cast", valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 if (self.semantic_expr_depth == 1) {
-                    try self.addAggregateRangeFactForUncheckedExpr(self.assignment_target orelse "value", valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases), expr);
+                    try self.addAggregateRangeFactForUncheckedExpr(self.assignment_target orelse "value", expr);
                 }
                 const previous_target_ty = self.assignment_target_ty;
                 const previous_target_type_expr = self.assignment_target_type_expr;
@@ -14256,7 +14256,8 @@ const FunctionBuilder = struct {
                         }
                     }
                 }
-                if (instr_kind == .unchecked_assume) try self.addRangeFactForUncheckedCall(callee_name, node.args, expr.span);
+                if (unchecked_target) |target|
+                    try self.addRangeFactForUncheckedCall(callee_name, node.args, target.result_ty, expr.span);
                 const preserves_pointer_provenance = raw_many_offset_target != null or reflectionCallPreservesPointerProvenance(node);
                 if (!preserves_pointer_provenance and instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
                 if (!preserves_pointer_provenance and instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
@@ -16460,7 +16461,7 @@ const FunctionBuilder = struct {
         }
     }
 
-    fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, args: []ast.Expr, span: ast.Span) !void {
+    fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, args: []ast.Expr, result_ty: ValueType, span: ast.Span) !void {
         const op = noOverflowUncheckedOp(callee_name) orelse return;
         if (args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
@@ -16479,20 +16480,21 @@ const FunctionBuilder = struct {
             .op = op,
             .left = exprText(args[0]),
             .right = exprText(args[1]),
-            .result_ty = self.assignment_target_ty,
+            .result_ty = result_ty,
             .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
             .line = span.line,
             .column = span.column,
         });
     }
 
-    fn addAggregateRangeFactForUncheckedExpr(self: *FunctionBuilder, target: []const u8, result_ty: ValueType, expr: ast.Expr) !void {
+    fn addAggregateRangeFactForUncheckedExpr(self: *FunctionBuilder, target: []const u8, expr: ast.Expr) !void {
         const call = switch (expr.kind) {
-            .grouped => |inner| return self.addAggregateRangeFactForUncheckedExpr(target, result_ty, inner.*),
-            .cast => |node| return self.addAggregateRangeFactForUncheckedExpr(target, result_ty, node.value.*),
+            .grouped => |inner| return self.addAggregateRangeFactForUncheckedExpr(target, inner.*),
+            .cast => |node| return self.addAggregateRangeFactForUncheckedExpr(target, node.value.*),
             .call => |node| node,
             else => return,
         };
+        const unchecked_target = self.uncheckedCallTarget(call) orelse return;
         const op = noOverflowUncheckedOp(self.calleeName(call.callee.*)) orelse return;
         if (call.args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
@@ -16510,7 +16512,7 @@ const FunctionBuilder = struct {
             .op = op,
             .left = exprText(call.args[0]),
             .right = exprText(call.args[1]),
-            .result_ty = result_ty,
+            .result_ty = unchecked_target.result_ty,
             .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
             .line = expr.span.line,
             .column = expr.span.column,
@@ -16731,7 +16733,7 @@ const FunctionBuilder = struct {
                     try self.addResultPayloadConversionCheck(child_value_ty, item, item.span);
                     try self.addTargetRepresentationCheck(child_value_ty, item, item.span);
                     if (self.exprNeedsTargetRepresentationCheck(item)) try self.addRepresentationUseForValue(child_value_ty, "aggregate_element", item.span, exprText(item));
-                    try self.addAggregateRangeFactForUncheckedExpr("aggregate_element", child_value_ty, item);
+                    try self.addAggregateRangeFactForUncheckedExpr("aggregate_element", item);
                     try self.addAggregateConversionChecks(child_ty, item, ctx);
                 }
             },
@@ -16746,7 +16748,7 @@ const FunctionBuilder = struct {
                     try self.addResultPayloadConversionCheck(field_value_ty, field.value, field.value.span);
                     try self.addTargetRepresentationCheck(field_value_ty, field.value, field.value.span);
                     if (self.exprNeedsTargetRepresentationCheck(field.value)) try self.addRepresentationUseForValue(field_value_ty, "aggregate_field", field.value.span, exprText(field.value));
-                    try self.addAggregateRangeFactForUncheckedExpr(field.name.text, field_value_ty, field.value);
+                    try self.addAggregateRangeFactForUncheckedExpr(field.name.text, field.value);
                     try self.addAggregateConversionChecks(field_ty, field.value, ctx);
                 }
             },
