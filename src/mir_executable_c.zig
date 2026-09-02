@@ -2941,7 +2941,7 @@ fn directAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.E
     if (place.storage != .ordinary or place.projection_count != 0 or !sameValueType(place.root_ty, place.ty)) return false;
     return switch (place.root) {
         .local => |id| local: {
-            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
+            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local true;
             for (body.statements) |statement| switch (statement.operation) {
                 .local_init => |value| if (value.local.eql(id)) break :local true,
                 else => {},

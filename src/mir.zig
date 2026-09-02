@@ -8013,7 +8013,7 @@ const FunctionBuilder = struct {
         if (place.projection_count != 0) return false;
         return switch (place.root) {
             .local => |id| local: {
-                for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local false;
+                for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local true;
                 for (self.executable_statements.items) |statement| switch (statement.operation) {
                     .local_init => |value| if (value.local.eql(id)) break :local true,
                     else => {},
@@ -11262,7 +11262,17 @@ const FunctionBuilder = struct {
     }
 
     fn appendExecutablePlace(self: *FunctionBuilder, expr: ast.Expr) anyerror!PlaceId {
-        const place_ty = self.exprType(expr);
+        var place_ty = self.exprType(expr);
+        if (place_ty == .array and place_ty.array.length == null) {
+            const resolved = aggregateTargetTypeAlias(self.typeExprForExpr(expr) orelse return error.UnsupportedExecutablePlace, self.aliases);
+            const array = switch (resolved.kind) {
+                .array => |value| value,
+                else => return error.UnsupportedExecutablePlace,
+            };
+            place_ty.array.length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse
+                return error.UnsupportedExecutablePlace;
+            if (!try self.internExecutableTypeExpr(place_ty, resolved)) return error.UnsupportedExecutablePlace;
+        }
         var place: ExecutablePlace = .{
             // Filling an indexed place may recursively materialize an index
             // expression, which can append another place. Assign this place's
@@ -11916,8 +11926,18 @@ const FunctionBuilder = struct {
                 return false;
             },
             .assignment => |node| {
-                const assignment_target_ty = self.typeForAssignmentTarget(node.target);
+                var assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
+                if (assignment_target_ty == .array and assignment_target_ty.array.length == null) {
+                    const resolved = aggregateTargetTypeAlias(assignment_target_type_expr orelse return error.UnsupportedExecutablePlace, self.aliases);
+                    const array = switch (resolved.kind) {
+                        .array => |value| value,
+                        else => return error.UnsupportedExecutablePlace,
+                    };
+                    assignment_target_ty.array.length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse
+                        return error.UnsupportedExecutablePlace;
+                    if (!try self.internExecutableTypeExpr(assignment_target_ty, resolved)) return error.UnsupportedExecutablePlace;
+                }
                 // MC assignments evaluate the RHS before evaluating the LHS
                 // place. Build the executable value first so calls/indexes in
                 // the target cannot be scheduled ahead of RHS effects.

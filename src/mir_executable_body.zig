@@ -40,6 +40,15 @@ pub fn incompleteReason(function: *const mir.Function) []const u8 {
             !assertGuardHasExactTrapEdge(body, statement_value, guard)) return "assert_guard",
         else => {},
     };
+    for (body.places) |place_value| {
+        if (place_value.storage == .atomic) {
+            if (!atomicPlaceSupported(body, place_value)) return "incomplete_atomic_place";
+        } else if (place_value.projection_count != 0 and !isScalarAccessPlace(body, place_value, false) and
+            !mir.executableGuardedLocalAggregateDerefPlace(body, place_value, false) and
+            !mir.executableParameterProjectedPlace(body, place_value, false) and
+            mir.executableFixedArrayIndexPlace(body, place_value) == null and
+            mir.executableSliceIndexPlace(body, place_value) == null) return "incomplete_place";
+    }
     for (body.terminators) |terminator| switch (terminator.operation) {
         .switch_ => return "general_switch",
         .fallthrough => return "invalid_fallthrough",
@@ -2097,7 +2106,7 @@ fn directAddressablePlace(body: *const mir.ExecutableBody, target: mir.Executabl
     if (target.storage != .ordinary or target.projection_count != 0 or !sameValueType(target.root_ty, target.ty)) return false;
     return switch (target.root) {
         .local => |id| local: {
-            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
+            for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local true;
             for (body.statements) |current_statement| switch (current_statement.operation) {
                 .local_init => |value| if (value.local.eql(id)) break :local true,
                 else => {},

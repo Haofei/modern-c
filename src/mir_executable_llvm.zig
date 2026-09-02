@@ -551,7 +551,20 @@ const Renderer = struct {
                 "{ ptr, ptr }"
             else
                 try self.typeText(parameter.ty);
-            try self.locals.put(parameter.local.raw, .{ .ty = ty, .storage = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw}), .addressable = false });
+            const argument = try std.fmt.allocPrint(self.allocator, "%mc_arg_{d}", .{parameter.local.raw});
+            if (parameterAddressTaken(self.body, parameter.local)) {
+                const slot = try std.fmt.allocPrint(self.allocator, "%mc_parameter_{d}", .{parameter.local.raw});
+                try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{
+                    slot,
+                    ty,
+                    ty,
+                    argument,
+                    slot,
+                });
+                try self.locals.put(parameter.local.raw, .{ .ty = ty, .storage = slot, .addressable = true });
+            } else {
+                try self.locals.put(parameter.local.raw, .{ .ty = ty, .storage = argument, .addressable = false });
+            }
         }
         try self.output.appendSlice(self.allocator, "  ; canonical executable MIR\n");
         // Allocate every local once in the entry prologue. An alloca inside a
@@ -5529,10 +5542,26 @@ fn directAddressOfSupported(body: *const mir.ExecutableBody, expression: mir.Exe
         address.representation_source != null or address.representation_span_id.isValid() or
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return switch (place.root) {
-        .local => |id| localAddressable(body, id) and parameterIdentity(body, id) == null,
+        .local => |id| localExists(body, id),
         .symbol => |id| if (symbolIdentity(body, id)) |identity| identity.kind == .global else false,
         .value => false,
     };
+}
+
+fn parameterAddressTaken(body: *const mir.ExecutableBody, id: mir.LocalId) bool {
+    for (body.expressions) |expression| switch (expression.operation) {
+        .address_of => |address| {
+            if (!placeValid(body, address.place)) continue;
+            const place = body.places[address.place.index()];
+            if (place.storage != .ordinary or place.projection_count != 0) continue;
+            switch (place.root) {
+                .local => |root| if (root.eql(id)) return true,
+                .symbol, .value => {},
+            }
+        },
+        else => {},
+    };
+    return false;
 }
 
 fn addressResultMatchesPlace(result_ty: mir.ValueType, place_ty: mir.ValueType) bool {
