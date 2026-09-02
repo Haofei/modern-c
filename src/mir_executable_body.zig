@@ -116,7 +116,7 @@ pub fn verify(function: *const mir.Function) !void {
     }
     if (body.complete and body.incomplete_reason != .none) return error.InvalidIncompleteReason;
     if (!body.complete and body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
-        body.aggregate_types.len == 0 and body.enum_types.len == 0 and body.result_types.len == 0 and
+        body.aggregate_types.len == 0 and body.enum_types.len == 0 and body.result_types.len == 0 and body.tagged_union_types.len == 0 and
         body.expressions.len == 0 and body.places.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return;
 
     try verifyType(function, body.return_type_id, function.return_ty, body.complete);
@@ -137,6 +137,9 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.result_types, 0..) |result_ty, index| {
         try verifyResultType(function, result_ty, index);
+    }
+    for (body.tagged_union_types, 0..) |tagged_union_ty, index| {
+        try verifyTaggedUnionType(function, tagged_union_ty, index);
     }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
@@ -700,6 +703,18 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .variant_payload => |operation| {
             try verifyOperand(body, value, operation.operand);
             if (body.complete) try verifyVariantOperation(body, value, operation.operand, operation.kind, true);
+        },
+        .tagged_union_construct => |operation| {
+            if (operation.payload) |payload| try verifyOperand(body, value, payload);
+            if (body.complete) try verifyTaggedUnionConstruction(body, value, operation);
+        },
+        .tagged_union_tag => |operand| {
+            try verifyOperand(body, value, operand);
+            if (body.complete) try verifyTaggedUnionTag(body, value, operand);
+        },
+        .tagged_union_payload => |operation| {
+            try verifyOperand(body, value, operation.operand);
+            if (body.complete) try verifyTaggedUnionPayload(function, value, operation);
         },
         .try_unwrap => |operand_id| {
             try verifyOperand(body, value, operand_id);
@@ -1775,6 +1790,120 @@ fn verifyResultType(function: *const mir.Function, result_ty: mir.ExecutableResu
     try verifyType(function, result_ty.err_type_id, result_ty.err_ty, body.complete);
     for (body.result_types[0..index]) |previous| if (previous.type_id.eql(result_ty.type_id) or
         sameValueType(previous.ty, result_ty.ty)) return error.InvalidAggregateType;
+}
+
+fn taggedUnionType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableTaggedUnionType {
+    for (body.tagged_union_types) |*candidate| if (candidate.type_id.eql(type_id)) return candidate;
+    return null;
+}
+
+fn verifyTaggedUnionType(function: *const mir.Function, tagged: mir.ExecutableTaggedUnionType, index: usize) !void {
+    const body = &function.executable_body;
+    if (!tagged.type_id.isValid() or !tagged.tag_type_id.isValid() or tagged.ty != .tagged_union or
+        tagged.case_count == 0 or tagged.case_count > mir.max_executable_switch_cases or
+        tagged.size == 0 or tagged.alignment == 0 or tagged.payload_size == 0 or tagged.payload_alignment == 0 or
+        tagged.storage_count == 0 or tagged.payload_field_index == 0)
+        return error.InvalidAggregateType;
+    if (tagged.payload_alignment != 1 and tagged.payload_alignment != 2 and
+        tagged.payload_alignment != 4 and tagged.payload_alignment != 8)
+        return error.InvalidAggregateType;
+    const expected_alignment = @max(@as(u64, 4), tagged.payload_alignment);
+    const expected_padding = ((tagged.payload_alignment - (4 % tagged.payload_alignment)) % tagged.payload_alignment);
+    const payload_rounding = tagged.payload_alignment - 1;
+    const payload_with_rounding = std.math.add(u64, tagged.payload_size, payload_rounding) catch
+        return error.InvalidAggregateType;
+    const aligned_payload_size = payload_with_rounding & ~payload_rounding;
+    const expected_storage_count = @max(@as(u64, 1), aligned_payload_size / tagged.payload_alignment);
+    const payload_storage_size = std.math.mul(u64, expected_storage_count, tagged.payload_alignment) catch
+        return error.InvalidAggregateType;
+    const payload_offset = std.math.add(u64, 4, expected_padding) catch return error.InvalidAggregateType;
+    const payload_end = std.math.add(u64, payload_offset, payload_storage_size) catch return error.InvalidAggregateType;
+    const total_with_rounding = std.math.add(u64, payload_end, expected_alignment - 1) catch
+        return error.InvalidAggregateType;
+    const expected_size = total_with_rounding & ~(expected_alignment - 1);
+    if (tagged.alignment != expected_alignment or tagged.padding_size != expected_padding or
+        tagged.storage_count != expected_storage_count or tagged.size != expected_size or
+        tagged.payload_field_index != @as(u8, if (expected_padding == 0) 1 else 2))
+        return error.InvalidAggregateType;
+    try verifyType(function, tagged.type_id, tagged.ty, body.complete);
+    try verifyType(function, tagged.tag_type_id, .{ .integer = "u32" }, body.complete);
+    for (body.tagged_union_types[0..index]) |previous| if (previous.type_id.eql(tagged.type_id) or
+        sameValueType(previous.ty, tagged.ty)) return error.InvalidAggregateType;
+    for (tagged.cases[0..tagged.case_count], 0..) |case, case_index| {
+        if (case.spelling.len == 0) return error.InvalidAggregateType;
+        for (tagged.cases[0..case_index]) |previous| if (std.mem.eql(u8, previous.spelling, case.spelling))
+            return error.InvalidAggregateType;
+        if (case.has_payload) {
+            if (!case.payload_type_id.isValid() or case.payload_ty == .unknown or case.payload_ty == .value or
+                case.payload_ty == .void or case.payload_ty == .never) return error.InvalidAggregateType;
+            try verifyType(function, case.payload_type_id, case.payload_ty, body.complete);
+        } else if (case.payload_type_id.isValid() or case.payload_ty != .void) return error.InvalidAggregateType;
+    }
+    for (tagged.cases[tagged.case_count..]) |case| if (case.spelling.len != 0 or case.has_payload or
+        case.payload_type_id.isValid() or case.payload_ty != .void) return error.InvalidAggregateType;
+}
+
+fn verifyTaggedUnionConstruction(body: *const mir.ExecutableBody, value: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_construct")) !void {
+    const tagged = taggedUnionType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
+    if (!sameValueType(tagged.ty, value.result_ty) or operation.case_index >= tagged.case_count)
+        return error.InvalidAggregateConstruction;
+    const case = tagged.cases[operation.case_index];
+    if (case.has_payload) {
+        const payload_id = operation.payload orelse return error.InvalidAggregateConstruction;
+        const payload = expression(body, payload_id) orelse return error.InvalidExpressionReference;
+        if (!sameValueType(payload.result_ty, case.payload_ty) or !payload.type_id.eql(case.payload_type_id))
+            return error.InvalidAggregateConstruction;
+    } else if (operation.payload != null) return error.InvalidAggregateConstruction;
+}
+
+fn verifyTaggedUnionTag(body: *const mir.ExecutableBody, value: mir.ExecutableExpression, operand_id: mir.ExprId) !void {
+    const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
+    const tagged = taggedUnionType(body, operand.type_id) orelse return error.InvalidAggregateConstruction;
+    if (!sameValueType(operand.result_ty, tagged.ty) or !sameValueType(value.result_ty, .{ .integer = "u32" }) or
+        !value.type_id.eql(tagged.tag_type_id)) return error.InvalidAggregateConstruction;
+}
+
+fn expressionLocal(body: *const mir.ExecutableBody, id: mir.ExprId) ?mir.LocalId {
+    const value = expression(body, id) orelse return null;
+    return switch (value.operation) {
+        .local => |local_id| local_id,
+        else => null,
+    };
+}
+
+fn taggedUnionPayloadHasCaseEdge(function: *const mir.Function, value: mir.ExecutableExpression, operand_id: mir.ExprId, case_index: u32) bool {
+    const body = &function.executable_body;
+    const payload_local = expressionLocal(body, operand_id) orelse return false;
+    for (body.expressions) |tag_value| switch (tag_value.operation) {
+        .tagged_union_tag => |tag_operand| {
+            const tag_local = expressionLocal(body, tag_operand) orelse continue;
+            if (!tag_local.eql(payload_local)) continue;
+            const terminator = executableTerminator(body, tag_value.block_id) orelse continue;
+            switch (terminator.operation) {
+                .switch_ => |switch_| {
+                    if (!switch_.subject.eql(tag_value.id)) continue;
+                    for (switch_.cases[0..switch_.case_count]) |case| {
+                        if (case.value == .unsigned and case.value.unsigned == case_index and case.target.eql(value.block_id)) return true;
+                    }
+                },
+                else => {},
+            }
+        },
+        else => {},
+    };
+    return false;
+}
+
+fn verifyTaggedUnionPayload(function: *const mir.Function, value: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_payload")) !void {
+    const body = &function.executable_body;
+    const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
+    const tagged = taggedUnionType(body, operand.type_id) orelse return error.InvalidAggregateConstruction;
+    if (!sameValueType(operand.result_ty, tagged.ty) or operation.case_index >= tagged.case_count)
+        return error.InvalidAggregateConstruction;
+    const case = tagged.cases[operation.case_index];
+    if (!case.has_payload or !sameValueType(value.result_ty, case.payload_ty) or !value.type_id.eql(case.payload_type_id) or
+        !taggedUnionPayloadHasCaseEdge(function, value, operation.operand, operation.case_index))
+        return error.InvalidAggregateConstruction;
 }
 
 fn verifyMemberProjection(

@@ -244,6 +244,10 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
             .struct_ => |source_name| source_name,
             else => unreachable,
         }),
+        .tagged_union => |target_name| std.mem.eql(u8, target_name, switch (source) {
+            .tagged_union => |source_name| source_name,
+            else => unreachable,
+        }),
         .address => |target_kind| target_kind == switch (source) {
             .address => |source_kind| source_kind,
             else => unreachable,

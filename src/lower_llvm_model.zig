@@ -1,6 +1,7 @@
 const ast_bridge = @import("ast_bridge.zig");
 const codegen_signature = @import("codegen_signature.zig");
 const mir_model = @import("mir_model.zig");
+const type_layout = @import("layout.zig");
 
 pub const LocalSlot = struct {
     ty: ast_bridge.TypeExpr,
@@ -50,15 +51,7 @@ pub const OverlayLayout = struct {
     alignment: u64,
 };
 
-pub const TaggedUnionLayout = struct {
-    size: u64,
-    alignment: u64,
-    payload_size: u64,
-    payload_alignment: u64,
-    padding_size: u64,
-    storage_count: u64,
-    payload_field_index: u8,
-};
+pub const TaggedUnionLayout = type_layout.ComptimeTaggedUnionLayout;
 
 pub const MmioFieldInfo = struct {
     storage_ty: ast_bridge.TypeExpr,

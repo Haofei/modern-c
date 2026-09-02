@@ -13994,7 +13994,10 @@ test "lower-c emits C ABI for tagged unions" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "} payload;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "} Token;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Token pass_token(Token token)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return token;") != null);
+    const pass_body = try cFunctionBody(output.items, "static Token pass_token(Token token)");
+    try expectContains(pass_body, "/* canonical executable MIR */");
+    try expectContains(pass_body, "mc_exec_tmp_0 = token;");
+    try expectContains(pass_body, "return mc_exec_tmp_0;");
 }
 
 test "lower-c emits tagged union switch narrowing" {
@@ -14041,24 +14044,32 @@ test "lower-c emits tagged union switch narrowing" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_tagged_union_switch.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_value(Token token)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (token.tag == TokenTag_int) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = token.payload.int_;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return v;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (token.tag == TokenTag_eof) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t token_kind(Token token)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (token.tag == TokenTag_int) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (token.tag == TokenTag_eof || token.tag == TokenTag_space) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_call_value(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = make_token();\n    if (mc_tmp0.tag == TokenTag_int) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = mc_tmp0.payload.int_;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (mc_tmp0.tag == TokenTag_eof) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_local_value(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = make_token();\n    if (token.tag == TokenTag_int) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = token.payload.int_;") != null);
+    const value_body = try cFunctionBody(output.items, "static int64_t token_value(Token token)");
+    try expectContains(value_body, "/* canonical executable MIR */");
+    try expectContains(value_body, ").tag;");
+    try expectContains(value_body, "switch (");
+    try expectContains(value_body, "case 0: goto");
+    try expectContains(value_body, "case 1: goto");
+    try expectContains(value_body, "mc_trap_InvalidRepresentation();");
+    try expectContains(value_body, ").payload.int_;");
+
+    const kind_body = try cFunctionBody(output.items, "static uint32_t token_kind(Token token)");
+    try expectContains(kind_body, "/* canonical executable MIR */");
+    try expectContains(kind_body, "case 0: goto");
+    try expectContains(kind_body, "case 1: goto");
+    try expectContains(kind_body, "case 2: goto");
+    try expectContains(kind_body, "mc_trap_InvalidRepresentation();");
+
+    const call_body = try cFunctionBody(output.items, "static int64_t token_call_value(void)");
+    try expectContains(call_body, "= make_token();");
+    try expectContains(call_body, ").tag;");
+    try expectContains(call_body, ").payload.int_;");
+
+    const local_body = try cFunctionBody(output.items, "static int64_t token_local_value(void)");
+    try expectContains(local_body, "= make_token();");
+    try expectContains(local_body, "MC_UNUSED Token token =");
+    try expectContains(local_body, ").tag;");
+    try expectContains(local_body, ").payload.int_;");
 }
 
 test "lower-c emits tagged union constructors" {
@@ -14099,16 +14110,27 @@ test "lower-c emits tagged union constructors" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_tagged_union_constructors.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_value, .payload.value = 7 });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_eof });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = ((Token){ .tag = TokenTag_value, .payload.value = 7 });\n    return id(mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_value, .payload.value = 9 });") != null);
+    const make_number_body = try cFunctionBody(output.items, "static Token make_number(void)");
+    try expectContains(make_number_body, "/* canonical executable MIR */");
+    try expectContains(make_number_body, "= 7;");
+    try expectContains(make_number_body, "((Token){ .tag = TokenTag_value, .payload.value =");
+    try expectContains(make_number_body, "return mc_exec_tmp_");
+    const make_eof_body = try cFunctionBody(output.items, "static Token make_eof(void)");
+    try expectContains(make_eof_body, "((Token){ .tag = TokenTag_eof });");
+    const call_id_body = try cFunctionBody(output.items, "static Token call_id(void)");
+    try expectContains(call_id_body, "((Token){ .tag = TokenTag_value, .payload.value =");
+    try expectContains(call_id_body, "= id(mc_exec_tmp_");
+    const local_number_body = try cFunctionBody(output.items, "static Token local_number(void)");
+    try expectContains(local_number_body, "((Token){ .tag = TokenTag_value, .payload.value =");
+    try expectContains(local_number_body, "MC_UNUSED Token token =");
     const number_body = try cFunctionBody(output.items, "static Token number(int64_t value)");
     try expectContains(number_body, "TokenTag_number");
     const call_number_body = try cFunctionBody(output.items, "static Token call_number(void)");
     try expectContains(call_number_body, "= 11;");
     try expectContains(call_number_body, "number(");
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_ok, .payload.ok = 12 });") != null);
+    const ok_body = try cFunctionBody(output.items, "static Token make_ok_case(void)");
+    try expectContains(ok_body, "= 12;");
+    try expectContains(ok_body, "((Token){ .tag = TokenTag_ok, .payload.ok =");
 }
 
 test "lower-c emits Result ok and err constructors" {

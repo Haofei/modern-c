@@ -1011,6 +1011,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     return_type,
                     &enums,
                     &structs,
+                    &unions,
                     &packed_bits,
                     &aliases,
                     &const_fns,
@@ -1022,6 +1023,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     global_type,
                     &enums,
                     &structs,
+                    &unions,
                     &packed_bits,
                     &aliases,
                     &const_fns,
@@ -1111,7 +1113,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .source_id = typed_source_id,
                         .body_id = BodyId.fromIndex(checked_callables.items.len),
                         .kind = .function,
-                        .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
+                        .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
                         .param_count = fn_decl.params.len,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
                         .is_variadic = fn_decl.is_variadic,
@@ -1140,14 +1142,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .source_id = typed_source_id,
                         .body_id = .invalid,
                         .kind = .extern_function,
-                        .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
+                        .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
                         .param_count = fn_decl.params.len,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
                         .is_variadic = fn_decl.is_variadic,
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
-                    const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &packed_bits, &aliases, &const_fns, &const_globals);
+                    const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals);
                     var param_types_unowned = true;
                     errdefer if (param_types_unowned and param_types.len != 0) allocator.free(param_types);
                     const ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params);
@@ -1398,6 +1400,7 @@ fn functionParamValueTypes(
     params: []const ast.Param,
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
+    unions: *const std.StringHashMap(UnionSummary),
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
@@ -1405,7 +1408,7 @@ fn functionParamValueTypes(
 ) ![]ValueType {
     const types = try allocator.alloc(ValueType, params.len);
     for (params, 0..) |parameter, index| {
-        types[index] = canonicalExecutableValueType(parameter.ty, enums, structs, packed_bits, aliases, const_fns, const_globals);
+        types[index] = canonicalExecutableValueType(parameter.ty, enums, structs, unions, packed_bits, aliases, const_fns, const_globals);
     }
     return types;
 }
@@ -1414,11 +1417,15 @@ fn canonicalExecutableValueType(
     type_expr: ast.TypeExpr,
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
+    unions: *const std.StringHashMap(UnionSummary),
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
 ) ValueType {
+    if (unionTypeNameAlias(type_expr, aliases)) |name| {
+        if (unions.contains(name)) return .{ .tagged_union = name };
+    }
     var ty = valueTypeFromTypeAlias(type_expr, enums, structs, packed_bits, aliases);
     if (ty == .array and ty.array.length == null) {
         const resolved = aggregateTargetTypeAlias(type_expr, aliases);
@@ -6130,7 +6137,7 @@ const ValueTypeContext = struct {
         const tag: u8 = @intCast(@intFromEnum(std.meta.activeTag(ty)));
         hasher.update(&.{tag});
         switch (ty) {
-            .integer, .float, .nullable_value, .slice, .closed_enum, .open_enum, .struct_ => |name| hashTypeString(&hasher, name),
+            .integer, .float, .nullable_value, .slice, .closed_enum, .open_enum, .struct_, .tagged_union => |name| hashTypeString(&hasher, name),
             .array => |shape| {
                 hashTypeString(&hasher, shape.child);
                 if (shape.length) |length| {
@@ -6234,6 +6241,7 @@ const FunctionBuilder = struct {
     executable_aggregate_types: std.ArrayList(mir_model.ExecutableAggregateType),
     executable_enum_types: std.ArrayList(mir_model.ExecutableEnumType),
     executable_result_types: std.ArrayList(mir_model.ExecutableResultType),
+    executable_tagged_union_types: std.ArrayList(mir_model.ExecutableTaggedUnionType),
     executable_expressions: std.ArrayList(ExecutableExpression),
     executable_trap_edges: std.ArrayList(mir_model.ExecutableTrapEdge),
     executable_places: std.ArrayList(ExecutablePlace),
@@ -6322,7 +6330,7 @@ const FunctionBuilder = struct {
             .allocator = allocator,
             .name = fn_decl.name.text,
             .source_file_id = fn_decl.name.span.file_id,
-            .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, enums, structs, packed_bits, aliases, const_fns, const_globals) else .void,
+            .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, enums, structs, unions, packed_bits, aliases, const_fns, const_globals) else .void,
             .return_type_expr = fn_decl.return_type,
             .param_count = fn_decl.params.len,
             .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(attrs, "mc_abi")),
@@ -6378,6 +6386,7 @@ const FunctionBuilder = struct {
             .executable_aggregate_types = .empty,
             .executable_enum_types = .empty,
             .executable_result_types = .empty,
+            .executable_tagged_union_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6423,7 +6432,7 @@ const FunctionBuilder = struct {
                 builder.return_dyn_trait_symbol_id = try builder.internExecutableTraitSymbol(trait_name);
         }
         for (fn_decl.params) |param| {
-            const param_ty = canonicalExecutableValueType(param.ty, enums, structs, packed_bits, aliases, const_fns, const_globals);
+            const param_ty = canonicalExecutableValueType(param.ty, enums, structs, unions, packed_bits, aliases, const_fns, const_globals);
             if (!try builder.internExecutableEnumType(param_ty)) builder.executable_supported = false;
             if (param_ty == .nullable_value and !try builder.internExecutableValueOptionalType(param_ty))
                 builder.executable_supported = false;
@@ -6534,6 +6543,7 @@ const FunctionBuilder = struct {
             .executable_aggregate_types = .empty,
             .executable_enum_types = .empty,
             .executable_result_types = .empty,
+            .executable_tagged_union_types = .empty,
             .executable_expressions = .empty,
             .executable_trap_edges = .empty,
             .executable_places = .empty,
@@ -6615,6 +6625,7 @@ const FunctionBuilder = struct {
         self.executable_aggregate_types.deinit(self.allocator);
         self.executable_enum_types.deinit(self.allocator);
         self.executable_result_types.deinit(self.allocator);
+        self.executable_tagged_union_types.deinit(self.allocator);
         self.executable_expressions.deinit(self.allocator);
         self.executable_trap_edges.deinit(self.allocator);
         self.executable_places.deinit(self.allocator);
@@ -7105,6 +7116,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(enum_types);
         const result_types = try self.executable_result_types.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(result_types);
+        const tagged_union_types = try self.executable_tagged_union_types.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(tagged_union_types);
         const expressions = try self.executable_expressions.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(expressions);
         const executable_trap_edges = try self.executable_trap_edges.toOwnedSlice(self.allocator);
@@ -7140,6 +7153,7 @@ const FunctionBuilder = struct {
             .aggregate_types = aggregate_types,
             .enum_types = enum_types,
             .result_types = result_types,
+            .tagged_union_types = tagged_union_types,
             .expressions = expressions,
             .trap_edges = executable_trap_edges,
             .places = places,
@@ -7186,6 +7200,9 @@ const FunctionBuilder = struct {
             },
             .variant_test => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, false),
             .variant_payload => |operation| self.executableVariantOperationComplete(expression, operation.operand, operation.kind, true),
+            .tagged_union_construct => |operation| self.executableTaggedUnionConstructionComplete(expression, operation),
+            .tagged_union_tag => |operand| self.executableTaggedUnionTagComplete(expression, operand),
+            .tagged_union_payload => |operation| self.executableTaggedUnionPayloadComplete(expression, operation),
             .try_unwrap => |operand_id| self.executableTryUnwrapComplete(expression, operand_id),
             .try_propagate => |operand_id| self.executableTryPropagateComplete(expression, operand_id),
             .try_map_error => |operation| self.executableTryMapErrorComplete(expression, operation),
@@ -7266,6 +7283,43 @@ const FunctionBuilder = struct {
             .representation_check => |check| self.executableRepresentationCheckComplete(expression, check),
             else => true,
         };
+    }
+
+    fn executableTaggedUnionType(self: *const FunctionBuilder, type_id: TypeId) ?mir_model.ExecutableTaggedUnionType {
+        for (self.executable_tagged_union_types.items) |shape| if (shape.type_id.eql(type_id)) return shape;
+        return null;
+    }
+
+    fn executableTaggedUnionConstructionComplete(self: *const FunctionBuilder, expression: ExecutableExpression, operation: @FieldType(ExecutableExpression.Operation, "tagged_union_construct")) bool {
+        const shape = self.executableTaggedUnionType(expression.type_id) orelse return false;
+        if (!sameValueType(shape.ty, expression.result_ty) or operation.case_index >= shape.case_count) return false;
+        const case = shape.cases[operation.case_index];
+        if (!case.has_payload) return operation.payload == null;
+        const payload_id = operation.payload orelse return false;
+        if (!payload_id.isValid() or payload_id.index() >= expression.id.index() or payload_id.index() >= self.executable_expressions.items.len)
+            return false;
+        const payload = self.executable_expressions.items[payload_id.index()];
+        return sameValueType(payload.result_ty, case.payload_ty) and payload.type_id.eql(case.payload_type_id);
+    }
+
+    fn executableTaggedUnionTagComplete(self: *const FunctionBuilder, expression: ExecutableExpression, operand_id: ExprId) bool {
+        if (!operand_id.isValid() or operand_id.index() >= expression.id.index() or operand_id.index() >= self.executable_expressions.items.len)
+            return false;
+        const operand = self.executable_expressions.items[operand_id.index()];
+        const shape = self.executableTaggedUnionType(operand.type_id) orelse return false;
+        return sameValueType(operand.result_ty, shape.ty) and sameValueType(expression.result_ty, .{ .integer = "u32" }) and
+            expression.type_id.eql(shape.tag_type_id);
+    }
+
+    fn executableTaggedUnionPayloadComplete(self: *const FunctionBuilder, expression: ExecutableExpression, operation: @FieldType(ExecutableExpression.Operation, "tagged_union_payload")) bool {
+        if (!operation.operand.isValid() or operation.operand.index() >= expression.id.index() or
+            operation.operand.index() >= self.executable_expressions.items.len) return false;
+        const operand = self.executable_expressions.items[operation.operand.index()];
+        const shape = self.executableTaggedUnionType(operand.type_id) orelse return false;
+        if (!sameValueType(operand.result_ty, shape.ty) or operation.case_index >= shape.case_count) return false;
+        const case = shape.cases[operation.case_index];
+        return case.has_payload and sameValueType(expression.result_ty, case.payload_ty) and
+            expression.type_id.eql(case.payload_type_id);
     }
 
     fn executableTryPropagateComplete(self: *const FunctionBuilder, expression: ExecutableExpression, operand_id: ExprId) bool {
@@ -9179,6 +9233,31 @@ const FunctionBuilder = struct {
         return id;
     }
 
+    fn appendExecutableTaggedUnionOperation(
+        self: *FunctionBuilder,
+        source: SourcePoint,
+        operand: ExprId,
+        result_ty: ValueType,
+        result_type_id: TypeId,
+        case_index: ?u32,
+    ) !ExprId {
+        const id = ExprId.fromIndex(self.executable_expressions.items.len);
+        try self.executable_expressions.append(self.allocator, .{
+            .id = id,
+            .block_id = BlockId.fromIndex(self.current),
+            .owner_statement = InstId.fromIndex(self.executable_statements.items.len),
+            .source = source,
+            .span_id = try self.internSpanId(source),
+            .result_ty = result_ty,
+            .type_id = result_type_id,
+            .operation = if (case_index) |index|
+                .{ .tagged_union_payload = .{ .operand = operand, .case_index = index } }
+            else
+                .{ .tagged_union_tag = operand },
+        });
+        return id;
+    }
+
     fn appendExecutableCast(self: *FunctionBuilder, input: ast.Expr, operand: ExprId, target_ty: ValueType, kind: mir_model.ExecutableCastKind) !ExprId {
         const source = self.sourcePoint(input.span);
         const id = ExprId.fromIndex(self.executable_expressions.items.len);
@@ -9214,6 +9293,10 @@ const FunctionBuilder = struct {
         if (try self.ensureExecutableDynBind(expr, expected_type_expr)) |id| return id;
         const source = self.sourcePoint(expr.span);
         var result_ty = self.exprType(expr);
+        if (result_ty == .value) if (self.typeExprForExpr(expr)) |type_expr| {
+            const canonical = self.executableValueType(type_expr);
+            if (canonical == .tagged_union) result_ty = canonical;
+        };
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
             result_ty = expected;
         };
@@ -9463,7 +9546,7 @@ const FunctionBuilder = struct {
             .index => |node| index: {
                 var base_ty = self.exprType(node.base.*);
                 if (base_ty == .unknown or base_ty == .value) if (self.typeExprForExpr(node.base.*)) |resolved_base| {
-                    base_ty = valueTypeFromTypeAlias(resolved_base, self.enums, self.structs, self.packed_bits, self.aliases);
+                    base_ty = self.executableValueType(resolved_base);
                 };
                 if (base_ty == .array and base_ty.array.length == null) {
                     const resolved_base = aggregateTargetTypeAlias(
@@ -9601,7 +9684,7 @@ const FunctionBuilder = struct {
                 if (field_index >= summary.fields.len or
                     !try self.internExecutableAggregateType(.{ .struct_ = struct_name }, executableAggregateConstruction(summary), summary.fields))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
-                const field_ty = valueTypeFromTypeAlias(summary.fields[field_index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                const field_ty = self.executableValueType(summary.fields[field_index].ty);
                 if (!sameValueType(result_ty, field_ty))
                     break :member self.unsupportedExecutableExpression(.unsupported_member);
                 const callable_field = field_ty == .value and
@@ -9659,13 +9742,19 @@ const FunctionBuilder = struct {
             .call => |node| call: {
                 if (node.args.len > mir_model.max_executable_operands)
                     break :call self.unsupportedExecutableExpression(.unsupported_call);
-                // A qualified tagged-union constructor such as
-                // `Token.number(value)` is not an ordinary function call.
-                // Keep the canonical body closed until executable MIR has a
-                // first-class variant-construction operation; otherwise a
-                // same-named function can be selected and recursively called.
-                if (self.qualifiedUnionConstructorTypeExpr(node) != null)
-                    break :call self.unsupportedExecutableExpression(.unsupported_call);
+                if (self.executableTaggedUnionConstructor(node, expected_type_expr)) |constructor| {
+                    result_ty = constructor.ty;
+                    if (!try self.internExecutableTaggedUnionType(result_ty))
+                        break :call self.unsupportedExecutableExpression(.unsupported_call);
+                    const payload: ?ExprId = if (constructor.payload_type_expr) |payload_type_expr| blk: {
+                        const payload_ty = self.executableValueType(payload_type_expr);
+                        break :blk try self.ensureExecutableExprAsType(node.args[0], payload_ty, payload_type_expr);
+                    } else null;
+                    break :call .{ .tagged_union_construct = .{
+                        .case_index = @intCast(constructor.case_index),
+                        .payload = payload,
+                    } };
+                }
                 // Reflection is a compile-time semantic operation.  Legalize it
                 // before the generic builtin path so executable MIR owns the
                 // selected value and codegen only renders an ordinary scalar
@@ -10368,7 +10457,8 @@ const FunctionBuilder = struct {
                     // shapes for which the legacy semantic pass records an
                     // InvalidRepresentation edge. Bounds remain owned by
                     // index/range operations and are deliberately excluded.
-                    .local, .load, .member, .cast => .valid_slice,
+                    .local => |local_id| if (self.executableLocalInitializedByTaggedUnionPayload(local_id)) null else .valid_slice,
+                    .load, .member, .cast => .valid_slice,
                     .direct_call, .indirect_call => switch (expr.kind) {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .valid_slice else null,
                         else => null,
@@ -10496,7 +10586,7 @@ const FunctionBuilder = struct {
         switch (resolved.kind) {
             .array => |array| {
                 const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
-                const element_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
+                const element_ty = self.executableValueType(array.child.*);
                 const callable_element = if (aggregateTargetTypeAlias(array.child.*, self.aliases).kind == .fn_pointer)
                     try self.executableCallableSignature(array.child.*)
                 else
@@ -10525,8 +10615,86 @@ const FunctionBuilder = struct {
                 return false;
             },
             .closed_enum, .open_enum => return self.internExecutableEnumType(ty),
+            .tagged_union => return self.internExecutableTaggedUnionType(ty),
             else => return true,
         }
+    }
+
+    fn executableValueType(self: *FunctionBuilder, type_expr: ast.TypeExpr) ValueType {
+        if (unionTypeNameAlias(type_expr, self.aliases)) |name| {
+            if (self.unions.contains(name)) return .{ .tagged_union = name };
+        }
+        return valueTypeFromTypeAlias(type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn executableLocalInitializedByTaggedUnionPayload(self: *const FunctionBuilder, local_id: LocalId) bool {
+        for (self.executable_statements.items) |statement| switch (statement.operation) {
+            .local_init => |local_init| if (local_init.local.eql(local_id) and local_init.value != null) {
+                const value_id = local_init.value.?;
+                if (!value_id.isValid() or value_id.index() >= self.executable_expressions.items.len) return false;
+                return self.executable_expressions.items[value_id.index()].operation == .tagged_union_payload;
+            },
+            else => {},
+        };
+        return false;
+    }
+
+    fn internExecutableTaggedUnionType(self: *FunctionBuilder, ty: ValueType) !bool {
+        const name = switch (ty) {
+            .tagged_union => |value| value,
+            else => return false,
+        };
+        const summary = self.unions.get(name) orelse return false;
+        if (summary.cases.len == 0 or summary.cases.len > mir_model.max_executable_switch_cases) return false;
+        const type_id = try self.internTypeId(ty);
+        for (self.executable_tagged_union_types.items) |shape| {
+            if (!shape.type_id.eql(type_id)) continue;
+            return sameValueType(shape.ty, ty) and shape.case_count == summary.cases.len;
+        }
+        var reflect_env = MirReflectEnv{
+            .enums = self.enums,
+            .structs = self.structs,
+            .unions = self.unions,
+            .packed_bits = self.packed_bits,
+            .aliases = self.aliases,
+        };
+        const layout = mir_reflect.taggedUnionLayout(&reflect_env, summary, 0) orelse return false;
+        const previous_len = self.executable_tagged_union_types.items.len;
+        var complete = false;
+        defer {
+            if (!complete) self.executable_tagged_union_types.items.len = previous_len;
+        }
+        var shape: mir_model.ExecutableTaggedUnionType = .{
+            .type_id = type_id,
+            .ty = ty,
+            .tag_type_id = try self.internTypeId(.{ .integer = "u32" }),
+            .case_count = summary.cases.len,
+            .size = layout.size,
+            .alignment = layout.alignment,
+            .payload_size = layout.payload_size,
+            .payload_alignment = layout.payload_alignment,
+            .padding_size = layout.padding_size,
+            .storage_count = layout.storage_count,
+            .payload_field_index = layout.payload_field_index,
+        };
+        for (summary.cases, 0..) |case, index| {
+            shape.cases[index].spelling = case.name.text;
+            if (case.ty) |payload_type_expr| {
+                const payload_ty = self.executableValueType(payload_type_expr);
+                if (payload_ty == .unknown or payload_ty == .value or payload_ty == .void or payload_ty == .never)
+                    return false;
+                shape.cases[index].has_payload = true;
+                shape.cases[index].payload_ty = payload_ty;
+                shape.cases[index].payload_type_id = try self.internTypeId(payload_ty);
+            }
+        }
+        try self.executable_tagged_union_types.append(self.allocator, shape);
+        for (summary.cases) |case| if (case.ty) |payload_type_expr| {
+            const payload_ty = self.executableValueType(payload_type_expr);
+            if (!try self.internExecutableTypeExpr(payload_ty, payload_type_expr)) return false;
+        };
+        complete = true;
+        return true;
     }
 
     fn internExecutablePackedBitsType(self: *FunctionBuilder, ty: ValueType, summary: PackedBitsSummary) !bool {
@@ -10636,9 +10804,9 @@ const FunctionBuilder = struct {
         };
         for (fields, 0..) |field, index| {
             var field_ty = if (directAtomicPayloadTypeExprAlias(field.ty, self.aliases, true)) |payload|
-                valueTypeFromTypeAlias(payload, self.enums, self.structs, self.packed_bits, self.aliases)
+                self.executableValueType(payload)
             else
-                valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                self.executableValueType(field.ty);
             if (field_ty == .array and field_ty.array.length == null) {
                 const resolved_field = aggregateTargetTypeAlias(field.ty, self.aliases);
                 const array = switch (resolved_field.kind) {
@@ -10673,6 +10841,7 @@ const FunctionBuilder = struct {
             },
             .closed_enum, .open_enum => if (!try self.internExecutableEnumType(field_ty)) return false,
             .result => if (!try self.internExecutableResultType(field_ty, field.ty)) return false,
+            .tagged_union => if (!try self.internExecutableTaggedUnionType(field_ty)) return false,
             .array => {
                 // Nested fixed arrays are an LLVM layout requirement, not a
                 // reason to invalidate an otherwise complete executable body.
@@ -10992,6 +11161,9 @@ const FunctionBuilder = struct {
 
     fn executableAggregateRequiresPlainAccess(self: *const FunctionBuilder, ty: ValueType) bool {
         if (mir_model.executableAggregateCopyAlignment(ty) == null) return false;
+        if (ty == .tagged_union) for (self.executable_tagged_union_types.items) |shape| {
+            if (sameValueType(shape.ty, ty)) return true;
+        };
         for (self.executable_aggregate_types.items) |shape| {
             if (!sameValueType(shape.ty, ty)) continue;
             return shape.construction != .declared_struct;
@@ -11804,7 +11976,7 @@ const FunctionBuilder = struct {
     }
 
     fn buildGlobalInitializer(self: *FunctionBuilder, ty: ast.TypeExpr, initializer: ast.Expr) anyerror!void {
-        const target_ty = valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        const target_ty = self.executableValueType(ty);
         const previous_target = self.assignment_target;
         const previous_target_ty = self.assignment_target_ty;
         const previous_target_type_expr = self.assignment_target_type_expr;
@@ -11854,9 +12026,9 @@ const FunctionBuilder = struct {
             .let_decl, .var_decl => |local| {
                 const ty_expr = local.ty orelse if (local.init) |init_expr| try self.inferredLocalTypeExpr(init_expr) else null;
                 const ty = if (local.ty) |local_ty|
-                    valueTypeFromTypeAlias(local_ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                    self.executableValueType(local_ty)
                 else if (ty_expr) |inferred_ty|
-                    valueTypeFromTypeAlias(inferred_ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                    self.executableValueType(inferred_ty)
                 else if (local.init) |init_expr|
                     self.exprType(init_expr)
                 else
@@ -11871,7 +12043,7 @@ const FunctionBuilder = struct {
                 else
                     null;
                 var executable_ty = if (executable_ty_expr) |storage_type|
-                    valueTypeFromTypeAlias(storage_type, self.enums, self.structs, self.packed_bits, self.aliases)
+                    self.executableValueType(storage_type)
                 else
                     ty;
                 // `ValueType` cannot evaluate named/comptime array lengths by
@@ -11893,7 +12065,7 @@ const FunctionBuilder = struct {
                             try self.appendOwnedTargetTypeFact(
                                 .inferred_local,
                                 inferred_ty,
-                                valueTypeFromTypeAlias(inferred_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                                self.executableValueType(inferred_ty),
                                 init_expr.span,
                                 local.names[0].text,
                                 null,
@@ -12560,7 +12732,7 @@ const FunctionBuilder = struct {
                     const payload_ty = unionCasePayloadType(info, tag_bind.tag.text) orelse break :blk null;
                     break :blk .{
                         .name = tag_bind.binding.text,
-                        .ty = valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                        .ty = self.executableValueType(payload_ty),
                         .ty_expr = payload_ty,
                     };
                 }
@@ -12659,18 +12831,21 @@ const FunctionBuilder = struct {
         try self.addInstr(.binary, "switch_subject", .branch, span);
         const subject_type_expr = self.switchSubjectTypeExpr(node.subject) orelse booleanSwitchSubjectType(node);
         if (subject_type_expr) |ty| {
-            try self.appendTargetTypeFact(.switch_subject, ty, valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases), node.subject.span);
+            try self.appendTargetTypeFact(.switch_subject, ty, self.executableValueType(ty), node.subject.span);
         } else return error.InvalidMirTargetTypeFacts;
         const subject_source = self.sourcePoint(node.subject.span);
         const subject_ty = self.exprType(node.subject);
         const subject_type_id = try self.internTypeId(subject_ty);
         const variant_switch = executableVariantSwitch(node, subject_ty);
+        const tagged_union_switch = subject_ty == .tagged_union;
+        if (tagged_union_switch and !try self.internExecutableTaggedUnionType(subject_ty))
+            self.executable_supported = false;
         var synthetic_subject: ?LocalId = null;
         var executable_subject = try self.ensureExecutableExpr(node.subject);
         var executable_boolean_subject = executable_subject.isValid() and
             executable_subject.index() < self.executable_expressions.items.len and
             sameValueType(self.executable_expressions.items[executable_subject.index()].result_ty, .bool);
-        if (variant_switch) |variant| {
+        if (variant_switch != null or tagged_union_switch) {
             const subject_local = try self.appendSyntheticIfLetSubjectLocal();
             synthetic_subject = subject_local;
             try self.appendExecutableStatement(subject_source, .{ .local_init = .{
@@ -12681,15 +12856,25 @@ const FunctionBuilder = struct {
                 .mutable = false,
             } });
             const stored_subject = try self.appendExecutableLocalValue(subject_local, subject_ty, subject_type_id, subject_source);
-            executable_subject = try self.appendExecutableVariantOperation(
-                subject_source,
-                stored_subject,
-                .bool,
-                try self.internTypeId(.bool),
-                variant.test_kind,
-                false,
-            );
-            executable_boolean_subject = true;
+            if (variant_switch) |variant| {
+                executable_subject = try self.appendExecutableVariantOperation(
+                    subject_source,
+                    stored_subject,
+                    .bool,
+                    try self.internTypeId(.bool),
+                    variant.test_kind,
+                    false,
+                );
+                executable_boolean_subject = true;
+            } else {
+                executable_subject = try self.appendExecutableTaggedUnionOperation(
+                    subject_source,
+                    stored_subject,
+                    .{ .integer = "u32" },
+                    try self.internTypeId(.{ .integer = "u32" }),
+                    null,
+                );
+            }
         }
         try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = executable_subject } });
         try self.buildExpr(node.subject);
@@ -12698,6 +12883,11 @@ const FunctionBuilder = struct {
 
         const dispatch_id = self.current;
         const after_id = try self.addBlock("switch_after");
+        if (tagged_union_switch and !switchHasWildcardArm(node)) {
+            const trap_id = try self.addBlock("switch_invalid_representation");
+            self.blocks.items[trap_id].terminator = .{ .trap_ = .InvalidRepresentation };
+            try self.addSuccessor(dispatch_id, trap_id);
+        }
         var executable_true_arm: ?usize = null;
         var executable_false_arm: ?usize = null;
         for (node.arms, 0..) |arm, arm_index| {
@@ -12726,6 +12916,12 @@ const FunctionBuilder = struct {
                 const marker = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 marker.typed_switch_patterns = patterns.values;
                 marker.typed_switch_pattern_count = patterns.count;
+            } else if (tagged_union_switch) {
+                if (self.normalizedTaggedUnionSwitchPatterns(subject_ty, arm.patterns)) |patterns| {
+                    const marker = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                    marker.typed_switch_patterns = patterns.values;
+                    marker.typed_switch_pattern_count = patterns.count;
+                }
             }
             const narrowed_binding = if (arm.patterns.len > 0) self.switchNarrowedBinding(node.subject, arm.patterns[0]) else null;
             var had_previous_type = false;
@@ -12777,6 +12973,33 @@ const FunctionBuilder = struct {
                             binding_type_id,
                             kind,
                             true,
+                        );
+                        try self.appendExecutableStatement(self.sourcePoint(arm.patterns[0].span), .{ .local_init = .{
+                            .local = binding_local,
+                            .ty = binding.ty,
+                            .type_id = binding_type_id,
+                            .value = payload,
+                            .mutable = false,
+                        } });
+                    } else if (tagged_union_switch) {
+                        const case_index = self.taggedUnionPatternCaseIndex(subject_ty, arm.patterns[0]) orelse {
+                            self.executable_supported = false;
+                            return error.InvalidMirTargetTypeFacts;
+                        };
+                        const binding_type_complete = if (binding.ty_expr) |ty_expr|
+                            try self.internExecutableTypeExpr(binding.ty, ty_expr)
+                        else
+                            try self.internExecutableEnumType(binding.ty);
+                        if (!binding_type_complete) self.executable_supported = false;
+                        const binding_local = try self.internExecutableLocal(binding.name);
+                        const binding_type_id = try self.internTypeId(binding.ty);
+                        const stored_subject = try self.appendExecutableLocalValue(subject_local, subject_ty, subject_type_id, subject_source);
+                        const payload = try self.appendExecutableTaggedUnionOperation(
+                            self.sourcePoint(arm.patterns[0].span),
+                            stored_subject,
+                            binding.ty,
+                            binding_type_id,
+                            @intCast(case_index),
                         );
                         try self.appendExecutableStatement(self.sourcePoint(arm.patterns[0].span), .{ .local_init = .{
                             .local = binding_local,
@@ -12920,6 +13143,7 @@ const FunctionBuilder = struct {
     // return type into the destination local so neither backend has to
     // rediscover a type merely to allocate an unannotated binding.
     fn inferredLocalCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        if (self.qualifiedUnionConstructorTypeExpr(call)) |ty| return ty;
         if (self.dynDispatchCallTarget(call)) |target| return target.result_type_expr;
         if (self.isDynDispatchMember(call.callee.*)) return null;
         if (self.atomicCallTargetKind(call.callee.*)) |kind| {
@@ -15829,10 +16053,10 @@ const FunctionBuilder = struct {
     /// classifier used by generic expression construction.
     fn resolvedAccessValueType(self: *FunctionBuilder, expr: ast.Expr) !ValueType {
         if (self.typeExprForExpr(expr)) |ty| {
-            return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            return self.executableValueType(ty);
         }
         if (try self.expressionResultTypeExpr(expr)) |ty| {
-            return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            return self.executableValueType(ty);
         }
         return self.exprType(expr);
     }
@@ -16098,7 +16322,7 @@ const FunctionBuilder = struct {
 
     fn qualifiedUnionConstructorCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
         const ty = self.qualifiedUnionConstructorTypeExpr(call) orelse return null;
-        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return self.executableValueType(ty);
     }
 
     fn targetTypeForTargetTypedCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {
@@ -18202,6 +18426,53 @@ const FunctionBuilder = struct {
         return result;
     }
 
+    fn normalizedTaggedUnionSwitchPatterns(self: *FunctionBuilder, subject_ty: ValueType, patterns: []const ast.Pattern) ?NormalizedSwitchPatterns {
+        var result: NormalizedSwitchPatterns = .{};
+        if (patterns.len == 0) {
+            result.values[0] = .wildcard;
+            result.count = 1;
+            return result;
+        }
+        if (patterns.len > Instruction.max_switch_patterns) return null;
+        for (patterns, 0..) |pattern, index| {
+            result.values[index] = switch (pattern.kind) {
+                .wildcard => .wildcard,
+                .tag, .tag_bind => .{ .scalar = .{
+                    .negative = false,
+                    .magnitude = self.taggedUnionPatternCaseIndex(subject_ty, pattern) orelse return null,
+                } },
+                else => return null,
+            };
+        }
+        result.count = patterns.len;
+        return result;
+    }
+
+    fn taggedUnionPatternCaseIndex(self: *FunctionBuilder, subject_ty: ValueType, pattern: ast.Pattern) ?usize {
+        const union_name = switch (subject_ty) {
+            .tagged_union => |name| name,
+            else => return null,
+        };
+        const tag_name = switch (pattern.kind) {
+            .tag => |tag| tag.text,
+            .tag_bind => |tag_bind| tag_bind.tag.text,
+            else => return null,
+        };
+        const info = self.unions.get(union_name) orelse return null;
+        for (info.cases, 0..) |case, index| {
+            if (std.mem.eql(u8, case.name.text, tag_name)) return index;
+        }
+        return null;
+    }
+
+    fn switchHasWildcardArm(node: ast.Switch) bool {
+        for (node.arms) |arm| {
+            if (arm.patterns.len == 0) return true;
+            for (arm.patterns) |pattern| if (pattern.kind == .wildcard) return true;
+        }
+        return false;
+    }
+
     // Structural equality of two simple place expressions (identifiers and `base.field` chains),
     // by text. Sound because facts only ever hold ident operands, and any binding change to an
     // ident clears all facts, so equal text at a use site denotes the same live value.
@@ -19069,7 +19340,7 @@ const FunctionBuilder = struct {
             .ident => |ident| self.local_types.get(ident.text) orelse self.globals.get(ident.text) orelse valueTypeFromExpr(current),
             .cast => |node| valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases),
             .call => |node| if (self.qualifiedUnionConstructorTypeExpr(node)) |ty|
-                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                self.executableValueType(ty)
             else if (self.bitcastCallValueType(node)) |ty|
                 ty
             else if (self.enumRawCallTarget(node)) |target|
@@ -19112,7 +19383,7 @@ const FunctionBuilder = struct {
             else
                 self.memberType(node),
             .deref, .index, .slice => if (self.typeExprForExpr(expr)) |ty|
-                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                self.executableValueType(ty)
             else
                 .unknown,
             else => valueTypeFromExpr(current),
@@ -19343,6 +19614,49 @@ const FunctionBuilder = struct {
         return null;
     }
 
+    const ExecutableTaggedUnionConstructor = struct {
+        ty: ValueType,
+        case_index: usize,
+        payload_type_expr: ?ast.TypeExpr,
+    };
+
+    fn executableTaggedUnionConstructor(
+        self: *FunctionBuilder,
+        call: anytype,
+        expected_type_expr: ?ast.TypeExpr,
+    ) ?ExecutableTaggedUnionConstructor {
+        var union_name: []const u8 = undefined;
+        var case_name: []const u8 = undefined;
+        if (memberCallee(call.callee.*)) |member| {
+            const owner = switch (member.base.kind) {
+                .ident => |ident| ident.text,
+                else => return null,
+            };
+            if (!self.unions.contains(owner)) return null;
+            union_name = owner;
+            case_name = member.name.text;
+        } else {
+            const target_type_expr = expected_type_expr orelse return null;
+            union_name = unionTypeNameAlias(target_type_expr, self.aliases) orelse return null;
+            if (!self.unions.contains(union_name)) return null;
+            case_name = calleeIdentName(call.callee.*) orelse return null;
+            if (self.summaries.contains(case_name)) return null;
+        }
+        if (call.type_args.len != 0) return null;
+        const summary = self.unions.get(union_name) orelse return null;
+        for (summary.cases, 0..) |case, index| {
+            if (!std.mem.eql(u8, case.name.text, case_name)) continue;
+            const expected_args: usize = if (case.ty == null) 0 else 1;
+            if (call.args.len != expected_args) return null;
+            return .{
+                .ty = .{ .tagged_union = union_name },
+                .case_index = index,
+                .payload_type_expr = case.ty,
+            };
+        }
+        return null;
+    }
+
     fn reflectionOrByteViewCallTypeExpr(_: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
         if (reflectionCallTargetKind(call) != null) return ast_query.simpleNameType("usize", call.callee.*.span);
         return ast_query.byteViewCallReturnType(call);
@@ -19369,7 +19683,7 @@ const FunctionBuilder = struct {
     fn structFieldType(self: *FunctionBuilder, struct_name: []const u8, field_name: []const u8) ?ValueType {
         if (self.structs.get(struct_name)) |info| {
             for (info.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, field_name)) return valueTypeFromTypeAlias(field.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                if (std.mem.eql(u8, field.name.text, field_name)) return self.executableValueType(field.ty);
             }
         }
         if (self.packed_bits.get(struct_name)) |info| {

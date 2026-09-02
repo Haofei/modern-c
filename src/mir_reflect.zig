@@ -68,6 +68,10 @@ fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 
                 const layout = comptimeStructLayout(env, info, depth + 1, null) orelse return null;
                 return layout.size;
             }
+            if (env.unions.get(name.text)) |info| {
+                const layout = taggedUnionLayout(env, info, depth + 1) orelse return null;
+                return @intCast(layout.size);
+            }
             if (env.enums.get(name.text)) |info| {
                 const repr = info.repr orelse simpleNameType("isize", ty.span);
                 return comptimeSizeOf(env, repr, depth + 1);
@@ -104,6 +108,10 @@ fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128
             if (env.structs.get(name.text)) |info| {
                 const layout = comptimeStructLayout(env, info, depth + 1, null) orelse return null;
                 return layout.alignment;
+            }
+            if (env.unions.get(name.text)) |info| {
+                const layout = taggedUnionLayout(env, info, depth + 1) orelse return null;
+                return @intCast(layout.alignment);
             }
             if (env.enums.get(name.text)) |info| {
                 const repr = info.repr orelse simpleNameType("isize", ty.span);
@@ -229,6 +237,10 @@ fn comptimeStructLayout(env: *const ReflectEnv, info: StructSummary, depth: usiz
 
 fn taggedUnionTagSize() i128 {
     return 4;
+}
+
+pub fn taggedUnionLayout(env: *const ReflectEnv, info: mir_summary.UnionSummary, depth: usize) ?type_layout.ComptimeTaggedUnionLayout {
+    return type_layout.comptimeTaggedUnionLayout(*const ReflectEnv, env, info.cases, depth, comptimeSizeOf, comptimeAlignOf);
 }
 
 fn typeName(ty: ast.TypeExpr) ?[]const u8 {

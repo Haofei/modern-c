@@ -28,6 +28,61 @@ pub const ComptimeOptionalLayout = struct {
     payload_offset: i128,
 };
 
+/// Canonical layout of a tagged union represented as a 32-bit discriminant,
+/// optional padding, and maximally aligned payload storage.  Keeping this in
+/// the shared layout layer prevents MIR admission and LLVM emission from
+/// independently reconstructing the ABI.
+pub const ComptimeTaggedUnionLayout = struct {
+    size: u64,
+    alignment: u64,
+    payload_size: u64,
+    payload_alignment: u64,
+    padding_size: u64,
+    storage_count: u64,
+    payload_field_index: u8,
+};
+
+pub fn comptimeTaggedUnionLayout(
+    comptime Ctx: type,
+    ctx: Ctx,
+    cases: []const ast.UnionCase,
+    depth: usize,
+    comptime sizeOf: fn (Ctx, ast.TypeExpr, usize) ?i128,
+    comptime alignOf: fn (Ctx, ast.TypeExpr, usize) ?i128,
+) ?ComptimeTaggedUnionLayout {
+    if (depth > 32) return null;
+    var payload_size: u64 = 1;
+    var payload_alignment: u64 = 1;
+    for (cases) |case| {
+        const ty = case.ty orelse continue;
+        const size = sizeOf(ctx, ty, depth + 1) orelse return null;
+        const alignment = alignOf(ctx, ty, depth + 1) orelse return null;
+        if (size < 0 or alignment <= 0) return null;
+        const size_u64 = std.math.cast(u64, size) orelse return null;
+        const alignment_u64 = std.math.cast(u64, alignment) orelse return null;
+        payload_size = @max(payload_size, size_u64);
+        payload_alignment = @max(payload_alignment, alignment_u64);
+    }
+    if (payload_alignment != 1 and payload_alignment != 2 and
+        payload_alignment != 4 and payload_alignment != 8) return null;
+    const payload_offset = alignForward(@as(i128, 4), @as(i128, @intCast(payload_alignment))) orelse return null;
+    const aligned_payload_size = alignForward(@as(i128, @intCast(payload_size)), @as(i128, @intCast(payload_alignment))) orelse return null;
+    const total_alignment = @max(@as(u64, 4), payload_alignment);
+    const payload_end = comptimeLayoutAdd(payload_offset, aligned_payload_size) orelse return null;
+    const size = alignForward(payload_end, @as(i128, @intCast(total_alignment))) orelse return null;
+    const payload_offset_u64 = std.math.cast(u64, payload_offset) orelse return null;
+    const aligned_payload_size_u64 = std.math.cast(u64, aligned_payload_size) orelse return null;
+    return .{
+        .size = std.math.cast(u64, size) orelse return null,
+        .alignment = total_alignment,
+        .payload_size = payload_size,
+        .payload_alignment = payload_alignment,
+        .padding_size = payload_offset_u64 - 4,
+        .storage_count = @max(@as(u64, 1), aligned_payload_size_u64 / payload_alignment),
+        .payload_field_index = if (payload_offset_u64 == 4) 1 else 2,
+    };
+}
+
 /// Layout of the tagged value-optional representation `{ bool present; T value; }`.
 /// Pointer and fat-pointer niche optionals bypass this helper and retain their child layout.
 pub fn comptimeTaggedOptionalLayout(payload_size: i128, payload_alignment: i128) ?ComptimeOptionalLayout {

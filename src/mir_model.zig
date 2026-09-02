@@ -145,6 +145,7 @@ pub const ValueType = union(enum) {
     closed_enum: []const u8,
     open_enum: []const u8,
     struct_: []const u8,
+    tagged_union: []const u8,
     result: ResultShape,
     contract,
     branch,
@@ -173,6 +174,7 @@ pub const ValueType = union(enum) {
             .closed_enum => |n| n,
             .open_enum => |n| n,
             .struct_ => |n| n,
+            .tagged_union => |n| n,
             .result => "Result",
             .contract => "contract",
             .branch => "branch",
@@ -199,6 +201,7 @@ pub const ValueType = union(enum) {
             .closed_enum => |spelling| std.mem.eql(u8, spelling, right.closed_enum),
             .open_enum => |spelling| std.mem.eql(u8, spelling, right.open_enum),
             .struct_ => |spelling| std.mem.eql(u8, spelling, right.struct_),
+            .tagged_union => |spelling| std.mem.eql(u8, spelling, right.tagged_union),
             .result => |shape| std.mem.eql(u8, shape.ok, right.result.ok) and std.mem.eql(u8, shape.err, right.result.err),
             else => true,
         };
@@ -960,7 +963,7 @@ pub fn executableStorageAlignment(enum_types: []const ExecutableEnumType, ty: Va
 /// renderers copy the complete value mechanically.
 pub fn executableAggregateCopyAlignment(ty: ValueType) ?u16 {
     return switch (ty) {
-        .array, .struct_, .result, .nullable_value => 1,
+        .array, .struct_, .tagged_union, .result, .nullable_value => 1,
         else => null,
     };
 }
@@ -1243,6 +1246,13 @@ pub const ExecutableExpression = struct {
         /// Extract the payload selected by a preceding variant test. Control
         /// flow, not this operation, proves that the requested variant is live.
         variant_payload: struct { operand: ExprId, kind: ExecutableVariantKind },
+        /// Construct one case of a nominal tagged union. `case_index` is the
+        /// declaration-order discriminant owned by ExecutableTaggedUnionType.
+        tagged_union_construct: struct { case_index: u32, payload: ?ExprId = null },
+        /// Read the fixed u32 discriminant from a materialized tagged union.
+        tagged_union_tag: ExprId,
+        /// Read the payload for the case selected by the enclosing switch.
+        tagged_union_payload: struct { operand: ExprId, case_index: u32 },
         /// Consume a nullable pointer after an exact `Unwrap` exceptional
         /// edge. The result is the same machine pointer with its non-null
         /// obligation made explicit; backends only encode this checked MIR
@@ -1824,6 +1834,30 @@ pub const ExecutableResultType = struct {
 
 pub const max_executable_switch_cases: usize = 8;
 
+pub const ExecutableTaggedUnionCase = struct {
+    spelling: []const u8 = "",
+    payload_ty: ValueType = .void,
+    payload_type_id: TypeId = .invalid,
+    has_payload: bool = false,
+};
+
+/// Canonical nominal identity, cases, and machine layout for a tagged union.
+/// Both renderers consume this table; neither may reopen the AST declaration.
+pub const ExecutableTaggedUnionType = struct {
+    type_id: TypeId,
+    ty: ValueType,
+    tag_type_id: TypeId,
+    cases: [max_executable_switch_cases]ExecutableTaggedUnionCase = [_]ExecutableTaggedUnionCase{.{}} ** max_executable_switch_cases,
+    case_count: usize = 0,
+    size: u64,
+    alignment: u64,
+    payload_size: u64,
+    payload_alignment: u64,
+    padding_size: u64,
+    storage_count: u64,
+    payload_field_index: u8,
+};
+
 pub const ExecutableSwitchValue = union(enum) {
     unsigned: u128,
     signed: i128,
@@ -1932,6 +1966,7 @@ pub const ExecutableBody = struct {
     aggregate_types: []ExecutableAggregateType = &.{},
     enum_types: []ExecutableEnumType = &.{},
     result_types: []ExecutableResultType = &.{},
+    tagged_union_types: []ExecutableTaggedUnionType = &.{},
     expressions: []ExecutableExpression = &.{},
     trap_edges: []ExecutableTrapEdge = &.{},
     places: []ExecutablePlace = &.{},
@@ -1957,6 +1992,7 @@ pub const ExecutableBody = struct {
         if (self.aggregate_types.len != 0) allocator.free(self.aggregate_types);
         if (self.enum_types.len != 0) allocator.free(self.enum_types);
         if (self.result_types.len != 0) allocator.free(self.result_types);
+        if (self.tagged_union_types.len != 0) allocator.free(self.tagged_union_types);
         if (self.expressions.len != 0) allocator.free(self.expressions);
         if (self.trap_edges.len != 0) allocator.free(self.trap_edges);
         if (self.places.len != 0) allocator.free(self.places);
@@ -2435,6 +2471,7 @@ pub fn executableRaceAggregateTypeSupported(body: *const ExecutableBody, type_id
 /// changing active-member or bitfield semantics.
 pub fn executableAggregateRequiresPlainAccess(body: *const ExecutableBody, type_id: TypeId, ty: ValueType) bool {
     if (executableAggregateCopyAlignment(ty) == null or !type_id.isValid()) return false;
+    for (body.tagged_union_types) |shape| if (shape.type_id.eql(type_id) and ValueType.eql(shape.ty, ty)) return true;
     for (body.aggregate_types) |shape| {
         if (!shape.type_id.eql(type_id) or !ValueType.eql(shape.ty, ty)) continue;
         return shape.construction == .packed_bits or shape.construction == .c_union;

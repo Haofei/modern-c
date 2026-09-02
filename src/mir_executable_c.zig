@@ -1020,6 +1020,40 @@ fn emitExpressionOperation(
             }
             try out.append(allocator, ')');
         },
+        .tagged_union_construct => |operation| {
+            const shape = taggedUnionType(body, expression.type_id) orelse return error.InvalidExpression;
+            if (operation.case_index >= shape.case_count) return error.InvalidExpression;
+            const case = shape.cases[operation.case_index];
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, shape.ty);
+            try out.appendSlice(allocator, "){ .tag = ");
+            try appendIdent(allocator, out, shape.ty.tagged_union);
+            try out.appendSlice(allocator, "Tag_");
+            try appendIdent(allocator, out, case.spelling);
+            if (case.has_payload) {
+                const payload = operation.payload orelse return error.InvalidExpression;
+                try out.appendSlice(allocator, ", .payload.");
+                try appendIdent(allocator, out, case.spelling);
+                try out.appendSlice(allocator, " = ");
+                try emitExpression(allocator, out, body, payload, depth + 1);
+            } else if (operation.payload != null) return error.InvalidExpression;
+            try out.appendSlice(allocator, " })");
+        },
+        .tagged_union_tag => |operand| {
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, operand, depth + 1);
+            try out.appendSlice(allocator, ").tag");
+        },
+        .tagged_union_payload => |operation| {
+            const operand = expressionById(body, operation.operand) orelse return error.InvalidExpression;
+            const shape = taggedUnionType(body, operand.type_id) orelse return error.InvalidExpression;
+            if (operation.case_index >= shape.case_count or !shape.cases[operation.case_index].has_payload)
+                return error.InvalidExpression;
+            try out.append(allocator, '(');
+            try emitExpression(allocator, out, body, operation.operand, depth + 1);
+            try out.appendSlice(allocator, ").payload.");
+            try appendIdent(allocator, out, shape.cases[operation.case_index].spelling);
+        },
         .try_unwrap => |operand_id| {
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, operand_id, depth + 1);
@@ -1538,6 +1572,9 @@ fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.Executabl
         .optional_none => optionalConstructionSupported(body, expression, null),
         .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
+        .tagged_union_construct => |operation| taggedUnionConstructionSupported(body, expression, operation),
+        .tagged_union_tag => |operand| taggedUnionTagSupported(body, expression, operand),
+        .tagged_union_payload => |operation| taggedUnionPayloadSupported(body, expression, operation),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
         .try_map_error => |operation| tryMapErrorSupported(body, expression, operation),
@@ -2478,6 +2515,36 @@ fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const m
     if (!type_id.isValid()) return null;
     for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
     return null;
+}
+
+fn taggedUnionType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableTaggedUnionType {
+    if (!type_id.isValid()) return null;
+    for (body.tagged_union_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
+    return null;
+}
+
+fn taggedUnionConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_construct")) bool {
+    const shape = taggedUnionType(body, expression.type_id) orelse return false;
+    if (!sameValueType(shape.ty, expression.result_ty) or operation.case_index >= shape.case_count) return false;
+    const case = shape.cases[operation.case_index];
+    if (!case.has_payload) return operation.payload == null;
+    const payload = expressionById(body, operation.payload orelse return false) orelse return false;
+    return sameValueType(payload.result_ty, case.payload_ty) and payload.type_id.eql(case.payload_type_id);
+}
+
+fn taggedUnionTagSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    const operand = expressionById(body, operand_id) orelse return false;
+    const shape = taggedUnionType(body, operand.type_id) orelse return false;
+    return sameValueType(operand.result_ty, shape.ty) and sameValueType(expression.result_ty, .{ .integer = "u32" }) and
+        expression.type_id.eql(shape.tag_type_id);
+}
+
+fn taggedUnionPayloadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_payload")) bool {
+    const operand = expressionById(body, operation.operand) orelse return false;
+    const shape = taggedUnionType(body, operand.type_id) orelse return false;
+    if (!sameValueType(operand.result_ty, shape.ty) or operation.case_index >= shape.case_count) return false;
+    const case = shape.cases[operation.case_index];
+    return case.has_payload and sameValueType(expression.result_ty, case.payload_ty) and expression.type_id.eql(case.payload_type_id);
 }
 
 fn aggregateTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableAggregateType {
@@ -4168,7 +4235,7 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .domain_integer => |shape| primitiveType(shape.child) != null,
         .pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
         .nullable_pointer => |shape| shape.kind != .slice and (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
-        .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
+        .closed_enum, .open_enum, .struct_, .tagged_union => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
             shape.array_length != null and shape.array_length.? != 0 and
                 shape.field_count != 0 and arrayElementTypeSupported(body, shape.field_types[0], shape.field_dyn_trait_symbols[0], 0)
@@ -4441,6 +4508,12 @@ fn expressionDependsOn(body: *const mir.ExecutableBody, root: mir.ExprId, candid
         .member => |member| expressionDependsOn(body, member.base, candidate, depth + 1),
         .variant_test => |variant| expressionDependsOn(body, variant.operand, candidate, depth + 1),
         .variant_payload => |variant| expressionDependsOn(body, variant.operand, candidate, depth + 1),
+        .tagged_union_construct => |operation| if (operation.payload) |payload|
+            expressionDependsOn(body, payload, candidate, depth + 1)
+        else
+            false,
+        .tagged_union_tag => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
+        .tagged_union_payload => |operation| expressionDependsOn(body, operation.operand, candidate, depth + 1),
         .try_map_error => |mapped| expressionDependsOn(body, mapped.operand, candidate, depth + 1) or switch (mapped.mapper) {
             .conversion => false,
             .literal => |literal| expressionDependsOn(body, literal, candidate, depth + 1),
@@ -5002,7 +5075,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             try appendArrayElementTypeSuffix(allocator, out, body, shape.field_types[0], shape.field_dyn_trait_symbols[0], 0);
             try out.print(allocator, "_{d}", .{shape.array_length.?});
         },
-        .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
+        .closed_enum, .open_enum, .struct_, .tagged_union => |name| try appendIdent(allocator, out, name),
         .nullable_value => {
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
             if (shape.construction != .declared_struct or shape.ty != .nullable_value or shape.field_count != 2) return error.UnsupportedType;
@@ -5068,6 +5141,7 @@ fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: 
         .integer, .float => |name| try out.appendSlice(allocator, name),
         .address => try out.appendSlice(allocator, ty.name()),
         .struct_ => |name| try out.print(allocator, "mc_type_struct_{d}_{s}", .{ name.len, name }),
+        .tagged_union => |name| try out.print(allocator, "mc_type_union_{d}_{s}", .{ name.len, name }),
         // Enum declarations are emitted as nominal C typedefs, so Result
         // helper names use the same public suffix as the declaration path.
         // Encoding them as a generic source type name here produces a helper

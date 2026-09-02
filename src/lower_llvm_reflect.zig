@@ -31,10 +31,6 @@ const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const comptimeLayoutAdd = type_layout.comptimeLayoutAdd;
 const comptimeTaggedOptionalLayout = type_layout.comptimeTaggedOptionalLayout;
 
-fn castU64(value: i128) ?u64 {
-    return std.math.cast(u64, value);
-}
-
 pub const ReflectEnv = struct {
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     enum_types: *const std.StringHashMap(ast_bridge.EnumDecl),
@@ -282,48 +278,7 @@ pub fn comptimeStructLayout(env: *const ReflectEnv, struct_decl: ast_bridge.Stru
 }
 
 pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?TaggedUnionLayout {
-    const payload_size = taggedUnionPayloadSize(env, union_decl, depth + 1) orelse return null;
-    const payload_align = taggedUnionPayloadAlignment(env, union_decl, depth + 1) orelse return null;
-    if (payload_align != 1 and payload_align != 2 and payload_align != 4 and payload_align != 8) return null;
-    var payload_offset: i128 = 4;
-    payload_offset = alignForward(payload_offset, @intCast(payload_align)) orelse return null;
-    const payload_offset_u64 = castU64(payload_offset) orelse return null;
-    const aligned_payload_size = alignForward(@intCast(payload_size), @intCast(payload_align)) orelse return null;
-    const aligned_payload_size_u64 = castU64(aligned_payload_size) orelse return null;
-    const size = alignForward(comptimeLayoutAdd(payload_offset, aligned_payload_size) orelse return null, @intCast(@max(@as(u64, 4), payload_align))) orelse return null;
-    const size_u64 = castU64(size) orelse return null;
-    const storage_count = aligned_payload_size_u64 / payload_align;
-    return .{
-        .size = size_u64,
-        .alignment = @max(@as(u64, 4), payload_align),
-        .payload_size = payload_size,
-        .payload_alignment = payload_align,
-        .padding_size = payload_offset_u64 - 4,
-        .storage_count = @max(@as(u64, 1), storage_count),
-        .payload_field_index = if (payload_offset_u64 == 4) 1 else 2,
-    };
-}
-
-fn taggedUnionPayloadSize(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?u64 {
-    if (depth > 32) return null;
-    var size: u64 = 1;
-    for (union_decl.cases) |case| {
-        const ty = case.ty orelse continue;
-        const payload_size = comptimeSizeOf(env, ty, depth + 1) orelse return null;
-        size = @max(size, std.math.cast(u64, payload_size) orelse return null);
-    }
-    return size;
-}
-
-fn taggedUnionPayloadAlignment(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?u64 {
-    if (depth > 32) return null;
-    var alignment: u64 = 1;
-    for (union_decl.cases) |case| {
-        const ty = case.ty orelse continue;
-        const payload_alignment = comptimeAlignOf(env, ty, depth + 1) orelse return null;
-        alignment = @max(alignment, std.math.cast(u64, payload_alignment) orelse return null);
-    }
-    return alignment;
+    return type_layout.comptimeTaggedUnionLayout(*const ReflectEnv, env, union_decl.cases, depth, comptimeSizeOf, comptimeAlignOf);
 }
 
 fn packedBitsInfoForType(env: *const ReflectEnv, ty: ast_bridge.TypeExpr) ?PackedBitsInfo {

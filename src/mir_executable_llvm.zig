@@ -588,6 +588,7 @@ const Renderer = struct {
         if (ty == .value) return "ptr";
         if (depth >= mir.max_executable_operands) return error.Unsupported;
         if (enumTypeForValueType(self.body, ty)) |enum_ty| return self.typeTextDepth(enum_ty.repr_ty, depth + 1);
+        if (taggedUnionTypeForValueType(self.body, ty)) |shape| return self.taggedUnionTypeText(shape.*);
         if (resultTypeForValueType(self.body, ty)) |shape| {
             const ok_ty = try self.typeTextDepth(shape.ok_ty, depth + 1);
             const err_ty = try self.typeTextDepth(shape.err_ty, depth + 1);
@@ -1157,6 +1158,9 @@ const Renderer = struct {
             .optional_none => .{ .ty = ty, .spelling = "zeroinitializer" },
             .variant_test => |operation| try self.emitVariant(expression, operation.operand, operation.kind, false),
             .variant_payload => |operation| try self.emitVariant(expression, operation.operand, operation.kind, true),
+            .tagged_union_construct => |operation| try self.emitTaggedUnionConstruct(expression, operation),
+            .tagged_union_tag => |operand| try self.emitTaggedUnionTag(expression, operand),
+            .tagged_union_payload => |operation| try self.emitTaggedUnionPayload(expression, operation),
             .try_unwrap => |operand| try self.emitTryUnwrap(expression, operand),
             .try_propagate => |operand| try self.emitTryPropagate(expression, operand),
             .try_map_error => |operation| try self.emitTryMapError(expression, operation),
@@ -1229,6 +1233,61 @@ const Renderer = struct {
         const ty = try self.typeText(expression.result_ty);
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ value, operand.ty, operand.spelling, index });
         return .{ .ty = ty, .spelling = value };
+    }
+
+    fn taggedUnionTypeText(self: *Renderer, shape: mir.ExecutableTaggedUnionType) RenderError![]const u8 {
+        if (shape.payload_alignment == 0 or shape.storage_count == 0) return error.InvalidBody;
+        const storage = try std.fmt.allocPrint(self.allocator, "[{d} x i{d}]", .{ shape.storage_count, shape.payload_alignment * 8 });
+        if (shape.padding_size == 0) return std.fmt.allocPrint(self.allocator, "{{ i32, {s} }}", .{storage});
+        return std.fmt.allocPrint(self.allocator, "{{ i32, [{d} x i8], {s} }}", .{ shape.padding_size, storage });
+    }
+
+    fn emitTaggedUnionConstruct(self: *Renderer, expression: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_construct")) RenderError!Value {
+        if (!taggedUnionConstructionSupported(self.body, expression, operation)) return error.InvalidBody;
+        const shape = taggedUnionType(self.body, expression.type_id) orelse return error.InvalidBody;
+        const union_ty = try self.typeText(expression.result_ty);
+        const storage = try self.temp();
+        try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} zeroinitializer, ptr {s}\n", .{ storage, union_ty, union_ty, storage });
+        const tag_ptr = try self.temp();
+        try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n  store i32 {d}, ptr {s}\n", .{ tag_ptr, union_ty, storage, operation.case_index, tag_ptr });
+        if (operation.payload) |payload_id| {
+            const payload = try self.emitExpression(payload_id);
+            const payload_ptr = try self.temp();
+            try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n  store {s} {s}, ptr {s}\n", .{
+                payload_ptr,
+                union_ty,
+                storage,
+                shape.payload_field_index,
+                payload.ty,
+                payload.spelling,
+                payload_ptr,
+            });
+        }
+        const result = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, union_ty, storage });
+        return .{ .ty = union_ty, .spelling = result };
+    }
+
+    fn emitTaggedUnionTag(self: *Renderer, expression: mir.ExecutableExpression, operand_id: mir.ExprId) RenderError!Value {
+        if (!taggedUnionTagSupported(self.body, expression, operand_id)) return error.InvalidBody;
+        const operand = try self.emitExpression(operand_id);
+        const tag = try self.temp();
+        try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ tag, operand.ty, operand.spelling });
+        return .{ .ty = "i32", .spelling = tag };
+    }
+
+    fn emitTaggedUnionPayload(self: *Renderer, expression: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_payload")) RenderError!Value {
+        if (!taggedUnionPayloadSupported(self.body, expression, operation)) return error.InvalidBody;
+        const operand = try self.emitExpression(operation.operand);
+        const shape = taggedUnionType(self.body, self.body.expressions[operation.operand.index()].type_id) orelse return error.InvalidBody;
+        const storage = try self.temp();
+        try self.output.print(self.allocator, "  {s} = alloca {s}\n  store {s} {s}, ptr {s}\n", .{ storage, operand.ty, operand.ty, operand.spelling, storage });
+        const payload_ptr = try self.temp();
+        try self.output.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ payload_ptr, operand.ty, storage, shape.payload_field_index });
+        const payload_ty = try self.typeText(expression.result_ty);
+        const payload = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ payload, payload_ty, payload_ptr });
+        return .{ .ty = payload_ty, .spelling = payload };
     }
 
     fn emitRepresentationCheck(self: *Renderer, expression: mir.ExecutableExpression, check: anytype) RenderError!Value {
@@ -4147,6 +4206,12 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
     if (ty == .value) return true;
     if (depth >= mir.max_executable_operands) return false;
     if (enumTypeForValueType(body, ty)) |enum_ty| return llvmTypeSupportedDepth(body, enum_ty.repr_ty, depth + 1);
+    if (taggedUnionTypeForValueType(body, ty)) |shape| {
+        if (shape.case_count == 0 or shape.payload_alignment == 0 or shape.storage_count == 0) return false;
+        for (shape.cases[0..shape.case_count]) |case| if (case.has_payload and
+            !llvmTypeSupportedDepth(body, case.payload_ty, depth + 1)) return false;
+        return true;
+    }
     if (resultTypeForValueType(body, ty)) |shape|
         return llvmTypeSupportedDepth(body, shape.ok_ty, depth + 1) and
             llvmTypeSupportedDepth(body, shape.err_ty, depth + 1);
@@ -4167,6 +4232,17 @@ fn llvmTypeSupportedDepth(body: *const mir.ExecutableBody, ty: mir.ValueType, de
 fn aggregateType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableAggregateType {
     if (!type_id.isValid()) return null;
     for (body.aggregate_types) |*aggregate| if (aggregate.type_id.eql(type_id)) return aggregate;
+    return null;
+}
+
+fn taggedUnionType(body: *const mir.ExecutableBody, type_id: mir.TypeId) ?*const mir.ExecutableTaggedUnionType {
+    if (!type_id.isValid()) return null;
+    for (body.tagged_union_types) |*shape| if (shape.type_id.eql(type_id)) return shape;
+    return null;
+}
+
+fn taggedUnionTypeForValueType(body: *const mir.ExecutableBody, ty: mir.ValueType) ?*const mir.ExecutableTaggedUnionType {
+    for (body.tagged_union_types) |*shape| if (sameValueType(shape.ty, ty)) return shape;
     return null;
 }
 
@@ -4297,6 +4373,9 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .optional_none => optionalConstructionSupported(body, expression, null),
         .variant_test => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, false),
         .variant_payload => |operation| variantOperationSupported(body, expression, operation.operand, operation.kind, true),
+        .tagged_union_construct => |operation| taggedUnionConstructionSupported(body, expression, operation),
+        .tagged_union_tag => |operand| taggedUnionTagSupported(body, expression, operand),
+        .tagged_union_payload => |operation| taggedUnionPayloadSupported(body, expression, operation),
         .try_unwrap => |operand| tryUnwrapSupported(body, expression, operand),
         .try_propagate => |operand| tryPropagateSupported(body, expression, operand),
         .try_map_error => |operation| tryMapErrorSupported(body, expression, operation),
@@ -4305,6 +4384,36 @@ fn operationSupported(body: *const mir.ExecutableBody, expression: mir.Executabl
         .range_slice => |range| rangeSliceSupported(body, expression, range),
         .unsupported => false,
     };
+}
+
+fn taggedUnionConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_construct")) bool {
+    const shape = taggedUnionType(body, expression.type_id) orelse return false;
+    if (!sameValueType(shape.ty, expression.result_ty) or operation.case_index >= shape.case_count) return false;
+    const case = shape.cases[operation.case_index];
+    if (!case.has_payload) return operation.payload == null;
+    const payload_id = operation.payload orelse return false;
+    if (!expressionValid(body, payload_id)) return false;
+    const payload = body.expressions[payload_id.index()];
+    return sameValueType(payload.result_ty, case.payload_ty) and payload.type_id.eql(case.payload_type_id) and
+        llvmTypeSupported(body, payload.result_ty);
+}
+
+fn taggedUnionTagSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
+    if (!expressionValid(body, operand_id)) return false;
+    const operand = body.expressions[operand_id.index()];
+    const shape = taggedUnionType(body, operand.type_id) orelse return false;
+    return sameValueType(operand.result_ty, shape.ty) and sameValueType(expression.result_ty, .{ .integer = "u32" }) and
+        expression.type_id.eql(shape.tag_type_id);
+}
+
+fn taggedUnionPayloadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: @FieldType(mir.ExecutableExpression.Operation, "tagged_union_payload")) bool {
+    if (!expressionValid(body, operation.operand)) return false;
+    const operand = body.expressions[operation.operand.index()];
+    const shape = taggedUnionType(body, operand.type_id) orelse return false;
+    if (!sameValueType(operand.result_ty, shape.ty) or operation.case_index >= shape.case_count) return false;
+    const case = shape.cases[operation.case_index];
+    return case.has_payload and sameValueType(expression.result_ty, case.payload_ty) and
+        expression.type_id.eql(case.payload_type_id) and llvmTypeSupported(body, expression.result_ty);
 }
 
 fn dynBindSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
