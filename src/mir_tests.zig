@@ -978,6 +978,46 @@ test "executable MIR reports a stable unsupported expression reason" {
     try std.testing.expectEqualStrings("unsupported_borrow", mir_executable_body.incompleteReason(&function));
 }
 
+test "executable MIR distinguishes explicit backend rejection from migration fallback" {
+    const source =
+        \\fn targetless_array() -> u32 {
+        \\    .{ 1, 2 };
+        \\    return 0;
+        \\}
+        \\fn opaque_asm_operand(value: u32) -> u32 {
+        \\    unsafe {
+        \\        asm opaque volatile {
+        \\            "nop"
+        \\            in("r") value: u32
+        \\        }
+        \\    }
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_explicit_backend_rejection.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const array_function = functionByName(module_mir, "targetless_array") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        mir.ExecutableIncompleteReason.unsupported_targetless_array_literal,
+        array_function.executable_body.incomplete_reason,
+    );
+    const array_rejection = mir_executable_body.explicitUnsupported(&array_function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir_executable_body.ExplicitUnsupported.Kind.array, array_rejection.kind);
+    try std.testing.expectEqual(@as(usize, 2), array_rejection.source.line);
+
+    const asm_function = functionByName(module_mir, "opaque_asm_operand") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        mir.ExecutableIncompleteReason.unsupported_opaque_asm,
+        asm_function.executable_body.incomplete_reason,
+    );
+    const asm_rejection = mir_executable_body.explicitUnsupported(&asm_function) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir_executable_body.ExplicitUnsupported.Kind.asm_stmt, asm_rejection.kind);
+    try std.testing.expectEqual(@as(usize, 7), asm_rejection.source.line);
+}
+
 test "executable MIR owns direct global address place without a trap" {
     const source =
         \\global shared_counter: u32 = 0;

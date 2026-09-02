@@ -2090,11 +2090,13 @@ pub const ExecutableIncompleteReason = enum {
     unsupported_index,
     unsupported_call,
     unsupported_array_literal,
+    unsupported_targetless_array_literal,
     unsupported_struct_literal,
     unsupported_try,
     unsupported_block_expression,
     unsupported_unreachable_expression,
     unsupported_await,
+    unsupported_opaque_asm,
     compile_time_statement,
 };
 

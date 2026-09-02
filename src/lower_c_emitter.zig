@@ -659,6 +659,10 @@ pub const CEmitter = struct {
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs, &selected_path)) {
                 fallback_census.record(.c, .admitted, selected_path, canonical_status, canonical_detail, self.source_path, fn_mir);
                 continue;
+            } else if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
+                fallback_census.record(.c, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
+                self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
+                return error.UnsupportedCEmission;
             } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
                 fallback_census.record(.c, .fallback, .ast_fallback, canonical_status, canonical_detail, self.source_path, fn_mir);
                 try self.emitFunction(function, body, render_attrs);

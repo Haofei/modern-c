@@ -10481,7 +10481,7 @@ const FunctionBuilder = struct {
             },
             .array_literal => |items| array: {
                 const target_type_expr = expected_type_expr orelse
-                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
+                    break :array self.unsupportedExecutableExpression(.unsupported_targetless_array_literal);
                 const target = switch (aggregateTargetTypeAlias(target_type_expr, self.aliases).kind) {
                     .array => |value| value,
                     else => break :array self.unsupportedExecutableExpression(.unsupported_array_literal),
@@ -12829,8 +12829,11 @@ const FunctionBuilder = struct {
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .opaque_asm = asm_value })
                 else if (try self.executablePreciseAsm(asm_stmt)) |asm_value|
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .precise_asm = asm_value })
-                else
+                else {
+                    if (self.executable_incomplete_reason == .none)
+                        self.executable_incomplete_reason = .unsupported_opaque_asm;
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .unsupported);
+                }
                 if (!self.active_unsafe) try self.addInstr(.unsafe_check, "asm.opaque", .unknown, stmt.span);
                 try self.addInstr(.asm_effect, "opaque", .value, stmt.span);
                 if (self.naked) {

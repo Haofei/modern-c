@@ -13,6 +13,40 @@ pub fn isComplete(function: *const mir.Function) bool {
     return function.executable_body.isComplete();
 }
 
+pub const ExplicitUnsupported = struct {
+    kind: Kind,
+    source: mir.SourcePoint,
+
+    pub const Kind = enum {
+        array,
+        asm_stmt,
+    };
+
+    pub fn construct(self: ExplicitUnsupported) []const u8 {
+        return @tagName(self.kind);
+    }
+};
+
+/// Return a producer-owned, intentionally unsupported executable operation.
+/// These are language/backend rejection boundaries, not migration gaps, so
+/// codegen must fail closed instead of consulting a syntax-body fallback.
+pub fn explicitUnsupported(function: *const mir.Function) ?ExplicitUnsupported {
+    const body = &function.executable_body;
+    return switch (body.incomplete_reason) {
+        .unsupported_targetless_array_literal => blk: {
+            for (body.expressions) |expression_value| if (expression_value.operation == .unsupported)
+                break :blk .{ .kind = .array, .source = expression_value.source };
+            break :blk null;
+        },
+        .unsupported_opaque_asm => blk: {
+            for (body.statements) |statement_value| if (statement_value.operation == .unsupported)
+                break :blk .{ .kind = .asm_stmt, .source = statement_value.source };
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
 /// Coarse, stable reason for an incomplete canonical body.  This is migration
 /// telemetry only: admission still depends on `verify` + `complete`.  Keeping
 /// the classifier beside the canonical model lets the broad census rank the
