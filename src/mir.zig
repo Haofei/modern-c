@@ -9365,11 +9365,18 @@ const FunctionBuilder = struct {
         const operation: ExecutableExpression.Operation = switch (expr.kind) {
             .ident => |ident| if (self.executable_local_ids.get(ident.text)) |local|
                 .{ .local = local }
-            else if (self.globals.contains(ident.text))
-                .{ .load = .{
+            else if (self.globals.contains(ident.text)) global_load: {
+                if (mir_model.executableAggregateCopyAlignment(result_ty) != null) {
+                    const type_expr = self.global_type_exprs.get(ident.text) orelse
+                        break :global_load self.unsupportedExecutableExpression(.unsupported_array_literal);
+                    if (!try self.internExecutableTypeExpr(result_ty, type_expr))
+                        break :global_load self.unsupportedExecutableExpression(.unsupported_array_literal);
+                }
+                break :global_load .{ .load = .{
                     .place = try self.appendExecutablePlace(expr),
                     .access = self.executableMemoryAccess(expr, result_ty),
-                } }
+                } };
+            }
             else
                 .{ .symbol = try self.internExecutableFunctionSymbol(ident.text) },
             .int_literal => |literal| integer: {
