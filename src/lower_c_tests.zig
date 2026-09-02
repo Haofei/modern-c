@@ -12614,11 +12614,15 @@ test "lower-c emits cstr as immutable C string pointer" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * identity(char const * s);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "global_cstr = ((char const *)\"global\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "copied_cstr = ((char const *)\"global\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * s = ((char const *)\"abc\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * s = mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_InvalidRepresentation();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * return_cstr(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " = ((char const *)\"xyz\");") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return identity(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = identity(mc_exec_tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".len = 5") != null);
 }
 

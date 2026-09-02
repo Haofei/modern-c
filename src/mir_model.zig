@@ -911,6 +911,7 @@ pub const ExecutableRepresentationCheckKind = enum {
         return switch (kind) {
             .nonnull_pointer => switch (result) {
                 .pointer => |shape| shape.kind == .single,
+                .cstr => true,
                 else => false,
             },
             .valid_slice => switch (result) {

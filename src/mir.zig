@@ -10285,6 +10285,18 @@ const FunctionBuilder = struct {
             .operation = operation,
         });
         const representation_check_kind: ?mir_model.ExecutableRepresentationCheckKind = switch (result_ty) {
+            .cstr => switch (operation) {
+                .local => switch (expr.kind) {
+                    .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
+                    else => null,
+                },
+                .load, .member => .nonnull_pointer,
+                .direct_call, .indirect_call => switch (expr.kind) {
+                    .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .nonnull_pointer else null,
+                    else => null,
+                },
+                else => null,
+            },
             .pointer => |shape| switch (shape.kind) {
                 .single => switch (operation) {
                     .local => switch (expr.kind) {
