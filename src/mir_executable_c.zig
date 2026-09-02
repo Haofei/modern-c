@@ -1548,13 +1548,58 @@ fn dynBindSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
 
 fn opaqueValueExpressionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (expression.result_ty != .value or !expression.type_id.isValid()) return false;
+    if (dynTraitExpression(body, expression)) |_| return true;
     return switch (expression.operation) {
-        .local => |local| localById(body, local) != null and (dynLocal(body, local) or dynTraitParameter(body, local)),
         .direct_call => |call| call.argument_count <= call.arguments.len and
             symbolById(body, call.callee) != null and allExpressionsExist(body, call.arguments[0..call.argument_count]),
-        .load => |load| dynLoadTargetSupported(body, expression, load) and memoryLoadSupported(body, expression, load),
         else => false,
     };
+}
+
+/// Return the exact trait-object identity carried by a canonical expression.
+/// `.value` deliberately covers several unrelated representations, so callers
+/// must compare this SymbolId instead of accepting an opaque value by shape.
+fn dynTraitExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) ?mir.SymbolId {
+    if (expression.result_ty != .value or !expression.type_id.isValid()) return null;
+    return switch (expression.operation) {
+        .dyn_bind => |bind| if (dynBindSupported(body, expression)) bind.trait_symbol else null,
+        .local => |local| local_dyn: {
+            if (localById(body, local)) |identity| if (identity.dyn_trait_symbol_id.isValid())
+                break :local_dyn identity.dyn_trait_symbol_id;
+            for (body.parameters) |parameter| if (parameter.local.eql(local) and
+                parameter.dyn_trait_symbol_id.isValid()) break :local_dyn parameter.dyn_trait_symbol_id;
+            break :local_dyn null;
+        },
+        .load => |load| load_dyn: {
+            if (!dynLoadTargetSupported(body, expression, load) or !memoryLoadSupported(body, expression, load))
+                break :load_dyn null;
+            const place = placeById(body, load.place) orelse break :load_dyn null;
+            break :load_dyn mir.executableDynTraitPlace(body, place.*);
+        },
+        .member => |member| member_dyn: {
+            if (!memberSupported(body, expression, member)) break :member_dyn null;
+            const base = expressionById(body, member.base) orelse break :member_dyn null;
+            const shape = aggregateType(body, base.type_id) orelse break :member_dyn null;
+            const trait = shape.field_dyn_trait_symbols[member.field_index];
+            break :member_dyn if (trait.isValid()) trait else null;
+        },
+        .direct_call => |call| call_dyn: {
+            if (call.argument_count > call.arguments.len or !allExpressionsExist(body, call.arguments[0..call.argument_count]))
+                break :call_dyn null;
+            const callee = symbolById(body, call.callee) orelse break :call_dyn null;
+            break :call_dyn if (callee.kind == .function and callee.return_dyn_trait_symbol_id.isValid())
+                callee.return_dyn_trait_symbol_id
+            else
+                null;
+        },
+        else => null,
+    };
+}
+
+fn expressionMatchesDynTrait(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, expected: mir.SymbolId) bool {
+    if (!expected.isValid()) return false;
+    const actual = dynTraitExpression(body, expression) orelse return false;
+    return actual.eql(expected);
 }
 
 fn dynLocal(body: *const mir.ExecutableBody, local: mir.LocalId) bool {
@@ -2251,7 +2296,7 @@ fn structConstructionSupported(
                 if (shape.field_callable_signatures[field_index]) |signature|
                     callableExpressionMatches(body, operand.*, signature)
                 else
-                    shape.field_dyn_trait_symbols[field_index].isValid() and dynBindSupported(body, operand.*))) return false;
+                    expressionMatchesDynTrait(body, operand.*, shape.field_dyn_trait_symbols[field_index]))) return false;
     }
     for (seen[0..shape.field_count]) |present| if (!present) return false;
     return true;
@@ -2277,7 +2322,7 @@ fn arrayConstructionSupported(
                 if (shape.field_callable_signatures[metadata_index]) |signature|
                     callableExpressionMatches(body, operand.*, signature)
                 else
-                    shape.field_dyn_trait_symbols[metadata_index].isValid() and dynBindSupported(body, operand.*))) return false;
+                    expressionMatchesDynTrait(body, operand.*, shape.field_dyn_trait_symbols[metadata_index]))) return false;
     }
     return true;
 }
