@@ -2059,7 +2059,8 @@ fn verifyMemoryAccess(
             return;
         }
         if (!isScalarAccessPlace(body, target.*, is_store) and
-            !(aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, target.*, is_store)))
+            !(aggregate_copy and (mir.executableGuardedLocalAggregateDerefPlace(body, target.*, is_store) or
+                mir.executableParameterProjectedPlace(body, target.*, is_store))))
             return error.InvalidPlaceType;
         const expected_kind = mir.executablePointerDerefAccessKind(body, target.*) orelse return error.InvalidPlaceType;
         if (access.kind != expected_kind) return error.InvalidMemoryAccessKind;

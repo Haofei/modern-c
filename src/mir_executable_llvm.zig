@@ -2941,7 +2941,10 @@ const Renderer = struct {
         while (index < count) : (index += 1) {
             const metadata_index: usize = if (shape.array_length != null) 0 else index;
             if (metadata_index >= shape.field_count) return error.InvalidBody;
-            const child_ty = try self.typeText(shape.field_types[metadata_index]);
+            const child_ty = try self.callableStorageType(
+                shape.field_types[metadata_index],
+                shape.field_callable_signatures[metadata_index],
+            );
             const child_value = try self.temp();
             const child_pointer = try self.temp();
             try self.output.print(
@@ -3411,6 +3414,8 @@ const Renderer = struct {
         const place = self.body.places[place_id.index()];
         if (!parameterScalarAccessStorePlaceSupported(self.body, place) and
             !parameterCallableProjectedPlaceSupported(self.body, place, true) and
+            !(mir.executableAggregateCopyAlignment(place.ty) != null and
+                mir.executableParameterProjectedPlace(self.body, place, true)) and
             !(mir.executableDynTraitPlace(self.body, place) != null and
                 mir.executableParameterProjectedPlace(self.body, place, true))) return error.InvalidBody;
         const edge = statementRepresentationTrapEdge(self.body, statement) orelse return error.InvalidBody;
@@ -5307,6 +5312,8 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             statementRepresentationTrapEdge(body, statement) == null;
     }
     return (parameterScalarAccessStorePlaceSupported(body, place) or
+        (mir.executableAggregateCopyAlignment(store.ty) != null and
+            mir.executableParameterProjectedPlace(body, place, true)) or
         mir.executableLocalAddressDerefPlace(body, place, true) or
         mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
         mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
@@ -5442,6 +5449,7 @@ fn memoryAccessSupported(body: *const mir.ExecutableBody, place_id: mir.PlaceId,
                     parameterCallableProjectedPlaceSupported(body, place, true) or
                     (mir.executableDynTraitPlace(body, place) != null and
                         mir.executableParameterProjectedPlace(body, place, true)) or
+                    (aggregate_copy and mir.executableParameterProjectedPlace(body, place, true)) or
                     mir.executableLocalAddressDerefPlace(body, place, true) or
                     mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
                     mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or

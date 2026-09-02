@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 168/168 canonical | 168/168 canonical |
-| broad sweep | 1584/1818 admitted | 1634/1872 admitted |
-| AST fallback | 234 | 238 |
+| broad sweep | 1590/1818 admitted | 1642/1872 admitted |
+| AST fallback | 228 | 230 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both

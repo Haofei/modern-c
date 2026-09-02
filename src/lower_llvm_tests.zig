@@ -159,9 +159,14 @@ test "LLVM fixed-array signatures and direct calls use canonical executable MIR"
 test "LLVM fixed-array element addresses use canonical executable MIR" {
     const source =
         \\extern fn consume_pointer(pointer: *mut u8) -> void;
+        \\const ELEMENT_COUNT: usize = 4;
+        \\global global_buffer: [ELEMENT_COUNT]u8;
         \\fn pass_array_element_address() -> void {
         \\    var buffer: [4]u8 = uninit;
         \\    consume_pointer(&buffer[0]);
+        \\}
+        \\fn pass_symbolic_global_element_address() -> void {
+        \\    consume_pointer(&global_buffer[0]);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -173,6 +178,10 @@ test "LLVM fixed-array element addresses use canonical executable MIR" {
     try expectContains(body, "icmp ult i64 0, 4");
     try expectContains(body, "getelementptr inbounds [4 x i8]");
     try expectContains(body, "call void @consume_pointer(ptr %mc_expr_tmp_");
+
+    const global_body = try llvmFunctionBody(output.items, "define internal void @pass_symbolic_global_element_address");
+    try expectContains(global_body, "; canonical executable MIR");
+    try expectContains(global_body, "getelementptr inbounds [4 x i8], ptr @global_buffer");
 }
 
 test "LLVM callable parameters forward through canonical executable MIR" {
@@ -200,9 +209,10 @@ test "LLVM callable field stores use verified signatures" {
         \\struct Env { offset: u32 }
         \\global environment: Env;
         \\fn run(env: *mut Env, value: u32) -> u32 { return value; }
-        \\struct Slot { callback: closure(u32) -> u32 }
+        \\struct Slot { callback: closure(u32) -> u32, probe: fn(u32, u32) -> u32 }
         \\global slot: Slot;
-        \\fn install() -> void { slot.callback = bind(&environment, run); }
+        \\fn install_field() -> void { slot.callback = bind(&environment, run); }
+        \\fn install_all() -> void { slot = .{ .callback = bind(&environment, run), .probe = add }; }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -214,10 +224,15 @@ test "LLVM callable field stores use verified signatures" {
     try expectContains(body, "getelementptr inbounds { ptr }");
     try expectContains(body, "store atomic ptr @add");
 
-    const closure_body = try llvmFunctionBody(output.items, "define internal void @install");
+    const closure_body = try llvmFunctionBody(output.items, "define internal void @install_field");
     try expectContains(closure_body, "; canonical executable MIR");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, closure_body, "store atomic ptr"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, closure_body, "extractvalue { ptr, ptr }"));
+
+    const aggregate_body = try llvmFunctionBody(output.items, "define internal void @install_all");
+    try expectContains(aggregate_body, "; canonical executable MIR");
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, aggregate_body, "store atomic ptr"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, aggregate_body, "extractvalue { ptr, ptr }"));
 }
 
 test "LLVM valid slice representation check uses canonical executable MIR" {
@@ -11660,18 +11675,27 @@ test "LLVM aggregate-return bounded call prefixes are MIR-owned" {
 test "LLVM lowers pointer parameter field stores after specialized plan retirement" {
     const source =
         \\struct Cell { value: u32 }
+        \\struct Frame { child: Cell }
+        \\fn make_cell(value: u32) -> Cell { return .{ .value = value }; }
         \\fn store_cell(cell: *mut Cell) -> void {
         \\    cell.*.value = 7;
+        \\}
+        \\fn store_child(frame: *mut Frame, value: u32) -> void {
+        \\    frame.*.child = make_cell(value);
         \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_pointer_param_field_store.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_param_field_store.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @store_cell");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "getelementptr inbounds { i32 }, ptr %mc_arg_0, i32 0, i32 0");
     try expectContains(body, "store atomic i32 7, ptr %");
+    const aggregate_body = try llvmFunctionBody(output.items, "define internal void @store_child");
+    try expectContains(aggregate_body, "; canonical executable MIR");
+    try expectContains(aggregate_body, "getelementptr inbounds { { i32 } }, ptr %mc_arg_0, i32 0, i32 0");
+    try expectContains(aggregate_body, "store atomic i32 %");
 }
 
 test "LLVM admits direct-return checked arithmetic in normal emit without losing source fidelity" {

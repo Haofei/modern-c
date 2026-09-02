@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 168/168 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1584/1818 C functions and 1634/1872 LLVM functions.
-  The remaining 234 C and 238 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1590/1818 C functions and 1642/1872 LLVM functions.
+  The remaining 228 C and 230 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -98,6 +98,17 @@ and seven LLVM bodies; `InvalidCompletionClaim` fell to one and
 `InvalidPlaceType` from thirteen to seven. The remaining `packet_init` case is
 a local pointer-generation plus fixed-array projection and stays fail-closed
 until that generation has a canonical pointee proof.
+
+Direct global fixed-array indexes now preserve a resolved symbolic constant
+length on the canonical place root, retiring three memory-operation fallbacks
+per backend. Aggregate stores through a pointer-parameter projection are
+verified once and lowered field-wise by both renderers; this admits the three
+generated async poll bodies that previously failed `InvalidPlaceType`, plus
+the shallow and nested parameter-store regressions. LLVM recursive aggregate
+stores now select closure fat-value storage from the verified callable
+signature instead of treating `.value` as one pointer. The two remaining
+`canonical=ready` global-closure stores therefore emit from MIR, leaving no
+ready-but-fallback entry in the broad census.
 
 ## Next work
 

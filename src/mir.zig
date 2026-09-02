@@ -11350,6 +11350,17 @@ const FunctionBuilder = struct {
                 } else if (!try self.fillExecutablePlace(place, node.base.*)) {
                     break :projection false;
                 }
+                // Global array declarations may carry a symbolic constant
+                // length in the transitional declaration table. Once that
+                // length has been resolved above, keep the canonical root
+                // type on the place as well as on the index projection. A
+                // global has no local-init fact whose legacy unresolved type
+                // must remain equal, so this is the single authoritative
+                // identity consumed by verification and both renderers.
+                if (kind == .fixed_array and place.root == .symbol and place.projection_count == 0) {
+                    place.root_ty = base_ty;
+                    place.root_type_id = try self.internTypeId(base_ty);
+                }
                 if (place.projection_count >= mir_model.max_executable_projections) break :projection false;
                 place.projections[place.projection_count] = .{ .index = .{
                     .value = try self.ensureExecutableExprAs(node.index.*, .{ .integer = "usize" }),

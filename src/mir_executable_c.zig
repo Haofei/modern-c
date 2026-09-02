@@ -3051,6 +3051,7 @@ fn memoryStoreSupported(
             (dyn_store and mir.executableParameterProjectedPlace(body, place.*, true)) or local_alias or
             mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
             (aggregate_copy and mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true)) or
+            (aggregate_copy and mir.executableParameterProjectedPlace(body, place.*, true)) or
             mir.executableGlobalPointerDerefPlace(body, place.*, true)) and
             statementRepresentationOperationHasExactTrapEdge(body, statement, store);
     }
@@ -3456,6 +3457,7 @@ fn statementRepresentationOperationHasExactTrapEdge(
     const place = placeById(body, store.place) orelse return false;
     if (!(parameterScalarAccessPlaceSupported(body, place.*) or
         mir.executableFixedArrayParameterPointeePlace(body, place.*, true) or
+        mir.executableParameterProjectedPlace(body, place.*, true) or
         mir.executableLocalAddressDerefPlace(body, place.*, false) or
         mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
         mir.executableGuardedLocalAggregateDerefPlace(body, place.*, true) or

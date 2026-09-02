@@ -192,9 +192,14 @@ test "lower-c fixed-array signatures and direct calls use canonical executable M
 test "lower-c fixed-array element addresses use canonical executable MIR" {
     const source =
         \\extern fn consume_pointer(pointer: *mut u8) -> void;
+        \\const ELEMENT_COUNT: usize = 4;
+        \\global global_buffer: [ELEMENT_COUNT]u8;
         \\fn pass_array_element_address() -> void {
         \\    var buffer: [4]u8 = uninit;
         \\    consume_pointer(&buffer[0]);
+        \\}
+        \\fn pass_symbolic_global_element_address() -> void {
+        \\    consume_pointer(&global_buffer[0]);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -206,6 +211,11 @@ test "lower-c fixed-array element addresses use canonical executable MIR" {
     try expectContains(body, "mc_check_index_usize(");
     try expectContains(body, "&((buffer).elems[");
     try expectContains(body, "consume_pointer(mc_exec_tmp_");
+
+    const global_body = try cFunctionBody(output.items, "static void pass_symbolic_global_element_address(void)");
+    try expectContains(global_body, "/* canonical executable MIR */");
+    try expectContains(global_body, "&((global_buffer).elems[mc_check_index_usize(");
+    try expectContains(global_body, ", 4)]");
 }
 
 test "lower-c callable parameters forward through canonical executable MIR" {
@@ -10649,17 +10659,25 @@ test "lower-c aggregate-return bounded call prefixes are MIR-owned" {
 test "lower-c lowers pointer parameter field stores after specialized plan retirement" {
     const source =
         \\struct Cell { value: u32 }
+        \\struct Frame { child: Cell }
+        \\fn make_cell(value: u32) -> Cell { return .{ .value = value }; }
         \\fn store_cell(cell: *mut Cell) -> void {
         \\    cell.*.value = 7;
+        \\}
+        \\fn store_child(frame: *mut Frame, value: u32) -> void {
+        \\    frame.*.child = make_cell(value);
         \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_pointer_param_field_store.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_param_field_store.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void store_cell(Cell * cell)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "mc_race_store_u32(&(cell->value), (uint32_t)mc_exec_tmp_");
+    const aggregate_body = try cFunctionBody(output.items, "static void store_child(Frame * frame, uint32_t value)");
+    try expectContains(aggregate_body, "/* canonical executable MIR */");
+    try expectContains(aggregate_body, "mc_race_store_u32");
 }
 
 test "lower-c emits global address direct-call args from MIR without body fallback" {
@@ -14696,8 +14714,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     defer store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_member_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_member_aggregate_store(Outer * p, Inner value)");
-    try expectContains(store_body, "Outer * mc_ptr");
-    try expectContains(store_body, "Inner mc_tmp");
+    try expectContains(store_body, "/* canonical executable MIR */");
     try expectContains(store_body, "mc_race_store_u32");
 
     const call_source =
@@ -14765,8 +14782,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try expectContains(nested_init_body, "Leaf leaf = ({");
     try expectContains(nested_init_body, "mc_race_load_u32");
     const nested_store_body = try cFunctionBody(nested_output.items, "static void nested_pointer_member_aggregate_store(Outer * p, Leaf value)");
-    try expectContains(nested_store_body, "Outer * mc_ptr");
-    try expectContains(nested_store_body, "Leaf mc_tmp");
+    try expectContains(nested_store_body, "/* canonical executable MIR */");
     try expectContains(nested_store_body, "mc_race_store_u32");
 
     const nested_call_source =
