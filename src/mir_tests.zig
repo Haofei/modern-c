@@ -4984,6 +4984,63 @@ test "MIR records complete checked binary trap edges for division remainder and 
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_shr pass=trap finding=trap_edge detail=InvalidShift") != null);
 }
 
+test "MIR variadic cursor operations carry verified local identities" {
+    const source =
+        \\export fn sum_args(count: i32, ...) -> i64 {
+        \\    var ap: va_list = va.start();
+        \\    var total: i64 = 0;
+        \\    var i: i32 = 0;
+        \\    while i < count {
+        \\        unsafe { total = total + va.arg<i64>(&ap); }
+        \\        i = i + 1;
+        \\    }
+        \\    va.end(&ap);
+        \\    return total;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_executable_varargs.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try mir_executable_body.verify(function);
+    try std.testing.expect(function.executable_body.is_variadic);
+    try std.testing.expect(function.executable_body.last_named_parameter.eql(
+        function.executable_body.parameters[0].local,
+    ));
+
+    var cursor = mir_model.LocalId.invalid;
+    var arg_expression: ?*mir_model.ExecutableExpression = null;
+    for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .builtin_call => |*call| switch (call.kind) {
+            .va_arg => {
+                cursor = call.vararg_cursor;
+                arg_expression = expression;
+            },
+            .va_end => try std.testing.expect(call.vararg_cursor.eql(cursor)),
+            else => {},
+        },
+        else => {},
+    };
+    try std.testing.expect(cursor.isValid());
+    try std.testing.expect(mir_model.executableVaListLocal(&function.executable_body, cursor));
+    const argument = arg_expression orelse return error.TestUnexpectedResult;
+    argument.operation.builtin_call.vararg_cursor = .invalid;
+    try std.testing.expectError(error.InvalidBuiltinCall, mir_executable_body.verify(function));
+    argument.operation.builtin_call.vararg_cursor = cursor;
+    try mir_executable_body.verify(function);
+
+    function.executable_body.last_named_parameter = .invalid;
+    try std.testing.expectError(error.InvalidFunctionSignature, mir_executable_body.verify(function));
+}
+
 test "MIR const_get fixed indexing has no bounds trap edge" {
     const source =
         \\#[no_lang_trap]

@@ -7199,6 +7199,11 @@ const FunctionBuilder = struct {
         return .{
             .complete = complete,
             .incomplete_reason = self.executable_incomplete_reason,
+            .is_variadic = self.is_variadic,
+            .last_named_parameter = if (self.is_variadic and parameters.len != 0)
+                parameters[parameters.len - 1].local
+            else
+                .invalid,
             .return_type_id = self.type_ids.get(self.return_ty) orelse .invalid,
             .return_dyn_trait_symbol_id = self.return_dyn_trait_symbol_id,
             .parameters = parameters,
@@ -8301,6 +8306,16 @@ const FunctionBuilder = struct {
             operand_types[index] = self.executable_expressions.items[argument.index()].result_ty;
         }
         if (!mir_model.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+        switch (call.kind) {
+            .va_start => {
+                if (call.vararg_cursor.isValid() or !self.is_variadic or self.executable_parameters.items.len == 0 or
+                    !self.executableBuiltinInitializesVaList(expression)) return false;
+            },
+            .va_arg, .va_end => {
+                if (!self.executableVaListLocal(call.vararg_cursor)) return false;
+            },
+            else => if (call.vararg_cursor.isValid()) return false,
+        }
         if (call.kind == .enum_raw and !self.executableEnumRawComplete(expression, call)) return false;
         return if (call.kind == .raw_ptr)
             call.representation_source != null and
@@ -8308,6 +8323,24 @@ const FunctionBuilder = struct {
                 call.representation_span_id.eql(expression.span_id)
         else
             call.representation_source == null and !call.representation_span_id.isValid();
+    }
+
+    fn executableVaListLocal(self: *const FunctionBuilder, local: LocalId) bool {
+        return local.isValid() and local.index() < self.executable_locals.items.len and
+            self.executable_locals.items[local.index()].id.eql(local) and
+            self.executable_locals.items[local.index()].is_va_list;
+    }
+
+    fn executableBuiltinInitializesVaList(self: *const FunctionBuilder, expression: ExecutableExpression) bool {
+        if (!expression.owner_statement.isValid() or
+            expression.owner_statement.index() >= self.executable_statements.items.len) return false;
+        const statement = self.executable_statements.items[expression.owner_statement.index()];
+        if (!statement.id.eql(expression.owner_statement) or !statement.block_id.eql(expression.block_id)) return false;
+        return switch (statement.operation) {
+            .local_init => |local_decl| local_decl.value != null and local_decl.value.?.eql(expression.id) and
+                self.executableVaListLocal(local_decl.local),
+            else => false,
+        };
     }
 
     fn executableEnumRawComplete(
@@ -9985,6 +10018,7 @@ const FunctionBuilder = struct {
                     const conversion_target = self.conversionCallFactInfo(node);
                     const byte_view_target = self.byteViewCallTarget(node);
                     const semantic_escape_target = try self.semanticEscapeCallTarget(node);
+                    const va_target = try self.vaCallTarget(node);
                     const result_target_type = if (kind == .result_ok or kind == .result_err)
                         (expected_type_expr orelse self.assignment_target_type_expr)
                     else
@@ -10023,6 +10057,8 @@ const FunctionBuilder = struct {
                         result_ty = target.result_ty;
                     } else if (semantic_escape_target) |target| {
                         result_ty = target.result_ty;
+                    } else if (va_target) |target| {
+                        result_ty = target.result_ty;
                     } else if (kind == .forget_unchecked or kind == .cpu_pause or kind == .fence_full or kind == .fence_release or kind == .fence_acquire) {
                         result_ty = .void;
                     } else if (raw_target) |target| {
@@ -10053,7 +10089,13 @@ const FunctionBuilder = struct {
                         else => .{ null, null },
                     };
                     const argument_count = node.args.len + @as(usize, if (receiver != null) 1 else 0);
-                    if (argument_count > mir_model.max_executable_operands)
+                    const vararg_cursor = if (kind == .va_arg or kind == .va_end)
+                        self.executableVaCursorLocal(node.args[0]) orelse
+                            break :call self.unsupportedExecutableExpression(.unsupported_call)
+                    else
+                        LocalId.invalid;
+                    const stored_argument_count = if (kind == .va_arg or kind == .va_end) 0 else argument_count;
+                    if (stored_argument_count > mir_model.max_executable_operands)
                         break :call self.unsupportedExecutableExpression(.unsupported_call);
                     var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
                         .kind = kind,
@@ -10063,7 +10105,8 @@ const FunctionBuilder = struct {
                         .representation_source = if (kind == .raw_ptr) source else null,
                         .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
                         .const_index = if (const_get_target) |target| target.index else null,
-                        .argument_count = argument_count,
+                        .vararg_cursor = vararg_cursor,
+                        .argument_count = stored_argument_count,
                     };
                     var argument_index: usize = 0;
                     if (receiver) |base| {
@@ -10071,6 +10114,7 @@ const FunctionBuilder = struct {
                         argument_index = 1;
                     }
                     for (node.args, 0..) |argument, source_index| {
+                        if (kind == .va_arg or kind == .va_end) break;
                         call_value.arguments[argument_index] = if (kind == .result_ok or kind == .result_err) result_arg: {
                             const target_type = result_target_type orelse
                                 break :call self.unsupportedExecutableExpression(.unsupported_call);
@@ -12252,6 +12296,10 @@ const FunctionBuilder = struct {
                         else => {},
                     }
                     const executable_local = try self.internExecutableLocal(name.text);
+                    if (executable_ty_expr) |declared_ty| {
+                        if (self.executableTypeExprIsVaList(declared_ty))
+                            self.executable_locals.items[executable_local.index()].is_va_list = true;
+                    }
                     if (executable_ty_expr) |declared_ty| if (dynTraitNameFromTypeAlias(declared_ty, self.aliases)) |trait_name| {
                         self.executable_locals.items[executable_local.index()].dyn_trait_symbol_id =
                             try self.internExecutableTraitSymbol(trait_name);
@@ -15239,6 +15287,33 @@ const FunctionBuilder = struct {
         child.* = ast_query.simpleNameType("va_list", span);
         try self.generated_type_expr_nodes.append(self.allocator, child);
         return .{ .span = span, .kind = .{ .pointer = .{ .mutability = .mut, .child = child } } };
+    }
+
+    fn executableVaCursorLocal(self: *FunctionBuilder, input: ast.Expr) ?LocalId {
+        var expression = input;
+        while (expression.kind == .grouped) expression = expression.kind.grouped.*;
+        expression = switch (expression.kind) {
+            .address_of => |inner| inner.*,
+            .borrow_expr => |borrow| borrow.value.*,
+            else => return null,
+        };
+        while (expression.kind == .grouped) expression = expression.kind.grouped.*;
+        const name = switch (expression.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        };
+        const local = self.executable_local_ids.get(name) orelse return null;
+        if (local.index() >= self.executable_locals.items.len or
+            !self.executable_locals.items[local.index()].is_va_list) return null;
+        return local;
+    }
+
+    fn executableTypeExprIsVaList(self: *const FunctionBuilder, ty: ast.TypeExpr) bool {
+        const resolved = aggregateTargetTypeAlias(ty, self.aliases);
+        return switch (resolved.kind) {
+            .name => |name| std.mem.eql(u8, name.text, "va_list"),
+            else => false,
+        };
     }
 
     fn discardCallTargetKind(_: *FunctionBuilder, call: anytype) ?CallTargetKind {

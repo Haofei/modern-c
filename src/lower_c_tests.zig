@@ -83,6 +83,32 @@ test "lower-c canonical MIR renders scalar closure capture through a thunk" {
     try expectContains(body, ".env = (void *)(uintptr_t)");
 }
 
+test "lower-c canonical MIR renders variadic cursor operations" {
+    const source =
+        \\export fn sum_args(count: i32, ...) -> i64 {
+        \\    var ap: va_list = va.start();
+        \\    var total: i64 = 0;
+        \\    var i: i32 = 0;
+        \\    while i < count {
+        \\        unsafe { total = total + va.arg<i64>(&ap); }
+        \\        i = i + 1;
+        \\    }
+        \\    va.end(&ap);
+        \\    return total;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_varargs.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "int64_t sum_args(int32_t count, ...)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "__builtin_va_list ap;");
+    try expectContains(body, "__builtin_va_start(ap, count);");
+    try expectContains(body, "__builtin_va_arg(ap, int64_t)");
+    try expectContains(body, "__builtin_va_end(ap);");
+}
+
 test "lower-c canonical MIR maps propagated Result errors" {
     const source =
         \\enum LowErr { Failed }

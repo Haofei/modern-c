@@ -737,7 +737,20 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         // still carries the operand so both mechanical renderers must evaluate
         // it exactly once before discarding the resulting value.
         .forget_unchecked => operands.len == 1 and result == .void,
+        .va_start => operands.len == 0 and result == .value,
+        .va_arg => operands.len == 0 and executableVaArgPayloadType(result),
+        .va_end => operands.len == 0 and result == .void,
         .cpu_pause, .fence_full, .fence_release, .fence_acquire => operands.len == 0 and result == .void,
+        else => false,
+    };
+}
+
+pub fn executableVaArgPayloadType(ty: ValueType) bool {
+    if (ExecutableCastKind.integerInfo(ty)) |info| return info.bits == 32 or info.bits == 64;
+    return switch (ty) {
+        .float => |name| std.mem.eql(u8, name, "f64"),
+        .pointer, .nullable_pointer => |shape| shape.kind != .slice,
+        .cstr, .address => true,
         else => false,
     };
 }
@@ -1182,6 +1195,10 @@ pub const ExecutableExpression = struct {
             /// builtin kind. Keeping it on the verified operation prevents a
             /// renderer from reopening generic syntax to recover the index.
             const_index: ?usize = null,
+            /// Canonical cursor storage for `va.arg` / `va.end`. `va.start`
+            /// is tied to its local-init owner instead. Keeping a LocalId here
+            /// avoids rebuilding `&ap` from call syntax in codegen.
+            vararg_cursor: LocalId = .invalid,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
         },
@@ -1653,6 +1670,10 @@ pub const ExecutableParameter = struct {
 pub const ExecutableLocalIdentity = struct {
     id: LocalId,
     spelling: []const u8,
+    /// This local owns target-ABI `va_list` cursor storage. The ordinary
+    /// `.value` type is intentionally insufficient to select that storage:
+    /// callable and dynamic-trait values also use the opaque value class.
+    is_va_list: bool = false,
     /// Exact dynamic-trait identity for an opaque local fat value.
     dyn_trait_symbol_id: SymbolId = .invalid,
 };
@@ -1981,6 +2002,10 @@ pub const ExecutableIncompleteReason = enum {
 pub const ExecutableBody = struct {
     complete: bool = true,
     incomplete_reason: ExecutableIncompleteReason = .none,
+    /// Vararg cursor operations need the function's fixed-parameter boundary,
+    /// but must not recover it from a declaration AST in either backend.
+    is_variadic: bool = false,
+    last_named_parameter: LocalId = .invalid,
     return_type_id: TypeId = .invalid,
     /// Exact dynamic-trait identity for an opaque two-pointer return value.
     return_dyn_trait_symbol_id: SymbolId = .invalid,
@@ -2034,6 +2059,27 @@ pub const ExecutableBody = struct {
         self.* = .{};
     }
 };
+
+pub fn executableVaListLocal(body: *const ExecutableBody, id: LocalId) bool {
+    return id.isValid() and id.index() < body.locals.len and
+        body.locals[id.index()].id.eql(id) and body.locals[id.index()].is_va_list;
+}
+
+pub fn executableVaStartLocal(body: *const ExecutableBody, expression: ExprId) ?LocalId {
+    if (!expression.isValid() or expression.index() >= body.expressions.len) return null;
+    const value = body.expressions[expression.index()];
+    if (!value.id.eql(expression) or value.operation != .builtin_call or
+        value.operation.builtin_call.kind != .va_start or
+        !value.owner_statement.isValid() or value.owner_statement.index() >= body.statements.len)
+        return null;
+    const statement = body.statements[value.owner_statement.index()];
+    if (!statement.id.eql(value.owner_statement) or !statement.block_id.eql(value.block_id)) return null;
+    const local = switch (statement.operation) {
+        .local_init => |init| if (init.value != null and init.value.?.eql(expression)) init.local else return null,
+        else => return null,
+    };
+    return if (executableVaListLocal(body, local)) local else null;
+}
 
 /// A canonical MMIO base is either a function parameter or a local storage
 /// generation whose checked type is `MmioPtr<T>`. The pointee layout and field

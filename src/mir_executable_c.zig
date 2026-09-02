@@ -187,12 +187,26 @@ fn emitStatement(
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
-            _ = localById(body, local.local) orelse return error.InvalidLocal;
+            const identity = localById(body, local.local) orelse return error.InvalidLocal;
             // Canonical MIR intentionally does not reconstruct source-level liveness in the
             // renderer.  Mark every generated local as potentially unused so pattern bindings
             // and other control-flow-local values remain valid under the toolchain's -Werror
             // policy without adding a second liveness authority to codegen.
             try out.appendSlice(allocator, "MC_UNUSED ");
+            if (identity.is_va_list) {
+                const value = local.value orelse return error.InvalidExpression;
+                if (mir.executableVaStartLocal(body, value) == null) return error.InvalidExpression;
+                try out.appendSlice(allocator, "__builtin_va_list ");
+                try appendLocal(allocator, out, body, local.local);
+                try out.appendSlice(allocator, ";\n");
+                try writeIndent(allocator, out, indent);
+                try out.appendSlice(allocator, "__builtin_va_start(");
+                try appendLocal(allocator, out, body, local.local);
+                try out.appendSlice(allocator, ", ");
+                try appendLocal(allocator, out, body, body.last_named_parameter);
+                try out.appendSlice(allocator, ");\n");
+                return;
+            }
             if (isSliceType(local.ty) or local.ty == .value) {
                 if (local.value == null) return error.UnsupportedType;
                 try out.appendSlice(allocator, "__auto_type ");
@@ -1296,6 +1310,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                     if (!localInitializerTypeCompatible(local.ty, expression.result_ty)) return false;
                     if (!(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
                         dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
+                        (mir.executableVaListLocal(body, local.local) and mir.executableVaStartLocal(body, value) != null) or
                         (local.ty == .value and dynLocal(body, local.local)))) return false;
                 } else if (isSliceType(local.ty) or local.ty == .value) return false;
             },
@@ -1347,6 +1362,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
         .load => |load| memoryLoadUnsupportedReason(body, expression, load),
         .atomic_load => |load| atomicLoadUnsupportedReason(body, expression, load),
         .atomic_update => |update| atomicUpdateUnsupportedReason(body, expression, update),
+        .builtin_call => |call| @tagName(call.kind),
         else => @tagName(expression.operation),
     };
     for (body.trap_edges) |edge| switch (edge.owner) {
@@ -1380,6 +1396,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
                 if (!localInitializerTypeCompatible(local.ty, expression.result_ty) or
                     !(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
                         dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
+                        (mir.executableVaListLocal(body, local.local) and mir.executableVaStartLocal(body, value) != null) or
                         (local.ty == .value and dynLocal(body, local.local)))) return "local_init";
             } else if (isSliceType(local.ty) or local.ty == .value) return "local_init";
         },
@@ -1606,13 +1623,14 @@ fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.Execu
 
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (functionSymbolExpressionSupported(body, expression)) return true;
-    if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression) or
+    if (expression.result_ty == .value and mir.executableVaStartLocal(body, expression.id) == null) return callableValueExpressionSupported(body, expression) or
         dynBindSupported(body, expression) or opaqueValueExpressionSupported(body, expression) or
         switch (expression.operation) {
             .index => |index| indexSupported(body, expression, index),
             else => false,
         };
-    if (!supportsType(body, expression.result_ty)) return false;
+    if (!supportsType(body, expression.result_ty) and
+        mir.executableVaStartLocal(body, expression.id) == null) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
         // A global aggregate symbol is only an addressable base for one typed
@@ -2687,7 +2705,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -2697,6 +2715,16 @@ fn builtinCallSupported(
         operand_types[index] = operand.result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    switch (call.kind) {
+        .va_start => return !call.vararg_cursor.isValid() and
+            mir.executableVaStartLocal(body, expression.id) != null and
+            body.is_variadic and body.last_named_parameter.isValid() and
+            ownedTrapEdgeCount(body, expression.id) == 0,
+        .va_arg, .va_end => return mir.executableVaListLocal(body, call.vararg_cursor) and
+            call.representation_source == null and !call.representation_span_id.isValid() and
+            ownedTrapEdgeCount(body, expression.id) == 0,
+        else => if (call.vararg_cursor.isValid()) return false,
+    }
     if (call.kind == .reduce_sum_checked and !reduceCheckedResultSupported(body, expression, call)) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
@@ -3100,6 +3128,19 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, "((void)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "))");
+        },
+        .va_start => return error.InvalidExpression,
+        .va_arg => {
+            try out.appendSlice(allocator, "__builtin_va_arg(");
+            try appendLocal(allocator, out, body, call.vararg_cursor);
+            try out.appendSlice(allocator, ", ");
+            try appendCType(allocator, out, body, result_ty);
+            try out.append(allocator, ')');
+        },
+        .va_end => {
+            try out.appendSlice(allocator, "__builtin_va_end(");
+            try appendLocal(allocator, out, body, call.vararg_cursor);
+            try out.append(allocator, ')');
         },
         .cpu_pause => try out.appendSlice(allocator, "mc_cpu_pause()"),
         .fence_full, .fence_release, .fence_acquire => try out.appendSlice(allocator, switch (call.kind) {
@@ -4409,6 +4450,10 @@ fn prepareExpressionSet(
         // `uninit` is a storage policy, not a runtime value. The local
         // declaration intentionally has no initializer expression.
         if (mir.executableUninitLocalInitializer(body, expression)) continue;
+        // `va.start` initializes the target cursor in place and has no C
+        // value. The owning local-init statement emits the declaration and
+        // `__builtin_va_start` together after verifier admission.
+        if (mir.executableVaStartLocal(body, expression.id) != null) continue;
         // A function identity is a pure leaf and is emitted directly at its
         // use site. Emitting it here as a discarded expression would add no
         // ordering guarantee and would produce an avoidable C warning.

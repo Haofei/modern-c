@@ -30,6 +30,32 @@ test "LLVM canonical MIR renders scalar closure capture through a thunk" {
     try expectContains(output.items, "ptrtoint ptr %env to i32");
 }
 
+test "LLVM canonical MIR renders variadic cursor operations" {
+    const source =
+        \\export fn sum_args(count: i32, ...) -> i64 {
+        \\    var ap: va_list = va.start();
+        \\    var total: i64 = 0;
+        \\    var i: i32 = 0;
+        \\    while i < count {
+        \\        unsafe { total = total + va.arg<i64>(&ap); }
+        \\        i = i + 1;
+        \\    }
+        \\    va.end(&ap);
+        \\    return total;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_varargs.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define i64 @sum_args(i32 signext %mc_arg_0, ...)");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "call void @llvm.va_start(ptr %mc_local_");
+    try expectContains(body, "va_arg ptr %mc_local_");
+    try expectContains(body, ", i64");
+    try expectContains(body, "call void @llvm.va_end(ptr %mc_local_");
+}
+
 test "LLVM canonical MIR maps propagated Result errors" {
     const source =
         \\enum LowErr { Failed }

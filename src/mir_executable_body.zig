@@ -108,7 +108,15 @@ pub fn symbol(body: *const mir.ExecutableBody, id: mir.SymbolId) ?mir.SymbolIden
 pub fn verify(function: *const mir.Function) !void {
     const body = &function.executable_body;
     if (function.param_types.len != function.param_count) return error.InvalidFunctionSignature;
-    if (!function.is_extern and body.parameters.len != function.param_count) return error.InvalidFunctionSignature;
+    if (!function.is_extern) {
+        if (body.parameters.len != function.param_count or body.is_variadic != function.is_variadic)
+            return error.InvalidFunctionSignature;
+        if (body.is_variadic) {
+            if (body.parameters.len == 0 or
+                !body.last_named_parameter.eql(body.parameters[body.parameters.len - 1].local))
+                return error.InvalidFunctionSignature;
+        } else if (body.last_named_parameter.isValid()) return error.InvalidFunctionSignature;
+    }
     if (body.parameters.len == function.param_types.len) {
         for (body.parameters, function.param_types) |parameter, parameter_ty| {
             if (!sameValueType(parameter.ty, parameter_ty)) return error.InvalidFunctionSignature;
@@ -143,6 +151,7 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
+        if (identity.is_va_list and identity.dyn_trait_symbol_id.isValid()) return error.InvalidLocalIdentity;
         if (identity.dyn_trait_symbol_id.isValid()) {
             const trait = symbol(body, identity.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
             if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
@@ -636,6 +645,16 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             }
             if (body.complete) {
                 if (!mir.executableBuiltinTypesValid(call.kind, value.result_ty, operand_types[0..call.argument_count])) return error.InvalidBuiltinCall;
+                switch (call.kind) {
+                    .va_start => {
+                        if (call.vararg_cursor.isValid() or !body.is_variadic or
+                            mir.executableVaStartLocal(body, value.id) == null)
+                            return error.InvalidBuiltinCall;
+                    },
+                    .va_arg, .va_end => if (!mir.executableVaListLocal(body, call.vararg_cursor))
+                        return error.InvalidBuiltinCall,
+                    else => if (call.vararg_cursor.isValid()) return error.InvalidBuiltinCall,
+                }
                 if (call.kind == .const_get) {
                     const index = call.const_index orelse return error.InvalidBuiltinCall;
                     const array = switch (operand_types[0]) {

@@ -1504,6 +1504,10 @@ const LlvmEmitter = struct {
             const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
             try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.llvmType(param.ty), param_ext, executable_parameter.local.raw });
         }
+        if (fn_mir.executable_body.is_variadic) {
+            if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, "...");
+        }
         const entry_label = try self.functionEntryLabel();
         if (self.current_debug_scope) |scope| {
             try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, scope, entry_label });
@@ -1618,7 +1622,6 @@ const LlvmEmitter = struct {
     }
 
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
-        if (function.signature.is_variadic) return false;
         // Prefer the canonical executable body before constructing any of the
         // legacy, source-shaped recognition plans below.  Unsupported bodies
         // still fall through to those plans, but an admitted body has exactly

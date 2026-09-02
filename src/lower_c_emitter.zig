@@ -1411,7 +1411,6 @@ pub const CEmitter = struct {
     };
 
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
-        if (function.signature.is_variadic) return false;
         // Prefer the canonical, syntax-free executable body whenever it is
         // complete and within this backend's capability set.  In particular,
         // do this before constructing any of the transitional specialized

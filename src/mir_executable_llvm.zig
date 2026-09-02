@@ -159,6 +159,10 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
         (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty) and
             !(return_ty == .value and body.return_dyn_trait_symbol_id.isValid())))
         return false;
+    if (body.is_variadic) {
+        if (body.parameters.len == 0 or
+            !body.last_named_parameter.eql(body.parameters[body.parameters.len - 1].local)) return false;
+    } else if (body.last_named_parameter.isValid()) return false;
     for (body.parameters) |parameter| {
         if (!parameter.local.isValid() or !parameterTypeSupported(body, parameter))
             return false;
@@ -166,7 +170,8 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
     for (body.expressions) |expression| {
         if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
             (!llvmTypeSupported(body, expression.result_ty) and !functionSymbolExpressionSupported(body, expression) and
-                !callableValueExpressionSupported(body, expression)))
+                !callableValueExpressionSupported(body, expression) and
+                mir.executableVaStartLocal(body, expression.id) == null))
             return false;
         if (!operationSupported(body, expression)) return false;
     }
@@ -236,7 +241,7 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .local_init => |local| {
                 if (!local.local.isValid() or !(llvmTypeSupported(body, local.ty) or
                     (local.ty == .value and (callableLocalUsedAsIndirectCallee(body, local.local) or
-                        dynLocal(body, local.local))))) return false;
+                        dynLocal(body, local.local) or mir.executableVaListLocal(body, local.local))))) return false;
                 if (local.value) |value| if (!expressionValid(body, value)) return false;
             },
             .store => |store| {
@@ -473,7 +478,16 @@ pub fn render(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, ret
 }
 
 pub fn supportsWithCallAbi(body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) bool {
-    return supports(body, return_ty) and callAbiPlanValid(body, plan);
+    if (!supports(body, return_ty) or !callAbiPlanValid(body, plan)) return false;
+    // AArch64 classifies variadic payloads through the target's register-save
+    // area rather than LLVM's generic `va_arg` instruction. Keep that target
+    // on the existing qualified lowering until the ABI walk is represented by
+    // canonical operations too.
+    if (plan.target == .aarch64) for (body.expressions) |expression| switch (expression.operation) {
+        .builtin_call => |call| if (call.kind == .va_arg) return false,
+        else => {},
+    };
+    return true;
 }
 
 pub fn renderWithCallAbi(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) RenderError![]u8 {
@@ -623,6 +637,7 @@ const Renderer = struct {
     }
 
     fn localStorageType(self: *Renderer, local: @FieldType(mir.ExecutableStatement.Operation, "local_init")) RenderError![]const u8 {
+        if (mir.executableVaListLocal(self.body, local.local)) return self.vaListStorageType();
         if (dynLocal(self.body, local.local)) return "{ ptr, ptr }";
         if (local.value) |initializer| if (expressionValid(self.body, initializer)) {
             const expression = self.body.expressions[initializer.index()];
@@ -647,6 +662,35 @@ const Renderer = struct {
             }
         };
         return self.typeText(local.ty);
+    }
+
+    fn targetAbi(self: *Renderer) RenderError!TargetAbi {
+        return if (self.call_abi_plan) |plan| plan.target else error.InvalidBody;
+    }
+
+    fn vaListStorageType(self: *Renderer) RenderError![]const u8 {
+        return switch (try self.targetAbi()) {
+            .riscv64 => "ptr",
+            .x86_64 => "[1 x %mc.va_list.x86_64]",
+            .aarch64 => "%mc.va_list.aarch64",
+        };
+    }
+
+    fn vaListCursorPointer(self: *Renderer, local: mir.LocalId) RenderError![]const u8 {
+        if (!mir.executableVaListLocal(self.body, local)) return error.InvalidBody;
+        const slot = (self.locals.get(local.raw) orelse return error.InvalidBody).storage;
+        return switch (try self.targetAbi()) {
+            .riscv64, .aarch64 => slot,
+            .x86_64 => blk: {
+                const cursor = try self.temp();
+                try self.output.print(
+                    self.allocator,
+                    "  {s} = getelementptr inbounds [1 x %mc.va_list.x86_64], ptr {s}, i64 0, i64 0\n",
+                    .{ cursor, slot },
+                );
+                break :blk cursor;
+            },
+        };
     }
 
     fn emit(self: *Renderer) RenderError!void {
@@ -736,6 +780,13 @@ const Renderer = struct {
             .local_init => |local| {
                 const ty = try self.localStorageType(local);
                 const slot = (self.locals.get(local.local.raw) orelse return error.InvalidBody).storage;
+                if (mir.executableVaListLocal(self.body, local.local)) {
+                    const initializer = local.value orelse return error.InvalidBody;
+                    if (mir.executableVaStartLocal(self.body, initializer) == null) return error.InvalidBody;
+                    const cursor = try self.vaListCursorPointer(local.local);
+                    try self.output.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{cursor});
+                    return;
+                }
                 if (local.value) |initializer| {
                     const expression = if (expressionValid(self.body, initializer)) self.body.expressions[initializer.index()] else return error.InvalidBody;
                     if (!mir.executableUninitLocalInitializer(self.body, expression)) {
@@ -2640,6 +2691,19 @@ const Renderer = struct {
                 // consumes the ownership obligation but has no LLVM runtime
                 // operation and, in particular, must not invoke drop glue.
                 if (!std.mem.eql(u8, result_ty, "void") or call.argument_count != 1) return error.InvalidBody;
+                return .{ .ty = "void", .spelling = "" };
+            },
+            .va_start => return error.InvalidBody,
+            .va_arg => {
+                const cursor = try self.vaListCursorPointer(call.vararg_cursor);
+                if (try self.targetAbi() == .aarch64) return error.Unsupported;
+                const result = try self.temp();
+                try self.output.print(self.allocator, "  {s} = va_arg ptr {s}, {s}\n", .{ result, cursor, result_ty });
+                return .{ .ty = result_ty, .spelling = result };
+            },
+            .va_end => {
+                const cursor = try self.vaListCursorPointer(call.vararg_cursor);
+                try self.output.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{cursor});
                 return .{ .ty = "void", .spelling = "" };
             },
             .cpu_pause => {
@@ -5119,7 +5183,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -5129,6 +5193,12 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
         operand_types[index] = body.expressions[id.index()].result_ty;
     }
     if (!mir.executableBuiltinTypesValid(call.kind, expression.result_ty, operand_types[0..call.argument_count])) return false;
+    switch (call.kind) {
+        .va_start => if (call.vararg_cursor.isValid() or mir.executableVaStartLocal(body, expression.id) == null or
+            !body.is_variadic or !body.last_named_parameter.isValid()) return false,
+        .va_arg, .va_end => if (!mir.executableVaListLocal(body, call.vararg_cursor)) return false,
+        else => if (call.vararg_cursor.isValid()) return false,
+    }
     if (call.kind == .reduce_sum_checked and !reduceCheckedResultSupported(body, expression, call)) return false;
     if (call.kind == .enum_raw and !enumRawSupported(body, expression, call)) return false;
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
