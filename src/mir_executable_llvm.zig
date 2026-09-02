@@ -503,7 +503,10 @@ const Renderer = struct {
         if (aggregate.construction == .packed_bits) return self.typeTextDepth(aggregate.storage_ty, depth + 1);
         if (aggregate.ty == .array) {
             if (aggregate.field_count == 0 or aggregate.array_length == null) return error.Unsupported;
-            const element_ty = try self.typeTextDepth(aggregate.field_types[0], depth + 1);
+            const element_ty = if (aggregate.field_dyn_trait_symbols[0].isValid())
+                "{ ptr, ptr }"
+            else
+                try self.typeTextDepth(aggregate.field_types[0], depth + 1);
             return std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{ aggregate.array_length.?, element_ty });
         }
         var text: std.ArrayList(u8) = .empty;
@@ -932,6 +935,10 @@ const Renderer = struct {
             .local => |local_id| (self.locals.get(local_id.raw) orelse return error.InvalidBody).ty,
             .closure_bind => "{ ptr, ptr }",
             .dyn_bind => "{ ptr, ptr }",
+            .index => |index| if (indexedDynTraitSymbol(self.body, expression, index) != null)
+                "{ ptr, ptr }"
+            else
+                try self.typeText(expression.result_ty),
             .direct_call => |call| if ((symbolIdentity(self.body, call.callee) orelse return error.InvalidBody).return_dyn_trait_symbol_id.isValid())
                 "{ ptr, ptr }"
             else
@@ -1326,7 +1333,10 @@ const Renderer = struct {
         for (operation.operands, 0..) |operand_id, index| {
             const operand = try self.emitExpression(operand_id);
             const metadata_index: usize = if (shape.field_count == 1) 0 else index;
-            const element_ty = try self.typeText(shape.field_types[metadata_index]);
+            const element_ty = if (shape.field_dyn_trait_symbols[metadata_index].isValid())
+                "{ ptr, ptr }"
+            else
+                try self.typeText(shape.field_types[metadata_index]);
             if (!std.mem.eql(u8, operand.ty, element_ty)) return error.InvalidBody;
             const result = try self.temp();
             try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
@@ -1400,7 +1410,10 @@ const Renderer = struct {
         };
         const index = try self.emitExpression(operation.index);
         if (!std.mem.eql(u8, index.ty, "i64")) return error.InvalidBody;
-        const result_ty = try self.typeText(expression.result_ty);
+        const result_ty = if (indexedDynTraitSymbol(self.body, expression, operation) != null)
+            "{ ptr, ptr }"
+        else
+            try self.typeText(expression.result_ty);
         var element_pointer: []const u8 = undefined;
 
         switch (operation.kind) {
@@ -4265,6 +4278,22 @@ fn memberSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
         sameValueType(expression.result_ty, shape.field_types[operation.field_index]) and
         expression.type_id.eql(shape.field_type_ids[operation.field_index]) and
         llvmTypeSupported(body, base.result_ty) and llvmTypeSupported(body, expression.result_ty);
+}
+
+fn indexedDynTraitSymbol(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    operation: @FieldType(mir.ExecutableExpression.Operation, "index"),
+) ?mir.SymbolId {
+    if (operation.kind != .fixed_array or expression.result_ty != .value or
+        !expressionValid(body, operation.base)) return null;
+    const base = body.expressions[operation.base.index()];
+    const aggregate = aggregateType(body, base.type_id) orelse return null;
+    if (aggregate.ty != .array or aggregate.field_count == 0 or
+        !sameValueType(aggregate.field_types[0], expression.result_ty) or
+        !aggregate.field_type_ids[0].eql(expression.type_id) or
+        !aggregate.field_dyn_trait_symbols[0].isValid()) return null;
+    return aggregate.field_dyn_trait_symbols[0];
 }
 
 fn indexSupported(

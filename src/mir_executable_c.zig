@@ -1125,7 +1125,8 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                     const expression = expressionById(body, value) orelse return false;
                     if (!sameValueType(local.ty, expression.result_ty)) return false;
                     if (!(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
-                        dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*))) return false;
+                        dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
+                        (local.ty == .value and dynLocal(body, local.local)))) return false;
                 } else if (isSliceType(local.ty) or local.ty == .value) return false;
             },
             .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
@@ -1292,7 +1293,11 @@ fn switchTerminatorSupported(body: *const mir.ExecutableBody, switch_: mir.Execu
 fn supportsExpression(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression) bool {
     if (functionSymbolExpressionSupported(body, expression)) return true;
     if (expression.result_ty == .value) return callableValueExpressionSupported(body, expression) or
-        dynBindSupported(body, expression) or opaqueValueExpressionSupported(body, expression);
+        dynBindSupported(body, expression) or opaqueValueExpressionSupported(body, expression) or
+        switch (expression.operation) {
+            .index => |index| indexSupported(body, expression, index),
+            else => false,
+        };
     if (!supportsType(body, expression.result_ty)) return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
@@ -1726,9 +1731,14 @@ fn indexSupported(
     }
     const base = expressionById(body, operation.base) orelse return false;
     const index = expressionById(body, operation.index) orelse return false;
+    const dyn_array_element = if (operation.kind == .fixed_array)
+        if (aggregateType(body, base.type_id)) |shape| shape.field_count != 0 and shape.field_dyn_trait_symbols[0].isValid() else false
+    else
+        false;
     if (!base.block_id.eql(expression.block_id) or !index.block_id.eql(expression.block_id) or
         !base.owner_statement.eql(expression.owner_statement) or !index.owner_statement.eql(expression.owner_statement) or
-        !sameValueType(index.result_ty, .{ .integer = "usize" }) or !supportsType(body, expression.result_ty))
+        !sameValueType(index.result_ty, .{ .integer = "usize" }) or
+        !(supportsType(body, expression.result_ty) or (expression.result_ty == .value and dyn_array_element)))
         return false;
     switch (operation.kind) {
         .fixed_array => {
@@ -2035,12 +2045,14 @@ fn arrayConstructionSupported(
         shape.array_length == null or shape.array_length.? != operation.operands.len or
         (shape.field_count != 1 and shape.field_count != operation.operands.len) or
         !sameValueType(shape.ty, expression.result_ty)) return false;
-    if (!arrayElementTypeSupported(body, shape.field_types[0], 0)) return false;
+    if (!arrayElementTypeSupported(body, shape.field_types[0], shape.field_dyn_trait_symbols[0], 0)) return false;
     for (operation.operands, 0..) |operand_id, index| {
         const operand = expressionById(body, operand_id) orelse return false;
         const metadata_index: usize = if (shape.field_count == 1) 0 else index;
         if (!sameValueType(operand.result_ty, shape.field_types[metadata_index]) or
-            !operand.type_id.eql(shape.field_type_ids[metadata_index]) or !supportsType(body, operand.result_ty)) return false;
+            !operand.type_id.eql(shape.field_type_ids[metadata_index]) or
+            !(supportsType(body, operand.result_ty) or
+                (shape.field_dyn_trait_symbols[metadata_index].isValid() and dynBindSupported(body, operand.*)))) return false;
     }
     return true;
 }
@@ -3605,7 +3617,7 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .closed_enum, .open_enum, .struct_ => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
             shape.array_length != null and shape.array_length.? != 0 and
-                shape.field_count != 0 and arrayElementTypeSupported(body, shape.field_types[0], 0)
+                shape.field_count != 0 and arrayElementTypeSupported(body, shape.field_types[0], shape.field_dyn_trait_symbols[0], 0)
         else
             false,
         .nullable_value => aggregateTypeForValueType(body, ty) != null,
@@ -4283,7 +4295,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
             if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or shape.array_length == null) return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_array_");
-            try appendArrayElementTypeSuffix(allocator, out, body, shape.field_types[0], 0);
+            try appendArrayElementTypeSuffix(allocator, out, body, shape.field_types[0], shape.field_dyn_trait_symbols[0], 0);
             try out.print(allocator, "_{d}", .{shape.array_length.?});
         },
         .closed_enum, .open_enum, .struct_ => |name| try appendIdent(allocator, out, name),
@@ -4366,29 +4378,40 @@ fn appendArrayElementTypeSuffix(
     out: *std.ArrayList(u8),
     body: *const mir.ExecutableBody,
     ty: mir.ValueType,
+    dyn_trait_symbol: mir.SymbolId,
     depth: usize,
 ) (RenderError || std.mem.Allocator.Error)!void {
     if (depth >= mir.max_executable_operands) return error.UnsupportedType;
+    if (dyn_trait_symbol.isValid()) {
+        if (ty != .value) return error.UnsupportedType;
+        const trait = symbolById(body, dyn_trait_symbol) orelse return error.UnsupportedType;
+        if (trait.kind != .trait or !isSafeIdentifier(trait.spelling)) return error.UnsupportedType;
+        return out.print(allocator, "mc_type_dyn_n_{d}_{s}", .{ trait.spelling.len, trait.spelling });
+    }
     if (ty != .array) return appendCTypeSuffix(allocator, out, ty);
     const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
     if (shape.array_length == null or shape.array_length.? == 0 or shape.field_count == 0) return error.UnsupportedType;
     var child: std.ArrayList(u8) = .empty;
     defer child.deinit(allocator);
-    try appendArrayElementTypeSuffix(allocator, &child, body, shape.field_types[0], depth + 1);
+    try appendArrayElementTypeSuffix(allocator, &child, body, shape.field_types[0], shape.field_dyn_trait_symbols[0], depth + 1);
     const length = try std.fmt.allocPrint(allocator, "{d}", .{shape.array_length.?});
     defer allocator.free(length);
     try out.print(allocator, "mc_type_array_{d}_{s}_{d}_{s}", .{ child.items.len, child.items, length.len, length });
 }
 
-fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType, depth: usize) bool {
+fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType, dyn_trait_symbol: mir.SymbolId, depth: usize) bool {
     if (depth >= mir.max_executable_operands) return false;
+    if (dyn_trait_symbol.isValid()) {
+        const trait = symbolById(body, dyn_trait_symbol) orelse return false;
+        return ty == .value and trait.kind == .trait and isSafeIdentifier(trait.spelling);
+    }
     return switch (ty) {
         .bool, .address => true,
         .integer, .float => |name| primitiveType(name) != null,
         .struct_, .closed_enum, .open_enum => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
             shape.array_length != null and shape.array_length.? != 0 and shape.field_count != 0 and
-                arrayElementTypeSupported(body, shape.field_types[0], depth + 1)
+                arrayElementTypeSupported(body, shape.field_types[0], shape.field_dyn_trait_symbols[0], depth + 1)
         else
             false,
         else => false,

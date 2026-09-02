@@ -10025,7 +10025,11 @@ const FunctionBuilder = struct {
                     try self.executableCallableSignature(target.child.*)
                 else
                     null;
-                if (!try self.internExecutableArrayType(result_ty, element_ty, length, callable_element))
+                const dyn_trait_symbol = if (dynTraitNameFromTypeAlias(target.child.*, self.aliases)) |trait_name|
+                    try self.internExecutableTraitSymbol(trait_name)
+                else
+                    SymbolId.invalid;
+                if (!try self.internExecutableArrayType(result_ty, element_ty, length, callable_element, dyn_trait_symbol))
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 const operands = try self.allocator.alloc(ExprId, items.len);
                 var operands_owned = false;
@@ -10305,9 +10309,10 @@ const FunctionBuilder = struct {
         element_ty: ValueType,
         length: usize,
         callable_element: ?mir_model.ExecutableCallSignature,
+        dyn_trait_symbol: SymbolId,
     ) !bool {
         if (std.meta.activeTag(ty) != .array or element_ty == .unknown or
-            (element_ty == .value) != (callable_element != null) or length == 0) return false;
+            (element_ty == .value) != ((callable_element != null) != dyn_trait_symbol.isValid()) or length == 0) return false;
         if (ty.array.length == null or ty.array.length.? != length) return false;
         const type_id = try self.internTypeId(ty);
         const element_type_id = try self.internTypeId(element_ty);
@@ -10318,8 +10323,9 @@ const FunctionBuilder = struct {
                 aggregate.array_length == null or aggregate.array_length.? != length or
                 aggregate.field_count != stored_field_count)
                 return false;
-            for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count]) |field_ty, field_type_id| {
-                if (!sameValueType(field_ty, element_ty) or !field_type_id.eql(element_type_id)) return false;
+            for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count]) |field_ty, field_type_id, field_dyn_trait_symbol| {
+                if (!sameValueType(field_ty, element_ty) or !field_type_id.eql(element_type_id) or
+                    !field_dyn_trait_symbol.eql(dyn_trait_symbol)) return false;
             }
             return true;
         }
@@ -10334,6 +10340,7 @@ const FunctionBuilder = struct {
             aggregate.field_types[index] = element_ty;
             aggregate.field_type_ids[index] = element_type_id;
             aggregate.field_callable_signatures[index] = callable_element;
+            aggregate.field_dyn_trait_symbols[index] = dyn_trait_symbol;
         }
         try self.executable_aggregate_types.append(self.allocator, aggregate);
         if (!try self.internExecutableEnumType(element_ty)) return false;
@@ -10375,7 +10382,11 @@ const FunctionBuilder = struct {
                     try self.executableCallableSignature(array.child.*)
                 else
                     null;
-                if (!try self.internExecutableArrayType(ty, element_ty, length, callable_element)) return false;
+                const dyn_trait_symbol = if (dynTraitNameFromTypeAlias(array.child.*, self.aliases)) |trait_name|
+                    try self.internExecutableTraitSymbol(trait_name)
+                else
+                    SymbolId.invalid;
+                if (!try self.internExecutableArrayType(ty, element_ty, length, callable_element, dyn_trait_symbol)) return false;
                 if (element_ty == .array) {
                     if (!try self.internExecutableTypeExpr(element_ty, array.child.*)) return false;
                     self.markExecutableArrayElementLayoutComplete(ty, element_ty);
