@@ -3176,9 +3176,12 @@ fn binarySupported(
     const right = expressionById(body, binary.right) orelse return false;
     if (binary.arithmetic != .unchecked and binary.contract_region_id != null) return false;
     if (binary.op == .logical_and or binary.op == .logical_or) {
-        return binary.eager_safe and binary.arithmetic == .ordinary and expression.result_ty == .bool and
-            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) and
-            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, right.id) and ownedTrapEdgeCount(body, expression.id) == 0;
+        return binary.arithmetic == .ordinary and expression.result_ty == .bool and
+            left.result_ty == .bool and right.result_ty == .bool and
+            (!binary.eager_safe or
+                (mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) and
+                    mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, right.id))) and
+            ownedTrapEdgeCount(body, expression.id) == 0;
     }
     if (binary.eager_safe) return false;
     if (!sameValueType(left.result_ty, right.result_ty)) return false;
@@ -3731,12 +3734,45 @@ fn prepareStatementExpressions(
     indent: usize,
     source_path: ?[]const u8,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    return prepareExpressionSet(allocator, out, body, statement, null, indent, source_path);
+}
+
+fn prepareExpressionSet(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    statement: mir.ExecutableStatement,
+    root: ?mir.ExprId,
+    indent: usize,
+    source_path: ?[]const u8,
+) (RenderError || std.mem.Allocator.Error)!void {
     // ExprIds are emitted by the producer in source evaluation order and the
     // verified body requires operands to precede their consumer under one
     // owner statement.  Materialize every value, including reads, so a later
     // call or store cannot change what an earlier operand observes.
     for (body.expressions) |expression| {
         if (!expression.owner_statement.eql(statement.id)) continue;
+        if (root) |selected| if (!expressionDependsOn(body, selected, expression.id, 0)) continue;
+        if (expressionDeferredByLazyLogical(body, statement.id, root, expression.id)) continue;
+        if (lazyLogical(expression)) |logical| {
+            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeIndent(allocator, out, indent);
+            try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
+            try emitExpression(allocator, out, body, logical.left, 0);
+            try out.appendSlice(allocator, ";\n");
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, if (logical.op == .logical_and) "if (" else "if (!(");
+            try out.print(allocator, "mc_exec_tmp_{d}", .{expression.id.raw});
+            try out.appendSlice(allocator, if (logical.op == .logical_and) ") {\n" else ")) {\n");
+            try prepareExpressionSet(allocator, out, body, statement, logical.right, indent + 1, source_path);
+            try writeIndent(allocator, out, indent + 1);
+            try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
+            try emitExpression(allocator, out, body, logical.right, 0);
+            try out.appendSlice(allocator, ";\n");
+            try writeIndent(allocator, out, indent);
+            try out.appendSlice(allocator, "}\n");
+            continue;
+        }
         // `uninit` is a storage policy, not a runtime value. The local
         // declaration intentionally has no initializer expression.
         if (mir.executableUninitLocalInitializer(body, expression)) continue;
@@ -3862,6 +3898,98 @@ fn prepareStatementExpressions(
             }
         }
     }
+}
+
+fn lazyLogical(expression: mir.ExecutableExpression) ?@FieldType(mir.ExecutableExpression.Operation, "binary") {
+    return switch (expression.operation) {
+        .binary => |binary| if (!binary.eager_safe and
+            (binary.op == .logical_and or binary.op == .logical_or)) binary else null,
+        else => null,
+    };
+}
+
+fn expressionDeferredByLazyLogical(
+    body: *const mir.ExecutableBody,
+    owner: mir.InstId,
+    selected_root: ?mir.ExprId,
+    candidate: mir.ExprId,
+) bool {
+    for (body.expressions) |expression| {
+        if (!expression.owner_statement.eql(owner) or expression.id.eql(candidate)) continue;
+        if (selected_root) |root| if (!expressionDependsOn(body, root, expression.id, 0)) continue;
+        const logical = lazyLogical(expression) orelse continue;
+        if (expressionDependsOn(body, logical.right, candidate, 0)) return true;
+    }
+    return false;
+}
+
+fn expressionDependsOn(body: *const mir.ExecutableBody, root: mir.ExprId, candidate: mir.ExprId, depth: usize) bool {
+    if (!root.isValid() or root.index() >= body.expressions.len or depth > body.expressions.len) return false;
+    if (root.eql(candidate)) return true;
+    const expression = body.expressions[root.index()];
+    return switch (expression.operation) {
+        .local, .symbol, .literal, .mmio_read, .optional_none, .unsupported => false,
+        .load => |load| placeDependsOn(body, load.place, candidate, depth + 1),
+        .atomic_load => |load| placeDependsOn(body, load.place, candidate, depth + 1),
+        .atomic_init => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
+        .atomic_update => |update| expressionDependsOn(body, update.value, candidate, depth + 1) or
+            placeDependsOn(body, update.place, candidate, depth + 1),
+        .mmio_write => |write| expressionDependsOn(body, write.value, candidate, depth + 1),
+        .mmio_map_checked => |map| expressionDependsOn(body, map.address, candidate, depth + 1),
+        .unary => |unary| expressionDependsOn(body, unary.operand, candidate, depth + 1),
+        .binary => |binary| expressionDependsOn(body, binary.left, candidate, depth + 1) or
+            expressionDependsOn(body, binary.right, candidate, depth + 1),
+        .cast => |cast| expressionDependsOn(body, cast.operand, candidate, depth + 1),
+        .representation_check => |check| expressionDependsOn(body, check.operand, candidate, depth + 1),
+        .direct_call => |call| expressionListDependsOn(body, call.arguments[0..call.argument_count], candidate, depth + 1),
+        .closure_bind => |bind| expressionDependsOn(body, bind.capture, candidate, depth + 1),
+        .builtin_call => |call| expressionListDependsOn(body, call.arguments[0..call.argument_count], candidate, depth + 1),
+        .indirect_call => |call| expressionDependsOn(body, call.callee, candidate, depth + 1) or
+            expressionListDependsOn(body, call.arguments[0..call.argument_count], candidate, depth + 1),
+        .dyn_call => |call| placeDependsOn(body, call.receiver, candidate, depth + 1) or
+            expressionListDependsOn(body, call.arguments[0..call.argument_count], candidate, depth + 1),
+        .dyn_bind => |bind| expressionDependsOn(body, bind.source, candidate, depth + 1),
+        .address_of => |address| placeDependsOn(body, address.place, candidate, depth + 1),
+        .deref, .slice_length, .optional_some, .try_unwrap, .try_propagate => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
+        .index => |index| expressionDependsOn(body, index.base, candidate, depth + 1) or
+            expressionDependsOn(body, index.index, candidate, depth + 1),
+        .range_slice => |range| expressionDependsOn(body, range.base, candidate, depth + 1) or
+            expressionDependsOn(body, range.start, candidate, depth + 1) or
+            expressionDependsOn(body, range.end, candidate, depth + 1),
+        .member => |member| expressionDependsOn(body, member.base, candidate, depth + 1),
+        .variant_test => |variant| expressionDependsOn(body, variant.operand, candidate, depth + 1),
+        .variant_payload => |variant| expressionDependsOn(body, variant.operand, candidate, depth + 1),
+        .try_map_error => |mapped| expressionDependsOn(body, mapped.operand, candidate, depth + 1) or switch (mapped.mapper) {
+            .conversion => false,
+            .literal => |literal| expressionDependsOn(body, literal, candidate, depth + 1),
+        },
+        .result => |result| expressionDependsOn(body, result.payload, candidate, depth + 1),
+        .array => |array| expressionListDependsOn(body, array.operands, candidate, depth + 1),
+        .struct_ => |aggregate| expressionListDependsOn(body, aggregate.operands[0..aggregate.operand_count], candidate, depth + 1),
+    };
+}
+
+fn expressionListDependsOn(
+    body: *const mir.ExecutableBody,
+    operands: []const mir.ExprId,
+    candidate: mir.ExprId,
+    depth: usize,
+) bool {
+    for (operands) |operand| if (expressionDependsOn(body, operand, candidate, depth)) return true;
+    return false;
+}
+
+fn placeDependsOn(body: *const mir.ExecutableBody, id: mir.PlaceId, candidate: mir.ExprId, depth: usize) bool {
+    const place = placeById(body, id) orelse return false;
+    switch (place.root) {
+        .value => |value| if (expressionDependsOn(body, value, candidate, depth)) return true,
+        else => {},
+    }
+    for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+        .index => |index| if (expressionDependsOn(body, index.value, candidate, depth)) return true,
+        else => {},
+    };
+    return false;
 }
 
 const RepresentationGuard = struct {
@@ -4881,7 +5009,7 @@ test "executable C renderer snapshots reads before a later effect" {
     try std.testing.expect(read_pos < mutate_pos and mutate_pos < combine_pos);
 }
 
-test "executable C renderer rejects implicit CFG and short circuit effects" {
+test "executable C renderer rejects implicit CFG and emits short circuit effects" {
     const entry = mir.BlockId.fromIndex(0);
     const other = mir.BlockId.fromIndex(1);
     var fallthrough_terminators = [_]mir.ExecutableTerminator{
@@ -4904,7 +5032,11 @@ test "executable C renderer rejects implicit CFG and short circuit effects" {
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const logical_body: mir.ExecutableBody = .{ .expressions = &expressions, .statements = &statements, .terminators = &terminators };
-    try std.testing.expect(!canEmitBody(&logical_body));
+    try std.testing.expect(canEmitBody(&logical_body));
+    var logical_output: std.ArrayList(u8) = .empty;
+    defer logical_output.deinit(std.testing.allocator);
+    try emitBody(std.testing.allocator, &logical_output, &logical_body, 0);
+    try std.testing.expect(std.mem.indexOf(u8, logical_output.items, "if (mc_exec_tmp_2)") != null);
 }
 
 test "executable C renderer maps only closed trap helpers" {

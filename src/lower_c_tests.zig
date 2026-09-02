@@ -22044,7 +22044,7 @@ test "lower-c rejects non-static global initializers instead of zeroing" {
     try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.decls(), &output));
 }
 
-test "lower-c rejects two MMIO reads in one short-circuit operand" {
+test "lower-c preserves two MMIO reads before a short-circuit edge" {
     const source =
         \\extern mmio struct ProbeMmio {
         \\    magic: Reg<u32, .read>      @offset(0x000),
@@ -22055,7 +22055,15 @@ test "lower-c rejects two MMIO reads in one short-circuit operand" {
         \\    return both(slot.magic.read(.acquire), slot.device_id.read(.acquire)) && true;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_reject_mmio_seq.mc", source);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_mmio_seq.mc", source, &output);
+    const probe = std.mem.indexOf(u8, output.items, "bool probe(") orelse return error.TestUnexpectedResult;
+    const first = std.mem.indexOfPos(u8, output.items, probe, "mc_mmio_read_u32") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, output.items, first + 1, "mc_mmio_read_u32") orelse return error.TestUnexpectedResult;
+    const both = std.mem.indexOfPos(u8, output.items, second, "both(") orelse return error.TestUnexpectedResult;
+    const logical = std.mem.indexOfPos(u8, output.items, both, "if (mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first < second and second < both and both < logical);
 }
 
 test "lower-c keeps a single MMIO read per short-circuit operand" {
@@ -22071,13 +22079,12 @@ test "lower-c keeps a single MMIO read per short-circuit operand" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("emit_c_single_mmio_seq.mc", source, &output);
-    const magic_read = std.mem.indexOf(u8, output.items, "slot->magic") orelse return error.TestUnexpectedResult;
-    const amp = std.mem.indexOfPos(u8, output.items, magic_read, "&&") orelse return error.TestUnexpectedResult;
-    const devid_read = std.mem.indexOf(u8, output.items, "slot->device_id") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOfPos(u8, output.items, magic_read + 1, "slot->magic") == null);
-    try std.testing.expect(std.mem.indexOfPos(u8, output.items, devid_read + 1, "slot->device_id") == null);
-    try std.testing.expect(magic_read < amp);
-    try std.testing.expect(amp < devid_read);
+    const probe = std.mem.indexOf(u8, output.items, "bool probe(") orelse return error.TestUnexpectedResult;
+    const magic_read = std.mem.indexOfPos(u8, output.items, probe, "mc_mmio_read_u32") orelse return error.TestUnexpectedResult;
+    const branch = std.mem.indexOfPos(u8, output.items, magic_read, "if (mc_exec_tmp_") orelse return error.TestUnexpectedResult;
+    const devid_read = std.mem.indexOfPos(u8, output.items, branch, "mc_mmio_read_u32") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOfPos(u8, output.items, devid_read + 1, "mc_mmio_read_u32") == null);
+    try std.testing.expect(magic_read < branch and branch < devid_read);
 }
 
 test "lower-c uses type-directed helpers for fixed-width checked arithmetic" {
