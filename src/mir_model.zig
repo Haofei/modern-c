@@ -1204,8 +1204,7 @@ pub const ExecutableExpression = struct {
             payload: ExprId,
         },
         array: struct {
-            operands: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
-            operand_count: usize = 0,
+            operands: []const ExprId = &.{},
         },
         struct_: struct {
             operands: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
@@ -1878,6 +1877,10 @@ pub const ExecutableBody = struct {
     /// ownership on the body makes operation payloads self-contained without
     /// embedding AST nodes or source-literal spellings.
     owned_bytes: []const []const u8 = &.{},
+    /// Variable-width operand lists owned by expression operations such as
+    /// fixed-array construction. Keeping ownership here avoids an arbitrary
+    /// language limit inherited from call/asm inline storage.
+    owned_expr_id_slices: []const []const ExprId = &.{},
 
     pub fn isComplete(self: *const ExecutableBody) bool {
         return self.complete;
@@ -1897,6 +1900,8 @@ pub const ExecutableBody = struct {
         if (self.terminators.len != 0) allocator.free(self.terminators);
         for (self.owned_bytes) |bytes| allocator.free(bytes);
         if (self.owned_bytes.len != 0) allocator.free(self.owned_bytes);
+        for (self.owned_expr_id_slices) |ids| allocator.free(ids);
+        if (self.owned_expr_id_slices.len != 0) allocator.free(self.owned_expr_id_slices);
         self.* = .{};
     }
 };

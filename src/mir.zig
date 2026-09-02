@@ -6186,6 +6186,7 @@ const FunctionBuilder = struct {
     executable_statements: std.ArrayList(ExecutableStatement),
     executable_terminators: std.ArrayList(ExecutableTerminator),
     executable_owned_bytes: std.ArrayList([]const u8),
+    executable_owned_expr_id_slices: std.ArrayList([]const ExprId),
     executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
     executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
@@ -6329,6 +6330,7 @@ const FunctionBuilder = struct {
             .executable_statements = .empty,
             .executable_terminators = .empty,
             .executable_owned_bytes = .empty,
+            .executable_owned_expr_id_slices = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -6483,6 +6485,7 @@ const FunctionBuilder = struct {
             .executable_statements = .empty,
             .executable_terminators = .empty,
             .executable_owned_bytes = .empty,
+            .executable_owned_expr_id_slices = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -6564,6 +6567,8 @@ const FunctionBuilder = struct {
         self.executable_terminators.deinit(self.allocator);
         for (self.executable_owned_bytes.items) |bytes| self.allocator.free(bytes);
         self.executable_owned_bytes.deinit(self.allocator);
+        for (self.executable_owned_expr_id_slices.items) |ids| self.allocator.free(ids);
+        self.executable_owned_expr_id_slices.deinit(self.allocator);
         self.executable_for_each_terminators.deinit();
         self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
@@ -7060,6 +7065,11 @@ const FunctionBuilder = struct {
             for (owned_bytes) |bytes| self.allocator.free(bytes);
             self.allocator.free(owned_bytes);
         }
+        const owned_expr_id_slices = try self.executable_owned_expr_id_slices.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_expr_id_slices) |ids| self.allocator.free(ids);
+            self.allocator.free(owned_expr_id_slices);
+        }
         self.executable_local_ids.deinit();
         self.executable_local_ids = std.StringHashMap(LocalId).init(self.allocator);
         self.executable_symbol_ids.deinit();
@@ -7081,6 +7091,7 @@ const FunctionBuilder = struct {
             .statements = statements,
             .terminators = terminators,
             .owned_bytes = owned_bytes,
+            .owned_expr_id_slices = owned_expr_id_slices,
         };
     }
 
@@ -7464,7 +7475,7 @@ const FunctionBuilder = struct {
         expression: ExecutableExpression,
         operation: @FieldType(ExecutableExpression.Operation, "array"),
     ) bool {
-        if (operation.operand_count == 0 or operation.operand_count > mir_model.max_executable_operands) return false;
+        if (operation.operands.len == 0) return false;
         var aggregate: ?mir_model.ExecutableAggregateType = null;
         for (self.executable_aggregate_types.items) |candidate| if (candidate.type_id.eql(expression.type_id)) {
             aggregate = candidate;
@@ -7472,15 +7483,15 @@ const FunctionBuilder = struct {
         };
         const shape = aggregate orelse return false;
         if (shape.construction != .declared_struct or shape.ty != .array or !sameValueType(shape.ty, expression.result_ty) or
-            shape.array_length == null or shape.array_length.? != operation.operand_count or
-            shape.field_count != operation.operand_count) return false;
-        for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+            shape.array_length == null or shape.array_length.? != operation.operands.len or
+            (shape.field_count != 1 and shape.field_count != operation.operands.len)) return false;
+        for (operation.operands, 0..) |operand_id, index| {
             if (!operand_id.isValid() or operand_id.index() >= self.executable_expressions.items.len) return false;
             const operand = self.executable_expressions.items[operand_id.index()];
-            if (!sameValueType(operand.result_ty, shape.field_types[index]) or
-                !operand.type_id.eql(shape.field_type_ids[index])) return false;
+            const field_index = if (shape.field_count == 1) 0 else index;
+            if (!sameValueType(operand.result_ty, shape.field_types[field_index]) or
+                !operand.type_id.eql(shape.field_type_ids[field_index])) return false;
         }
-        for (operation.operands[operation.operand_count..]) |operand_id| if (operand_id.isValid()) return false;
         return true;
     }
 
@@ -9945,8 +9956,6 @@ const FunctionBuilder = struct {
                 break :call .{ .indirect_call = call_value };
             },
             .array_literal => |items| array: {
-                if (items.len > mir_model.max_executable_operands)
-                    break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 const target_type_expr = expected_type_expr orelse
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 const target = switch (aggregateTargetTypeAlias(target_type_expr, self.aliases).kind) {
@@ -9964,13 +9973,17 @@ const FunctionBuilder = struct {
                     null;
                 if (!try self.internExecutableArrayType(result_ty, element_ty, length, callable_element))
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
-                var aggregate: @FieldType(ExecutableExpression.Operation, "array") = .{ .operand_count = items.len };
+                const operands = try self.allocator.alloc(ExprId, items.len);
+                var operands_owned = false;
+                errdefer if (!operands_owned) self.allocator.free(operands);
                 for (items, 0..) |item, index| {
-                    aggregate.operands[index] = try self.ensureExecutableExprAsType(item, element_ty, target.child.*);
-                    try self.contextualizeExecutableLiteral(aggregate.operands[index], element_ty);
+                    operands[index] = try self.ensureExecutableExprAsType(item, element_ty, target.child.*);
+                    try self.contextualizeExecutableLiteral(operands[index], element_ty);
                 }
+                try self.executable_owned_expr_id_slices.append(self.allocator, operands);
+                operands_owned = true;
                 self.markExecutableArrayElementLayoutComplete(result_ty, element_ty);
-                break :array .{ .array = aggregate };
+                break :array .{ .array = .{ .operands = operands } };
             },
             .struct_literal => |fields| aggregate: {
                 const struct_name = switch (result_ty) {

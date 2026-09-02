@@ -494,7 +494,7 @@ test "array construction and local aggregate stores are verified executable MIR"
     };
     const array_value = array_expression orelse return error.TestUnexpectedResult;
     const saved_array_operation = array_value.operation;
-    array_value.operation.array.operand_count = 1;
+    array_value.operation.array.operands = saved_array_operation.array.operands[0..1];
     try std.testing.expectError(error.InvalidAggregateConstruction, executable.verify(function));
     array_value.operation = saved_array_operation;
 

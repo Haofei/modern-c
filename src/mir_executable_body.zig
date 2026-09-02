@@ -721,7 +721,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             }
         },
         .array => |operation| {
-            try verifyArguments(body, value, operation.operands, operation.operand_count);
+            for (operation.operands) |operand| try verifyOperand(body, value, operand);
             if (body.complete) try verifyArrayConstruction(function, value, operation);
         },
         .struct_ => |operation| {
@@ -1872,13 +1872,15 @@ fn verifyArrayConstruction(
     const body = &function.executable_body;
     const aggregate = aggregateType(body, value.type_id) orelse return error.InvalidAggregateConstruction;
     if (aggregate.construction != .declared_struct or aggregate.ty != .array or !sameValueType(aggregate.ty, value.result_ty) or
-        operation.operand_count == 0 or aggregate.array_length == null or
-        operation.operand_count != aggregate.array_length.? or operation.operand_count != aggregate.field_count)
+        operation.operands.len == 0 or aggregate.array_length == null or
+        operation.operands.len != aggregate.array_length.? or
+        (aggregate.field_count != 1 and operation.operands.len != aggregate.field_count))
         return error.InvalidAggregateConstruction;
-    for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+    for (operation.operands, 0..) |operand_id, index| {
         const operand = expression(body, operand_id) orelse return error.InvalidExpressionReference;
-        if (!sameValueType(operand.result_ty, aggregate.field_types[index]) or
-            !operand.type_id.eql(aggregate.field_type_ids[index])) return error.InvalidAggregateConstruction;
+        const field_index = if (aggregate.field_count == 1) 0 else index;
+        if (!sameValueType(operand.result_ty, aggregate.field_types[field_index]) or
+            !operand.type_id.eql(aggregate.field_type_ids[field_index])) return error.InvalidAggregateConstruction;
     }
 }
 

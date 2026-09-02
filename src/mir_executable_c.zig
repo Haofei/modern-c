@@ -1008,7 +1008,7 @@ fn emitExpressionOperation(
             try out.append(allocator, '(');
             try appendCType(allocator, out, body, shape.ty);
             try out.appendSlice(allocator, "){ .elems = { ");
-            for (aggregate.operands[0..aggregate.operand_count], 0..) |operand, index| {
+            for (aggregate.operands, 0..) |operand, index| {
                 if (index != 0) try out.appendSlice(allocator, ", ");
                 try emitExpression(allocator, out, body, operand, depth + 1);
             }
@@ -2032,11 +2032,11 @@ fn arrayConstructionSupported(
 ) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
     if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
-        shape.array_length == null or shape.array_length.? != operation.operand_count or
-        (shape.field_count != 1 and shape.field_count != operation.operand_count) or
+        shape.array_length == null or shape.array_length.? != operation.operands.len or
+        (shape.field_count != 1 and shape.field_count != operation.operands.len) or
         !sameValueType(shape.ty, expression.result_ty)) return false;
     if (!arrayElementTypeSupported(body, shape.field_types[0], 0)) return false;
-    for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+    for (operation.operands, 0..) |operand_id, index| {
         const operand = expressionById(body, operand_id) orelse return false;
         const metadata_index: usize = if (shape.field_count == 1) 0 else index;
         if (!sameValueType(operand.result_ty, shape.field_types[metadata_index]) or

@@ -3015,6 +3015,10 @@ test "lower-c emits simple array literal returns from MIR" {
         \\    out = .{ b, a };
         \\    return out;
         \\}
+        \\fn array_wide(value: u32) -> [20]u32 {
+        \\    return .{ value, value, value, value, value, value, value, value, value, value,
+        \\        value, value, value, value, value, value, value, value, value, value };
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -3034,6 +3038,10 @@ test "lower-c emits simple array literal returns from MIR" {
     try expectContains(assigned_body, "(mc_array_u32_2){ .elems = {");
     try expectContains(assigned_body, if (isCanonicalExecutableCBody(assigned_body)) "return mc_exec_tmp_" else "return (mc_array_u32_2)");
     try expectNotContains(assigned_body, "mc_tmp");
+
+    const wide_body = try cFunctionBody(output.items, "static mc_array_u32_20 array_wide(uint32_t value)");
+    try expectContains(wide_body, "/* canonical executable MIR */");
+    try expectContains(wide_body, "(mc_array_u32_20){ .elems = {");
 }
 
 test "lower-c preserves local aggregate assignment and return from MIR without body fallback" {

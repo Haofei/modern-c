@@ -3421,6 +3421,10 @@ test "LLVM emits simple array literal returns from MIR" {
         \\    out = .{ b, a };
         \\    return out;
         \\}
+        \\fn array_wide(value: u32) -> [20]u32 {
+        \\    return .{ value, value, value, value, value, value, value, value, value, value,
+        \\        value, value, value, value, value, value, value, value, value, value };
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -3449,6 +3453,11 @@ test "LLVM emits simple array literal returns from MIR" {
     try expectContains(assigned_body, "ret [2 x i32] %mc_expr_tmp_");
     try expectContains(assigned_body, "alloca [2 x i32]");
     try expectContains(assigned_body, "store [2 x i32]");
+
+    const wide_body = try llvmFunctionBody(output.items, "define internal [20 x i32] @array_wide");
+    try expectContains(wide_body, "; canonical executable MIR");
+    try expectContains(wide_body, "insertvalue [20 x i32]");
+    try expectContains(wide_body, "ret [20 x i32]");
 }
 
 test "LLVM emits array control-flow returns from MIR" {

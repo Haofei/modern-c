@@ -1323,9 +1323,10 @@ const Renderer = struct {
         const shape = aggregateType(self.body, expression.type_id) orelse return error.InvalidBody;
         const aggregate_ty = try self.typeText(shape.ty);
         var current: []const u8 = "zeroinitializer";
-        for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+        for (operation.operands, 0..) |operand_id, index| {
             const operand = try self.emitExpression(operand_id);
-            const element_ty = try self.typeText(shape.field_types[index]);
+            const metadata_index: usize = if (shape.field_count == 1) 0 else index;
+            const element_ty = try self.typeText(shape.field_types[metadata_index]);
             if (!std.mem.eql(u8, operand.ty, element_ty)) return error.InvalidBody;
             const result = try self.temp();
             try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
@@ -3800,13 +3801,15 @@ fn structConstructionSupported(body: *const mir.ExecutableBody, expression: mir.
 fn arrayConstructionSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operation: anytype) bool {
     const shape = aggregateType(body, expression.type_id) orelse return false;
     if (shape.construction != .declared_struct or shape.ty != .array or shape.field_count == 0 or
-        shape.array_length == null or shape.array_length.? != operation.operand_count or
-        shape.field_count != operation.operand_count or !sameValueType(shape.ty, expression.result_ty)) return false;
-    for (operation.operands[0..operation.operand_count], 0..) |operand_id, index| {
+        shape.array_length == null or shape.array_length.? != operation.operands.len or
+        (shape.field_count != 1 and shape.field_count != operation.operands.len) or
+        !sameValueType(shape.ty, expression.result_ty)) return false;
+    for (operation.operands, 0..) |operand_id, index| {
         if (!expressionValid(body, operand_id)) return false;
         const operand = body.expressions[operand_id.index()];
-        if (!sameValueType(operand.result_ty, shape.field_types[index]) or
-            !operand.type_id.eql(shape.field_type_ids[index]) or !llvmTypeSupported(body, operand.result_ty)) return false;
+        const metadata_index: usize = if (shape.field_count == 1) 0 else index;
+        if (!sameValueType(operand.result_ty, shape.field_types[metadata_index]) or
+            !operand.type_id.eql(shape.field_type_ids[metadata_index]) or !llvmTypeSupported(body, operand.result_ty)) return false;
     }
     return true;
 }
