@@ -575,6 +575,17 @@ const Renderer = struct {
                 .{ place.id.raw, try self.typeText(place.root_ty) },
             );
         }
+        // A lazy logical expression joins two evaluation paths. Keep its
+        // result slot in the entry block so nested expressions and loop
+        // re-entry cannot allocate repeatedly.
+        for (self.body.expressions) |expression| switch (expression.operation) {
+            .binary => |binary| if (!binary.eager_safe and
+                (binary.op == .logical_and or binary.op == .logical_or))
+            {
+                try self.output.print(self.allocator, "  %mc_short_slot_{d} = alloca i1\n", .{expression.id.raw});
+            },
+            else => {},
+        };
         try self.output.print(self.allocator, "  br label %mc_block_{d}\n", .{self.body.terminators[0].block_id.raw});
         for (self.body.terminators) |terminator| {
             // Expression IDs identify source occurrences, not SSA definitions.
@@ -1838,6 +1849,8 @@ const Renderer = struct {
                 },
             });
         }
+        if (!binary.eager_safe and (binary.op == .logical_and or binary.op == .logical_or))
+            return self.emitShortCircuitLogical(expression, result_ty, binary);
         const left = try self.emitExpression(binary.left);
         const right = try self.emitExpression(binary.right);
         if (!std.mem.eql(u8, left.ty, right.ty)) return error.InvalidBody;
@@ -1912,6 +1925,41 @@ const Renderer = struct {
             try self.output.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ value, operation, left.ty, left.spelling, right.spelling });
         }
         return .{ .ty = result_ty, .spelling = value };
+    }
+
+    fn emitShortCircuitLogical(
+        self: *Renderer,
+        expression: mir.ExecutableExpression,
+        result_ty: []const u8,
+        binary: @FieldType(mir.ExecutableExpression.Operation, "binary"),
+    ) RenderError!Value {
+        if (!std.mem.eql(u8, result_ty, "i1") or binary.arithmetic != .ordinary or
+            (binary.op != .logical_and and binary.op != .logical_or)) return error.InvalidBody;
+        const left = try self.emitExpression(binary.left);
+        if (!std.mem.eql(u8, left.ty, "i1")) return error.InvalidBody;
+        const rhs_label = try std.fmt.allocPrint(self.allocator, "mc_short_rhs_{d}", .{expression.id.raw});
+        const skip_label = try std.fmt.allocPrint(self.allocator, "mc_short_skip_{d}", .{expression.id.raw});
+        const done_label = try std.fmt.allocPrint(self.allocator, "mc_short_done_{d}", .{expression.id.raw});
+        const slot = try std.fmt.allocPrint(self.allocator, "%mc_short_slot_{d}", .{expression.id.raw});
+        if (binary.op == .logical_and)
+            try self.output.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ left.spelling, rhs_label, skip_label })
+        else
+            try self.output.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ left.spelling, skip_label, rhs_label });
+        try self.output.print(
+            self.allocator,
+            "{s}:\n  store i1 {s}, ptr {s}\n  br label %{s}\n{s}:\n",
+            .{ skip_label, if (binary.op == .logical_or) "true" else "false", slot, done_label, rhs_label },
+        );
+        const right = try self.emitExpression(binary.right);
+        if (!std.mem.eql(u8, right.ty, "i1")) return error.InvalidBody;
+        try self.output.print(
+            self.allocator,
+            "  store i1 {s}, ptr {s}\n  br label %{s}\n{s}:\n",
+            .{ right.spelling, slot, done_label, done_label },
+        );
+        const value = try self.temp();
+        try self.output.print(self.allocator, "  {s} = load i1, ptr {s}\n", .{ value, slot });
+        return .{ .ty = "i1", .spelling = value };
     }
 
     fn emitSaturatingBinary(
@@ -4844,9 +4892,11 @@ fn binarySupported(body: *const mir.ExecutableBody, expression: mir.ExecutableEx
     if (binary.arithmetic != .unchecked and binary.contract_region_id != null) return false;
     if (!sameValueType(left_ty, right_ty)) return false;
     if (binary.op == .logical_and or binary.op == .logical_or) {
-        return binary.eager_safe and binary.arithmetic == .ordinary and expression.result_ty == .bool and
-            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, binary.left) and
-            mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, binary.right) and
+        return binary.arithmetic == .ordinary and expression.result_ty == .bool and
+            left_ty == .bool and right_ty == .bool and
+            (!binary.eager_safe or
+                (mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, binary.left) and
+                    mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, binary.right))) and
             ownedExpressionTrapCount(body, expression.id) == 0;
     }
     if (binary.eager_safe) return false;
@@ -6199,6 +6249,38 @@ test "mechanical renderer emits checked-free integer arithmetic and logical not"
     try std.testing.expect(std.mem.indexOf(u8, rendered, " = add i32 %mc_arg_1, %mc_arg_2") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, " = sub i32 ") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, " = mul i32 ") != null);
+}
+
+test "mechanical renderer emits lazy logical control flow" {
+    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
+    const entry = mir.BlockId.fromIndex(0);
+    const statement = mir.InstId.fromIndex(0);
+    const left = mir.ExprId.fromIndex(0);
+    const right = mir.ExprId.fromIndex(1);
+    const result = mir.ExprId.fromIndex(2);
+    const parameters = [_]mir.ExecutableParameter{
+        .{ .local = mir.LocalId.fromIndex(0), .ty = .bool, .source = source },
+        .{ .local = mir.LocalId.fromIndex(1), .ty = .bool, .source = source },
+    };
+    const expressions = [_]mir.ExecutableExpression{
+        .{ .id = left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = left, .right = right, .eager_safe = false } } },
+    };
+    const statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    const terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
+    const body: mir.ExecutableBody = .{
+        .parameters = @constCast(&parameters),
+        .expressions = @constCast(&expressions),
+        .statements = @constCast(&statements),
+        .terminators = @constCast(&terminators),
+    };
+    const rendered = try render(std.testing.allocator, &body, .bool);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "%mc_short_slot_2 = alloca i1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "br i1 %mc_arg_0, label %mc_short_rhs_2, label %mc_short_skip_2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "mc_short_rhs_2:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "mc_short_done_2:") != null);
 }
 
 test "mechanical renderer keeps arithmetic restricted to integer ValueType" {

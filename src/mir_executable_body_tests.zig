@@ -1075,7 +1075,7 @@ test "lowering admission rejects executable body identity drift" {
     return error.TestUnexpectedResult;
 }
 
-test "checked traps and asserts are complete while eager logical operators remain incomplete" {
+test "checked traps asserts and short circuit logical operators are complete" {
     const source =
         \\fn checked(value: u32) -> u32 { return value + 1; }
         \\fn logical(left: bool, right: bool) -> bool { return left && right; }
@@ -1091,9 +1091,9 @@ test "checked traps and asserts are complete while eager logical operators remai
     try std.testing.expect(!reporter.has_errors);
     var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
     defer module.deinit();
-    for (module.functions, 0..) |*function, index| {
+    for (module.functions) |*function| {
         try executable.verify(function);
-        try std.testing.expectEqual(index != 1, executable.isComplete(function));
+        try std.testing.expect(executable.isComplete(function));
     }
 }
 

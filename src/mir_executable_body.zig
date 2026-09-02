@@ -376,9 +376,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidUncheckedArithmetic;
                 const logical = operation.op == .logical_and or operation.op == .logical_or;
                 if (logical) {
-                    if (!operation.eager_safe or value.result_ty != .bool or
-                        !mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) or
-                        !mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, right.id) or
+                    if (value.result_ty != .bool or left.result_ty != .bool or right.result_ty != .bool or
+                        (operation.eager_safe and
+                            (!mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, left.id) or
+                                !mir.executableEagerSafeBoolTree(body.expressions, body.trap_edges, right.id))) or
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidLogicalOperation;
                 } else if (operation.eager_safe) {

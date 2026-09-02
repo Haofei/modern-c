@@ -7245,7 +7245,13 @@ const FunctionBuilder = struct {
             else if (binary.contract_region_id != null)
                 false
             else if (binary.op == .logical_and or binary.op == .logical_or)
-                binary.eager_safe and self.executablePureBoolOperand(binary.left) and self.executablePureBoolOperand(binary.right)
+                expression.result_ty == .bool and
+                    binary.left.isValid() and binary.left.index() < expression.id.index() and
+                    binary.right.isValid() and binary.right.index() < expression.id.index() and
+                    self.executable_expressions.items[binary.left.index()].result_ty == .bool and
+                    self.executable_expressions.items[binary.right.index()].result_ty == .bool and
+                    (!binary.eager_safe or
+                        (self.executablePureBoolOperand(binary.left) and self.executablePureBoolOperand(binary.right)))
             else
                 !binary.eager_safe,
             .direct_call => |call| direct: {

@@ -4769,7 +4769,7 @@ test "executable MIR owns checked pointer-to-integer casts" {
     try mir_executable_body.verify(function);
 }
 
-test "executable MIR owns pure logical eager-evaluation proof" {
+test "executable MIR owns logical evaluation mode" {
     // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
     const source =
         \\fn bool_and(a: bool, b: bool) -> bool { return a && b; }
@@ -4810,7 +4810,7 @@ test "executable MIR owns pure logical eager-evaluation proof" {
         .binary => |*binary| switch (binary.op) {
             .logical_and => {
                 binary.eager_safe = false;
-                try std.testing.expectError(error.InvalidLogicalOperation, mir_executable_body.verify(mutable_bool_and));
+                try mir_executable_body.verify(mutable_bool_and);
                 binary.eager_safe = true;
                 try mir_executable_body.verify(mutable_bool_and);
                 break;
