@@ -196,7 +196,6 @@ pub fn verify(function: *const mir.Function) !void {
         try verifySpan(function, statement_value.span_id, statement_value.source);
         try verifyStatement(function, statement_value);
     }
-    if (body.complete) try verifyContractMarkers(body);
 
     if (body.terminators.len != function.blocks.len) return error.InvalidTerminatorIdentity;
     for (body.terminators, 0..) |terminator, index| {
@@ -1335,7 +1334,6 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                 if (body.complete and !sameValueType(result.result_ty, function.return_ty)) return error.InvalidReturnStatement;
             } else if (body.complete and function.return_ty != .void) return error.InvalidReturnStatement;
         },
-        .contract_marker => |marker| if (marker.name.len == 0) return error.InvalidContractMarker,
         .opaque_asm => |asm_value| {
             if (asm_value.template_count > mir.max_executable_operands or
                 asm_value.clobber_count > mir.max_executable_operands or
@@ -1381,40 +1379,6 @@ fn mutableLocalDeclaration(
         else => {},
     };
     return found;
-}
-
-fn verifyContractMarkers(body: *const mir.ExecutableBody) !void {
-    var names: [64][]const u8 = undefined;
-    var blocks: [64]mir.BlockId = undefined;
-    var depth: usize = 0;
-    for (body.statements) |statement_value| switch (statement_value.operation) {
-        .contract_marker => |marker| switch (marker.kind) {
-            .begin => {
-                if (marker.name.len == 0 or depth == names.len) return error.InvalidContractMarker;
-                names[depth] = marker.name;
-                blocks[depth] = statement_value.block_id;
-                depth += 1;
-            },
-            .end => {
-                if (depth == 0) return error.InvalidContractMarker;
-                depth -= 1;
-                if (!blocks[depth].eql(statement_value.block_id) or !std.mem.eql(u8, names[depth], marker.name))
-                    return error.InvalidContractMarker;
-            },
-        },
-        else => {},
-    };
-    // A lexical contract whose body terminates has no reachable point at
-    // which to emit an end marker. Its CFG terminator closes the remaining
-    // marker stack for that block.
-    while (depth != 0) {
-        depth -= 1;
-        const terminator = executableTerminator(body, blocks[depth]) orelse return error.InvalidContractMarker;
-        switch (terminator.operation) {
-            .return_, .trap_, .unreachable_ => {},
-            else => return error.InvalidContractMarker,
-        }
-    }
 }
 
 fn verifyTerminator(function: *const mir.Function, terminator: mir.ExecutableTerminator) !void {

@@ -1450,10 +1450,6 @@ pub const ExecutableStatement = struct {
         },
         eval: ExprId,
         guard: struct { kind: enum { if_, while_, switch_, assert_ }, condition: ExprId },
-        contract_marker: struct {
-            kind: enum { begin, end },
-            name: []const u8,
-        },
         return_: ?ExprId,
         control_transfer: enum { break_, continue_ },
         opaque_asm: ExecutableOpaqueAsm,

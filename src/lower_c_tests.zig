@@ -156,9 +156,8 @@ test "lower-c lexical unsafe and contract call bodies use canonical executable M
 
     const contract_body = try cFunctionBody(output.items, "static void contract_call");
     try expectContains(contract_body, "/* canonical executable MIR */");
-    try expectContains(contract_body, "/* MC_CONTRACT_BEGIN no_overflow */");
     try expectContains(contract_body, "consume(mc_exec_tmp_0);");
-    try expectContains(contract_body, "/* MC_CONTRACT_END no_overflow */");
+    try expectNotContains(contract_body, "MC_CONTRACT_");
 }
 
 test "lower-c fixed-array signatures and direct calls use canonical executable MIR" {
@@ -21964,9 +21963,11 @@ test "lower-c omits pure comptime blocks from C runtime output" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("emit_c_comptime_block.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_comptime_block.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_pure_comptime_block(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
+    const body = try cFunctionBody(output.items, "static uint32_t accept_pure_comptime_block(void)");
+    try expectContains(body, "/* canonical executable MIR */");
+    try expectContains(body, "return ");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(true))") == null);
@@ -22380,9 +22381,7 @@ test "lower-c emits unsafe contract blocks as scoped blocks" {
     try appendCheckedCTest("emit_c_contract_block.mc", source, &output);
     const plain_scope = try cFunctionBody(output.items, "MC_UNUSED static uint32_t accept_plain_contract_scope(void)");
     try expectContains(plain_scope, "/* canonical executable MIR */");
-    const contract_begin = std.mem.indexOf(u8, plain_scope, "/* MC_CONTRACT_BEGIN no_overflow */") orelse return error.TestUnexpectedResult;
-    const contract_end = std.mem.indexOf(u8, plain_scope, "/* MC_CONTRACT_END no_overflow */") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(contract_begin < contract_end);
+    try expectNotContains(plain_scope, "MC_CONTRACT_");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);

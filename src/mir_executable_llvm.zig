@@ -252,7 +252,6 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
             .return_ => |value| if (value) |result| {
                 if (!expressionValid(body, result)) return false;
             },
-            .contract_marker => |marker| if (marker.name.len == 0) return false,
             .opaque_asm => |asm_value| if (asm_value.template_count > mir.max_executable_operands or
                 asm_value.clobber_count > mir.max_executable_operands) return false,
             .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,
@@ -610,10 +609,6 @@ const Renderer = struct {
                         .{ condition.spelling, continuation, edge.trap_block.raw, continuation },
                     );
                 }
-            },
-            .contract_marker => |marker| switch (marker.kind) {
-                .begin => try self.output.print(self.allocator, "  ; MC_CONTRACT_BEGIN {s}\n", .{marker.name}),
-                .end => try self.output.print(self.allocator, "  ; MC_CONTRACT_END {s}\n", .{marker.name}),
             },
             .opaque_asm => |asm_value| try self.emitOpaqueAsm(asm_value),
             .precise_asm => |asm_value| try self.emitPreciseAsm(asm_value),

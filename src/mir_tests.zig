@@ -525,7 +525,9 @@ test "executable MIR owns assertion trap edges and rejects semantic drift" {
     defer module_mir.deinit();
 
     const compile_only = functionByName(module_mir, "compile_only") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(!compile_only.executable_body.complete);
+    try std.testing.expect(compile_only.executable_body.complete);
+    try std.testing.expectEqual(@as(usize, 1), compile_only.executable_body.statements.len);
+    try std.testing.expectEqual(@as(usize, 0), compile_only.executable_body.trap_edges.len);
 
     const function = functionByNameMut(&module_mir, "require_flag") orelse return error.TestUnexpectedResult;
     try std.testing.expect(function.executable_body.complete);

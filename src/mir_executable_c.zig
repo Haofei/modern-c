@@ -269,13 +269,6 @@ fn emitStatement(
             // terminator.  The statement only preserves the source operation.
             .if_, .while_, .switch_ => {},
         },
-        .contract_marker => |marker| {
-            try writeIndent(allocator, out, indent);
-            switch (marker.kind) {
-                .begin => try out.print(allocator, "/* MC_CONTRACT_BEGIN {s} */\n", .{marker.name}),
-                .end => try out.print(allocator, "/* MC_CONTRACT_END {s} */\n", .{marker.name}),
-            }
-        },
         .opaque_asm => |asm_value| try emitOpaqueAsm(allocator, out, asm_value, indent, options.stub_asm),
         .precise_asm => |asm_value| try emitPreciseAsm(allocator, out, body, asm_value, indent, options.stub_asm),
         .return_ => |value| {
@@ -1148,7 +1141,6 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                 }
             },
             .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return false,
-            .contract_marker => |marker| if (marker.name.len == 0) return false,
             .opaque_asm => |asm_value| if (asm_value.template_count > mir.max_executable_operands or
                 asm_value.clobber_count > mir.max_executable_operands) return false,
             .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,

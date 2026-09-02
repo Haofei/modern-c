@@ -123,9 +123,8 @@ test "LLVM lexical unsafe and contract call bodies use canonical executable MIR"
 
     const contract_body = try llvmFunctionBody(output.items, "define internal void @contract_call");
     try expectContains(contract_body, "; canonical executable MIR");
-    try expectContains(contract_body, "; MC_CONTRACT_BEGIN no_overflow");
     try expectContains(contract_body, "call void @consume(i32 %mc_arg_0)");
-    try expectContains(contract_body, "; MC_CONTRACT_END no_overflow");
+    try expectNotContains(contract_body, "MC_CONTRACT_");
 }
 
 test "LLVM fixed-array signatures and direct calls use canonical executable MIR" {
@@ -20196,6 +20195,26 @@ test "LLVM proven-local aggregate pointer deref value copy stays plain" {
     try expectContains(raw_many_array_body, "store i32 ");
     try expectContains(raw_many_array_body, "load { [2 x i32] }, ptr %");
     try expectNotContains(raw_many_array_body, " atomic ");
+}
+
+test "LLVM omits checked comptime blocks from canonical runtime bodies" {
+    const source =
+        \\fn accept_pure_comptime_block() -> u32 {
+        \\    comptime {
+        \\        let x: u32 = 1;
+        \\        assert(x == 1);
+        \\    }
+        \\    return 1;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_comptime_block.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @accept_pure_comptime_block");
+    try expectContains(body, "; canonical executable MIR");
+    try expectContains(body, "ret i32 1");
+    try expectNotContains(body, "alloca i32");
+    try expectNotContains(body, "mc_trap_Assert");
 }
 
 test "LLVM proven-local wide-scalar deref stays plain" {

@@ -12014,16 +12014,11 @@ const FunctionBuilder = struct {
                 return false;
             },
             .block => |body| return try self.buildBlock(body),
-            .comptime_block => |body| {
-                // Comptime statements belong to evaluation, not the runtime
-                // executable body. Until that phase has a separate typed
-                // representation, retain the verified legacy lowering and
-                // fail closed instead of emitting its assertions at runtime.
-                self.executable_supported = false;
-                if (self.executable_incomplete_reason == .none)
-                    self.executable_incomplete_reason = .compile_time_statement;
-                return try self.buildBlock(body);
-            },
+            // Sema has already evaluated and validated a comptime block before
+            // MIR construction. It has no runtime operation or control-flow
+            // edge, so executable MIR deliberately omits it instead of making
+            // both backends rediscover and erase source syntax.
+            .comptime_block => return false,
             .unsafe_block => |body| return try self.buildUnsafeBlock(body),
             .contract_block => |contract| return try self.buildContractBlock(contract, stmt.span),
             .if_let => |node| return try self.buildIfLet(node, stmt.span),
@@ -12036,7 +12031,6 @@ const FunctionBuilder = struct {
         const id = self.next_contract_region_id;
         self.next_contract_region_id += 1;
         const name = contractName(contract.attr);
-        try self.appendExecutableStatement(self.sourcePoint(contract.attr.span), .{ .contract_marker = .{ .kind = .begin, .name = name } });
         try self.contract_regions.append(self.allocator, .{
             .id = id,
             .kind = name,
@@ -12054,7 +12048,6 @@ const FunctionBuilder = struct {
         self.active_contract_region_id = old_region_id;
 
         if (!terminated) {
-            try self.appendExecutableStatement(self.sourcePoint(stmt_span), .{ .contract_marker = .{ .kind = .end, .name = name } });
             try self.addInstr(.contract_end, name, .contract, stmt_span);
         } else {
             // A terminating edge leaves the region; there is no reachable

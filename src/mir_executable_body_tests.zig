@@ -1352,7 +1352,7 @@ test "conditional arms that both return leave an unreachable continuation" {
     try std.testing.expect(selected.executable_body.terminators[1].operation == .unreachable_);
 }
 
-test "lexical unsafe blocks and contract markers are canonical executable MIR" {
+test "lexical unsafe and contract blocks need no runtime marker statements" {
     const source =
         \\extern fn consume(value: u32) -> void;
         \\fn unsafe_call(value: u32) -> void { unsafe { consume(value); } }
@@ -1378,22 +1378,8 @@ test "lexical unsafe blocks and contract markers are canonical executable MIR" {
     const contracted_call = &module.functions[2];
     try executable.verify(contracted_call);
     try std.testing.expect(executable.isComplete(contracted_call));
-    var marker_count: usize = 0;
-    var end_marker: ?*mir.ExecutableStatement = null;
-    for (contracted_call.executable_body.statements) |*statement| switch (statement.operation) {
-        .contract_marker => |marker| {
-            marker_count += 1;
-            if (marker.kind == .end) end_marker = statement;
-        },
-        else => {},
-    };
-    try std.testing.expectEqual(@as(usize, 2), marker_count);
-    const marker = end_marker orelse return error.TestUnexpectedResult;
-    const saved = marker.operation;
-    marker.operation.contract_marker.name = "wrong_contract";
-    try std.testing.expectError(error.InvalidContractMarker, executable.verify(contracted_call));
-    marker.operation = saved;
-    try executable.verify(contracted_call);
+    try std.testing.expectEqual(@as(usize, 1), contracted_call.executable_body.statements.len);
+    try std.testing.expect(contracted_call.executable_body.statements[0].operation == .eval);
 }
 
 test "trapping integer conversion owns its exact executable trap edge" {
