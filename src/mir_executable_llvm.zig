@@ -3173,6 +3173,10 @@ const Renderer = struct {
             .symbol => |id| try std.fmt.allocPrint(self.allocator, "@{s}", .{symbolSpelling(self.body, id) orelse return error.InvalidBody}),
             .value => error.InvalidBody,
         };
+        var ordinary = place;
+        ordinary.storage = .ordinary;
+        if (mir.executableAggregateFieldPlace(self.body.locals, self.body.statements, self.body.aggregate_types, ordinary, false))
+            return self.emitPlace(place_id, try self.typeText(place.ty));
         const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
         const local_id = switch (place.root) {
             .local => |id| id,
@@ -3470,8 +3474,14 @@ const Renderer = struct {
     }
 
     fn emitPlace(self: *Renderer, place_id: mir.PlaceId, value_ty: []const u8) RenderError![]const u8 {
-        const place = &self.body.places[place_id.index()];
-        if (place.storage != .ordinary) return error.Unsupported;
+        const source_place = &self.body.places[place_id.index()];
+        var ordinary_place = source_place.*;
+        if (ordinary_place.storage == .atomic) {
+            ordinary_place.storage = .ordinary;
+            if (!mir.executableAggregateFieldPlace(self.body.locals, self.body.statements, self.body.aggregate_types, ordinary_place, false))
+                return error.Unsupported;
+        } else if (ordinary_place.storage != .ordinary) return error.Unsupported;
+        const place = &ordinary_place;
         const pointer: []const u8 = switch (place.root) {
             .local => |local_id| blk: {
                 const local = self.locals.get(local_id.raw) orelse return error.InvalidBody;
@@ -5623,12 +5633,10 @@ fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
     const place = body.places[load.place.index()];
     if (!atomicPlaceSupported(body, place) or !sameValueType(place.ty, expression.result_ty) or
         !place.type_id.eql(expression.type_id)) return false;
-    if (place.projection_count == 0) {
-        return load.representation_source == null and !load.representation_span_id.isValid() and
-            ownedExpressionTrapCount(body, expression.id) == 0;
-    }
-    return load.representation_source != null and load.representation_span_id.isValid() and
-        representationTrapEdgeIsExact(body, expression);
+    if (placeNeedsRepresentationGuard(body, place)) return load.representation_source != null and
+        load.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
+    return load.representation_source == null and !load.representation_span_id.isValid() and
+        ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
 fn atomicLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) []const u8 {
@@ -5636,7 +5644,7 @@ fn atomicLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.
     const place = body.places[load.place.index()];
     if (!atomicPlaceSupported(body, place)) return "atomic_load_place_shape";
     if (!sameValueType(place.ty, expression.result_ty) or !place.type_id.eql(expression.type_id)) return "atomic_load_type";
-    if (place.projection_count != 0)
+    if (placeNeedsRepresentationGuard(body, place))
         return if (load.representation_source != null and load.representation_span_id.isValid() and
             representationTrapEdgeIsExact(body, expression)) "atomic_load_invariant" else "atomic_load_trap";
     return "atomic_load_direct";
@@ -5662,10 +5670,10 @@ fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     if (update.kind == .store) {
         if (expression.result_ty != .void) return false;
     } else if (!sameValueType(expression.result_ty, place.ty) or !expression.type_id.eql(place.type_id)) return false;
-    if (place.projection_count == 0) return update.representation_source == null and
-        !update.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
-    return update.representation_source != null and update.representation_span_id.isValid() and
-        representationTrapEdgeIsExact(body, expression);
+    if (placeNeedsRepresentationGuard(body, place)) return update.representation_source != null and
+        update.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
+    return update.representation_source == null and !update.representation_span_id.isValid() and
+        ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
 fn atomicUpdateUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) []const u8 {
@@ -5674,7 +5682,7 @@ fn atomicUpdateUnsupportedReason(body: *const mir.ExecutableBody, expression: mi
     const operand = body.expressions[update.value.index()];
     if (!atomicPlaceSupported(body, place)) return "atomic_update_place_shape";
     if (!sameValueType(place.ty, operand.result_ty) or !place.type_id.eql(operand.type_id)) return "atomic_update_type";
-    if (place.projection_count != 0)
+    if (placeNeedsRepresentationGuard(body, place))
         return if (update.representation_source != null and update.representation_span_id.isValid() and
             representationTrapEdgeIsExact(body, expression)) "atomic_update_invariant" else "atomic_update_trap";
     return "atomic_update_direct";
@@ -5745,10 +5753,11 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
             false,
         .value => false,
     };
-    if (place.projection_count == 2) {
+    if (place.projection_count != 0) {
         var ordinary = place;
         ordinary.storage = .ordinary;
-        return mir.executableParameterProjectedPlace(body, ordinary, false);
+        if (mir.executableAggregateFieldPlace(body.locals, body.statements, body.aggregate_types, ordinary, false) or
+            mir.executableParameterProjectedPlace(body, ordinary, false)) return true;
     }
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local_id = switch (place.root) {

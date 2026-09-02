@@ -3268,10 +3268,10 @@ fn atomicPlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePl
             false,
         .value => false,
     };
-    if (place.projection_count == 2) {
+    if (place.projection_count != 0) {
         var ordinary = place;
         ordinary.storage = .ordinary;
-        return mir.executableParameterProjectedPlace(body, ordinary, false);
+        if (scalarAccessPlaceSupported(body, ordinary)) return true;
     }
     if (place.projection_count != 1 or place.projections[0] != .deref) return false;
     const local = switch (place.root) {
@@ -4591,8 +4591,13 @@ fn emitPlace(
     body: *const mir.ExecutableBody,
     id: mir.PlaceId,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    const place = placeById(body, id) orelse return error.InvalidPlace;
-    if (place.storage != .ordinary) return error.UnsupportedOperation;
+    const source_place = placeById(body, id) orelse return error.InvalidPlace;
+    var ordinary_place = source_place.*;
+    if (ordinary_place.storage == .atomic) {
+        ordinary_place.storage = .ordinary;
+        if (!scalarAccessPlaceSupported(body, ordinary_place)) return error.UnsupportedOperation;
+    } else if (ordinary_place.storage != .ordinary) return error.UnsupportedOperation;
+    const place = &ordinary_place;
     if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
         try out.append(allocator, '(');
         if (indexed.parameter_pointee) try out.appendSlice(allocator, "*(");
@@ -4796,6 +4801,14 @@ fn emitAtomicPlaceAddress(
     if (place.projection_count == 0) {
         try out.append(allocator, '&');
         try emitPlaceRootValue(allocator, out, body, place.*);
+        return;
+    }
+    var ordinary = place.*;
+    ordinary.storage = .ordinary;
+    if (scalarAccessPlaceSupported(body, ordinary)) {
+        try out.appendSlice(allocator, "&(");
+        try emitPlace(allocator, out, body, id);
+        try out.append(allocator, ')');
         return;
     }
     if (place.projection_count == 2) {

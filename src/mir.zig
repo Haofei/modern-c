@@ -7879,10 +7879,10 @@ const FunctionBuilder = struct {
                 self.executable_symbols.items[id.index()].atomic_payload_type_id.eql(place.type_id),
             .value => false,
         };
-        if (place.projection_count == 2) {
+        if (place.projection_count != 0) {
             var ordinary = place;
             ordinary.storage = .ordinary;
-            return self.executablePlaceComplete(ordinary);
+            if (self.executablePlaceComplete(ordinary)) return true;
         }
         if (place.projection_count != 1) return false;
         if (place.projections[0] != .deref) return false;
