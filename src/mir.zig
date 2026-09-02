@@ -10604,6 +10604,7 @@ const FunctionBuilder = struct {
                 )) return false;
             },
             .closed_enum, .open_enum => if (!try self.internExecutableEnumType(field_ty)) return false,
+            .result => if (!try self.internExecutableResultType(field_ty, field.ty)) return false,
             .array => {
                 // Nested fixed arrays are an LLVM layout requirement, not a
                 // reason to invalidate an otherwise complete executable body.
