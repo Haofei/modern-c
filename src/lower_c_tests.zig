@@ -8842,7 +8842,8 @@ test "lower-c pointer-to-PAddr coercions require MIR source type facts" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null);
-    try expectContains(complete_output.items, "((uintptr_t)(addr))");
+    try expectContains(complete_output.items, "/* canonical executable MIR */");
+    try expectContains(complete_output.items, "((uintptr_t)(mc_exec_tmp_");
 
     var missing_source = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_source.deinit();

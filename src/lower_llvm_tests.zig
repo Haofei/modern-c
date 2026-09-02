@@ -10722,7 +10722,8 @@ test "LLVM inferred local semantic escape calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_semantic_escape_local_type.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%alias") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "; canonical executable MIR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "ret ptr") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

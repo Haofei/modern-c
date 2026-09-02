@@ -2432,7 +2432,7 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = add {s} {s}, {s}\n", .{ result, result_ty, left.spelling, right.spelling });
                 return .{ .ty = result_ty, .spelling = result };
             },
-            .declassify, .wrap_residue, .enum_raw => {
+            .declassify, .assume_noalias, .wrap_residue, .enum_raw => {
                 const operand = operands[0];
                 if (!std.mem.eql(u8, operand.ty, result_ty)) return error.InvalidBody;
                 return .{ .ty = result_ty, .spelling = operand.spelling };
@@ -4937,7 +4937,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;

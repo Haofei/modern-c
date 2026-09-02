@@ -9920,7 +9920,7 @@ const FunctionBuilder = struct {
                             try self.ensureExecutableCoercedExpr(argument, .{ .integer = "usize" })
                         else if (raw_target) |target|
                             if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store)
-                                try self.ensureExecutableExprAs(argument, if (source_index == 0) target.address_ty else target.payload_ty)
+                                try self.ensureExecutableCoercedExpr(argument, if (source_index == 0) target.address_ty else target.payload_ty)
                             else
                                 try self.ensureExecutableExpr(argument)
                         else if (conversion_target) |target|

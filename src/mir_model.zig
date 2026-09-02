@@ -723,6 +723,11 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         // payload ValueType and the unsafe authorization, so lowering is an
         // identity operation only when the structural types still agree.
         .declassify => operands.len == 1 and ValueType.eql(result, operands[0]),
+        // The contract checker owns the no-alias promise. Executable MIR only
+        // carries the value-preserving operation and the checked byte length;
+        // both operands are evaluated, while codegen returns the first.
+        .assume_noalias => operands.len == 2 and ValueType.eql(result, operands[0]) and
+            ValueType.eql(operands[1], .{ .integer = "usize" }),
         // `forget_unchecked` consumes its operand at the ownership layer, but
         // deliberately has no runtime release action.  The executable body
         // still carries the operand so both mechanical renderers must evaluate
