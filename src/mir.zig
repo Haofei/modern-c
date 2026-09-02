@@ -13398,6 +13398,8 @@ const FunctionBuilder = struct {
                         for_element_ty = valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases);
                         for_iterable_type_id = try self.internTypeId(for_iterable_ty);
                         for_element_type_id = try self.internTypeId(for_element_ty);
+                        if (!try self.internExecutableTypeExpr(for_iterable_ty, iterable_ty))
+                            self.executable_supported = false;
                         switch (for_iterable_ty) {
                             .array => |array| {
                                 for_kind = .fixed_array;

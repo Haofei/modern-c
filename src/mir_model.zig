@@ -955,7 +955,7 @@ pub fn executableStorageAlignment(enum_types: []const ExecutableEnumType, ty: Va
 /// renderers copy the complete value mechanically.
 pub fn executableAggregateCopyAlignment(ty: ValueType) ?u16 {
     return switch (ty) {
-        .array, .struct_, .nullable_value => 1,
+        .array, .struct_, .result, .nullable_value => 1,
         else => null,
     };
 }
