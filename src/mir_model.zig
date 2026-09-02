@@ -1566,6 +1566,26 @@ pub fn executableLocalInitializedByOptionalPresentPayload(
     };
 }
 
+/// A function symbol is represented as an opaque callable value in executable
+/// MIR. Its explicit conversion to an integer is nevertheless a pointer cast,
+/// and is admitted only when the operand identity resolves to a function.
+pub fn executableFunctionPointerToIntegerCast(
+    body: *const ExecutableBody,
+    operand: ExecutableExpression,
+    target_ty: ValueType,
+    kind: ExecutableCastKind,
+) bool {
+    if (kind != .pointer_to_integer or operand.result_ty != .value or
+        ExecutableCastKind.integerInfo(target_ty) == null) return false;
+    const symbol_id = switch (operand.operation) {
+        .symbol => |id| id,
+        else => return false,
+    };
+    if (!symbol_id.isValid() or symbol_id.index() >= body.symbols.len) return false;
+    const identity = body.symbols[symbol_id.index()];
+    return identity.id.eql(symbol_id) and identity.kind == .function;
+}
+
 /// A deferred expression graph registered by one executable statement.
 /// Roots are evaluated in source order only when a cleanup execution point
 /// names this action; registration itself has no runtime effect.
@@ -2626,6 +2646,12 @@ pub fn executableRaceAggregateTypeSupported(body: *const ExecutableBody, type_id
 /// changing active-member or bitfield semantics.
 pub fn executableAggregateRequiresPlainAccess(body: *const ExecutableBody, type_id: TypeId, ty: ValueType) bool {
     if (executableAggregateCopyAlignment(ty) == null or !type_id.isValid()) return false;
+    // Result is a tagged aggregate. Splitting a mutable global read into
+    // independent unordered tag/payload atomics could observe a value that
+    // never existed, so it has the same indivisible-copy policy as a tagged
+    // union rather than the field-wise policy of an ordinary struct.
+    if (ty == .result) for (body.result_types) |shape|
+        if (shape.type_id.eql(type_id) and ValueType.eql(shape.ty, ty)) return true;
     for (body.tagged_union_types) |shape| if (shape.type_id.eql(type_id) and ValueType.eql(shape.ty, ty)) return true;
     for (body.aggregate_types) |shape| {
         if (!shape.type_id.eql(type_id) or !ValueType.eql(shape.ty, ty)) continue;

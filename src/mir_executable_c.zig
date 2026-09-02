@@ -3288,7 +3288,11 @@ fn castSupported(
     cast: @FieldType(mir.ExecutableExpression.Operation, "cast"),
 ) bool {
     const operand = expressionById(body, cast.operand) orelse return false;
-    const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse return false;
+    const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse
+        if (mir.executableFunctionPointerToIntegerCast(body, operand.*, expression.result_ty, cast.kind))
+            mir.ExecutableCastKind.pointer_to_integer
+        else
+            return false;
     return cast.kind == expected;
 }
 

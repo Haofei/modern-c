@@ -20406,7 +20406,10 @@ test "lower-c emits optional pointer if-let" {
     if (isCanonicalExecutableCBody(read_const)) {
         try expectContains(read_const, "!= NULL");
         try expectContains(read_const, "uint8_t const * p = mc_exec_tmp_");
-        try expectContains(read_const, "= *p;");
+        // Canonical MIR evaluates the pointer local into an SSA-style
+        // temporary before loading. The observable requirement is the typed
+        // dereference, not the legacy AST emitter's direct `*p` spelling.
+        try expectContains(read_const, "= *mc_exec_tmp_");
     } else {
         // Const-pointer dereference canonicalization is independent of if-let
         // variant lowering and remains covered by its dedicated MIR slice.

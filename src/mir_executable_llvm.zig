@@ -2049,7 +2049,11 @@ const Renderer = struct {
         const operand_expression = self.body.expressions[cast.operand.index()];
         const operand = try self.emitExpression(cast.operand);
         const target_ty = try self.typeText(expression.result_ty);
-        const expected = mir.ExecutableCastKind.classify(operand_expression.result_ty, expression.result_ty) orelse return error.InvalidBody;
+        const expected = mir.ExecutableCastKind.classify(operand_expression.result_ty, expression.result_ty) orelse
+            if (mir.executableFunctionPointerToIntegerCast(self.body, operand_expression, expression.result_ty, cast.kind))
+                mir.ExecutableCastKind.pointer_to_integer
+            else
+                return error.InvalidBody;
         if (expected != cast.kind) return error.InvalidBody;
 
         const source_info = mir.ExecutableCastKind.integerInfo(castStorageType(self.body, operand_expression.result_ty) orelse operand_expression.result_ty);
@@ -5403,6 +5407,7 @@ fn pureScalarBitWidth(ty: mir.ValueType) ?u16 {
 fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, cast: anytype) bool {
     if (!expressionValid(body, cast.operand)) return false;
     const operand = body.expressions[cast.operand.index()];
+    if (mir.executableFunctionPointerToIntegerCast(body, operand, expression.result_ty, cast.kind)) return true;
     const expected = mir.ExecutableCastKind.classify(operand.result_ty, expression.result_ty) orelse return false;
     const source_storage = castStorageType(body, operand.result_ty) orelse return false;
     const target_storage = castStorageType(body, expression.result_ty) orelse return false;

@@ -611,7 +611,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .cast => |operation| {
             try verifyOperand(body, value, operation.operand);
             const operand = expression(body, operation.operand) orelse return error.InvalidExpressionReference;
-            const expected = mir.ExecutableCastKind.classify(operand.result_ty, value.result_ty) orelse return error.InvalidCast;
+            const expected = mir.ExecutableCastKind.classify(operand.result_ty, value.result_ty) orelse
+                if (mir.executableFunctionPointerToIntegerCast(body, operand.*, value.result_ty, operation.kind))
+                    mir.ExecutableCastKind.pointer_to_integer
+                else
+                    return error.InvalidCast;
             if (operation.kind != expected) return error.InvalidCast;
             if (operation.kind == .integer_to_open_enum or operation.kind == .enum_to_integer) {
                 var exact = false;

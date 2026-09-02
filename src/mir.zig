@@ -9643,7 +9643,16 @@ const FunctionBuilder = struct {
                     .move_expr => |inner| inner.*,
                     else => unreachable,
                 };
-                const operand = switch (cast_operand.kind) {
+                const function_address_target: ?ast.Expr = switch (cast_operand.kind) {
+                    .address_of => |inner| if (directIdentName(inner.*)) |name|
+                        if (self.summaries.contains(name)) inner.* else null
+                    else
+                        null,
+                    else => null,
+                };
+                const operand = if (function_address_target) |target|
+                    try self.ensureExecutableExpr(target)
+                else switch (cast_operand.kind) {
                     .int_literal, .float_literal, .char_literal => try self.ensureExecutableExprAs(node.value.*, result_ty),
                     .address_of => address: {
                         const source_type_expr = (try self.expressionResultTypeExpr(cast_operand)) orelse
@@ -9662,9 +9671,12 @@ const FunctionBuilder = struct {
                     else => {},
                 }
                 const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
-                const kind = mir_model.ExecutableCastKind.classify(operand_ty, result_ty) orelse {
-                    break :cast self.unsupportedExecutableExpression(.unsupported_cast);
-                };
+                const kind = mir_model.ExecutableCastKind.classify(operand_ty, result_ty) orelse
+                    if (function_address_target != null and operand_ty == .value and
+                        mir_model.ExecutableCastKind.integerInfo(result_ty) != null)
+                        mir_model.ExecutableCastKind.pointer_to_integer
+                    else
+                        break :cast self.unsupportedExecutableExpression(.unsupported_cast);
                 break :cast .{ .cast = .{ .operand = operand, .kind = kind } };
             },
             .address_of => |inner| address: {
@@ -11410,6 +11422,7 @@ const FunctionBuilder = struct {
 
     fn executableAggregateRequiresPlainAccess(self: *const FunctionBuilder, ty: ValueType) bool {
         if (mir_model.executableAggregateCopyAlignment(ty) == null) return false;
+        if (ty == .result) return true;
         if (ty == .tagged_union) for (self.executable_tagged_union_types.items) |shape| {
             if (sameValueType(shape.ty, ty)) return true;
         };
