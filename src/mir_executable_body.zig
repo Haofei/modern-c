@@ -844,6 +844,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             _ = indexedProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                         } else if (target.storage != .ordinary or
                             !(isParameterScalarAccessPlace(body, target.*, false) or
+                                mir.executableParameterProjectedPlace(body, target.*, false) or
                                 mir.executableLocalAddressDerefPlace(body, target.*, false) or
                                 mir.executableGuardedLocalScalarDerefPlace(body, target.*, false) or
                                 mir.executableGuardedLocalAggregateDerefPlace(body, target.*, false) or

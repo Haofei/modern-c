@@ -11675,13 +11675,19 @@ test "LLVM aggregate-return bounded call prefixes are MIR-owned" {
 test "LLVM lowers pointer parameter field stores after specialized plan retirement" {
     const source =
         \\struct Cell { value: u32 }
-        \\struct Frame { child: Cell }
+        \\struct Frame { child: Cell, slots: [4]u32 }
         \\fn make_cell(value: u32) -> Cell { return .{ .value = value }; }
         \\fn store_cell(cell: *mut Cell) -> void {
         \\    cell.*.value = 7;
         \\}
         \\fn store_child(frame: *mut Frame, value: u32) -> void {
         \\    frame.*.child = make_cell(value);
+        \\}
+        \\fn load_child(frame: *mut Frame) -> Cell {
+        \\    return frame.*.child;
+        \\}
+        \\fn load_slot(frame: *mut Frame, index: usize) -> u32 {
+        \\    return frame.*.slots[index];
         \\}
     ;
 
@@ -11694,8 +11700,15 @@ test "LLVM lowers pointer parameter field stores after specialized plan retireme
     try expectContains(body, "store atomic i32 7, ptr %");
     const aggregate_body = try llvmFunctionBody(output.items, "define internal void @store_child");
     try expectContains(aggregate_body, "; canonical executable MIR");
-    try expectContains(aggregate_body, "getelementptr inbounds { { i32 } }, ptr %mc_arg_0, i32 0, i32 0");
+    try expectContains(aggregate_body, "getelementptr inbounds { { i32 }, [4 x i32] }, ptr %mc_arg_0, i32 0, i32 0");
     try expectContains(aggregate_body, "store atomic i32 %");
+    const load_body = try llvmFunctionBody(output.items, "define internal { i32 } @load_child");
+    try expectContains(load_body, "; canonical executable MIR");
+    try expectContains(load_body, "load atomic i32");
+    const indexed_load_body = try llvmFunctionBody(output.items, "define internal i32 @load_slot");
+    try expectContains(indexed_load_body, "; canonical executable MIR");
+    try expectContains(indexed_load_body, "icmp ult i64 %mc_arg_1, 4");
+    try expectContains(indexed_load_body, "load atomic i32");
 }
 
 test "LLVM admits direct-return checked arithmetic in normal emit without losing source fidelity" {

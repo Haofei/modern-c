@@ -10659,13 +10659,19 @@ test "lower-c aggregate-return bounded call prefixes are MIR-owned" {
 test "lower-c lowers pointer parameter field stores after specialized plan retirement" {
     const source =
         \\struct Cell { value: u32 }
-        \\struct Frame { child: Cell }
+        \\struct Frame { child: Cell, slots: [4]u32 }
         \\fn make_cell(value: u32) -> Cell { return .{ .value = value }; }
         \\fn store_cell(cell: *mut Cell) -> void {
         \\    cell.*.value = 7;
         \\}
         \\fn store_child(frame: *mut Frame, value: u32) -> void {
         \\    frame.*.child = make_cell(value);
+        \\}
+        \\fn load_child(frame: *mut Frame) -> Cell {
+        \\    return frame.*.child;
+        \\}
+        \\fn load_slot(frame: *mut Frame, index: usize) -> u32 {
+        \\    return frame.*.slots[index];
         \\}
     ;
 
@@ -10678,6 +10684,13 @@ test "lower-c lowers pointer parameter field stores after specialized plan retir
     const aggregate_body = try cFunctionBody(output.items, "static void store_child(Frame * frame, uint32_t value)");
     try expectContains(aggregate_body, "/* canonical executable MIR */");
     try expectContains(aggregate_body, "mc_race_store_u32");
+    const load_body = try cFunctionBody(output.items, "static Cell load_child(Frame * frame)");
+    try expectContains(load_body, "/* canonical executable MIR */");
+    try expectContains(load_body, "mc_race_load_u32");
+    const indexed_load_body = try cFunctionBody(output.items, "static uint32_t load_slot(Frame * frame, uintptr_t index)");
+    try expectContains(indexed_load_body, "/* canonical executable MIR */");
+    try expectContains(indexed_load_body, "mc_check_index_usize(");
+    try expectContains(indexed_load_body, "mc_race_load_u32");
 }
 
 test "lower-c emits global address direct-call args from MIR without body fallback" {
@@ -14671,10 +14684,9 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     ;
     var load_output: std.ArrayList(u8) = .empty;
     defer load_output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_pointer_member_aggregate_load.mc", load_source, &load_output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_member_aggregate_load.mc", load_source, &load_output);
     const load_body = try cFunctionBody(load_output.items, "static Inner pointer_member_aggregate_load(Outer * p)");
-    try expectContains(load_body, "Outer * mc_ptr");
-    try expectContains(load_body, "return ({");
+    try expectContains(load_body, "/* canonical executable MIR */");
     try expectContains(load_body, "mc_race_load_u32");
 
     const init_source =
@@ -14692,11 +14704,10 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     ;
     var init_output: std.ArrayList(u8) = .empty;
     defer init_output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_pointer_member_aggregate_init.mc", init_source, &init_output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_member_aggregate_init.mc", init_source, &init_output);
     const init_body = try cFunctionBody(init_output.items, "static uint32_t pointer_member_aggregate_init(Outer * p)");
-    try expectContains(init_body, "Inner inner = ({");
+    try expectContains(init_body, "/* canonical executable MIR */");
     try expectContains(init_body, "mc_race_load_u32");
-    try expectContains(init_body, "return inner.value;");
 
     const store_source =
         \\struct Inner {
@@ -14712,7 +14723,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     ;
     var store_output: std.ArrayList(u8) = .empty;
     defer store_output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_pointer_member_aggregate_store.mc", store_source, &store_output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_member_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_member_aggregate_store(Outer * p, Inner value)");
     try expectContains(store_body, "/* canonical executable MIR */");
     try expectContains(store_body, "mc_race_store_u32");
@@ -14774,12 +14785,12 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     ;
     var nested_output: std.ArrayList(u8) = .empty;
     defer nested_output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_nested_pointer_member_aggregate.mc", nested_source, &nested_output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_pointer_member_aggregate.mc", nested_source, &nested_output);
     const nested_load_body = try cFunctionBody(nested_output.items, "static Leaf nested_pointer_member_aggregate_load(Outer * p)");
-    try expectContains(nested_load_body, "Outer * mc_ptr");
+    try expectContains(nested_load_body, "/* canonical executable MIR */");
     try expectContains(nested_load_body, "mc_race_load_u32");
     const nested_init_body = try cFunctionBody(nested_output.items, "static uint32_t nested_pointer_member_aggregate_init(Outer * p)");
-    try expectContains(nested_init_body, "Leaf leaf = ({");
+    try expectContains(nested_init_body, "/* canonical executable MIR */");
     try expectContains(nested_init_body, "mc_race_load_u32");
     const nested_store_body = try cFunctionBody(nested_output.items, "static void nested_pointer_member_aggregate_store(Outer * p, Leaf value)");
     try expectContains(nested_store_body, "/* canonical executable MIR */");

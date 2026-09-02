@@ -8,8 +8,8 @@ emitted from verified executable MIR.
 | corpus | C | LLVM |
 | --- | ---: | ---: |
 | strict ratchet | 168/168 canonical | 168/168 canonical |
-| broad sweep | 1590/1818 admitted | 1642/1872 admitted |
-| AST fallback | 228 | 230 |
+| broad sweep | 1606/1818 admitted | 1658/1872 admitted |
+| AST fallback | 212 | 214 |
 | specialized plans | 0 | 0 |
 
 The specialized-plan migration is closed. `mir_statement_plan.zig`, both
@@ -213,6 +213,16 @@ the two backends no longer reconstruct it independently, and both retain the
 representation and bounds trap edges. Immutable local copies of pointer
 parameters use a narrow canonical provenance proof. The three address-return
 helpers in `pointer_field_addr.mc` are now canonical in C and LLVM.
+
+Fixed-array fields reached through a checked pointer are now aggregate-capable
+typed places rather than scalar-only member loads. An immediately indexed
+field is lowered as one projected-place load, so neither renderer has to
+materialize and then reinterpret a whole temporary array. The verifier owns
+the same representation edge and parameter-root proof. This moves sixteen
+broad-corpus functions per backend to canonical MIR across byteview, pool,
+ring, slotmap, const-generic ring, and capability workloads. The broad fallback
+is now 212 C / 214 LLVM; `unsupported_member` is reduced to two producer cases
+per backend.
 
 ## Rules
 

@@ -9320,13 +9320,24 @@ const FunctionBuilder = struct {
                 if (index_kind == .fixed_array and bound == null)
                     break :index self.unsupportedExecutableExpression(.unsupported_index);
                 const direct_global_storage = self.executablePlaceRootIsGlobal(node.base.*);
-                if (direct_global_storage and index_kind == .fixed_array and
+                const indirect_projected_storage = index_kind == .fixed_array and
+                    self.executablePlaceHasDeref(node.base.*) and
+                    (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null or
+                        mir_model.executableAggregateCopyAlignment(result_ty) != null);
+                if ((direct_global_storage or indirect_projected_storage) and index_kind == .fixed_array and
                     (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) != null or
                         (!self.executable_assignment_rhs and mir_model.executableAggregateCopyAlignment(result_ty) != null)))
                 {
+                    const guard_source = if (indirect_projected_storage)
+                        self.executableDerefOperandSource(node.base.*) orelse
+                            break :index self.unsupportedExecutableExpression(.unsupported_index)
+                    else
+                        null;
                     break :index .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
                         .access = self.executableMemoryAccess(expr, result_ty),
+                        .representation_source = guard_source,
+                        .representation_span_id = if (guard_source) |point| try self.internSpanId(point) else .invalid,
                     } };
                 }
                 const base = global_aggregate: {
@@ -9438,7 +9449,8 @@ const FunctionBuilder = struct {
                     // Pointer-valued fields stay closed until MIR can own both
                     // pointer-result and storage representation edges.
                     if (shape.kind != .single or
-                        mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null)
+                        (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null and
+                            mir_model.executableAggregateCopyAlignment(result_ty) == null))
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.sourcePoint(canonicalOperatorOperand(node.base.*).span);
                     break :member .{ .load = .{
@@ -9449,7 +9461,8 @@ const FunctionBuilder = struct {
                     } };
                 }
                 if (projected_through_pointer) {
-                    if (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null)
+                    if (mir_model.executableStorageAlignment(self.executable_enum_types.items, result_ty) == null and
+                        mir_model.executableAggregateCopyAlignment(result_ty) == null)
                         break :member self.unsupportedExecutableExpression(.unsupported_member);
                     const guard_source = self.executableDerefOperandSource(node.base.*) orelse
                         break :member self.unsupportedExecutableExpression(.unsupported_member);

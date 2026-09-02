@@ -7,8 +7,8 @@ Measured 2026-09-01 on `master`.
 - The strict corpus is 168/168 canonical for both C and LLVM.
 - Specialized MIR plans are fully retired: zero admissions, zero plan
   definitions, and no `mir_statement_plan.zig` exception.
-- The broad census admits 1590/1818 C functions and 1642/1872 LLVM functions.
-  The remaining 228 C and 230 LLVM bodies use the explicit AST fallback.
+- The broad census admits 1606/1818 C functions and 1658/1872 LLVM functions.
+  The remaining 212 C and 214 LLVM bodies use the explicit AST fallback.
 - `CheckedProgram` and the per-file module graph goals are complete. The active
   review goal is deletion of `FunctionBodyFallbackArtifact.syntax` and both
   backend fallback branches.
@@ -109,6 +109,15 @@ stores now select closure fat-value storage from the verified callable
 signature instead of treating `.value` as one pointer. The two remaining
 `canonical=ready` global-closure stores therefore emit from MIR, leaving no
 ready-but-fallback entry in the broad census.
+
+Pointer-projected fixed-array fields now use the same aggregate-capable place
+contract. When the source immediately indexes such a field, MIR emits one
+guarded projected-place load instead of copying the complete array into an
+intermediate expression. Producer, verifier, C, and LLVM therefore share the
+parameter-root representation proof and fixed-array projection. Sixteen broad
+fallbacks per backend moved to canonical emission across byteview, pool, ring,
+slotmap, const-generic ring, and capability workloads; `unsupported_member`
+now has only two producer-owned cases per backend.
 
 ## Next work
 
