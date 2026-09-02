@@ -873,9 +873,11 @@ test "executable MIR admits direct local 128-bit storage" {
 test "executable MIR classifies representation-preserving pointer casts" {
     const mutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const const_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
+    const immutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .none, .child = "u32" } };
     const nullable_mutable_pointer: ValueType = .{ .nullable_pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     try std.testing.expectEqual(mir.ExecutableCastKind.pointer_to_nullable, mir.ExecutableCastKind.classify(mutable_pointer, nullable_mutable_pointer).?);
     try std.testing.expectEqual(mir.ExecutableCastKind.pointer_const_narrow, mir.ExecutableCastKind.classify(mutable_pointer, const_pointer).?);
+    try std.testing.expectEqual(mir.ExecutableCastKind.pointer_const_narrow, mir.ExecutableCastKind.classify(mutable_pointer, immutable_pointer).?);
     try std.testing.expect(mir.ExecutableCastKind.classify(const_pointer, mutable_pointer) == null);
 }
 

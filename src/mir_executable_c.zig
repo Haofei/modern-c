@@ -1162,7 +1162,7 @@ pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
                 if (localById(body, local.local) == null) return false;
                 if (local.value) |value| {
                     const expression = expressionById(body, value) orelse return false;
-                    if (!sameValueType(local.ty, expression.result_ty)) return false;
+                    if (!localInitializerTypeCompatible(local.ty, expression.result_ty)) return false;
                     if (!(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
                         dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
                         (local.ty == .value and dynLocal(body, local.local)))) return false;
@@ -1245,7 +1245,7 @@ pub fn unsupportedReason(body: *const mir.ExecutableBody) []const u8 {
             if (localById(body, local.local) == null) return "local_init";
             if (local.value) |value| {
                 const expression = expressionById(body, value) orelse return "local_init";
-                if (!sameValueType(local.ty, expression.result_ty) or
+                if (!localInitializerTypeCompatible(local.ty, expression.result_ty) or
                     !(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
                         dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
                         (local.ty == .value and dynLocal(body, local.local)))) return "local_init";
@@ -4103,6 +4103,11 @@ fn allExpressionsExist(body: *const mir.ExecutableBody, expressions: []const mir
 
 fn sameValueType(left: mir.ValueType, right: mir.ValueType) bool {
     return mir.ValueType.eql(left, right);
+}
+
+fn localInitializerTypeCompatible(target: mir.ValueType, source: mir.ValueType) bool {
+    return sameValueType(target, source) or
+        mir.ExecutableCastKind.classify(source, target) == .pointer_const_narrow;
 }
 
 fn signedMinimum(bits: u16) i128 {

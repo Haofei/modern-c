@@ -1481,8 +1481,13 @@ pub const CEmitter = struct {
                 for (call.arguments[0..call.argument_count], signature.param_types) |argument_id, parameter_ty| {
                     if (!argument_id.isValid() or argument_id.index() >= body.expressions.len) return false;
                     const argument_ty = body.expressions[argument_id.index()].result_ty;
-                    if (!mir.ValueType.eql(argument_ty, parameter_ty) and
-                        (signature.c_abi or mir.ExecutableCastKind.classify(argument_ty, parameter_ty) != .pointer_to_nullable)) return false;
+                    if (!mir.ValueType.eql(argument_ty, parameter_ty)) {
+                        if (signature.c_abi) return false;
+                        switch (mir.ExecutableCastKind.classify(argument_ty, parameter_ty) orelse return false) {
+                            .pointer_to_nullable, .pointer_const_narrow => {},
+                            else => return false,
+                        }
+                    }
                 }
             },
             else => {},

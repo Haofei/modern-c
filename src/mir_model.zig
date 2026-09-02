@@ -536,7 +536,7 @@ pub const ExecutableCastKind = enum {
     fn pointerQualificationCompatible(source: PointerShape, target: PointerShape) bool {
         if (source.kind != target.kind or !std.mem.eql(u8, source.child, target.child)) return false;
         return source.mutability == target.mutability or
-            (source.mutability == .mut and target.mutability == .@"const");
+            (source.mutability == .mut and (target.mutability == .@"const" or target.mutability == .none));
     }
 
     pub fn integerInfo(ty: ValueType) ?ExecutableIntegerInfo {
