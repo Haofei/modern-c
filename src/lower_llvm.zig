@@ -37,7 +37,6 @@ const MaterializedTargetTypeFact = struct {
     aggregate_construction: ?mir.AggregateConstructionKind,
     target_index: ?usize,
     typed_target_owner_id: mir.SymbolId,
-    source: mir.SourcePoint,
 };
 
 const isIdentNamed = syntax_bridge.isIdentNamed;
@@ -6428,7 +6427,6 @@ const LlvmEmitter = struct {
             .aggregate_construction = fact.aggregate_construction,
             .target_index = fact.target_index,
             .typed_target_owner_id = fact.typed_target_owner_id,
-            .source = fact.source,
         };
     }
 

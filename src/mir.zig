@@ -617,10 +617,10 @@ pub fn targetOwnerSpelling(function: Function, owner_id: SymbolId) ?[]const u8 {
 }
 
 fn targetTypeFactAtSource(function: Function, kind: TargetTypeKind, source: SourcePoint) bool {
+    const typed_span_id = spanIdAtSource(function, source) orelse return false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
-        if (fact.source.line != source.line or fact.source.column != source.column) continue;
-        if (fact.source.offset != source.offset or fact.source.len != source.len) continue;
+        if (!fact.typed_span_id.eql(typed_span_id)) continue;
         return true;
     }
     return false;
@@ -3236,6 +3236,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.target_type_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirTargetTypeFacts;
             const target_index = if (fact.target_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
             defer if (fact.target_index != null) allocator.free(target_index);
             const target_owner = targetOwnerSpelling(function, fact.typed_target_owner_id) orelse "none";
@@ -3251,8 +3252,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     aggregate_construction,
                     target_owner,
                     target_index,
-                    fact.source.line,
-                    fact.source.column,
+                    source.line,
+                    source.column,
                     if (fact.typed_result_ty.isValid()) fact.typed_result_ty.index() else std.math.maxInt(usize),
                     if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize),
                     if (fact.typed_callee_span_id.isValid()) fact.typed_callee_span_id.index() else std.math.maxInt(usize),
@@ -5496,8 +5497,7 @@ fn targetTypeFactTypedIdentitiesValid(signature_types: SignatureTypeTable, funct
     if (!fact.typed_span_id.isValid()) return false;
     const span_index = fact.typed_span_id.index();
     if (span_index >= function.span_identities.len) return false;
-    const source = function.span_identities[span_index].source;
-    if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
+    if (!function.span_identities[span_index].id.eql(fact.typed_span_id)) return false;
 
     if (fact.kind == .direct_call_argument or fact.kind == .indirect_call_argument) {
         if (!fact.typed_callee_span_id.isValid()) return false;
@@ -5690,7 +5690,7 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
         if (!fact.typed_operand_value_id.eql(target.typed_operand_value_id)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
         if (!fact.target_type_id.eql(target.target_type_id)) continue;
-        if (fact.source.line == target.source.line and fact.source.column == target.source.column and (target.kind != .expression_result or (fact.source.offset == target.source.offset and fact.source.len == target.source.len))) count += 1;
+        count += 1;
     }
     return count;
 }
@@ -18385,7 +18385,6 @@ const FunctionBuilder = struct {
             .result_ty = result_ty,
             .typed_result_ty = typed_result_ty,
             .typed_span_id = typed_span_id,
-            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
 
@@ -18414,7 +18413,6 @@ const FunctionBuilder = struct {
             .typed_span_id = typed_span_id,
             .target_index = target_index,
             .typed_target_owner_id = typed_target_owner_id,
-            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
 

@@ -2234,7 +2234,12 @@ fn rawTargetTypeFactByKind(function: mir.Function, kind: mir.TargetTypeKind) ?mi
     return null;
 }
 
+fn targetTypeFactSource(function: mir.Function, fact: mir.TargetTypeFact) ?mir.SourcePoint {
+    return mir.sourcePointForSpanId(function, fact.typed_span_id);
+}
+
 fn targetTypeSyntaxForTest(function: mir.Function, fact: mir.TargetTypeFact) ?ast.TypeExpr {
+    const source = targetTypeFactSource(function, fact) orelse return null;
     for (function.blocks) |block| for (block.instructions) |instruction| {
         if (instruction.kind != .target_type or !std.mem.eql(u8, instruction.detail, @tagName(fact.kind))) continue;
         if (!instruction.typed_span_id.eql(fact.typed_span_id) or !instruction.target_type_id.eql(fact.target_type_id)) continue;
@@ -2244,10 +2249,10 @@ fn targetTypeSyntaxForTest(function: mir.Function, fact: mir.TargetTypeFact) ?as
             signature_types,
             fact.target_type_id,
             .{
-                .line = @intCast(fact.source.line),
-                .column = @intCast(fact.source.column),
-                .offset = fact.source.offset,
-                .len = fact.source.len,
+                .line = @intCast(source.line),
+                .column = @intCast(source.column),
+                .offset = source.offset,
+                .len = source.len,
             },
         ) catch null;
     };
@@ -2269,7 +2274,7 @@ fn targetTypeFactByKind(function: mir.Function, kind: mir.TargetTypeKind) ?TestT
                 .aggregate_construction = fact.aggregate_construction,
                 .target_index = fact.target_index,
                 .typed_target_owner_id = fact.typed_target_owner_id,
-                .source = fact.source,
+                .source = targetTypeFactSource(function, fact) orelse return null,
             };
         }
         return null;
@@ -3062,10 +3067,8 @@ test "MIR exposes generic typed span identity matching for codegen facts" {
     try std.testing.expect(mir.instructionMatchesSpanId(direct_fn, drifted_instruction, direct_call.typed_span_id));
 
     var drifted_result = rawTargetTypeFactByKind(direct_fn, .direct_call_result).?;
-    drifted_result.source.line += 100;
-    drifted_result.source.column += 100;
-    try std.testing.expect(mir.targetTypeFactMatchesSpanId(direct_fn, drifted_result, direct_result.typed_span_id));
-    try std.testing.expect(mir.spanIdAtSource(direct_fn, drifted_result.source) == null);
+    drifted_result.typed_span_id = SpanId.fromIndex(4096);
+    try std.testing.expect(!mir.targetTypeFactMatchesSpanId(direct_fn, drifted_result, direct_result.typed_span_id));
 
     const call_target_fn = functionByName(module_mir, "call_target").?;
     const call_target_fact = if (call_target_fn.call_target_facts.len == 1) call_target_fn.call_target_facts[0] else return error.TestUnexpectedResult;
@@ -3282,7 +3285,7 @@ test "MIR target-type admission rejects target fact identity table drift" {
         defer module_mir.deinit();
         const caller = functionByNameMut(&module_mir, "caller").?;
         const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
-        caller.span_identities[fact.typed_span_id.index()].source.line += 1;
+        caller.span_identities[fact.typed_span_id.index()].id = SpanId.fromIndex(4096);
 
         try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
     }
@@ -3531,21 +3534,21 @@ fn retargetFirstTargetTypeFactAndInstruction(
     result_ty: ValueType,
 ) !void {
     const type_identity = typeIdentityBySpelling(function.*, spelling) orelse return error.TestUnexpectedResult;
-    var fact_source: ?mir.SourcePoint = null;
+    var fact_span_id: ?SpanId = null;
     for (function.target_type_facts) |*fact| {
         if (fact.kind != kind) continue;
         fact.result_ty = result_ty;
         fact.typed_result_ty = type_identity.id;
-        fact_source = fact.source;
+        fact_span_id = fact.typed_span_id;
         break;
     } else return error.TestUnexpectedResult;
 
-    const source = fact_source.?;
+    const typed_span_id = fact_span_id.?;
     for (function.blocks) |*block| {
         for (block.instructions) |*instruction| {
             if (instruction.kind != .target_type) continue;
             if (!std.mem.eql(u8, instruction.detail, @tagName(kind))) continue;
-            if (!instruction.typed_span_id.eql(mir.spanIdAtSource(function.*, source) orelse return error.TestUnexpectedResult)) continue;
+            if (!instruction.typed_span_id.eql(typed_span_id)) continue;
             instruction.result_ty = result_ty;
             instruction.typed_result_ty = type_identity.id;
             return;
@@ -4183,14 +4186,14 @@ test "MIR owns qualified union and enum variant path result types" {
         .current = &shadow,
         .fact = .{
             .kind = .qualified_union_result,
-            .source = qualified_fact.?.source,
+            .source = targetTypeFactSource(make, qualified_fact.?) orelse return error.TestUnexpectedResult,
         },
     }) == null);
     try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = &shadow,
         .fact = .{
             .kind = .enum_variant_path_result,
-            .source = variant_fact.?.source,
+            .source = targetTypeFactSource(variant, variant_fact.?) orelse return error.TestUnexpectedResult,
         },
     }) == null);
 }
@@ -5478,11 +5481,12 @@ test "MIR owns direct identifier expression result types" {
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;
         const target_ty = targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult;
-        if (fact.source.offset == ident_offset and fact.source.len == value_text.len) {
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact_source.offset == ident_offset and fact_source.len == value_text.len) {
             try std.testing.expectEqualStrings("u32", target_ty.kind.name.text);
             saw_value = true;
         }
-        if (fact.source.offset == enabled_offset and fact.source.len == "enabled".len) {
+        if (fact_source.offset == enabled_offset and fact_source.len == "enabled".len) {
             try std.testing.expectEqualStrings("bool", target_ty.kind.name.text);
             saw_enabled = true;
         }
@@ -5516,7 +5520,8 @@ test "MIR owns direct call expression result types" {
     const function = functionByName(typed_mir, "use_call").?;
     var saw_call = false;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != .expression_result or fact.source.offset != call_offset or fact.source.len != call_text.len) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact.kind != .expression_result or fact_source.offset != call_offset or fact_source.len != call_text.len) continue;
         try std.testing.expectEqualStrings("u16", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         saw_call = true;
     }
@@ -5586,8 +5591,9 @@ test "MIR owns contextual negative integer unary result types" {
     var saw_negative_i32 = false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;
-        const end = fact.source.offset + fact.source.len;
-        if (!std.mem.eql(u8, source[fact.source.offset..end], "-6")) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        const end = fact_source.offset + fact_source.len;
+        if (!std.mem.eql(u8, source[fact_source.offset..end], "-6")) continue;
         try std.testing.expectEqualStrings("i32", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         saw_negative_i32 = true;
     }
@@ -6689,14 +6695,14 @@ test "MIR owns const_get base result and index facts" {
         .current = other,
         .fact = .{
             .kind = .const_get_base,
-            .source = base_fact.?.source,
+            .source = targetTypeFactSource(function, base_fact.?) orelse return error.TestUnexpectedResult,
         },
     }) == null);
     try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = other,
         .fact = .{
             .kind = .const_get_result,
-            .source = result_fact.?.source,
+            .source = targetTypeFactSource(function, result_fact.?) orelse return error.TestUnexpectedResult,
         },
     }) == null);
     try mir.validateConstGetFactsForLowering(typed_mir);
@@ -7111,9 +7117,10 @@ test "MIR owns span-identified result types for compound expressions" {
     var last_source: ?mir.SourcePoint = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;
-        try std.testing.expect(fact.source.len != 0);
-        if (last_source) |previous| try std.testing.expect(previous.offset != fact.source.offset or previous.len != fact.source.len);
-        last_source = fact.source;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(fact_source.len != 0);
+        if (last_source) |previous| try std.testing.expect(previous.offset != fact_source.offset or previous.len != fact_source.len);
+        last_source = fact_source;
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -7141,7 +7148,8 @@ test "MIR owns grouped expression result types" {
     const function = functionByName(typed_mir, "grouped_result").?;
     var found = false;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != .expression_result or fact.source.offset != grouped_offset or fact.source.len != grouped_text.len) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact.kind != .expression_result or fact_source.offset != grouped_offset or fact_source.len != grouped_text.len) continue;
         try std.testing.expectEqualStrings("u16", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         found = true;
     }
@@ -7170,7 +7178,8 @@ test "MIR owns grouped direct-call result types" {
     const function = functionByName(typed_mir, "grouped_call_result").?;
     var found = false;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != .expression_result or fact.source.offset != grouped_offset or fact.source.len != grouped_text.len) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact.kind != .expression_result or fact_source.offset != grouped_offset or fact_source.len != grouped_text.len) continue;
         try std.testing.expectEqualStrings("u16", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         found = true;
     }
@@ -7198,7 +7207,8 @@ test "MIR owns source block expression result types" {
     const function = functionByName(typed_mir, "block_result").?;
     var found = false;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != .expression_result or fact.source.offset != block_offset or fact.source.len != block_text.len) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact.kind != .expression_result or fact_source.offset != block_offset or fact_source.len != block_text.len) continue;
         try std.testing.expectEqualStrings("u32", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         found = true;
     }
@@ -7226,7 +7236,8 @@ test "MIR owns source boolean expression result types" {
     const function = functionByName(typed_mir, "compare").?;
     var found = false;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != .expression_result or fact.source.offset != comparison_offset or fact.source.len != comparison_text.len) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact.kind != .expression_result or fact_source.offset != comparison_offset or fact_source.len != comparison_text.len) continue;
         try std.testing.expectEqualStrings("bool", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         found = true;
     }
@@ -7254,7 +7265,8 @@ test "MIR owns source void literal expression result types" {
     const function = functionByName(typed_mir, "explicit_void").?;
     var found = false;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != .expression_result or fact.source.offset != void_offset or fact.source.len != void_text.len) continue;
+        const fact_source = targetTypeFactSource(function, fact) orelse return error.TestUnexpectedResult;
+        if (fact.kind != .expression_result or fact_source.offset != void_offset or fact_source.len != void_text.len) continue;
         try std.testing.expectEqualStrings("void", (targetTypeSyntaxForTest(function, fact) orelse return error.TestUnexpectedResult).kind.name.text);
         found = true;
     }

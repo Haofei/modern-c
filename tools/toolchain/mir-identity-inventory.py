@@ -133,6 +133,11 @@ def main() -> int:
     if "source:" in model[start:end]:
         fail("src/mir_model.zig CallTargetFact duplicates source identity beside SpanId")
 
+    start = model.index("pub const TargetTypeFact = struct {")
+    end = model.index("\n};", start)
+    if "source:" in model[start:end]:
+        fail("src/mir_model.zig TargetTypeFact duplicates source identity beside SpanId")
+
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",

@@ -6328,7 +6328,8 @@ fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []cons
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         for (function.target_type_facts) |*fact| {
-            if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
+            const source = mir.sourcePointForSpanId(function.*, fact.typed_span_id) orelse continue;
+            if (fact.kind != kind or source.offset != source_offset or source.len != source_len) continue;
             fact.target_type_id = target_type_id;
             return;
         }
@@ -6341,7 +6342,8 @@ fn retargetPointerMutabilityFactAtOffsetForFunction(module_mir: *mir.Module, nam
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         for (function.target_type_facts) |*fact| {
-            if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
+            const source = mir.sourcePointForSpanId(function.*, fact.typed_span_id) orelse continue;
+            if (fact.kind != kind or source.offset != source_offset or source.len != source_len) continue;
             fact.target_type_id = signaturePointerTypeIdWithMutability(module_mir, fact.target_type_id, mutability) orelse return error.TestUnexpectedResult;
             return;
         }
@@ -6369,7 +6371,8 @@ fn removeTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []cons
         var retained_count: usize = 0;
         var removed = false;
         for (function.target_type_facts) |fact| {
-            if (fact.kind == kind and fact.source.offset == source_offset and fact.source.len == source_len) {
+            const source = mir.sourcePointForSpanId(function.*, fact.typed_span_id) orelse continue;
+            if (fact.kind == kind and source.offset == source_offset and source.len == source_len) {
                 removed = true;
             } else {
                 retained_count += 1;
@@ -6379,7 +6382,8 @@ fn removeTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []cons
         const retained = try module_mir.allocator.alloc(mir.TargetTypeFact, retained_count);
         var index: usize = 0;
         for (function.target_type_facts) |fact| {
-            if (fact.kind == kind and fact.source.offset == source_offset and fact.source.len == source_len) continue;
+            const source = mir.sourcePointForSpanId(function.*, fact.typed_span_id) orelse continue;
+            if (fact.kind == kind and source.offset == source_offset and source.len == source_len) continue;
             retained[index] = fact;
             index += 1;
         }

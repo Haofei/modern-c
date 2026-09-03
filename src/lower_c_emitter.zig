@@ -34,7 +34,6 @@ const MaterializedTargetTypeFact = struct {
     aggregate_construction: ?mir.AggregateConstructionKind,
     target_index: ?usize,
     typed_target_owner_id: mir.SymbolId,
-    source: mir.SourcePoint,
 };
 
 const lower_c_type = @import("lower_c_type.zig");
@@ -3188,7 +3187,8 @@ pub const CEmitter = struct {
 
     fn collectMirFunctionTypes(self: *CEmitter, fn_mir: *const mir.Function) !void {
         for (fn_mir.target_type_facts) |fact| {
-            const ty = try self.signatureTypeExpr(fact.target_type_id, spanFromSourcePoint(fact.source));
+            const source = mir.sourcePointForSpanId(fn_mir.*, fact.typed_span_id) orelse return error.InvalidMirTargetTypeFacts;
+            const ty = try self.signatureTypeExpr(fact.target_type_id, spanFromSourcePoint(source));
             try self.collectTypeArtifacts(ty);
         }
     }
@@ -6611,7 +6611,6 @@ pub const CEmitter = struct {
             .aggregate_construction = fact.aggregate_construction,
             .target_index = fact.target_index,
             .typed_target_owner_id = fact.typed_target_owner_id,
-            .source = fact.source,
         };
     }
 

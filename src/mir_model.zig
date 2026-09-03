@@ -3596,7 +3596,6 @@ pub const TargetTypeFact = struct {
     aggregate_construction: ?AggregateConstructionKind = null,
     target_index: ?usize = null,
     typed_target_owner_id: SymbolId = .invalid,
-    source: SourcePoint,
 };
 
 pub const SourcePoint = struct {

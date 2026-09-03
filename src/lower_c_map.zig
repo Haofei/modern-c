@@ -201,6 +201,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.target_type_facts) |fact| {
+            const source = mir.sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirTargetTypeFacts;
             const target_owner = mir.targetOwnerSpelling(function, fact.typed_target_owner_id) orelse "none";
             try out.print(allocator, "target_type_fact fn={s} kind={s} target_type_id={} result={s} typed_result={} typed_span={} aggregate={s} target_owner={s} typed_target_owner={} target_index={} ", .{
                 function.name,
@@ -214,7 +215,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                 typedIndexOrMax(fact.typed_target_owner_id),
                 optionalUsizeOrMax(fact.target_index),
             });
-            try appendSourcePointForDigest(allocator, out, fact.source);
+            try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.pointer_provenance_facts) |fact| {
             try out.print(allocator, "pointer_provenance_fact fn={s} subject={s} field={s} element={} storage={s} provenance={s} pointer_kind={s} mutability={s} child={s} invalidation_reason={s} invalidation_policy={s} ", .{

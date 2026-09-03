@@ -195,7 +195,8 @@ pub const MirFactsView = struct {
         _ = self;
         if (fact.kind != kind) return false;
         if (!typedOwnerIdMatches(fact.typed_target_owner_id, owner_id)) return false;
-        if (!sourceMatches(kind, source, fact.source)) return false;
+        const typed_span_id = mir.spanIdAtSource(current.*, source) orelse return false;
+        if (!fact.typed_span_id.eql(typed_span_id)) return false;
         return typedIdentityIsValid(current, fact);
     }
 
@@ -235,7 +236,8 @@ fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeK
 fn targetTypeFactMatches(function: *const mir.Function, fact: mir.TargetTypeFact, query: TargetTypeFactQuery) bool {
     if (fact.kind != query.kind or fact.target_index != query.index) return false;
     if (!typedOwnerIdMatches(fact.typed_target_owner_id, query.typed_target_owner_id)) return false;
-    if (!sourceMatches(query.kind, query.source, fact.source)) return false;
+    const typed_span_id = mir.spanIdAtSource(function.*, query.source) orelse return false;
+    if (!fact.typed_span_id.eql(typed_span_id)) return false;
     return typedIdentityIsValid(function, fact);
 }
 
@@ -277,9 +279,8 @@ fn typedIdentityIsValid(function: *const mir.Function, fact: mir.TargetTypeFact)
     const type_index = fact.typed_result_ty.index();
     const span_index = fact.typed_span_id.index();
     if (type_index >= function.type_identities.len or span_index >= function.span_identities.len) return false;
+    if (!function.span_identities[span_index].id.eql(fact.typed_span_id)) return false;
     if (!std.mem.eql(u8, function.type_identities[type_index].spelling, fact.result_ty.name())) return false;
-    const source = function.span_identities[span_index].source;
-    if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
     if (!fact.typed_target_owner_id.isValid()) return true;
     const owner_index = fact.typed_target_owner_id.index();
     return owner_index < function.target_owner_identities.len and
@@ -294,11 +295,6 @@ fn typedOwnerIdMatches(actual: mir.SymbolId, expected: ?mir.SymbolId) bool {
 fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
     if (left == null or right == null) return left == null and right == null;
     return std.mem.eql(u8, left.?, right.?);
-}
-
-fn sourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint, source: mir.SourcePoint) bool {
-    if (!sourcePointLineColumnMatches(query, source)) return false;
-    return kind != .expression_result or sourcePointOffsetsMatch(query, source);
 }
 
 pub fn sourcePointLineColumnMatches(query: mir.SourcePoint, source: mir.SourcePoint) bool {
