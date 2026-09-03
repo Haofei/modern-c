@@ -8,11 +8,9 @@ const cli = @import("cli.zig");
 const compiler_session = @import("compiler_session.zig");
 const diagnostics = @import("diagnostics.zig");
 const driver_build = @import("driver_build.zig");
+const driver_check = @import("driver_check.zig");
 const driver_inspect = @import("driver_inspect.zig");
 const driver_codegen_inputs = @import("driver_codegen_inputs.zig");
-const hir = @import("hir_inspection.zig");
-const eval = @import("eval.zig");
-const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
 // Lowering-coverage instrumentation (hardening V3.2). Zero-cost unless the
@@ -23,7 +21,6 @@ const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
-const symbols = @import("symbols.zig");
 
 const usage =
     \\usage:
@@ -233,7 +230,7 @@ fn runMain(init: std.process.Init) !void {
         .mc_path = mc_path_entries.items,
     }, &load_diag) catch |err| switch (err) {
         error.Reported => {
-            try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
+            try driver_check.emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
             return error.ImportNotFound;
         },
         else => return err,
@@ -250,7 +247,7 @@ fn runMain(init: std.process.Init) !void {
     load_diag.source = source;
     load_diag.source_views = diagnostic_sources;
     if (load_diag.has_errors) {
-        try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
+        try driver_check.emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
         return error.ImportNotFound;
     }
     session.source_views = diagnostic_sources;
@@ -265,7 +262,7 @@ fn runMain(init: std.process.Init) !void {
     // Lexing is intentionally a root-file operation. It must not be blocked by
     // parse, generic, async or semantic errors in another module.
     if (std.mem.eql(u8, command, "lex")) {
-        try runLex(&session, path, source);
+        try driver_check.runLex(&session, path, source);
         return;
     }
     var module_parse_arena = std.heap.ArenaAllocator.init(allocator);
@@ -273,7 +270,7 @@ fn runMain(init: std.process.Init) !void {
     var parsed_sources: module_parser.ParsedSourceDatabase = undefined;
     var resolved_sources: module_parser.ResolvedSourceDatabase = undefined;
     session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources) catch |err| {
-        try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
+        try driver_check.emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
         return err;
     };
     defer session.resolved_sources = null;
@@ -285,7 +282,7 @@ fn runMain(init: std.process.Init) !void {
     defer session.resolved_program = null;
     if (commandNeedsResolvedProgram(command)) {
         resolved_program = session.prepareResolvedProgram(module_parse_arena.allocator(), &load_diag) catch |err| {
-            try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
+            try driver_check.emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
             return err;
         };
         resolved_program_ready = true;
@@ -293,21 +290,21 @@ fn runMain(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, command, "symbols")) {
-        try runSymbols(&session, path, source);
+        try driver_check.runSymbols(&session, path, source);
     } else if (std.mem.eql(u8, command, "check")) {
-        try runCheck(&session, path, source, options.json_diagnostics);
+        try driver_check.runCheck(&session, path, source, options.json_diagnostics);
     } else if (std.mem.eql(u8, command, "run-trap")) {
-        try runTrap(&session, path, source);
+        try driver_check.runTrap(&session, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try driver_inspect.runFacts(&session);
     } else if (std.mem.eql(u8, command, "inspect-hir")) {
-        try runLowerHir(&session, path, source);
+        try driver_check.runLowerHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "verify-inspect-hir")) {
-        try runVerifyHir(&session, path, source);
+        try driver_check.runVerifyHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-mir")) {
-        try runLowerMir(&session, path, source, options.checks.optimize);
+        try driver_check.runLowerMir(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "verify")) {
-        try runVerify(&session, path, source, options.checks.optimize);
+        try driver_check.runVerify(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "inspect-ir")) {
         try driver_inspect.runLowerIr(&session);
     } else if (std.mem.eql(u8, command, "lower-c")) {
@@ -387,217 +384,9 @@ fn commandNeedsResolvedProgram(command: []const u8) bool {
         cli.Options.isEmitCStruct(command);
 }
 
-fn runLowerHir(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.LowerHirFailed);
-    const decls = try resolved.astDecls(parse_allocator);
-    defer parse_allocator.free(decls);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try hir.appendDumpFromDecls(allocator, decls, &output);
-    try session.writeStdout(output.items);
-}
-
-fn runVerifyHir(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.VerifyHirFailed);
-    const decls = try resolved.astDecls(parse_allocator);
-    defer parse_allocator.free(decls);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try hir.appendVerificationFactsFromDecls(allocator, decls, &output);
-    try session.writeStdout(output.items);
-}
-
-fn runLowerMir(session: *CompilationSession, path: []const u8, source: []const u8, optimize: bool) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.LowerMirFailed);
-
-    var module_mir: mir.Module = undefined;
-    _ = try session.buildVerifiedProgramFromResolvedDecls(resolved.decls, &diag, optimize, &module_mir, error.LowerMirFailed);
-    defer module_mir.deinit();
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try mir.appendDumpFromMir(allocator, module_mir, &output);
-    try session.writeStdout(output.items);
-}
-
-fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8, optimize: bool) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.VerifyFailed);
-    var module_mir: mir.Module = undefined;
-    _ = try session.buildVerifiedProgramFromResolvedDecls(resolved.decls, &diag, optimize, &module_mir, error.VerifyFailed);
-    defer module_mir.deinit();
-}
-
 fn failUsage() !void {
     std.debug.print("{s}", .{usage});
     return error.InvalidArgs;
-}
-
-// `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for
-// local tooling. Parse failures are reported as structured incomplete results;
-// internal/resource failures return nonzero rather than masquerading as a clean
-// empty file.
-fn runSymbols(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    if (session.resolved_sources) |resolved_sources| {
-        const module_graph = session.module_graph orelse {
-            try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
-            return error.SymbolsFailed;
-        };
-        var output: std.ArrayList(u8) = .empty;
-        defer output.deinit(allocator);
-        try symbols.emitJsonFromResolvedSources(allocator, module_graph.*, resolved_sources.*, &diag, &output);
-        try session.writeStdout(output.items);
-        return;
-    }
-    try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted before resolved sources were attached\"}]}\n");
-    return error.MissingResolvedSources;
-}
-
-fn runLex(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var lx = lexer.Lexer.init(source, &diag);
-    while (true) {
-        const tok = lx.next();
-        std.debug.print("{s}:{d}:{d}: {s}", .{
-            path,
-            tok.span.line,
-            tok.span.column,
-            @tagName(tok.kind),
-        });
-        if (tok.lexeme.len != 0) {
-            std.debug.print(" `{s}`", .{tok.lexeme});
-        }
-        std.debug.print("\n", .{});
-        if (tok.kind == .eof) break;
-    }
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.LexFailed;
-    }
-}
-
-fn runCheck(session: *CompilationSession, path: []const u8, source: []const u8, json_diagnostics: bool) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.CheckFailed) catch |err| {
-        if (diag.has_errors) {
-            try emitDiagnostics(session, &diag, json_diagnostics);
-        }
-        return err;
-    };
-
-    if (json_diagnostics) {
-        try emitDiagnostics(session, &diag, true);
-    } else {
-        std.debug.print("parsed {d} top-level declarations\n", .{resolved.decls.len});
-    }
-}
-
-fn emitDiagnostics(session: *CompilationSession, diag: *diagnostics.Reporter, json_diagnostics: bool) !void {
-    if (!json_diagnostics) {
-        diag.render();
-        return;
-    }
-    const allocator = session.allocator;
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    try diag.appendJson(&out);
-    try session.writeStdout(out.items);
-}
-
-fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.RunTrapFailed);
-    const decls = try resolved.astDecls(parse_allocator);
-    defer parse_allocator.free(decls);
-
-    const source_db = session.source_db orelse return error.MissingResolvedSources;
-    const graph = session.module_graph orelse return error.MissingModuleGraph;
-    var expectation_count: usize = 0;
-    for (source_db.files) |source_file| {
-        var expectations = try eval.parseRunTrapExpectations(allocator, source_file.source);
-        defer eval.freeRunTrapExpectations(allocator, &expectations);
-        expectation_count += expectations.items.len;
-        const expectation_path = if (graph.fileById(source_file.id)) |file| file.display_path else path;
-
-        for (expectations.items) |expectation| {
-            const actual = try eval.runTrapExpectationFromDecls(allocator, decls, expectation.function_name, expectation.args);
-            if (actual == null or actual.? != expectation.trap) {
-                std.debug.print(
-                    "{s}:{d}: expected run {s}(...) to trap .{s}, got {s}\n",
-                    .{ expectation_path, expectation.line, expectation.function_name, @tagName(expectation.trap), if (actual) |trap| @tagName(trap) else "no trap" },
-                );
-                return error.RunTrapFailed;
-            }
-            std.debug.print(
-                "run_trap fn={s} trap={s} reached=true path={s} line={d}\n",
-                .{ expectation.function_name, @tagName(expectation.trap), expectation_path, expectation.line },
-            );
-        }
-    }
-    if (expectation_count == 0) {
-        std.debug.print("{s}: no inline run trap expectations found\n", .{path});
-        return error.RunTrapFailed;
-    }
 }
 
 fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8) !void {

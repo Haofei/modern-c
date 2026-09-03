@@ -701,10 +701,14 @@ ANCHORS: dict[str, list[str]] = {
         'std.mem.eql(u8, command, "facts")',
         'std.mem.eql(u8, command, "inspect-ir")',
         'std.mem.eql(u8, command, "lower-mir")',
-        "try ir.appendFacts",
+    ],
+    "src/driver_inspect.zig": [
+        "try ir.appendFactsFromResolvedSources",
+        "try ir.appendLowerIrFromResolvedSources",
+    ],
+    "src/driver_check.zig": [
         "try session.buildVerifiedProgramFromResolvedDecls(resolved.decls, &diag, optimize, &module_mir, error.LowerMirFailed)",
         "try mir.appendDumpFromMir",
-        "try ir.appendLowerIr",
     ],
     "src/numeric.zig": [
         "pub fn parseIntegerLiteral(raw",
@@ -978,10 +982,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         '@import("driver_codegen_inputs.zig")': 1,
         "early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls": 0,
         "declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls": 0,
-        "driver_codegen_inputs.DeclarationArtifacts": 7,
+        "driver_codegen_inputs.DeclarationArtifacts": 5,
         "fn buildDriverBackendInputs(": 0,
         "fn buildDriverCArtifactInputs(": 0,
-        "try driver_codegen_inputs.buildBackendInputs(": 4,
+        "try driver_codegen_inputs.buildBackendInputs(": 3,
         "try driver_codegen_inputs.buildCArtifactInputs(": 2,
     },
     "src/codegen_options.zig": {
