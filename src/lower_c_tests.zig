@@ -1070,6 +1070,7 @@ test "lower-c emits direct global-address plans without AST initializer artifact
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";
+        \\global greeting_copy: cstr = greeting;
         \\global raw: *const u8 = "raw";
     ;
     var parsed = try test_support.parseCheckedModule("c_string_bytes_global_plan.mc", source);
@@ -1078,12 +1079,10 @@ test "lower-c emits decoded string-byte global plans without AST initializer art
     defer module_mir.deinit();
     try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[0]) != null);
     try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[1]) != null);
+    try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[2]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -1098,6 +1097,7 @@ test "lower-c emits decoded string-byte global plans without AST initializer art
         null,
     );
     try expectContains(output.items, "greeting = ((char const *)\"hi\\n\");");
+    try expectContains(output.items, "greeting_copy = ((char const *)\"hi\\n\");");
     try expectContains(output.items, "raw = ((uint8_t const *)\"raw\");");
     var temp = std.testing.tmpDir(.{});
     defer temp.cleanup();

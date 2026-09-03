@@ -1576,6 +1576,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 allocator,
                                 initializer,
                                 checked_global,
+                                global_initializer_facts.items,
                                 &signature_types,
                                 type_alias_facts.items,
                                 &symbol_ids,
@@ -2107,6 +2108,7 @@ fn directStringBytesGlobalInitializerPlan(
     allocator: std.mem.Allocator,
     initializer: ast.Expr,
     global: CheckedGlobalFact,
+    prior_initializer_facts: []const GlobalInitializerFact,
     signature_types: *const SignatureTypeTableBuilder,
     type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
@@ -2115,21 +2117,32 @@ fn directStringBytesGlobalInitializerPlan(
         .cstr, .pointer => {},
         else => return null,
     }
-    const literal = directStringLiteral(initializer) orelse return null;
-    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
     if (!signatureTypeIsStringPointer(global.signature_type_id, signature_types, type_aliases, symbol_ids)) return null;
-    var bytes = try allocator.alloc(u8, literal.len - 2);
-    errdefer allocator.free(bytes);
-    const decoded = string_literal.decodeInto(bytes, literal) catch {
-        allocator.free(bytes);
-        return null;
-    };
-    if (decoded.len == 0) {
-        allocator.free(bytes);
-        return .{ .bytes = &.{} };
+    if (directStringLiteral(initializer)) |literal| {
+        if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+        var bytes = try allocator.alloc(u8, literal.len - 2);
+        errdefer allocator.free(bytes);
+        const decoded = string_literal.decodeInto(bytes, literal) catch {
+            allocator.free(bytes);
+            return null;
+        };
+        if (decoded.len == 0) {
+            allocator.free(bytes);
+            return .{ .bytes = &.{} };
+        }
+        bytes = try allocator.realloc(bytes, decoded.len);
+        return .{ .bytes = bytes };
     }
-    bytes = try allocator.realloc(bytes, decoded.len);
-    return .{ .bytes = bytes };
+    const source_name = directGlobalIdentifierName(initializer) orelse return null;
+    const source_symbol_id = symbol_ids.get(source_name) orelse return null;
+    for (prior_initializer_facts) |fact| {
+        if (!fact.global_symbol_id.eql(source_symbol_id) or !ValueType.eql(fact.value_ty, global.ty)) continue;
+        return switch (fact.plan) {
+            .string_bytes => |plan| .{ .bytes = if (plan.bytes.len == 0) &.{} else try allocator.dupe(u8, plan.bytes) },
+            else => null,
+        };
+    }
+    return null;
 }
 
 fn directStringLiteral(initializer: ast.Expr) ?[]const u8 {

@@ -5535,6 +5535,7 @@ test "LLVM emits direct global-address plans without AST initializer artifacts" 
 test "LLVM emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";
+        \\global greeting_copy: cstr = greeting;
         \\global raw: *const u8 = "raw";
     ;
     var parsed = try test_support.parseCheckedModule("llvm_string_bytes_global_plan.mc", source);
@@ -5543,12 +5544,10 @@ test "LLVM emits decoded string-byte global plans without AST initializer artifa
     defer module_mir.deinit();
     try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[0]) != null);
     try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[1]) != null);
+    try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[2]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5564,7 +5563,8 @@ test "LLVM emits decoded string-byte global plans without AST initializer artifa
         null,
     );
     try expectContains(output.items, "@greeting = internal global ptr getelementptr ([4 x i8], ptr @.str.0, i64 0, i64 0)");
-    try expectContains(output.items, "@raw = internal global ptr getelementptr ([4 x i8], ptr @.str.1, i64 0, i64 0)");
+    try expectContains(output.items, "@greeting_copy = internal global ptr getelementptr ([4 x i8], ptr @.str.1, i64 0, i64 0)");
+    try expectContains(output.items, "@raw = internal global ptr getelementptr ([4 x i8], ptr @.str.2, i64 0, i64 0)");
     try expectContains(output.items, "@.str.0 = private unnamed_addr constant [4 x i8] c\"hi\\0A\\00\"");
 }
 

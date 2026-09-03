@@ -1919,6 +1919,7 @@ test "CheckedProgram admits direct global-address initializer plans" {
 test "CheckedProgram admits decoded string-pointer global initializer plans" {
     const source =
         \\global greeting: cstr = "hi\n";
+        \\global greeting_copy: cstr = greeting;
         \\global raw: *const u8 = "raw";
     ;
     var parsed = try test_support.parseCheckedModule("string_bytes_global_initializer_plan.mc", source);
@@ -1926,7 +1927,7 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    try std.testing.expectEqual(@as(usize, 3), module_mir.global_initializer_facts.len);
     for (module_mir.checked_globals, 0..) |global, index| {
         const fact = module_mir.checkedStringBytesGlobal(global) orelse return error.TestUnexpectedResult;
         const bytes = switch (fact.plan) {
@@ -1935,7 +1936,7 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
         };
         try std.testing.expectEqual(global.symbol_id, fact.global_symbol_id);
         try std.testing.expect(module_mir.global_initializer_facts[index].plan == .string_bytes);
-        if (index == 0) try std.testing.expectEqualStrings("hi\n", bytes);
+        if (index <= 1) try std.testing.expectEqualStrings("hi\n", bytes);
     }
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
