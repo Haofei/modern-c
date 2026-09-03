@@ -4921,7 +4921,7 @@ test "typed MIR trap edges reject invalid and misaligned span identities" {
 
     const saved_identity_id = function.span_identities[span_id.index()].id;
     function.span_identities[span_id.index()].id = .invalid;
-    try std.testing.expectError(error.InvalidTrapEdge, mir_body_plan.verify(function));
+    try std.testing.expectError(error.InvalidSpanIdentity, mir_body_plan.verify(function));
     function.span_identities[span_id.index()].id = saved_identity_id;
 }
 
