@@ -422,7 +422,7 @@ test "lower-c fails closed when a scalar const-global fact is missing" {
     defer output.deinit(std.testing.allocator);
 
     try std.testing.expectError(
-        error.MissingGlobalInitializerFact,
+        error.InvalidMirGlobalInitializerFacts,
         lower_c.appendCProfileWithMirArtifacts(
             std.testing.allocator,
             artifacts.codegen(),
@@ -452,7 +452,7 @@ test "lower-c fails closed when a scalar const-global fact is stale" {
     defer output.deinit(std.testing.allocator);
 
     try std.testing.expectError(
-        error.InvalidGlobalInitializerFact,
+        error.InvalidMirGlobalInitializerFacts,
         lower_c.appendCProfileWithMirArtifacts(
             std.testing.allocator,
             artifacts.codegen(),
