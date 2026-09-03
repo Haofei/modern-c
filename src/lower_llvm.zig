@@ -772,7 +772,7 @@ const LlvmEmitter = struct {
             try self.global_is_const.put(name, global.is_const);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero => {},
+                .zero, .aggregate => {},
             }
         }
     }
@@ -899,6 +899,7 @@ const LlvmEmitter = struct {
             switch (fact.plan) {
                 .scalar => try self.emitCheckedScalarGlobal(global, fact),
                 .zero => try self.emitCheckedZeroGlobal(global),
+                .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -930,6 +931,42 @@ const LlvmEmitter = struct {
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const kind: []const u8 = if (global.is_const) "constant" else "global";
         try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, try self.zeroInitializer(ty) });
+    }
+
+    fn emitCheckedAggregateGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.AggregateInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmSignatureType(global.signature_type_id);
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(
+            self.allocator,
+            "@{s} = {s}{s} {s} {s}\n",
+            .{ name, visibility, kind, llvm_ty, try self.llvmAggregateGlobalInitializer(plan, global.signature_type_id) },
+        );
+    }
+
+    fn llvmAggregateGlobalInitializer(self: *LlvmEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {
+        return switch (plan) {
+            .scalar => |value| self.llvmScalarGlobalInitializer(value),
+            .array => |items| blk: {
+                const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
+                const array = switch (shape) {
+                    .array => |value| value,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                const length = array.length orelse return error.UnsupportedLlvmEmission;
+                if (items.len != length) return error.UnsupportedLlvmEmission;
+                const child_ty = try self.llvmSignatureType(array.child);
+                var text: std.ArrayList(u8) = .empty;
+                try text.append(self.scratch.allocator(), '[');
+                for (items, 0..) |item, index| {
+                    if (index != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    try text.print(self.scratch.allocator(), "{s} {s}", .{ child_ty, try self.llvmAggregateGlobalInitializer(item, array.child) });
+                }
+                try text.append(self.scratch.allocator(), ']');
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+        };
     }
 
     fn checkedGlobalSymbol(self: *const LlvmEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
@@ -1336,7 +1373,11 @@ const LlvmEmitter = struct {
 
     fn scalarConstGlobalInitializer(self: *LlvmEmitter, fact: mir.GlobalInitializerFact) ![]const u8 {
         if (!fact.scalarValue().isCompatibleWith(fact.value_ty)) return error.UnsupportedLlvmEmission;
-        return switch (fact.scalarValue()) {
+        return self.llvmScalarGlobalInitializer(fact.scalarValue());
+    }
+
+    fn llvmScalarGlobalInitializer(self: *LlvmEmitter, scalar: mir.ConstScalarValue) ![]const u8 {
+        return switch (scalar) {
             .int => |number| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{number}),
             .uint => |number| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{number}),
             .boolean => |value| if (value) "1" else "0",

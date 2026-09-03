@@ -5385,6 +5385,7 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
     for (module_mir.global_initializer_facts) |fact| switch (fact.plan) {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
+        .aggregate => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
@@ -5408,6 +5409,35 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
     );
     try expectContains(output.items, "@COUNT = internal global i32 0");
     try expectContains(output.items, "@VALUES = internal global [2 x i32] zeroinitializer");
+}
+
+test "LLVM renders pure array literals from syntax-free aggregate plans" {
+    const source = "global VALUES: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };";
+    var parsed = try test_support.parseCheckedModule("llvm_aggregate_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_aggregate_global_plan.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "@VALUES = internal global [2 x [2 x i32]] [[2 x i32] [i32 1, i32 2], [2 x i32] [i32 3, i32 4]]");
 }
 
 test "LLVM fails closed when a scalar const-global fact is missing" {

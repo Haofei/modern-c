@@ -79,6 +79,15 @@ pub const CheckedProgram = struct {
                     if (fact.initializer_body_id.isValid() or global.initializer_body_id.isValid())
                         return error.InvalidGlobalInitializerFact;
                 },
+                .aggregate => |plan| {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id) or
+                        !mir.aggregateInitializerPlanMatchesType(plan, signature_types, global.signature_type_id))
+                        return error.InvalidGlobalInitializerFact;
+                },
             }
             for (global_initializer_facts[0..index]) |prior| {
                 if (prior.global_symbol_id.eql(fact.global_symbol_id)) return error.DuplicateGlobalInitializerFact;

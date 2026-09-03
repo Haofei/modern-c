@@ -289,6 +289,7 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
     for (module_mir.global_initializer_facts) |fact| switch (fact.plan) {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
+        .aggregate => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
@@ -311,6 +312,34 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
     );
     try expectContains(output.items, "uint32_t COUNT = 0;");
     try expectContains(output.items, "mc_array_u32_2 VALUES = {0};");
+}
+
+test "lower-c renders pure array literals from syntax-free aggregate plans" {
+    const source = "global VALUES: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };";
+    var parsed = try test_support.parseCheckedModule("c_aggregate_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_aggregate_global_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "mc_array_mc_array_u32_2_2 VALUES = { { 1, 2 }, { 3, 4 } };");
 }
 
 test "lower-c fails closed when a scalar const-global fact is missing" {

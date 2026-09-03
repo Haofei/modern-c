@@ -536,7 +536,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero => {},
+                .zero, .aggregate => {},
             }
         }
     }
@@ -781,6 +781,7 @@ pub const CEmitter = struct {
             switch (fact.plan) {
                 .scalar => try self.emitCheckedScalarGlobal(global, fact),
                 .zero => try self.emitCheckedZeroGlobal(global),
+                .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -889,6 +890,39 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, if (self.isAggregateGlobalType(signature_ty)) "{0}" else "0" });
     }
 
+    fn emitCheckedAggregateGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.AggregateInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        const initializer = try self.cAggregateGlobalInitializer(plan, global.signature_type_id);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, initializer });
+    }
+
+    fn cAggregateGlobalInitializer(self: *CEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {
+        return switch (plan) {
+            .scalar => |value| self.cScalarGlobalValue(value),
+            .array => |items| blk: {
+                const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+                const array = switch (shape) {
+                    .array => |value| value,
+                    else => return error.UnsupportedCEmission,
+                };
+                const length = array.length orelse return error.UnsupportedCEmission;
+                if (items.len != length) return error.UnsupportedCEmission;
+                var text: std.ArrayList(u8) = .empty;
+                try text.appendSlice(self.scratch.allocator(), "{ ");
+                for (items, 0..) |item, index| {
+                    if (index != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    try text.appendSlice(self.scratch.allocator(), try self.cAggregateGlobalInitializer(item, array.child));
+                }
+                try text.appendSlice(self.scratch.allocator(), " }");
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+        };
+    }
+
     fn checkedGlobalSymbol(self: *const CEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
         if (!global.symbol_id.isValid() or global.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[global.symbol_id.index()];
@@ -945,7 +979,11 @@ pub const CEmitter = struct {
             return null;
         };
         if (!mir.ValueType.eql(fact.value_ty, value_ty) or !fact.scalarValue().isCompatibleWith(fact.value_ty)) return error.UnsupportedCEmission;
-        return switch (fact.scalarValue()) {
+        return @as(?[]const u8, try self.cScalarGlobalValue(fact.scalarValue()));
+    }
+
+    fn cScalarGlobalValue(self: *CEmitter, scalar: mir.ConstScalarValue) ![]const u8 {
+        return switch (scalar) {
             // Values above the signed-64 range need an unsigned suffix, or C
             // reads the decimal literal as implicitly unsigned (a warning).
             .int => |n| blk: {

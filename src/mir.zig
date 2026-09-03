@@ -693,6 +693,7 @@ pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
+pub const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
 pub const valueTypeRequiresScalarGlobalInitializerFact = mir_model.valueTypeRequiresScalarGlobalInitializerFact;
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
@@ -1196,7 +1197,10 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         overlay_union_facts.deinit(allocator);
     }
     var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
-    errdefer global_initializer_facts.deinit(allocator);
+    errdefer {
+        for (global_initializer_facts.items) |fact| fact.deinit(allocator);
+        global_initializer_facts.deinit(allocator);
+    }
 
     for (decl_items, 0..) |item, decl_ordinal| {
         const decl = declFromBuildItem(item);
@@ -1343,6 +1347,18 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                     .initializer_body_id = checked_global.initializer_body_id,
                                     .value_ty = global_ty,
                                     .plan = .{ .scalar = value },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
+                            if (try buildPureArrayGlobalInitializerPlan(allocator, initializer, ty, &const_fns, &const_globals, &reflect_env)) |plan| {
+                                errdefer plan.deinit(allocator);
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .aggregate = plan },
                                 });
                             }
                         }
@@ -1564,7 +1580,10 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
-    errdefer allocator.free(global_initializer_facts_slice);
+    errdefer {
+        for (global_initializer_facts_slice) |fact| fact.deinit(allocator);
+        allocator.free(global_initializer_facts_slice);
+    }
 
     var built_module: Module = .{
         .allocator = allocator,
@@ -1647,6 +1666,65 @@ fn foldMutableScalarGlobalInitializer(
             break :blk constScalarValueFromComptime(value);
         },
         .trap, .unknown => null,
+    };
+}
+
+/// Build the first recursive aggregate initializer family without retaining
+/// expression syntax: direct fixed arrays (including nested arrays) with
+/// leaves that fold to scalar values. Aliases, structs, strings, addresses,
+/// enum tags, function pointers and atomic calls intentionally return null;
+/// those declarations keep their bounded transitional AST artifact until
+/// dedicated facts exist.
+fn buildPureArrayGlobalInitializerPlan(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    ty: ast.TypeExpr,
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    reflect_env: *const MirReflectEnv,
+) !?mir_model.AggregateInitializerPlan {
+    const array = switch (ty.kind) {
+        .array => |value| value,
+        else => return null,
+    };
+    const items = switch (initializer.kind) {
+        .array_literal => |value| value,
+        .grouped => |inner| return buildPureArrayGlobalInitializerPlan(allocator, inner.*, ty, const_fns, const_globals, reflect_env),
+        else => return null,
+    };
+    const length = parseArrayLen(array.len, const_fns, const_globals) orelse return null;
+    if (items.len != length) return null;
+
+    var plans: std.ArrayList(mir_model.AggregateInitializerPlan) = .empty;
+    errdefer {
+        for (plans.items) |plan| plan.deinit(allocator);
+        plans.deinit(allocator);
+    }
+    for (items) |item| {
+        const child = switch (array.child.*.kind) {
+            .array => (try buildPureArrayGlobalInitializerPlan(allocator, item, array.child.*, const_fns, const_globals, reflect_env)) orelse return null,
+            else => blk: {
+                if (!isPureScalarArrayLeafType(array.child.*)) return null;
+                const value = (try foldMutableScalarGlobalInitializer(allocator, item, array.child.*, const_fns, const_globals, reflect_env)) orelse return null;
+                break :blk mir_model.AggregateInitializerPlan{ .scalar = value };
+            },
+        };
+        try plans.append(allocator, child);
+    }
+    return .{ .array = try plans.toOwnedSlice(allocator) };
+}
+
+fn isPureScalarArrayLeafType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .name => |name| std.mem.eql(u8, name.text, "bool") or
+            std.mem.eql(u8, name.text, "f32") or std.mem.eql(u8, name.text, "f64") or
+            std.mem.eql(u8, name.text, "u8") or std.mem.eql(u8, name.text, "u16") or
+            std.mem.eql(u8, name.text, "u32") or std.mem.eql(u8, name.text, "u64") or
+            std.mem.eql(u8, name.text, "u128") or std.mem.eql(u8, name.text, "usize") or
+            std.mem.eql(u8, name.text, "i8") or std.mem.eql(u8, name.text, "i16") or
+            std.mem.eql(u8, name.text, "i32") or std.mem.eql(u8, name.text, "i64") or
+            std.mem.eql(u8, name.text, "i128") or std.mem.eql(u8, name.text, "isize"),
+        else => false,
     };
 }
 

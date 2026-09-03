@@ -4176,6 +4176,33 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
+    aggregate: AggregateInitializerPlan,
+
+    pub fn deinit(self: GlobalInitializerPlan, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .aggregate => |plan| plan.deinit(allocator),
+            .scalar, .zero => {},
+        }
+    }
+};
+
+/// Recursive, syntax-free initializer tree for the deliberately narrow
+/// aggregate family admitted today: fixed arrays whose leaves are already
+/// checked scalar values. Struct fields, addresses, strings, atomic calls and
+/// relocations remain outside this plan until they have their own facts.
+pub const AggregateInitializerPlan = union(enum) {
+    scalar: ConstScalarValue,
+    array: []const AggregateInitializerPlan,
+
+    pub fn deinit(self: AggregateInitializerPlan, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .scalar => {},
+            .array => |items| {
+                for (items) |item| item.deinit(allocator);
+                if (items.len != 0) allocator.free(items);
+            },
+        }
+    }
 };
 
 /// A plan is keyed by its checked global identity, never source spelling.
@@ -4192,9 +4219,61 @@ pub const GlobalInitializerFact = struct {
         return switch (self.plan) {
             .scalar => |value| value,
             .zero => unreachable,
+            .aggregate => unreachable,
         };
     }
+
+    pub fn deinit(self: GlobalInitializerFact, allocator: std.mem.Allocator) void {
+        self.plan.deinit(allocator);
+    }
 };
+
+/// Checks that an aggregate plan describes exactly the recursive shape owned
+/// by the module signature table. This is deliberately not a fallback type
+/// inference path: an unsupported leaf or a malformed tree fails admission.
+pub fn aggregateInitializerPlanMatchesType(
+    plan: AggregateInitializerPlan,
+    types: SignatureTypeTable,
+    id: SignatureTypeId,
+) bool {
+    const shape = types.get(id) orelse return false;
+    return switch (plan) {
+        .scalar => |value| scalarInitializerMatchesShape(value, types, shape),
+        .array => |items| switch (shape) {
+            .array => |array| blk: {
+                const length = array.length orelse break :blk false;
+                if (items.len != length) break :blk false;
+                for (items) |item| if (!aggregateInitializerPlanMatchesType(item, types, array.child)) break :blk false;
+                break :blk true;
+            },
+            else => false,
+        },
+    };
+}
+
+fn scalarInitializerMatchesShape(value: ConstScalarValue, types: SignatureTypeTable, shape: TypeShape) bool {
+    return switch (shape) {
+        .qualified => |node| scalarInitializerMatchesShape(value, types, types.get(node.child) orelse return false),
+        .name => |name| if (std.mem.eql(u8, name, "bool"))
+            value.isCompatibleWith(.bool)
+        else if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64"))
+            value.isCompatibleWith(.{ .float = name })
+        else if (isBuiltinIntegerName(name))
+            value.isCompatibleWith(.{ .integer = name })
+        else
+            false,
+        else => false,
+    };
+}
+
+fn isBuiltinIntegerName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+        std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64") or
+        std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "usize") or
+        std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "i16") or
+        std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "i64") or
+        std.mem.eql(u8, name, "i128") or std.mem.eql(u8, name, "isize");
+}
 
 pub fn valueTypeRequiresScalarGlobalInitializerFact(ty: ValueType) bool {
     return switch (ty) {
@@ -4254,6 +4333,9 @@ pub const Module = struct {
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 value.isCompatibleWith(fact.value_ty)) fact else null,
             .zero => if (!global.initializer_body_id.isValid() and !fact.initializer_body_id.isValid()) fact else null,
+            .aggregate => |plan| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                aggregateInitializerPlanMatchesType(plan, self.signature_types, global.signature_type_id)) fact else null,
         };
     }
 
@@ -4267,7 +4349,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero => null,
+            .zero, .aggregate => null,
         };
     }
 
@@ -4275,7 +4357,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar => null,
+            .scalar, .aggregate => null,
         };
     }
 
@@ -4341,6 +4423,7 @@ pub const Module = struct {
         if (self.packed_bits.len != 0) self.allocator.free(self.packed_bits);
         for (self.overlay_unions) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) self.allocator.free(overlay_union_fact.fields);
         if (self.overlay_unions.len != 0) self.allocator.free(self.overlay_unions);
+        for (self.global_initializer_facts) |fact| fact.deinit(self.allocator);
         if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);

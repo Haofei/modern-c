@@ -1594,6 +1594,7 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
             else => {},
         },
         .zero => {},
+        .aggregate => {},
     };
     const float_fact_index = float_index orelse return error.TestUnexpectedResult;
     const saved_float = module_mir.global_initializer_facts[float_fact_index];
@@ -1670,6 +1671,7 @@ test "CheckedProgram requires an admitted zero-global initializer plan" {
     switch (module_mir.global_initializer_facts[0].plan) {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
+        .aggregate => return error.TestUnexpectedResult,
     }
     const saved = module_mir.global_initializer_facts;
     module_mir.global_initializer_facts = &.{};
@@ -1683,6 +1685,40 @@ test "CheckedProgram requires an admitted zero-global initializer plan" {
             module_mir.global_initializer_facts,
         ),
     );
+}
+
+test "CheckedProgram admits only shape-matching aggregate global initializer plans" {
+    const source = "global VALUES: [2]u32 = .{ 7, 8 };";
+    var parsed = try test_support.parseCheckedModule("aggregate_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    const saved = module_mir.global_initializer_facts[0];
+    switch (saved.plan) {
+        .aggregate => {},
+        .scalar, .zero => return error.TestUnexpectedResult,
+    }
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    module_mir.global_initializer_facts[0].plan = .{ .aggregate = .{ .scalar = .{ .uint = 7 } } };
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    module_mir.global_initializer_facts[0] = saved;
 }
 
 test "MIR verifier rejects per-file source identity drift" {
