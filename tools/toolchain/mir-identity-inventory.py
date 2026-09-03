@@ -87,6 +87,11 @@ def main() -> int:
         require_contains("src/mir_model.zig", needle)
 
     model = read("src/mir_model.zig")
+    instruction_start = model.index("pub const Instruction = struct {")
+    instruction_end = model.index("\n\npub const ", instruction_start)
+    if "target_ty:" in model[instruction_start:instruction_end]:
+        fail("src/mir_model.zig Instruction duplicates target syntax beside SignatureTypeId")
+
     for fact_name in ("IntegerFact", "FloatFact"):
         start = model.index(f"pub const {fact_name} = struct {{")
         end = model.index("\n};", start)

@@ -13,6 +13,7 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
 const mir_body_plan = @import("mir_body_plan.zig");
 const module_parser = @import("module_parser.zig");
+const signature_type_materializer = @import("signature_type_materializer.zig");
 const test_support = @import("test_support.zig");
 
 const Block = mir.Block;
@@ -31,6 +32,16 @@ const SpanId = mir.SpanId;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
 const SymbolId = mir.SymbolId;
+
+// Target-type facts retain only SignatureTypeId. Tests that assert legacy
+// syntax shape materialize an ephemeral view from the module table after
+// selecting a function. The table borrows module-owned storage, which remains
+// live for each test's `module_mir` lifetime.
+threadlocal var test_signature_types: ?mir.SignatureTypeTable = null;
+
+fn recordTestSignatureTypes(module: mir.Module) void {
+    test_signature_types = module.signature_types;
+}
 
 test "nested IEEE float arithmetic owns no integer-overflow edge" {
     const source =
@@ -1991,6 +2002,7 @@ fn symbolIdentityBySpelling(module: mir.Module, spelling: []const u8) ?mir.Symbo
 }
 
 fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
+    recordTestSignatureTypes(module);
     for (module.functions) |function| {
         if (std.mem.eql(u8, function.name, name)) return function;
     }
@@ -2031,7 +2043,18 @@ fn targetTypeSyntaxForTest(function: mir.Function, fact: mir.TargetTypeFact) ?as
     for (function.blocks) |block| for (block.instructions) |instruction| {
         if (instruction.kind != .target_type or !std.mem.eql(u8, instruction.detail, @tagName(fact.kind))) continue;
         if (!instruction.typed_span_id.eql(fact.typed_span_id) or !instruction.target_type_id.eql(fact.target_type_id)) continue;
-        return instruction.target_ty;
+        const signature_types = test_signature_types orelse return null;
+        return signature_type_materializer.typeExpr(
+            std.heap.page_allocator,
+            signature_types,
+            fact.target_type_id,
+            .{
+                .line = @intCast(fact.source.line),
+                .column = @intCast(fact.source.column),
+                .offset = fact.source.offset,
+                .len = fact.source.len,
+            },
+        ) catch null;
     };
     return null;
 }
@@ -2121,6 +2144,7 @@ fn spanIdentityBySource(function: mir.Function, source: SourcePoint) ?mir.SpanId
 }
 
 fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
+    recordTestSignatureTypes(module.*);
     for (module.functions) |*function| {
         if (std.mem.eql(u8, function.name, name)) return function;
     }
@@ -2128,6 +2152,7 @@ fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
 }
 
 fn functionByNamePtr(module: *const mir.Module, name: []const u8) ?*const mir.Function {
+    recordTestSignatureTypes(module.*);
     for (module.functions) |*function| {
         if (std.mem.eql(u8, function.name, name)) return function;
     }

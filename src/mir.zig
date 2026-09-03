@@ -17986,7 +17986,6 @@ const FunctionBuilder = struct {
         const instructions = &self.blocks.items[self.current].instructions;
         const typed_result_ty = instructions.items[instructions.items.len - 1].typed_result_ty;
         const typed_span_id = instructions.items[instructions.items.len - 1].typed_span_id;
-        instructions.items[instructions.items.len - 1].target_ty = target_ty;
         instructions.items[instructions.items.len - 1].target_type_id = target_type_id;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
@@ -18012,7 +18011,6 @@ const FunctionBuilder = struct {
         const instructions = &self.blocks.items[self.current].instructions;
         const typed_result_ty = instructions.items[instructions.items.len - 1].typed_result_ty;
         const typed_span_id = instructions.items[instructions.items.len - 1].typed_span_id;
-        instructions.items[instructions.items.len - 1].target_ty = target_ty;
         instructions.items[instructions.items.len - 1].target_type_id = target_type_id;
         instructions.items[instructions.items.len - 1].target_index = target_index;
         instructions.items[instructions.items.len - 1].typed_target_owner_id = typed_target_owner_id;

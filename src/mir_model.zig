@@ -386,11 +386,10 @@ pub const Instruction = struct {
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     detail: []const u8,
-    // Target-type instructions retain the complete semantic type separately
-    // from their runtime representation.
-    target_ty: ?ast.TypeExpr = null,
     /// Module-owned source type shape for target-type instructions.  This is
-    /// the verifier join key for the syntax-free target-type fact.
+    /// the verifier join key for the syntax-free target-type fact.  The
+    /// instruction deliberately retains no AST type payload: syntax is only
+    /// materialized at legacy rendering boundaries from this identity.
     target_type_id: SignatureTypeId = .invalid,
     aggregate_construction: ?AggregateConstructionKind = null,
     const_index: ?usize = null,

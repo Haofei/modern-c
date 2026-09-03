@@ -346,12 +346,13 @@ spelling-based initialization classifiers are retired. Atomic member operations
 remain covered by their separate receiver-derived payload facts; broader
 expression typing and typed-HIR/MIR remain open.
 
-Every MIR `target_type` instruction now also carries the complete source-level
-type syntax. Generic target-type admission compares that syntax with each
-prebuilt fact, in addition to source location, owner/index, and runtime
-representation. A stale complete fact is therefore classified before C or LLVM
-lowering; the backends preserve their existing unsupported-emission error
-surface while no longer decide whether the fact is stale.
+Every MIR `target_type` instruction carries only the module-owned
+`SignatureTypeId` that identifies its complete source-level type shape.
+Generic target-type admission compares that identity with each prebuilt fact,
+in addition to opaque span, owner/index, and runtime representation. A stale
+or missing type identity is therefore classified before C or LLVM lowering;
+legacy renderers may materialize a transient syntax view only from the verified
+signature table and never recover it from the instruction.
 
 ### Grouped expression result authority
 

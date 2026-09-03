@@ -17,7 +17,8 @@ const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
-const TransitionalTypeExpr = std.meta.Child(@TypeOf(@as(mir.Instruction, undefined).target_ty));
+const lower_c_model = @import("lower_c_model.zig");
+const TransitionalTypeExpr = @TypeOf(@as(lower_c_model.ArrayInfo, undefined).element_ty);
 
 /// Ephemeral legacy rendering view.  MIR facts retain only a
 /// `SignatureTypeId`; this view is reconstructed from the module-owned table
@@ -59,7 +60,6 @@ const widthBits = lower_c_op.widthBits;
 const lower_c_atomic = @import("lower_c_atomic.zig");
 
 // C emission model and helper modules used by the emitter implementation.
-const lower_c_model = @import("lower_c_model.zig");
 const codegen_attrs = @import("codegen_attrs.zig");
 const lower_c_flow = @import("lower_c_flow.zig");
 const lower_c_expr = @import("lower_c_expr.zig");

@@ -20,7 +20,8 @@ const scalar_repr = @import("scalar_repr.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
-const TransitionalTypeExpr = std.meta.Child(@TypeOf(@as(mir.Instruction, undefined).target_ty));
+const lower_llvm_model = @import("lower_llvm_model.zig");
+const TransitionalTypeExpr = @TypeOf(@as(lower_llvm_model.ReflectionCallInfo, undefined).target_ty);
 
 /// Ephemeral syntax view for legacy LLVM rendering.  The canonical
 /// target-type fact stores only `SignatureTypeId`; this is materialized from
@@ -136,7 +137,6 @@ const structLiteralField = lower_llvm_query.structLiteralField;
 const taggedUnionConstructorName = lower_llvm_query.taggedUnionConstructorName;
 
 // LLVM backend model records used by the emitter implementation.
-const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_reflect = @import("lower_llvm_reflect.zig");
 const LlvmReflectEnv = lower_llvm_reflect.ReflectEnv;
 

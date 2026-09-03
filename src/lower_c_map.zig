@@ -12,7 +12,6 @@ const backend = @import("backend.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
-const mir_syntax = @import("mir_syntax.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
@@ -146,14 +145,14 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                     mir.targetOwnerSpelling(function, owner_id) orelse "<invalid>"
                 else
                     "none";
-                try out.print(allocator, "instr fn={s} block={} kind={s} result={s} typed_result={} detail={s} target_type={s} aggregate={s} const_index={} target_owner={s} typed_target_owner={} target_index={} value_id={s} typed_value={} typed_span={} line={} column={} offset={} len={}\n", .{
+                try out.print(allocator, "instr fn={s} block={} kind={s} result={s} typed_result={} detail={s} target_type_id={} aggregate={s} const_index={} target_owner={s} typed_target_owner={} target_index={} value_id={s} typed_value={} typed_span={} line={} column={} offset={} len={}\n", .{
                     function.name,
                     block.id,
                     @tagName(instruction.kind),
                     instruction.result_ty.name(),
                     typedIndexOrMax(instruction.typed_result_ty),
                     instruction.detail,
-                    if (instruction.target_ty) |target_ty| mir_syntax.typeText(target_ty) else "none",
+                    typedIndexOrMax(instruction.target_type_id),
                     if (instruction.aggregate_construction) |kind| @tagName(kind) else "none",
                     optionalUsizeOrMax(instruction.const_index),
                     target_owner,
