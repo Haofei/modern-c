@@ -95,7 +95,7 @@ pub const VerifiedProgram = struct {
             typed_mir.checked_callables,
             typed_mir.checked_globals,
             typed_mir.signature_types,
-            typed_mir.const_global_scalar_inits,
+            typed_mir.global_initializer_facts,
         );
         if (!checked.matchesMir(typed_mir.*)) return error.InvalidCheckedProgram;
         return .{

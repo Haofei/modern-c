@@ -412,7 +412,7 @@ pub const CEmitter = struct {
         try self.collectTypeAliasFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
-        try self.collectCheckedScalarConstGlobals();
+        try self.collectCheckedScalarGlobals();
         try self.collectConstGlobals();
         try self.collectDeclArtifacts(early_metadata);
         try self.collectBindThunks();
@@ -481,9 +481,9 @@ pub const CEmitter = struct {
     /// Seed backend lookup/comptime state from the admitted scalar-global
     /// facts before evaluating the residual aggregate global artifacts. These
     /// rows deliberately have no `GlobalArtifact` payload.
-    fn collectCheckedScalarConstGlobals(self: *CEmitter) !void {
+    fn collectCheckedScalarGlobals(self: *CEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedScalarConstGlobal(global) orelse continue;
+            const fact = self.mir_module.checkedScalarGlobal(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
             const c_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
             try self.globals.put(name, .{
@@ -493,9 +493,9 @@ pub const CEmitter = struct {
                 .race_c_type = c_type,
                 .width_bits = widthBits(global.ty.name()),
                 .pointer_like = false,
-                .is_const = true,
+                .is_const = global.is_const,
             });
-            try self.const_globals.put(name, mir.comptimeValueFromConstGlobalScalarFact(fact));
+            if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact));
         }
     }
 
@@ -734,8 +734,8 @@ pub const CEmitter = struct {
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedScalarConstGlobal(global) orelse continue;
-            try self.emitCheckedScalarConstGlobal(global, fact);
+            const fact = self.mir_module.checkedScalarGlobal(global) orelse continue;
+            try self.emitCheckedScalarGlobal(global, fact);
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
@@ -816,10 +816,11 @@ pub const CEmitter = struct {
         try emitGlobalDecl(self.globalEmitContext(), global, rendered_type, signature_ty);
     }
 
-    fn emitCheckedScalarConstGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) !void {
+    fn emitCheckedScalarGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, fact: mir.GlobalInitializerFact) !void {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
         const rendered_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
         const value = (try self.constGlobalCValue(fact.initializer_body_id, global.ty)) orelse return error.UnsupportedCEmission;
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
         try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, value });
@@ -875,13 +876,13 @@ pub const CEmitter = struct {
     // retain the transitional AST route until they receive their own
     // syntax-free const-value representation.
     fn constGlobalCValue(self: *CEmitter, body_id: mir.BodyId, value_ty: mir.ValueType) !?[]const u8 {
-        const fact = self.mir_module.constGlobalScalarInit(body_id) orelse {
-            if (mir.valueTypeRequiresScalarConstInitFact(value_ty) and body_id.isValid())
+        const fact = self.mir_module.globalInitializerFact(body_id) orelse {
+            if (mir.valueTypeRequiresScalarGlobalInitializerFact(value_ty) and body_id.isValid())
                 return error.UnsupportedCEmission;
             return null;
         };
-        if (!mir.ValueType.eql(fact.value_ty, value_ty) or !fact.value.isCompatibleWith(fact.value_ty)) return error.UnsupportedCEmission;
-        return switch (fact.value) {
+        if (!mir.ValueType.eql(fact.value_ty, value_ty) or !fact.scalarValue().isCompatibleWith(fact.value_ty)) return error.UnsupportedCEmission;
+        return switch (fact.scalarValue()) {
             // Values above the signed-64 range need an unsigned suffix, or C
             // reads the decimal literal as implicitly unsigned (a warning).
             .int => |n| blk: {

@@ -786,8 +786,8 @@ pub const CallableKind = mir_model.CallableKind;
 pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
-pub const ConstGlobalScalarInitFact = mir_model.ConstGlobalScalarInitFact;
-pub const valueTypeRequiresScalarConstInitFact = mir_model.valueTypeRequiresScalarConstInitFact;
+pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
+pub const valueTypeRequiresScalarGlobalInitializerFact = mir_model.valueTypeRequiresScalarGlobalInitializerFact;
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
 pub const BuildOptions = mir_model.BuildOptions;
@@ -795,8 +795,8 @@ pub const BuildOptions = mir_model.BuildOptions;
 /// Converts a checked scalar-global fact to the evaluator's value domain for
 /// residual const evaluation. Codegen uses the same admitted MIR fact for its
 /// declaration renderer; it must not recreate the value from AST syntax.
-pub fn comptimeValueFromConstGlobalScalarFact(fact: ConstGlobalScalarInitFact) eval.ComptimeValue {
-    return switch (fact.value) {
+pub fn comptimeValueFromGlobalInitializerFact(fact: GlobalInitializerFact) eval.ComptimeValue {
+    return switch (fact.scalarValue()) {
         .int => |value| .{ .int = value },
         .uint => |value| .{ .uint = value },
         .boolean => |value| .{ .boolean = value },
@@ -1270,8 +1270,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer checked_globals.deinit(allocator);
     var type_alias_facts: std.ArrayList(TypeAliasFact) = .empty;
     errdefer type_alias_facts.deinit(allocator);
-    var const_global_scalar_inits: std.ArrayList(mir_model.ConstGlobalScalarInitFact) = .empty;
-    errdefer const_global_scalar_inits.deinit(allocator);
+    var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
+    errdefer global_initializer_facts.deinit(allocator);
 
     for (decl_items, 0..) |item, decl_ordinal| {
         const decl = declFromBuildItem(item);
@@ -1290,6 +1290,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     var checked_global: CheckedGlobalFact = .{
                         .symbol_id = try internSymbolId(&symbol_ids, global.name.text),
                         .source_id = typed_source_id,
+                        .declaration_source = sourcePointFromSpan(global.name.span),
                         .ty = globals.get(global.name.text) orelse .unknown,
                         .signature_type_id = try signature_types.internReturnType(global.ty, &const_fns, &const_globals),
                         .dyn_trait_symbol_id = if (dynTraitNameFromTypeAlias(ty, &aliases)) |trait_name|
@@ -1331,18 +1332,24 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             checked_param_types_unowned = false;
                             try functions.append(allocator, function);
                         }
-                        if (global.is_const) {
-                            if (const_globals.get(global.name.text)) |value| {
-                                if (constScalarValueFromComptime(value)) |scalar| {
-                                    const global_ty = checked_global.ty;
-                                    if (scalar.isCompatibleWith(global_ty)) {
-                                        try const_global_scalar_inits.append(allocator, .{
-                                            .initializer_body_id = checked_global.initializer_body_id,
-                                            .value_ty = global_ty,
-                                            .value = scalar,
-                                        });
-                                    }
-                                }
+                        // Do not evaluate aggregates or relocations here:
+                        // they require a recursive plan, not an AST fallback.
+                        const scalar = if (valueTypeRequiresScalarGlobalInitializerFact(checked_global.ty))
+                            if (global.is_const)
+                                if (const_globals.get(global.name.text)) |value| constScalarValueFromComptime(value) else null
+                            else
+                                try foldMutableScalarGlobalInitializer(allocator, initializer, ty, &const_fns, &const_globals, &reflect_env)
+                        else
+                            null;
+                        if (scalar) |value| {
+                            const global_ty = checked_global.ty;
+                            if (value.isCompatibleWith(global_ty)) {
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = global_ty,
+                                    .plan = .{ .scalar = value },
+                                });
                             }
                         }
                     }
@@ -1504,8 +1511,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer allocator.free(type_alias_facts_slice);
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
-    const const_global_scalar_inits_slice = try const_global_scalar_inits.toOwnedSlice(allocator);
-    errdefer allocator.free(const_global_scalar_inits_slice);
+    const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
+    errdefer allocator.free(global_initializer_facts_slice);
 
     var built_module: Module = .{
         .allocator = allocator,
@@ -1515,7 +1522,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .checked_callables = checked_callables_slice,
         .checked_globals = checked_globals_slice,
         .type_aliases = type_alias_facts_slice,
-        .const_global_scalar_inits = const_global_scalar_inits_slice,
+        .global_initializer_facts = global_initializer_facts_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
@@ -1533,6 +1540,33 @@ fn constScalarValueFromComptime(value: eval.ComptimeValue) ?mir_model.ConstScala
         .boolean => |boolean| .{ .boolean = boolean },
         .float => |float| .{ .float = .{ .bits = float.bits, .width = float.width } },
         .void, .tag, .bytes, .array, .@"struct" => null,
+    };
+}
+
+/// Mutable globals do not enter the const environment. A static scalar still
+/// has a frontend value, which is recorded directly for codegen.
+fn foldMutableScalarGlobalInitializer(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    ty: ast.TypeExpr,
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    reflect_env: *const MirReflectEnv,
+) !?mir_model.ConstScalarValue {
+    var scope = eval.ComptimeScope.init(allocator);
+    defer scope.deinit();
+    scope.funcs = const_fns;
+    scope.globals = const_globals;
+    scope.reflect = mir_reflect.comptimeReflectThunk;
+    scope.reflect_ctx = @constCast(reflect_env);
+    const folded = eval.foldComptimeExprExpected(&scope, initializer, ty);
+    if (scope.hasOom()) return error.OutOfMemory;
+    return switch (folded) {
+        .value => |value| blk: {
+            defer eval.freeComptimeValue(allocator, value);
+            break :blk constScalarValueFromComptime(value);
+        },
+        .trap, .unknown => null,
     };
 }
 

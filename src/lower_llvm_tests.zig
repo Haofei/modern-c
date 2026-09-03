@@ -5245,22 +5245,52 @@ test "LLVM renders scalar const globals from verified MIR facts" {
     try expectContains(output.items, "@NEG_ZERO = internal constant float bitcast (i32 2147483648 to float)");
 }
 
+test "LLVM renders mutable scalar globals from verified initializer plans" {
+    const source = "global COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("llvm_mutable_scalar_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_mutable_scalar_global_plan.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "@COUNT = internal global i32 3");
+}
+
 test "LLVM fails closed when a scalar const-global fact is missing" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("llvm_missing_scalar_const_global_fact.mc", source);
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
-    const saved_facts = module_mir.const_global_scalar_inits;
-    defer module_mir.const_global_scalar_inits = saved_facts;
-    module_mir.const_global_scalar_inits = &.{};
+    const saved_facts = module_mir.global_initializer_facts;
+    defer module_mir.global_initializer_facts = saved_facts;
+    module_mir.global_initializer_facts = &.{};
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try std.testing.expectError(
-        error.MissingConstGlobalScalarInitFact,
+        error.MissingGlobalInitializerFact,
         lower_llvm.appendLlvmCheckedMirArtifacts(
             std.testing.allocator,
             artifacts.codegen(),
@@ -5282,16 +5312,16 @@ test "LLVM fails closed when a scalar const-global fact is stale" {
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
-    const saved = module_mir.const_global_scalar_inits[0];
-    defer module_mir.const_global_scalar_inits[0] = saved;
-    module_mir.const_global_scalar_inits[0].value_ty = .bool;
+    const saved = module_mir.global_initializer_facts[0];
+    defer module_mir.global_initializer_facts[0] = saved;
+    module_mir.global_initializer_facts[0].value_ty = .bool;
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try std.testing.expectError(
-        error.InvalidConstGlobalScalarInitFact,
+        error.InvalidGlobalInitializerFact,
         lower_llvm.appendLlvmCheckedMirArtifacts(
             std.testing.allocator,
             artifacts.codegen(),

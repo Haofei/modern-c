@@ -1313,7 +1313,7 @@ test "CheckedProgram is a syntax-free callable and body table" {
         module_mir.checked_callables,
         module_mir.checked_globals,
         module_mir.signature_types,
-        module_mir.const_global_scalar_inits,
+        module_mir.global_initializer_facts,
     );
     try std.testing.expect(checked.matchesMir(module_mir));
     try std.testing.expectEqual(module_mir.functions.len, checked.callables.len);
@@ -1371,7 +1371,7 @@ test "CheckedProgram is a syntax-free callable and body table" {
         module_mir.checked_callables,
         module_mir.checked_globals,
         module_mir.signature_types,
-        module_mir.const_global_scalar_inits,
+        module_mir.global_initializer_facts,
     ));
     try std.testing.expect(!checked.matchesMir(module_mir));
 }
@@ -1468,7 +1468,7 @@ test "module signature type table preserves recursive callable shapes" {
         module_mir.checked_callables,
         module_mir.checked_globals,
         module_mir.signature_types,
-        module_mir.const_global_scalar_inits,
+        module_mir.global_initializer_facts,
     );
     try std.testing.expect(checked.matchesMir(module_mir));
 }
@@ -1516,7 +1516,7 @@ test "module signature type table owns recursive global declaration shapes" {
         module_mir.checked_callables,
         module_mir.checked_globals,
         module_mir.signature_types,
-        module_mir.const_global_scalar_inits,
+        module_mir.global_initializer_facts,
     );
     try std.testing.expect(checked.matchesMir(module_mir));
 
@@ -1526,7 +1526,7 @@ test "module signature type table owns recursive global declaration shapes" {
         module_mir.checked_callables,
         module_mir.checked_globals,
         module_mir.signature_types,
-        module_mir.const_global_scalar_inits,
+        module_mir.global_initializer_facts,
     ));
     module_mir.checked_globals[0].signature_type_id = saved_id;
 }
@@ -1542,43 +1542,43 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), module_mir.const_global_scalar_inits.len);
+    try std.testing.expectEqual(@as(usize, 3), module_mir.global_initializer_facts.len);
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
         module_mir.checked_globals,
         module_mir.signature_types,
-        module_mir.const_global_scalar_inits,
+        module_mir.global_initializer_facts,
     );
     try std.testing.expect(checked.matchesMir(module_mir));
 
-    const saved = module_mir.const_global_scalar_inits[0];
-    module_mir.const_global_scalar_inits[0].initializer_body_id = .invalid;
+    const saved = module_mir.global_initializer_facts[0];
+    module_mir.global_initializer_facts[0].initializer_body_id = .invalid;
     try std.testing.expectError(
-        error.InvalidConstGlobalScalarInitFact,
+        error.InvalidGlobalInitializerFact,
         checked_program.CheckedProgram.init(
             module_mir.checked_callables,
             module_mir.checked_globals,
             module_mir.signature_types,
-            module_mir.const_global_scalar_inits,
+            module_mir.global_initializer_facts,
         ),
     );
-    module_mir.const_global_scalar_inits[0] = saved;
+    module_mir.global_initializer_facts[0] = saved;
 
-    module_mir.const_global_scalar_inits[0].value_ty = .bool;
+    module_mir.global_initializer_facts[0].value_ty = .bool;
     try std.testing.expectError(
-        error.InvalidConstGlobalScalarInitFact,
+        error.InvalidGlobalInitializerFact,
         checked_program.CheckedProgram.init(
             module_mir.checked_callables,
             module_mir.checked_globals,
             module_mir.signature_types,
-            module_mir.const_global_scalar_inits,
+            module_mir.global_initializer_facts,
         ),
     );
-    module_mir.const_global_scalar_inits[0] = saved;
+    module_mir.global_initializer_facts[0] = saved;
 
-    const duplicate_facts = [_]mir.ConstGlobalScalarInitFact{ saved, saved };
+    const duplicate_facts = [_]mir.GlobalInitializerFact{ saved, saved };
     try std.testing.expectError(
-        error.DuplicateConstGlobalScalarInitFact,
+        error.DuplicateGlobalInitializerFact,
         checked_program.CheckedProgram.init(
             module_mir.checked_callables,
             module_mir.checked_globals,
@@ -1588,48 +1588,73 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
     );
 
     var float_index: ?usize = null;
-    for (module_mir.const_global_scalar_inits, 0..) |fact, index| switch (fact.value) {
-        .float => float_index = index,
-        else => {},
+    for (module_mir.global_initializer_facts, 0..) |fact, index| switch (fact.plan) {
+        .scalar => |value| switch (value) {
+            .float => float_index = index,
+            else => {},
+        },
     };
     const float_fact_index = float_index orelse return error.TestUnexpectedResult;
-    const saved_float = module_mir.const_global_scalar_inits[float_fact_index];
-    module_mir.const_global_scalar_inits[float_fact_index].value.float.width = 16;
+    const saved_float = module_mir.global_initializer_facts[float_fact_index];
+    module_mir.global_initializer_facts[float_fact_index].plan.scalar.float.width = 16;
     try std.testing.expectError(
-        error.InvalidConstGlobalScalarInitFact,
+        error.InvalidGlobalInitializerFact,
         checked_program.CheckedProgram.init(
             module_mir.checked_callables,
             module_mir.checked_globals,
             module_mir.signature_types,
-            module_mir.const_global_scalar_inits,
+            module_mir.global_initializer_facts,
         ),
     );
-    module_mir.const_global_scalar_inits[float_fact_index] = saved_float;
+    module_mir.global_initializer_facts[float_fact_index] = saved_float;
 
-    module_mir.const_global_scalar_inits[0].value = .{ .uint = std.math.maxInt(u128) };
+    module_mir.global_initializer_facts[0].plan = .{ .scalar = .{ .uint = std.math.maxInt(u128) } };
     try std.testing.expectError(
-        error.InvalidConstGlobalScalarInitFact,
+        error.InvalidGlobalInitializerFact,
         checked_program.CheckedProgram.init(
             module_mir.checked_callables,
             module_mir.checked_globals,
             module_mir.signature_types,
-            module_mir.const_global_scalar_inits,
+            module_mir.global_initializer_facts,
         ),
     );
-    module_mir.const_global_scalar_inits[0] = saved;
+    module_mir.global_initializer_facts[0] = saved;
 
-    const original_facts = module_mir.const_global_scalar_inits;
-    module_mir.const_global_scalar_inits = &.{};
+    const original_facts = module_mir.global_initializer_facts;
+    module_mir.global_initializer_facts = &.{};
     try std.testing.expectError(
-        error.MissingConstGlobalScalarInitFact,
+        error.MissingGlobalInitializerFact,
         checked_program.CheckedProgram.init(
             module_mir.checked_callables,
             module_mir.checked_globals,
             module_mir.signature_types,
-            module_mir.const_global_scalar_inits,
+            module_mir.global_initializer_facts,
         ),
     );
-    module_mir.const_global_scalar_inits = original_facts;
+    module_mir.global_initializer_facts = original_facts;
+}
+
+test "CheckedProgram requires an admitted mutable scalar global initializer plan" {
+    const source = "global COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("mutable_scalar_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    try std.testing.expect(module_mir.checked_globals[0].has_initializer_plan);
+    const saved = module_mir.global_initializer_facts;
+    module_mir.global_initializer_facts = &.{};
+    defer module_mir.global_initializer_facts = saved;
+    try std.testing.expectError(
+        error.MissingGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
 }
 
 test "MIR verifier rejects per-file source identity drift" {

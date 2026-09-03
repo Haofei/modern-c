@@ -64,7 +64,7 @@ pub const EarlyDeclarationArtifacts = struct {
                     // and a folded initializer fact. Keep their source-map row,
                     // but do not retain an AST-shaped codegen artifact merely to
                     // repeat a declaration that C/LLVM can render from MIR.
-                    if (checked == null or typed_mir.checkedScalarConstGlobal(checked.?) == null) {
+                    if (checked == null or typed_mir.checkedScalarGlobal(checked.?) == null) {
                         try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });
                     }
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
@@ -422,10 +422,9 @@ test "declaration artifacts collect from resolved declaration stream" {
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer from_resolved.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 3), from_resolved.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 2), from_resolved.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 3), from_resolved.source_map_artifacts.len);
     var saw_function = false;
-    var saw_global = false;
     var saw_struct = false;
     for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
         .function => |function| {
@@ -436,19 +435,13 @@ test "declaration artifacts collect from resolved declaration stream" {
             try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.params[0].value_ty));
             saw_function = true;
         },
-        .global => |global| {
-            try std.testing.expectEqualStrings("counter", global.signature.name.text);
-            try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, global.signature.value_ty));
-            try std.testing.expect(global.initializer.body_id.isValid());
-            saw_global = true;
-        },
+        .global => return error.TestUnexpectedResult,
         .transitional_type_decl => |type_decl| {
             try std.testing.expectEqualStrings("Box", type_decl.struct_decl.name.text);
             saw_struct = true;
         },
     };
     try std.testing.expect(saw_function);
-    try std.testing.expect(saw_global);
     try std.testing.expect(saw_struct);
 }
 

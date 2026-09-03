@@ -4026,6 +4026,9 @@ pub const CheckedCallableFact = struct {
 pub const CheckedGlobalFact = struct {
     symbol_id: SymbolId,
     source_id: SourceId,
+    /// Syntax-free declaration origin used by C line directives and source
+    /// maps when a global has no declaration-shaped codegen artifact.
+    declaration_source: SourcePoint = .{ .line = 0, .column = 0 },
     ty: ValueType,
     /// Module-owned recursive declaration shape.  Global codegen must use
     /// this instead of retaining an AST TypeExpr in declaration artifacts.
@@ -4035,6 +4038,9 @@ pub const CheckedGlobalFact = struct {
     /// qualified-backend admission syntax-free.
     dyn_trait_symbol_id: SymbolId = .invalid,
     initializer_body_id: BodyId = .invalid,
+    /// Codegen must consume this frontend-verified plan rather than recreate
+    /// a scalar initializer from declaration syntax.
+    has_initializer_plan: bool = false,
     is_const: bool,
     exported: bool,
     is_extern: bool,
@@ -4099,16 +4105,29 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
     return value <= (@as(u128, 1) << shift) - 1;
 }
 
-/// A scalar const-global value is keyed by the checked initializer body, not
-/// by a source spelling.  `CheckedProgram` verifies that the body belongs to
-/// exactly one `const` global before code generation can consume this fact.
-pub const ConstGlobalScalarInitFact = struct {
-    initializer_body_id: BodyId,
-    value_ty: ValueType,
-    value: ConstScalarValue,
+/// Syntax-free global-initializer payloads admitted by the frontend. This
+/// starts with folded scalar values: aggregate and relocation forms need an
+/// explicit recursive plan and remain outside this representation.
+pub const GlobalInitializerPlan = union(enum) {
+    scalar: ConstScalarValue,
 };
 
-pub fn valueTypeRequiresScalarConstInitFact(ty: ValueType) bool {
+/// A plan is keyed by its checked initializer body, not source spelling. The
+/// same fact covers immutable and mutable scalar globals; mutability remains
+/// a declaration property.
+pub const GlobalInitializerFact = struct {
+    initializer_body_id: BodyId,
+    value_ty: ValueType,
+    plan: GlobalInitializerPlan,
+
+    pub fn scalarValue(self: GlobalInitializerFact) ConstScalarValue {
+        return switch (self.plan) {
+            .scalar => |value| value,
+        };
+    }
+};
+
+pub fn valueTypeRequiresScalarGlobalInitializerFact(ty: ValueType) bool {
     return switch (ty) {
         .bool, .integer, .domain_integer, .float => true,
         else => false,
@@ -4123,17 +4142,17 @@ pub const Module = struct {
     checked_callables: []CheckedCallableFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
     type_aliases: []TypeAliasFact = &.{},
-    const_global_scalar_inits: []ConstGlobalScalarInitFact = &.{},
+    global_initializer_facts: []GlobalInitializerFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
     type_ownership_facts: []TypeOwnershipFact = &.{},
     aggregate_return_summaries: []AggregateReturnSummaryFact = &.{},
     aggregate_return_pointer_facts: []AggregateReturnPointerFact = &.{},
 
-    pub fn constGlobalScalarInit(self: Module, body_id: BodyId) ?ConstGlobalScalarInitFact {
+    pub fn globalInitializerFact(self: Module, body_id: BodyId) ?GlobalInitializerFact {
         if (!body_id.isValid()) return null;
-        var found: ?ConstGlobalScalarInitFact = null;
-        for (self.const_global_scalar_inits) |fact| {
+        var found: ?GlobalInitializerFact = null;
+        for (self.global_initializer_facts) |fact| {
             if (!fact.initializer_body_id.eql(body_id)) continue;
             if (found != null) return null;
             found = fact;
@@ -4141,16 +4160,16 @@ pub const Module = struct {
         return found;
     }
 
-    /// Returns the one scalar const-global fact that is complete enough for
+    /// Returns the one scalar global plan that is complete enough for
     /// syntax-free declaration emission. This is intentionally stricter than
-    /// `constGlobalScalarInit`: callers must not turn a stale, aggregate, or
+    /// `globalInitializerFact`: callers must not turn a stale, aggregate, or
     /// extern declaration into a codegen fast path.
-    pub fn checkedScalarConstGlobal(self: Module, global: CheckedGlobalFact) ?ConstGlobalScalarInitFact {
-        if (!global.is_const or global.is_extern or !global.initializer_body_id.isValid()) return null;
-        if (!valueTypeRequiresScalarConstInitFact(global.ty)) return null;
-        const fact = self.constGlobalScalarInit(global.initializer_body_id) orelse return null;
+    pub fn checkedScalarGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        if (global.is_extern or !global.initializer_body_id.isValid() or !global.has_initializer_plan) return null;
+        if (!valueTypeRequiresScalarGlobalInitializerFact(global.ty)) return null;
+        const fact = self.globalInitializerFact(global.initializer_body_id) orelse return null;
         if (!global.initializer_body_id.eql(fact.initializer_body_id)) return null;
-        if (!ValueType.eql(global.ty, fact.value_ty) or !fact.value.isCompatibleWith(fact.value_ty)) return null;
+        if (!ValueType.eql(global.ty, fact.value_ty) or !fact.scalarValue().isCompatibleWith(fact.value_ty)) return null;
         return fact;
     }
 
@@ -4211,7 +4230,7 @@ pub const Module = struct {
         }
         if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
         if (self.type_aliases.len != 0) self.allocator.free(self.type_aliases);
-        if (self.const_global_scalar_inits.len != 0) self.allocator.free(self.const_global_scalar_inits);
+        if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);

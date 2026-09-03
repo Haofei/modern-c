@@ -15,13 +15,13 @@ pub const CheckedProgram = struct {
     /// Borrowed module-owned signature type graph. The checked program never
     /// owns syntax or source type expressions.
     signature_types: mir.SignatureTypeTable,
-    const_global_scalar_inits: []const mir.ConstGlobalScalarInitFact,
+    global_initializer_facts: []const mir.GlobalInitializerFact,
 
     pub fn init(
         callables: []const mir.CheckedCallableFact,
         globals: []const mir.CheckedGlobalFact,
         signature_types: mir.SignatureTypeTable,
-        const_global_scalar_inits: []const mir.ConstGlobalScalarInitFact,
+        global_initializer_facts: []const mir.GlobalInitializerFact,
     ) !CheckedProgram {
         if (!signature_types.validate()) return error.InvalidCheckedProgram;
         for (callables, 0..) |callable, index| {
@@ -63,29 +63,29 @@ pub const CheckedProgram = struct {
                     return error.InvalidCheckedProgram;
             }
         }
-        for (const_global_scalar_inits, 0..) |fact, index| {
+        for (global_initializer_facts, 0..) |fact, index| {
             if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
-                return error.InvalidConstGlobalScalarInitFact;
+                return error.InvalidGlobalInitializerFact;
             const callable = callables[fact.initializer_body_id.index()];
             if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id))
-                return error.InvalidConstGlobalScalarInitFact;
-            const global = globalForInitializer(callables, globals, fact.initializer_body_id) orelse return error.InvalidConstGlobalScalarInitFact;
-            if (!global.is_const or !mir.ValueType.eql(global.ty, fact.value_ty) or !fact.value.isCompatibleWith(fact.value_ty))
-                return error.InvalidConstGlobalScalarInitFact;
-            for (const_global_scalar_inits[0..index]) |prior| {
-                if (prior.initializer_body_id.eql(fact.initializer_body_id)) return error.DuplicateConstGlobalScalarInitFact;
+                return error.InvalidGlobalInitializerFact;
+            const global = globalForInitializer(callables, globals, fact.initializer_body_id) orelse return error.InvalidGlobalInitializerFact;
+            if (!global.has_initializer_plan or !mir.ValueType.eql(global.ty, fact.value_ty) or !fact.scalarValue().isCompatibleWith(fact.value_ty))
+                return error.InvalidGlobalInitializerFact;
+            for (global_initializer_facts[0..index]) |prior| {
+                if (prior.initializer_body_id.eql(fact.initializer_body_id)) return error.DuplicateGlobalInitializerFact;
             }
         }
         for (globals) |global| {
-            if (requiresScalarConstInitFact(global)) {
-                _ = scalarConstInitFactForGlobal(const_global_scalar_inits, global) orelse return error.MissingConstGlobalScalarInitFact;
+            if (requiresScalarGlobalInitializerFact(global)) {
+                _ = scalarGlobalInitializerFactForGlobal(global_initializer_facts, global) orelse return error.MissingGlobalInitializerFact;
             }
         }
         return .{
             .callables = callables,
             .globals = globals,
             .signature_types = signature_types,
-            .const_global_scalar_inits = const_global_scalar_inits,
+            .global_initializer_facts = global_initializer_facts,
         };
     }
 
@@ -99,19 +99,19 @@ pub const CheckedProgram = struct {
     pub fn matchesMir(self: CheckedProgram, module: mir.Module) bool {
         return self.globals.ptr == module.checked_globals.ptr and self.globals.len == module.checked_globals.len and
             self.signature_types.shapes.ptr == module.signature_types.shapes.ptr and self.signature_types.shapes.len == module.signature_types.shapes.len and
-            self.const_global_scalar_inits.ptr == module.const_global_scalar_inits.ptr and
-            self.const_global_scalar_inits.len == module.const_global_scalar_inits.len and
+            self.global_initializer_facts.ptr == module.global_initializer_facts.ptr and
+            self.global_initializer_facts.len == module.global_initializer_facts.len and
             callableFactsMatchMir(self.callables, module);
     }
 };
 
-fn requiresScalarConstInitFact(global: mir.CheckedGlobalFact) bool {
-    if (!global.is_const or !global.initializer_body_id.isValid()) return false;
-    return mir.valueTypeRequiresScalarConstInitFact(global.ty);
+fn requiresScalarGlobalInitializerFact(global: mir.CheckedGlobalFact) bool {
+    if (global.is_extern or !global.initializer_body_id.isValid() or !global.has_initializer_plan) return false;
+    return mir.valueTypeRequiresScalarGlobalInitializerFact(global.ty);
 }
 
-fn scalarConstInitFactForGlobal(facts: []const mir.ConstGlobalScalarInitFact, global: mir.CheckedGlobalFact) ?mir.ConstGlobalScalarInitFact {
-    var found: ?mir.ConstGlobalScalarInitFact = null;
+fn scalarGlobalInitializerFactForGlobal(facts: []const mir.GlobalInitializerFact, global: mir.CheckedGlobalFact) ?mir.GlobalInitializerFact {
+    var found: ?mir.GlobalInitializerFact = null;
     for (facts) |fact| {
         if (!fact.initializer_body_id.eql(global.initializer_body_id)) continue;
         if (found != null) return null;
