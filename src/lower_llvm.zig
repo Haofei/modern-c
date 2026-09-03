@@ -16,6 +16,8 @@ const mir_executable_llvm = @import("mir_executable_llvm.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const numeric = @import("numeric.zig");
+const scalar_repr = @import("scalar_repr.zig");
+const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const type_bridge = @import("type_bridge.zig");
 const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
 
@@ -653,7 +655,16 @@ const LlvmEmitter = struct {
         const sig = function.signature;
         const ret_ty = sig.transitionalReturnType() orelse simpleType(function.signature.name.span, "void");
         _ = try self.llvmType(ret_ty);
-        for (sig.params) |param| _ = try self.llvmType(param.ty);
+        // Keep the existing body bridge for this transitional pass, but admit
+        // every callable signature through the module-owned syntax-free table
+        // first.  This gives the LLVM path one canonical recursive signature
+        // representation without copying type shapes into a second registry.
+        const signature_ret = try self.llvmSignatureType(sig.return_type_id);
+        if (!std.mem.eql(u8, signature_ret, try self.llvmType(ret_ty))) return error.UnsupportedLlvmEmission;
+        for (sig.params) |param| {
+            const signature_param = try self.llvmSignatureType(param.type_id);
+            if (!std.mem.eql(u8, signature_param, try self.llvmType(param.ty))) return error.UnsupportedLlvmEmission;
+        }
         const debug_id: ?usize = if (function.body_facts.has_definition) blk: {
             const id = self.debug_next_id;
             self.debug_next_id += 1;
@@ -666,7 +677,16 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        try self.fn_sigs.put(function.signature.name.text, .{ .ret = ret_ty, .params = sig.params, .c_abi = sig.c_abi, .is_variadic = sig.is_variadic, .debug_id = debug_id, .error_from = sig.error_from });
+        try self.fn_sigs.put(function.signature.name.text, .{
+            .return_ty = sig.return_ty,
+            .return_type_id = sig.return_type_id,
+            .ret = ret_ty,
+            .params = sig.params,
+            .c_abi = sig.c_abi,
+            .is_variadic = sig.is_variadic,
+            .debug_id = debug_id,
+            .error_from = sig.error_from,
+        });
         if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
     }
 
@@ -1292,10 +1312,10 @@ const LlvmEmitter = struct {
             const source_name = debug_function.name;
             const backend = self.backend_names.get(source_name) orelse continue;
             const sig = self.fn_sigs.get(source_name) orelse return error.UnsupportedLlvmEmission;
-            try self.out.print(self.allocator, "@{s} = alias {s} (", .{ backend, try self.llvmType(sig.ret) });
+            try self.out.print(self.allocator, "@{s} = alias {s} (", .{ backend, try self.llvmSignatureType(sig.return_type_id) });
             for (sig.params, 0..) |param, i| {
                 if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
+                try self.out.appendSlice(self.allocator, try self.llvmSignatureType(param.type_id));
             }
             try self.out.print(self.allocator, "), ptr @{s}\n", .{source_name});
         }
@@ -9510,6 +9530,81 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    // Callable signatures are materialized from the module-owned
+    // `SignatureTypeTable`, never by rebuilding an AST type.  Nominal names
+    // may still consult the transitional type-declaration registry for their
+    // representation; that is a type-declaration dependency, not a callable
+    // syntax ingress.
+    fn llvmSignatureType(self: *LlvmEmitter, id: mir.SignatureTypeId) ![]const u8 {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
+        return switch (shape) {
+            .name => |name| self.llvmSignatureNameType(name),
+            .enum_literal => error.UnsupportedLlvmEmission,
+            .qualified => |node| self.llvmSignatureType(node.child),
+            .pointer, .raw_many_pointer => "ptr",
+            .slice => "{ ptr, i64 }",
+            .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ node.length orelse return error.UnsupportedLlvmEmission, try self.llvmSignatureType(node.child) }),
+            .nullable => |child| if (self.signatureTypeIsPointerLike(child))
+                self.llvmSignatureType(child)
+            else
+                std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s} }}", .{try self.llvmSignatureType(child)}),
+            .generic => |node| self.llvmSignatureGenericType(node.base, node.args),
+            .fn_pointer => "ptr",
+            .closure_type => "{ ptr, ptr }",
+            // Dynamic dispatch is rejected by backend admission.  Do not
+            // retain a second representation route here.
+            .dyn_trait, .member => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn llvmSignatureNameType(self: *LlvmEmitter, name: []const u8) ![]const u8 {
+        if (std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never")) return "void";
+        if (isOpaqueAddressTypeName(name)) return "i64";
+        if (std.mem.eql(u8, name, "c_void") or std.mem.eql(u8, name, "IrqOff")) return "i8";
+        if (std.mem.eql(u8, name, "cstr") or std.mem.eql(u8, name, "va_list")) return "ptr";
+        if (std.mem.eql(u8, name, "bool")) return "i1";
+        if (std.mem.eql(u8, name, "f32")) return "float";
+        if (std.mem.eql(u8, name, "f64")) return "double";
+        // Aliases and aggregate declarations are module-level transitional
+        // type artifacts.  They are intentionally not carried by FnSig.
+        if (self.type_aliases.get(name)) |target| return self.llvmType(target);
+        if (self.enum_types.get(name)) |decl| return self.llvmType(enumReprType(decl));
+        if (self.packed_bits.get(name)) |info| return self.llvmType(info.repr);
+        if (self.overlay_unions.get(name)) |info| return self.overlayLlvmType(info);
+        if (self.tagged_unions.get(name)) |decl| return self.taggedUnionLlvmType(decl);
+        if (self.struct_types.get(name)) |decl| return self.structLlvmType(decl);
+        if (scalar_repr.integer(name)) |integer| return std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{integer.bits});
+        if (libraryScalarLlvmType(name)) |ty| return ty;
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn llvmSignatureGenericType(self: *LlvmEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {
+        if (std.mem.eql(u8, base, "Result") and args.len == 2) {
+            const ok = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, args[0])) "i8" else try self.llvmSignatureType(args[0]);
+            const err = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, args[1])) "i8" else try self.llvmSignatureType(args[1]);
+            return std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s}, {s} }}", .{ ok, err });
+        }
+        if (std.mem.eql(u8, base, "atomic") and args.len == 1) return self.llvmSignatureType(args[0]);
+        if (std.mem.eql(u8, base, "MaybeUninit") and args.len == 1) return self.llvmSignatureType(args[0]);
+        if ((std.mem.eql(u8, base, "Reg") or std.mem.eql(u8, base, "RegBits")) and args.len >= 1) return self.llvmSignatureType(args[0]);
+        if (std.mem.eql(u8, base, "MmioPtr") and args.len == 1) return "ptr";
+        if (std.mem.eql(u8, base, "DmaBuf") and args.len == 2) return "i64";
+        if (isPayloadDomainGenericName(base) and args.len == 1) return self.llvmSignatureType(args[0]);
+        if (isOpaqueAddressGenericName(base) and args.len >= 1) return "i64";
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn signatureTypeIsPointerLike(self: *LlvmEmitter, id: mir.SignatureTypeId) bool {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return false;
+        return switch (shape) {
+            .pointer, .raw_many_pointer, .fn_pointer => true,
+            .qualified => |node| self.signatureTypeIsPointerLike(node.child),
+            .name => |name| std.mem.eql(u8, name, "cstr"),
+            .generic => |node| std.mem.eql(u8, node.base, "MmioPtr") or std.mem.eql(u8, node.base, "UserPtr") or std.mem.eql(u8, node.base, "PhysPtr"),
+            else => false,
         };
     }
 

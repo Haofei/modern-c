@@ -17,6 +17,10 @@ pub const LocalSlotKind = enum {
 };
 
 pub const FnSig = struct {
+    /// Canonical callable result identity.  `ret` remains only for legacy
+    /// expression-body lowering until those consumers are cut over.
+    return_ty: mir_model.ValueType,
+    return_type_id: mir_model.SignatureTypeId,
     ret: ast_bridge.TypeExpr,
     params: []const codegen_signature.FunctionParamFact,
     c_abi: bool = false,
