@@ -775,7 +775,7 @@ const LlvmEmitter = struct {
             try self.global_is_const.put(name, global.is_const);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate => {},
+                .zero, .aggregate, .enum_case => {},
             }
         }
     }
@@ -903,6 +903,7 @@ const LlvmEmitter = struct {
                 .scalar => try self.emitCheckedScalarGlobal(global, fact),
                 .zero => try self.emitCheckedZeroGlobal(global),
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
+                .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -946,6 +947,31 @@ const LlvmEmitter = struct {
             "@{s} = {s}{s} {s} {s}\n",
             .{ name, visibility, kind, llvm_ty, try self.llvmAggregateGlobalInitializer(plan, global.signature_type_id) },
         );
+    }
+
+    fn emitCheckedEnumGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.EnumInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const enum_fact = self.enumFact(plan.enum_symbol_id) orelse return error.UnsupportedLlvmEmission;
+        if (!enum_fact.repr_type_id.eql(plan.repr_type_id) or plan.case_index >= enum_fact.cases.len) return error.UnsupportedLlvmEmission;
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(
+            self.allocator,
+            "@{s} = {s}{s} {s} {s}\n",
+            .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id), try self.llvmEnumCaseInitializer(enum_fact.cases[plan.case_index]) },
+        );
+    }
+
+    fn enumFact(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?mir.EnumFact {
+        for (self.mir_module.enums) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        return null;
+    }
+
+    fn llvmEnumCaseInitializer(self: *LlvmEmitter, value: mir.EnumCaseFact) ![]const u8 {
+        return if (value.negative)
+            std.fmt.allocPrint(self.scratch.allocator(), "-{d}", .{value.magnitude})
+        else
+            std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value.magnitude});
     }
 
     fn llvmAggregateGlobalInitializer(self: *LlvmEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {

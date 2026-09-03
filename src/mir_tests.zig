@@ -1643,6 +1643,7 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
         },
         .zero => {},
         .aggregate => {},
+        .enum_case => {},
     };
     const float_fact_index = float_index orelse return error.TestUnexpectedResult;
     const saved_float = module_mir.global_initializer_facts[float_fact_index];
@@ -1720,6 +1721,7 @@ test "CheckedProgram requires an admitted zero-global initializer plan" {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
+        .enum_case => return error.TestUnexpectedResult,
     }
     const saved = module_mir.global_initializer_facts;
     module_mir.global_initializer_facts = &.{};
@@ -1746,7 +1748,7 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     const saved = module_mir.global_initializer_facts[0];
     switch (saved.plan) {
         .aggregate => {},
-        .scalar, .zero => return error.TestUnexpectedResult,
+        .scalar, .zero, .enum_case => return error.TestUnexpectedResult,
     }
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
@@ -1769,6 +1771,48 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     module_mir.global_initializer_facts[0] = saved;
 }
 
+test "CheckedProgram admits direct enum global initializer plans" {
+    const source =
+        \\enum Mode: u8 { idle = 1, active = 7 }
+        \\global CURRENT: Mode = .active;
+    ;
+    var parsed = try test_support.parseCheckedModule("enum_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    const saved = module_mir.global_initializer_facts[0];
+    const plan = switch (saved.plan) {
+        .enum_case => |value| value,
+        .scalar, .zero, .aggregate => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(module_mir.checkedEnumGlobal(module_mir.checked_globals[0]) != null);
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    module_mir.global_initializer_facts[0].plan.enum_case.repr_type_id = .invalid;
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    module_mir.global_initializer_facts[0] = saved;
+
+    module_mir.global_initializer_facts[0].plan.enum_case.case_index = plan.case_index + 1;
+    try std.testing.expect(module_mir.checkedEnumGlobal(module_mir.checked_globals[0]) == null);
+    module_mir.global_initializer_facts[0] = saved;
+}
+
 test "pure aggregate global plan releases partial trees on unsupported later elements" {
     // The first element builds a scalar node; the mutable global reference in
     // the second element is deliberately not a foldable scalar leaf. The
@@ -1786,7 +1830,7 @@ test "pure aggregate global plan releases partial trees on unsupported later ele
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     switch (module_mir.global_initializer_facts[0].plan) {
         .scalar => {},
-        .zero, .aggregate => return error.TestUnexpectedResult,
+        .zero, .aggregate, .enum_case => return error.TestUnexpectedResult,
     }
 }
 

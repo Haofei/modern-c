@@ -4191,20 +4191,29 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 }
 
 /// Syntax-free global-initializer payloads admitted by the frontend. This
-/// starts with folded scalar values and zero-initialized storage. Aggregate
-/// literals and relocations still need an explicit recursive plan and remain
-/// outside this representation.
+/// starts with folded scalar values, zero-initialized storage, pure fixed
+/// arrays, and direct nominal enum cases. Struct literals and relocations
+/// still need their own explicit facts and remain outside this representation.
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
     aggregate: AggregateInitializerPlan,
+    enum_case: EnumInitializerPlan,
 
     pub fn deinit(self: GlobalInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
             .aggregate => |plan| plan.deinit(allocator),
-            .scalar, .zero => {},
+            .scalar, .zero, .enum_case => {},
         }
     }
+};
+
+/// A direct enum literal after name resolution.  The case is an index into
+/// the module-owned EnumFact, never source syntax or backend spelling.
+pub const EnumInitializerPlan = struct {
+    enum_symbol_id: SymbolId,
+    repr_type_id: SignatureTypeId,
+    case_index: u32,
 };
 
 /// Recursive, syntax-free initializer tree for the deliberately narrow
@@ -4241,6 +4250,7 @@ pub const GlobalInitializerFact = struct {
             .scalar => |value| value,
             .zero => unreachable,
             .aggregate => unreachable,
+            .enum_case => unreachable,
         };
     }
 
@@ -4358,6 +4368,9 @@ pub const Module = struct {
             .aggregate => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 aggregateInitializerPlanMatchesType(plan, self.signature_types, global.signature_type_id)) fact else null,
+            .enum_case => |plan| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                enumInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
         };
     }
 
@@ -4371,7 +4384,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero, .aggregate => null,
+            .zero, .aggregate, .enum_case => null,
         };
     }
 
@@ -4379,7 +4392,15 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar, .aggregate => null,
+            .scalar, .aggregate, .enum_case => null,
+        };
+    }
+
+    pub fn checkedEnumGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .enum_case => fact,
+            .scalar, .zero, .aggregate => null,
         };
     }
 
@@ -4458,6 +4479,27 @@ pub const Module = struct {
         if (self.aggregate_return_pointer_facts.len != 0) self.allocator.free(self.aggregate_return_pointer_facts);
     }
 };
+
+fn enumInitializerPlanMatchesGlobal(plan: EnumInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+    if (!plan.enum_symbol_id.isValid() or !module.signature_types.contains(plan.repr_type_id)) return false;
+    const identity = if (plan.enum_symbol_id.index() < module.symbol_identities.len) module.symbol_identities[plan.enum_symbol_id.index()] else return false;
+    if (!identity.id.eql(plan.enum_symbol_id) or identity.kind != .type_) return false;
+    const shape = module.signature_types.get(global.signature_type_id) orelse return false;
+    const global_name = switch (shape) {
+        .name => |name| name,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, global_name, identity.spelling)) return false;
+    const enum_fact = for (module.enums) |candidate| {
+        if (candidate.symbol_id.eql(plan.enum_symbol_id)) break candidate;
+    } else return false;
+    if (!enum_fact.repr_type_id.eql(plan.repr_type_id) or plan.case_index >= enum_fact.cases.len) return false;
+    return switch (global.ty) {
+        .closed_enum => |name| std.mem.eql(u8, name, identity.spelling),
+        .open_enum => |name| std.mem.eql(u8, name, identity.spelling),
+        else => false,
+    };
+}
 
 // Options for the MIR build/verify pipeline. `optimize` enables the fact-gated
 // optimizer passes (annex E); off by default, so the standard pipeline and every

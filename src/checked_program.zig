@@ -91,6 +91,21 @@ pub const CheckedProgram = struct {
                         !mir.aggregateInitializerPlanMatchesType(plan, signature_types, global.signature_type_id))
                         return error.InvalidGlobalInitializerFact;
                 },
+                .enum_case => |plan| {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len or
+                        !plan.enum_symbol_id.isValid() or !signature_types.contains(plan.repr_type_id))
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    const shape = signature_types.get(global.signature_type_id) orelse return error.InvalidGlobalInitializerFact;
+                    const is_nominal = switch (shape) {
+                        .name => true,
+                        else => false,
+                    };
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id) or
+                        !is_nominal)
+                        return error.InvalidGlobalInitializerFact;
+                },
             }
             for (global_initializer_facts[0..index]) |prior| {
                 if (prior.global_symbol_id.eql(fact.global_symbol_id)) return error.DuplicateGlobalInitializerFact;

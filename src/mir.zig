@@ -695,6 +695,7 @@ pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
 pub const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
+pub const EnumInitializerPlan = mir_model.EnumInitializerPlan;
 pub const valueTypeRequiresScalarGlobalInitializerFact = mir_model.valueTypeRequiresScalarGlobalInitializerFact;
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
@@ -1485,6 +1486,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 });
                             }
                         }
+                        if (!checked_global.has_initializer_plan and !global.is_const) {
+                            if (directEnumGlobalInitializerPlan(initializer, ty, &symbol_ids, enum_facts.items)) |plan| {
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .enum_case = plan },
+                                });
+                            }
+                        }
                     } else if (!global.is_extern) {
                         // No source initializer is an explicit frontend fact,
                         // not a backend invitation to recover `= 0` from the
@@ -1884,6 +1896,36 @@ fn isPureScalarArrayLeafType(ty: ast.TypeExpr) bool {
             std.mem.eql(u8, name.text, "i128") or std.mem.eql(u8, name.text, "isize"),
         else => false,
     };
+}
+
+fn directEnumGlobalInitializerPlan(
+    initializer: ast.Expr,
+    ty: ast.TypeExpr,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    enum_facts: []const EnumFact,
+) ?mir_model.EnumInitializerPlan {
+    const enum_name = switch (ty.kind) {
+        .name => |name| name.text,
+        else => return null,
+    };
+    const case_name = switch (initializer.kind) {
+        .enum_literal => |tag| tag.text,
+        .grouped => |inner| return directEnumGlobalInitializerPlan(inner.*, ty, symbol_ids, enum_facts),
+        else => return null,
+    };
+    const symbol_id = symbol_ids.get(enum_name) orelse return null;
+    const fact = for (enum_facts) |candidate| {
+        if (candidate.symbol_id.eql(symbol_id)) break candidate;
+    } else return null;
+    for (fact.cases, 0..) |candidate, index| {
+        if (!std.mem.eql(u8, candidate.spelling, case_name)) continue;
+        return .{
+            .enum_symbol_id = symbol_id,
+            .repr_type_id = fact.repr_type_id,
+            .case_index = @intCast(index),
+        };
+    }
+    return null;
 }
 
 fn applyCheckedCallableFact(allocator: std.mem.Allocator, function: *Function, checked: CheckedCallableFact) !void {

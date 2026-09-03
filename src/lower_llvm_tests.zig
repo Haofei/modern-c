@@ -5418,6 +5418,7 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
+        .enum_case => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);

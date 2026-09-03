@@ -550,7 +550,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate => {},
+                .zero, .aggregate, .enum_case => {},
             }
         }
     }
@@ -800,6 +800,7 @@ pub const CEmitter = struct {
                 .scalar => try self.emitCheckedScalarGlobal(global, fact),
                 .zero => try self.emitCheckedZeroGlobal(global),
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
+                .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -916,6 +917,31 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
         try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, initializer });
+    }
+
+    fn emitCheckedEnumGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.EnumInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const enum_fact = self.enumFact(plan.enum_symbol_id) orelse return error.UnsupportedCEmission;
+        if (!enum_fact.repr_type_id.eql(plan.repr_type_id) or plan.case_index >= enum_fact.cases.len) return error.UnsupportedCEmission;
+        const case = enum_fact.cases[plan.case_index];
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        const value = try self.cEnumCaseInitializer(plan.enum_symbol_id, case);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, value });
+    }
+
+    fn enumFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.EnumFact {
+        for (self.mir_module.enums) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        return null;
+    }
+
+    fn cEnumCaseInitializer(self: *CEmitter, symbol_id: mir.SymbolId, value: mir.EnumCaseFact) ![]const u8 {
+        if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return error.UnsupportedCEmission;
+        const identity = self.mir_module.symbol_identities[symbol_id.index()];
+        if (!identity.id.eql(symbol_id) or identity.kind != .type_) return error.UnsupportedCEmission;
+        return std.fmt.allocPrint(self.scratch.allocator(), "{s}_{s}", .{ identity.spelling, value.spelling });
     }
 
     fn cAggregateGlobalInitializer(self: *CEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {

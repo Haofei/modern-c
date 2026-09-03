@@ -128,7 +128,7 @@
       "pub const TypeAliasFact = struct": 1,
       "target_type_id: SignatureTypeId": 1,
       "pub const EnumFact = struct": 1,
-      "repr_type_id: SignatureTypeId": 2,
+      "repr_type_id: SignatureTypeId": 3,
       "pub const PackedBitsFact = struct": 1,
       "pub const OverlayUnionFact = struct": 1
     },
