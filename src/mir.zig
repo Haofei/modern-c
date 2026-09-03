@@ -204,6 +204,13 @@ pub const DeferCleanupRef = struct {
     source: SourcePoint,
 };
 
+/// The opaque span ID is the sole source identity carried by an instruction.
+/// Consumers may materialize coordinates only at diagnostics or rendering
+/// boundaries through the owning function table.
+pub fn instructionSourcePoint(function: Function, instruction: Instruction) ?SourcePoint {
+    return sourcePointForSpanId(function, instruction.typed_span_id);
+}
+
 fn sourcePointMatchesInstruction(function: Function, source: SourcePoint, instruction: Instruction) bool {
     const span_id = spanIdAtSource(function, source) orelse return false;
     return instructionMatchesSpanId(function, instruction, span_id);
@@ -585,7 +592,7 @@ fn deferCleanupEdgeActionRefMatchesDeferRef(action: DeferCleanupEdgeActionRef, r
 }
 
 fn sourcePointFromInstruction(function: Function, instruction: Instruction) ?SourcePoint {
-    return sourcePointForSpanId(function, instruction.typed_span_id);
+    return instructionSourcePoint(function, instruction);
 }
 
 fn sourcePointMatches(actual: SourcePoint, expected: SourcePoint) bool {
@@ -3157,38 +3164,39 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
+                const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
                 const value_id = if (instruction.typed_value_id) |id| valueSpelling(function, id) orelse "none" else "none";
                 if (instruction.target_index) |index| {
                     const target_owner = if (instruction.typed_target_owner_id) |owner_id| targetOwnerSpelling(function, owner_id) orelse "<invalid>" else "none";
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index={} value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), target_owner, index, value_id, instruction.line, instruction.column },
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), target_owner, index, value_id, source.line, source.column },
                     );
                 } else if (instruction.typed_target_owner_id) |owner_id| {
                     const owner = targetOwnerSpelling(function, owner_id) orelse "<invalid>";
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index=none value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), owner, value_id, instruction.line, instruction.column },
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), owner, value_id, source.line, source.column },
                     );
                 } else if (instruction.const_index) |index| {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} const_index={} value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), index, value_id, instruction.line, instruction.column },
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), index, value_id, source.line, source.column },
                     );
                 } else if (instruction.contract_region_id) |region_id| {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id={} line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, region_id, instruction.line, instruction.column },
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, region_id, source.line, source.column },
                     );
                 } else {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, instruction.line, instruction.column },
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, source.line, source.column },
                     );
                 }
                 if (instruction.typed_callee_span_id.isValid()) {
@@ -3343,10 +3351,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.const_get_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirConstGetFacts;
             try out.print(
                 allocator,
-                "mir const_get_fact fn={s} index={} recorded=true line={} column={}\n",
-                .{ function.name, fact.index, fact.source.line, fact.source.column },
+                "mir const_get_fact fn={s} index={} typed_span_id={} recorded=true line={} column={}\n",
+                .{ function.name, fact.index, fact.typed_span_id.index(), source.line, source.column },
             );
         }
         for (function.call_target_facts) |fact| {
@@ -3470,115 +3479,118 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
         }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
+                const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
                 if (instruction.kind != .unchecked_assume) continue;
                 try out.print(
                     allocator,
                     "mir verify fn={s} pass=unsafe finding=unchecked_assume detail={s} contract_region_id={s} line={} column={}\n",
-                    .{ function.name, instruction.detail, if (instruction.contract_region_id == null) "none" else "some", instruction.line, instruction.column },
+                    .{ function.name, instruction.detail, if (instruction.contract_region_id == null) "none" else "some", source.line, source.column },
                 );
             }
         }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
+                const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
                 if (instruction.kind != .unsafe_check) continue;
                 try out.print(
                     allocator,
                     "mir verify fn={s} pass=unsafe finding=unsafe_required detail={s} line={} column={}\n",
-                    .{ function.name, instruction.detail, instruction.line, instruction.column },
+                    .{ function.name, instruction.detail, source.line, source.column },
                 );
             }
         }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
+                const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
                 if (instruction.kind == .address_deref) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=address finding=direct_deref class={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .address_conversion) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=address finding=address_class_mismatch source={s} target={s} line={} column={}\n",
-                        .{ function.name, instruction.result_ty.name(), instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.result_ty.name(), instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .address_operation) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=address finding=opaque_operation detail={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .mmio_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=mmio finding=access_forbidden op={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .nullability_conversion) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=nullability finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .conversion_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=conversion finding={s} source_type={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.result_ty.name(), instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, instruction.result_ty.name(), source.line, source.column },
                     );
                 }
                 if (instruction.kind == .aggregate_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=aggregate finding={s} type={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.result_ty.name(), instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, instruction.result_ty.name(), source.line, source.column },
                     );
                 }
                 if (instruction.kind == .result_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=result finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .switch_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=core finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .assignment_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=core finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .arithmetic_domain_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=core finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (instruction.kind == .operator_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=core finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=context finding={s} detail={s} line={} column={}\n",
-                        .{ function.name, irqContextFindingName(finding), instruction.detail, instruction.line, instruction.column },
+                        .{ function.name, irqContextFindingName(finding), instruction.detail, source.line, source.column },
                     );
                 }
             }
@@ -3653,16 +3665,17 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
 
         for (function.blocks, 0..) |block, block_index| {
             for (block.instructions, 0..) |instruction, instruction_index| {
+                const source: SourcePoint = instructionSourcePoint(function, instruction) orelse .{ .line = 1, .column = 1 };
                 if (instruction.kind == .unchecked_assume and !uncheckedAssumeHasMatchingContract(function, instruction)) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "E_UNCHECKED_OUTSIDE_CONTRACT: MIR verifier found unchecked optimizer assumption outside matching contract region",
                         .{},
                     );
                 }
                 if (instruction.kind == .unsafe_check) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "E_UNSAFE_REQUIRED: MIR verifier found unsafe machine effect outside unsafe context",
                         .{},
                     );
@@ -3670,7 +3683,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .address_deref) {
                     const address_class = addressClassFromName(instruction.detail) orelse .paddr;
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found illegal direct dereference of {s}",
                         .{ addressDerefDiagnostic(address_class), instruction.detail },
                     );
@@ -3682,28 +3695,28 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                     };
                     const target_class = addressClassFromName(instruction.detail) orelse .paddr;
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid address-class conversion",
                         .{addressClassMismatchDiagnostic(target_class, source_class)},
                     );
                 }
                 if (instruction.kind == .address_operation) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "E_ADDRESS_CLASS_OPERATION: MIR verifier found illegal operation on opaque address class",
                         .{},
                     );
                 }
                 if (instruction.kind == .ffi_check) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found illegal c_void FFI operation",
                         .{ffiFindingDiagnostic(instruction.detail)},
                     );
                 }
                 if (instruction.kind == .usage_check) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid typed-resource operation",
                         .{usageFindingDiagnostic(instruction.detail)},
                     );
@@ -3711,13 +3724,13 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .mmio_check) {
                     if (std.mem.eql(u8, instruction.detail, "direct_assign")) {
                         reporter.err(
-                            sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                            sourcePointSpan(source),
                             "E_MMIO_DIRECT_ASSIGN: MIR verifier found direct assignment to an MMIO register",
                             .{},
                         );
                     } else {
                         reporter.err(
-                            sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                            sourcePointSpan(source),
                             "E_MMIO_ACCESS_FORBIDDEN: MIR verifier found MMIO register access disallowed by Reg/RegBits mode",
                             .{},
                         );
@@ -3725,14 +3738,14 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 }
                 if (isRepresentationSensitiveProducer(instruction) and !producerHasDominatingRepresentationCheck(block, instruction_index, instruction.result_ty)) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "E_REPRESENTATION_CHECK_MISSING: MIR verifier found representation-sensitive value use without dominating check",
                         .{},
                     );
                 }
                 if (isRepresentationSensitiveUse(instruction) and !try useHasDominatingRepresentationCheck(mir.allocator, function, block_index, instruction_index, instruction.result_ty)) {
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "E_REPRESENTATION_CHECK_MISSING: MIR verifier found representation-sensitive value use without dominating check",
                         .{},
                     );
@@ -3740,7 +3753,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .nullability_conversion) {
                     const code = nullabilityDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid nullability conversion",
                         .{code},
                     );
@@ -3748,7 +3761,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .conversion_check) {
                     const code = conversionDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid implicit conversion",
                         .{code},
                     );
@@ -3756,7 +3769,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .aggregate_check) {
                     const code = aggregateDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid aggregate literal shape",
                         .{code},
                     );
@@ -3764,7 +3777,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .result_check) {
                     if (resultFindingDiagnostic(instruction.detail)) |code| {
                         reporter.err(
-                            sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                            sourcePointSpan(source),
                             "{s}: MIR verifier found invalid Result control-flow handling",
                             .{code},
                         );
@@ -3773,7 +3786,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .switch_check) {
                     const code = switchFindingDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid switch pattern coverage",
                         .{code},
                     );
@@ -3781,7 +3794,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .assignment_check) {
                     const code = assignmentFindingDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid assignment target",
                         .{code},
                     );
@@ -3789,7 +3802,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .arithmetic_domain_check) {
                     const code = arithmeticDomainFindingDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid arithmetic-domain operation",
                         .{code},
                     );
@@ -3797,7 +3810,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (instruction.kind == .operator_check) {
                     const code = operatorFindingDiagnostic(instruction.detail);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR verifier found invalid operator operand",
                         .{code},
                     );
@@ -3805,7 +3818,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
-                        sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
+                        sourcePointSpan(source),
                         "{s}: MIR context verifier rejected call in #[irq_context]",
                         .{code},
                     );
@@ -3874,7 +3887,7 @@ fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostic
         for (block.instructions) |instruction| {
             if (!instructionTypedIdentitiesValid(function, instruction)) {
                 reporter.err(
-                    sourcePointSpan(sourcePointForSpanId(function, instruction.typed_span_id) orelse .{ .line = instruction.line, .column = instruction.column }),
+                    sourcePointSpan(instructionSourcePoint(function, instruction) orelse .{ .line = 1, .column = 1 }),
                     "E_MIR_IDENTITY: MIR verifier found malformed instruction identity",
                     .{},
                 );
@@ -3916,7 +3929,7 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
             indexFactForInstruction(function, instruction);
         if (!present) {
             reporter.err(
-                sourcePointSpan(sourcePointForSpanId(function, instruction.typed_span_id) orelse .{ .line = instruction.line, .column = instruction.column }),
+                sourcePointSpan(instructionSourcePoint(function, instruction) orelse .{ .line = 1, .column = 1 }),
                 "E_MIR_ACCESS_FACT: MIR verifier found index instruction without resolved access fact",
                 .{},
             );
@@ -4034,12 +4047,7 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         if (index >= function.type_identities.len) return false;
         if (!function.type_identities[index].matches(instruction.result_ty)) return false;
     }
-    if (instruction.typed_span_id.isValid()) {
-        const index = instruction.typed_span_id.index();
-        if (index >= function.span_identities.len) return false;
-        const source = function.span_identities[index].source;
-        if (source.line != instruction.line or source.column != instruction.column) return false;
-    }
+    if (instruction.typed_span_id.isValid() and instruction.typed_span_id.index() >= function.span_identities.len) return false;
     const requires_operand_identity = (instruction.kind == .unary and std.mem.eql(u8, instruction.detail, "logical_not")) or
         (instruction.kind == .binary and (std.mem.eql(u8, instruction.detail, "logical_and") or std.mem.eql(u8, instruction.detail, "logical_or")));
     if (requires_operand_identity and !instruction.typed_left_operand_span_id.isValid()) return false;
@@ -4317,65 +4325,66 @@ pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGet
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
             if (callTargetKindForInstruction(instruction) == .const_get) {
-                const call_count = countConstGetCallTargetsAtSource(function, instruction.line, instruction.column);
-                if (countConstGetInstructionsAtSource(function, instruction.line, instruction.column) != call_count) return error.InvalidMirConstGetFacts;
-                if (countTargetTypeInstructionsAtSource(function, .const_get_base, instruction.line, instruction.column) != call_count) return error.InvalidMirConstGetFacts;
-                if (countTargetTypeInstructionsAtSource(function, .const_get_result, instruction.line, instruction.column) != call_count) return error.InvalidMirConstGetFacts;
+                const call_count = countConstGetCallTargetsAtSource(function, instruction.typed_span_id);
+                if (countConstGetInstructionsAtSource(function, instruction.typed_span_id) != call_count) return error.InvalidMirConstGetFacts;
+                if (countTargetTypeInstructionsAtSource(function, .const_get_base, instruction.typed_span_id) != call_count) return error.InvalidMirConstGetFacts;
+                if (countTargetTypeInstructionsAtSource(function, .const_get_result, instruction.typed_span_id) != call_count) return error.InvalidMirConstGetFacts;
             }
             const is_const_get = instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get");
             if (!is_const_get) {
                 if (instruction.const_index != null) return error.InvalidMirConstGetFacts;
                 continue;
             }
-            if (countConstGetCallTargetsAtSource(function, instruction.line, instruction.column) != countConstGetInstructionsAtSource(function, instruction.line, instruction.column)) return error.InvalidMirConstGetFacts;
+            if (countConstGetCallTargetsAtSource(function, instruction.typed_span_id) != countConstGetInstructionsAtSource(function, instruction.typed_span_id)) return error.InvalidMirConstGetFacts;
             const index = instruction.const_index orelse return error.InvalidMirConstGetFacts;
-            const fact_count = countMatchingConstGetFacts(function, index, instruction.line, instruction.column);
-            if (fact_count == 0 or fact_count != countMatchingConstGetInstructions(function, index, instruction.line, instruction.column)) return error.InvalidMirConstGetFacts;
+            const fact_count = countMatchingConstGetFacts(function, index, instruction.typed_span_id);
+            if (fact_count == 0 or fact_count != countMatchingConstGetInstructions(function, index, instruction.typed_span_id)) return error.InvalidMirConstGetFacts;
         };
         for (function.const_get_facts) |fact| {
-            const instruction_count = countMatchingConstGetInstructions(function, fact.index, fact.source.line, fact.source.column);
-            if (instruction_count == 0 or instruction_count != countMatchingConstGetFacts(function, fact.index, fact.source.line, fact.source.column)) return error.InvalidMirConstGetFacts;
+            if (!fact.typed_span_id.isValid() or sourcePointForSpanId(function, fact.typed_span_id) == null) return error.InvalidMirConstGetFacts;
+            const instruction_count = countMatchingConstGetInstructions(function, fact.index, fact.typed_span_id);
+            if (instruction_count == 0 or instruction_count != countMatchingConstGetFacts(function, fact.index, fact.typed_span_id)) return error.InvalidMirConstGetFacts;
         }
     }
 }
 
-fn countConstGetCallTargetsAtSource(function: Function, line: usize, column: usize) usize {
+fn countConstGetCallTargetsAtSource(function: Function, span_id: SpanId) usize {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
-        if (callTargetKindForInstruction(instruction) == .const_get and instruction.line == line and instruction.column == column) count += 1;
+        if (callTargetKindForInstruction(instruction) == .const_get and instructionMatchesSpanId(function, instruction, span_id)) count += 1;
     };
     return count;
 }
 
-fn countConstGetInstructionsAtSource(function: Function, line: usize, column: usize) usize {
+fn countConstGetInstructionsAtSource(function: Function, span_id: SpanId) usize {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
-        if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get") and instruction.line == line and instruction.column == column) count += 1;
+        if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get") and instructionMatchesSpanId(function, instruction, span_id)) count += 1;
     };
     return count;
 }
 
-fn countTargetTypeInstructionsAtSource(function: Function, kind: TargetTypeKind, line: usize, column: usize) usize {
+fn countTargetTypeInstructionsAtSource(function: Function, kind: TargetTypeKind, span_id: SpanId) usize {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
-        if (targetTypeKindForInstruction(instruction) == kind and instruction.line == line and instruction.column == column) count += 1;
+        if (targetTypeKindForInstruction(instruction) == kind and instructionMatchesSpanId(function, instruction, span_id)) count += 1;
     };
     return count;
 }
 
-fn countMatchingConstGetFacts(function: Function, index: usize, line: usize, column: usize) usize {
+fn countMatchingConstGetFacts(function: Function, index: usize, span_id: SpanId) usize {
     var count: usize = 0;
     for (function.const_get_facts) |fact| {
-        if (fact.index == index and fact.source.line == line and fact.source.column == column) count += 1;
+        if (fact.index == index and fact.typed_span_id.eql(span_id)) count += 1;
     }
     return count;
 }
 
-fn countMatchingConstGetInstructions(function: Function, index: usize, line: usize, column: usize) usize {
+fn countMatchingConstGetInstructions(function: Function, index: usize, span_id: SpanId) usize {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
         if (instruction.kind != .index or !std.mem.eql(u8, instruction.detail, "const_get")) continue;
-        if (instruction.const_index == index and instruction.line == line and instruction.column == column) count += 1;
+        if (instruction.const_index == index and instructionMatchesSpanId(function, instruction, span_id)) count += 1;
     };
     return count;
 }
@@ -5147,6 +5156,7 @@ fn moduleHasConcreteFunction(module: Module, name: []const u8) bool {
 }
 
 pub const LoweringAdmissionError = error{
+    InvalidMirInstructionIdentities,
     InvalidMirRepresentationFacts,
     InvalidMirIntegerFacts,
     InvalidMirConstGetFacts,
@@ -5180,6 +5190,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     // explicit trap reasons), so reject missing/stale identities before the
     // executable-body verifier checks their projection.
     try validateCallTargetFactsForLowering(module);
+    try validateInstructionSpanIdentitiesForLowering(module);
     for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
@@ -5201,6 +5212,13 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
+}
+
+fn validateInstructionSpanIdentitiesForLowering(module: Module) error{InvalidMirInstructionIdentities}!void {
+    for (module.functions) |function| for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (!instruction.typed_span_id.isValid() or instructionSourcePoint(function, instruction) == null)
+            return error.InvalidMirInstructionIdentities;
+    };
 }
 
 /// A global initializer plan is authoritative only when its module-level
@@ -5567,7 +5585,6 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
         }
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = targetTypeKindForInstruction(instruction) orelse continue;
-            if (!targetTypeHasSourcePoint(instruction.line, instruction.column)) continue;
             const fact_count = countMatchingTargetTypeFacts(function, kind, instruction);
             if (fact_count == 0 or fact_count != countMatchingTargetTypeInstructionsForInstruction(function, kind, instruction)) {
                 if (hasStaleTargetTypeFact(function, kind, instruction)) return error.StaleMirTargetTypeFacts;
@@ -5576,7 +5593,6 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
             if (!matchingTargetTypeFactsAgree(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
         };
         for (function.target_type_facts) |fact| {
-            if (!targetTypeHasSourcePoint(fact.source.line, fact.source.column)) continue;
             const instruction_count = countMatchingTargetTypeInstructions(function, fact);
             if (instruction_count == 0 or instruction_count != countMatchingTargetTypeFactsForFact(function, fact)) return error.InvalidMirTargetTypeFacts;
         }
@@ -5599,10 +5615,6 @@ fn isResultOrNullableTargetType(ty: ValueType) bool {
         .result, .nullable_pointer, .nullable_dyn_trait, .nullable_value => true,
         else => false,
     };
-}
-
-fn targetTypeHasSourcePoint(line: usize, column: usize) bool {
-    return line != 0 and column != 0;
 }
 
 fn targetTypeFactTypedIdentitiesValid(signature_types: SignatureTypeTable, function: Function, fact: TargetTypeFact) bool {
@@ -5713,13 +5725,13 @@ fn targetTypeInstructionCalleeSpansCompatible(left: Instruction, right: Instruct
 }
 
 fn targetTypeSourceMatches(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
-    if (fact.source.line != instruction.line or fact.source.column != instruction.column) return false;
-    return kind != .expression_result or fact.typed_span_id.eql(instruction.typed_span_id);
+    _ = kind;
+    return fact.typed_span_id.eql(instruction.typed_span_id);
 }
 
 fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, right: Instruction) bool {
-    if (left.line != right.line or left.column != right.column) return false;
-    return kind != .expression_result or left.typed_span_id.eql(right.typed_span_id);
+    _ = kind;
+    return left.typed_span_id.eql(right.typed_span_id);
 }
 
 fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool {
@@ -16444,7 +16456,7 @@ const FunctionBuilder = struct {
                     try self.addCallTargetFact(.const_get, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.const_get_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.const_get_result, target.result_type_expr, target.result_ty, expr.span);
-                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .source = .{ .line = expr.span.line, .column = expr.span.column } });
+                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)) });
                     if (representationCheckKind(target.result_ty) != null) {
                         try self.addInstr(.typed_load, exprText(expr), target.result_ty, expr.span);
                         try self.addRuntimeRepresentationCheck(target.result_ty, expr.span, exprText(expr));
@@ -18876,8 +18888,6 @@ const FunctionBuilder = struct {
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
             .typed_value_id = typed_value_id,
             .typed_span_id = typed_span_id,
-            .line = span.line,
-            .column = span.column,
         });
         if (representationFactKind(kind, ty)) {
             try self.representation_facts.append(self.allocator, .{
@@ -22246,7 +22256,7 @@ fn functionFallsThrough(function: Function) ?SourcePoint {
         stack_len -= 1;
         const id = stack_buf[stack_len];
         const block = function.blocks[id];
-        if (block.successors.len == 0 and block.terminator == .fallthrough) return blockLastSpan(block);
+        if (block.successors.len == 0 and block.terminator == .fallthrough) return blockLastSpan(function, block);
         for (block.successors) |successor| {
             if (successor >= function.blocks.len or seen_buf[successor]) continue;
             seen_buf[successor] = true;
@@ -22260,18 +22270,18 @@ fn functionFallsThrough(function: Function) ?SourcePoint {
 fn cfgHasStructuralError(function: Function) ?SourcePoint {
     if (function.blocks.len == 0) return null;
     for (function.blocks, 0..) |block, block_index| {
-        if (block.id != block_index) return blockLastSpan(block);
-        if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(block);
+        if (block.id != block_index) return blockLastSpan(function, block);
+        if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(function, block);
         if (block.typed_successors.len != 0) {
-            if (block.typed_successors.len != block.successors.len) return blockLastSpan(block);
+            if (block.typed_successors.len != block.successors.len) return blockLastSpan(function, block);
             for (block.typed_successors, 0..) |successor, successor_index| {
-                if (!successor.isValid() or successor.index() != block.successors[successor_index]) return blockLastSpan(block);
+                if (!successor.isValid() or successor.index() != block.successors[successor_index]) return blockLastSpan(function, block);
             }
         }
         for (block.successors) |successor| {
-            if (successor >= function.blocks.len) return blockLastSpan(block);
+            if (successor >= function.blocks.len) return blockLastSpan(function, block);
         }
-        if (!terminatorSuccessorsAreConsistent(function, block)) return blockLastSpan(block);
+        if (!terminatorSuccessorsAreConsistent(function, block)) return blockLastSpan(function, block);
     }
     for (function.trap_edges) |edge| {
         if (edge.from_block >= function.blocks.len or edge.trap_block >= function.blocks.len) {
@@ -22346,10 +22356,10 @@ fn successorListed(block: Block, target: usize) bool {
     return false;
 }
 
-fn blockLastSpan(block: Block) SourcePoint {
+fn blockLastSpan(function: Function, block: Block) SourcePoint {
     if (block.instructions.len == 0) return .{ .line = 0, .column = 0 };
     const last = block.instructions[block.instructions.len - 1];
-    return .{ .line = last.line, .column = last.column };
+    return instructionSourcePoint(function, last) orelse .{ .line = 0, .column = 0 };
 }
 
 fn sourcePointSpan(point: SourcePoint) diagnostics.Span {

@@ -3058,9 +3058,7 @@ test "MIR exposes generic typed span identity matching for codegen facts" {
     try std.testing.expect(mir.targetTypeFactMatchesSpanId(direct_fn, rawTargetTypeFactByKind(direct_fn, .direct_call_result).?, direct_result.typed_span_id));
     try std.testing.expect(mir.targetTypeFactMatchesSpanId(direct_fn, rawTargetTypeFactByKind(direct_fn, .direct_call_argument).?, direct_arg.typed_span_id));
 
-    var drifted_instruction = direct_call;
-    drifted_instruction.line += 100;
-    drifted_instruction.column += 100;
+    const drifted_instruction = direct_call;
     try std.testing.expect(mir.instructionMatchesSpanId(direct_fn, drifted_instruction, direct_call.typed_span_id));
 
     var drifted_result = rawTargetTypeFactByKind(direct_fn, .direct_call_result).?;
@@ -3547,7 +3545,7 @@ fn retargetFirstTargetTypeFactAndInstruction(
         for (block.instructions) |*instruction| {
             if (instruction.kind != .target_type) continue;
             if (!std.mem.eql(u8, instruction.detail, @tagName(kind))) continue;
-            if (instruction.line != source.line or instruction.column != source.column) continue;
+            if (!instruction.typed_span_id.eql(mir.spanIdAtSource(function.*, source) orelse return error.TestUnexpectedResult)) continue;
             instruction.result_ty = result_ty;
             instruction.typed_result_ty = type_identity.id;
             return;
@@ -6709,7 +6707,7 @@ test "MIR owns const_get base result and index facts" {
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=index detail=const_get type=u32 const_index=2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir const_get_fact fn=get_word index=2 recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir const_get_fact fn=get_word index=2 typed_span_id=") != null);
 }
 
 test "MIR rejects const_get with both index instruction and fact removed" {
@@ -12956,7 +12954,7 @@ test "MIR representation checks emit invalid-representation trap edges" {
 
 test "MIR verifier rejects missing representation check" {
     var instructions = [_]Instruction{
-        .{ .kind = .call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "make_ptr", .typed_callee_span_id = SpanId.fromIndex(0), .line = 1, .column = 1 },
+        .{ .kind = .call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "make_ptr", .typed_callee_span_id = SpanId.fromIndex(0), .typed_span_id = SpanId.fromIndex(0) },
     };
     var span_identities = [_]mir.SpanIdentity{
         .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
@@ -12996,7 +12994,7 @@ test "MIR verifier rejects missing representation check" {
 
 test "MIR verifier rejects missing representation check on indirect call" {
     var instructions = [_]Instruction{
-        .{ .kind = .indirect_call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "callee", .typed_callee_span_id = SpanId.fromIndex(0), .line = 1, .column = 1 },
+        .{ .kind = .indirect_call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "callee", .typed_callee_span_id = SpanId.fromIndex(0), .typed_span_id = SpanId.fromIndex(0) },
     };
     var span_identities = [_]mir.SpanIdentity{
         .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
@@ -13035,7 +13033,7 @@ test "MIR verifier rejects missing representation check on indirect call" {
 
 test "MIR verifier rejects missing representation check on typed load" {
     var instructions = [_]Instruction{
-        .{ .kind = .typed_load, .result_ty = .{ .closed_enum = "Irq" }, .detail = "irq", .line = 1, .column = 1 },
+        .{ .kind = .typed_load, .result_ty = .{ .closed_enum = "Irq" }, .detail = "irq" },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{
@@ -13072,13 +13070,13 @@ test "MIR verifier requires representation checks to dominate sensitive returns"
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var entry_instructions = [_]Instruction{};
     var then_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 2, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer" },
     };
     var else_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 3, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer" },
     };
     var join_instructions = [_]Instruction{
-        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .line = 4, .column = 5 },
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value" },
     };
     var entry_successors = [_]usize{ 1, 2 };
     var then_successors = [_]usize{3};
@@ -13120,11 +13118,11 @@ test "MIR verifier rejects representation return when one predecessor lacks chec
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var entry_instructions = [_]Instruction{};
     var then_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 2, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer" },
     };
     var else_instructions = [_]Instruction{};
     var join_instructions = [_]Instruction{
-        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .line = 4, .column = 5 },
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value" },
     };
     var entry_successors = [_]usize{ 1, 2 };
     var then_successors = [_]usize{3};
@@ -13167,13 +13165,13 @@ test "MIR verifier matches representation identity across predecessor paths" {
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var entry_instructions = [_]Instruction{};
     var then_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 2, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0) },
     };
     var else_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 3, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0) },
     };
     var join_instructions = [_]Instruction{
-        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0), .line = 4, .column = 5 },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0) },
     };
     var entry_successors = [_]usize{ 1, 2 };
     var then_successors = [_]usize{3};
@@ -13217,13 +13215,13 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var entry_instructions = [_]Instruction{};
     var then_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 2, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0) },
     };
     var else_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(1), .line = 3, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(1) },
     };
     var join_instructions = [_]Instruction{
-        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0), .line = 4, .column = 5 },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0) },
     };
     var entry_successors = [_]usize{ 1, 2 };
     var then_successors = [_]usize{3};
@@ -13270,9 +13268,9 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
 test "MIR verifier requires representation checks to dominate non-return typed uses" {
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var instructions = [_]Instruction{
-        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "p", .line = 1, .column = 5 },
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 1, .column = 5 },
-        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "assignment", .line = 1, .column = 9 },
+        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "p" },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer" },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "assignment" },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{
@@ -13307,7 +13305,7 @@ test "MIR verifier requires representation checks to dominate non-return typed u
 test "MIR verifier rejects missing representation check on non-return typed use" {
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var instructions = [_]Instruction{
-        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .line = 1, .column = 9 },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg" },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{
@@ -13343,9 +13341,9 @@ test "MIR verifier rejects missing representation check on non-return typed use"
 test "MIR verifier rejects representation check for the wrong value identity" {
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var instructions = [_]Instruction{
-        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "checked_ptr", .typed_value_id = ValueId.fromIndex(0), .line = 1, .column = 5 },
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 1, .column = 9 },
-        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .typed_value_id = ValueId.fromIndex(1), .line = 2, .column = 5 },
+        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "checked_ptr", .typed_value_id = ValueId.fromIndex(0) },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0) },
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .typed_value_id = ValueId.fromIndex(1) },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{

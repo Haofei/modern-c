@@ -14035,17 +14035,13 @@ test "lower-c ordinary defer requires source-matched MIR cleanup marker" {
     for (function.blocks) |*block| {
         for (block.instructions) |*instruction| {
             if (instruction.kind == .defer_cleanup) {
-                instruction.line += 1;
+                instruction.typed_span_id = .invalid;
                 break;
             }
         } else continue;
         break;
     } else return error.TestUnexpectedResult;
-    try mir.validateLoweringAdmission(module_mir);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMir, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_marker.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirInstructionIdentities, mir.validateLoweringAdmission(module_mir));
 }
 
 test "lower-c ordinary defer rejects unsupported expression fallback" {

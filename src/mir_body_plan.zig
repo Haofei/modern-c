@@ -721,7 +721,7 @@ fn sourceOf(function: *const mir.Function, instruction: mir.Instruction) mir.Sou
     return if (spanIdentity(function, instruction.typed_span_id)) |identity|
         identity.source
     else
-        .{ .line = instruction.line, .column = instruction.column };
+        .{ .line = 1, .column = 1 };
 }
 
 fn sourceEquivalent(a: mir.SourcePoint, b: mir.SourcePoint) bool {
@@ -806,8 +806,6 @@ const Fixture = struct {
             .detail = "input",
             .typed_value_id = mir.ValueId.fromIndex(0),
             .typed_span_id = mir.SpanId.fromIndex(0),
-            .line = 1,
-            .column = 3,
         }};
         self.blocks = .{
             .{

@@ -173,9 +173,10 @@ pub const MirFactsView = struct {
     pub fn uniqueConstGetIndexAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?usize {
         _ = self;
         const function = current orelse return null;
+        const typed_span_id = mir.spanIdAtSource(function.*, source) orelse return null;
         var matched: ?usize = null;
         for (function.const_get_facts) |fact| {
-            if (!sourcePointLineColumnMatches(source, fact.source)) continue;
+            if (!fact.typed_span_id.eql(typed_span_id)) continue;
             if (matched) |index| {
                 if (index != fact.index) return null;
             } else {

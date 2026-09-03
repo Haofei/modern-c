@@ -318,8 +318,8 @@ test "cleanup edge plan comes directly from MIR cleanup cfg" {
     const span: mir.SourcePoint = .{ .offset = 10, .len = 1, .line = 1, .column = 10 };
     const later_span: mir.SourcePoint = .{ .offset = 20, .len = 1, .line = 1, .column = 20 };
     var instructions = [_]mir.Instruction{
-        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = span.line, .column = span.column, .typed_span_id = mir.SpanId.fromIndex(0) },
-        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = later_span.line, .column = later_span.column, .typed_span_id = mir.SpanId.fromIndex(1) },
+        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .typed_span_id = mir.SpanId.fromIndex(0) },
+        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .typed_span_id = mir.SpanId.fromIndex(1) },
     };
     var span_identities = [_]mir.SpanIdentity{
         .{ .id = mir.SpanId.fromIndex(0), .source = span },

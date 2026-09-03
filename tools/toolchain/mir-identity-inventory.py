@@ -91,9 +91,14 @@ def main() -> int:
     instruction_end = model.index("\n\npub const ", instruction_start)
     if "target_ty:" in model[instruction_start:instruction_end]:
         fail("src/mir_model.zig Instruction duplicates target syntax beside SignatureTypeId")
-    for field in ("source_offset:", "source_len:"):
+    for field in ("source_offset:", "source_len:", "line:", "column:"):
         if field in model[instruction_start:instruction_end]:
             fail(f"src/mir_model.zig Instruction duplicates {field[:-1]} beside SpanId")
+
+    start = model.index("pub const ConstGetFact = struct {")
+    end = model.index("\n};", start)
+    if "source:" in model[start:end]:
+        fail("src/mir_model.zig ConstGetFact duplicates source identity beside SpanId")
 
     function_start = model.index("pub const Function = struct {")
     function_end = model.index("\n\n/// Syntax-free semantic summary", function_start)
@@ -133,7 +138,7 @@ def main() -> int:
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",
         ".typed_id = BlockId.fromIndex(block.id),",
         ".typed_successors = typed_successors,",
-        "if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(block);",
+        "if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(function, block);",
         "if (block.typed_successors.len != 0) {",
         "pub const SymbolIdentity = mir_model.SymbolIdentity;",
         "pub const SourceIdentity = mir_model.SourceIdentity;",

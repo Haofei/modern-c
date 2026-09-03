@@ -129,8 +129,6 @@ test "dominating representation lookup rejects invalid instruction coordinates" 
             .kind = .representation_use,
             .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u8" } },
             .detail = "p",
-            .line = 1,
-            .column = 1,
         },
     };
     var successors = [_]usize{};

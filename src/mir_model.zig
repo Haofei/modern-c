@@ -450,9 +450,6 @@ pub const Instruction = struct {
     typed_callee_root_value_id: ValueId = .invalid,
     typed_callee_root_span_id: SpanId = .invalid,
     callee_field_index: ?usize = null,
-    line: usize,
-    column: usize,
-
     pub const Kind = enum {
         param,
         local,
@@ -3334,7 +3331,7 @@ pub const FloatFact = struct {
 
 pub const ConstGetFact = struct {
     index: usize,
-    source: SourcePoint,
+    typed_span_id: SpanId = .invalid,
 };
 
 pub const CallTargetKind = enum {

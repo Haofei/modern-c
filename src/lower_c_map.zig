@@ -191,8 +191,9 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.const_get_facts) |fact| {
-            try out.print(allocator, "const_get_fact fn={s} index={} ", .{ function.name, fact.index });
-            try appendSourcePointForDigest(allocator, out, fact.source);
+            const source = mir.sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirConstGetFacts;
+            try out.print(allocator, "const_get_fact fn={s} index={} typed_span_id={} ", .{ function.name, fact.index, typedIndexOrMax(fact.typed_span_id) });
+            try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.call_target_facts) |fact| {
             const source = mir.sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirCallTargetFacts;
@@ -318,20 +319,21 @@ fn sourceMapKindForMirInstruction(function: mir.Function, instruction: mir.Instr
 }
 
 fn expressionResultSourceMapKind(function: mir.Function, instruction: mir.Instruction) []const u8 {
-    if (functionHasInstructionAt(function, .return_value, instruction.line, null)) return "return_expr";
-    if (functionHasInstructionAt(function, .local, instruction.line, null)) return "initializer_expr";
-    if (functionHasInstructionAt(function, .defer_cleanup, instruction.line, null)) return "defer_expr";
+    const source = mir.instructionSourcePoint(function, instruction) orelse return "expr";
+    if (functionHasInstructionOnRenderedLine(function, .return_value, source.line)) return "return_expr";
+    if (functionHasInstructionOnRenderedLine(function, .local, source.line)) return "initializer_expr";
+    if (functionHasInstructionOnRenderedLine(function, .defer_cleanup, source.line)) return "defer_expr";
     return "expr";
 }
 
-fn functionHasInstructionAt(function: mir.Function, kind: mir.Instruction.Kind, line: usize, column: ?usize) bool {
+/// Source-map labels classify a rendered line only. This is presentation data,
+/// not a semantic MIR join; semantic facts always use SpanId.
+fn functionHasInstructionOnRenderedLine(function: mir.Function, kind: mir.Instruction.Kind, line: usize) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
             if (instruction.kind != kind) continue;
-            if (instruction.line != line) continue;
-            if (column) |expected| {
-                if (instruction.column != expected) continue;
-            }
+            const source = mir.instructionSourcePoint(function, instruction) orelse continue;
+            if (source.line != line) continue;
             return true;
         }
     }
@@ -598,8 +600,9 @@ const SourceMapEmitter = struct {
     fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: mir.SourcePoint, exact_column: bool) !?[]const u8 {
         for (function.blocks) |block| {
             for (block.instructions, 0..) |instruction, instruction_index| {
-                if (instruction.line != span.line) continue;
-                if (exact_column and instruction.column != span.column) continue;
+                const instruction_source = mir.instructionSourcePoint(function, instruction) orelse continue;
+                if (instruction_source.line != span.line) continue;
+                if (exact_column and instruction_source.column != span.column) continue;
                 return try std.fmt.allocPrint(
                     self.allocator,
                     "mir:{s}:block:{d}:instr:{d}:{s}",
