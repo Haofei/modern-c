@@ -1721,6 +1721,27 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     module_mir.global_initializer_facts[0] = saved;
 }
 
+test "pure aggregate global plan releases partial trees on unsupported later elements" {
+    // The first element builds a scalar node; the mutable global reference in
+    // the second element is deliberately not a foldable scalar leaf. The
+    // builder must return the declaration to the transitional path without
+    // leaking the already-built temporary node.
+    const source =
+        \\global OTHER: u32 = 9;
+        \\global VALUES: [2]u32 = .{ 1, OTHER };
+    ;
+    var parsed = try test_support.parseCheckedModule("aggregate_global_partial_plan_lifecycle.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    switch (module_mir.global_initializer_facts[0].plan) {
+        .scalar => {},
+        .zero, .aggregate => return error.TestUnexpectedResult,
+    }
+}
+
 test "MIR verifier rejects per-file source identity drift" {
     // DIAGNOSTIC_UNIT: E_MIR_SOURCE_ID
     const source = "fn main() -> u32 { return 1; }\n";

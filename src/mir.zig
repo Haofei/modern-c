@@ -1696,9 +1696,12 @@ fn buildPureArrayGlobalInitializerPlan(
     if (items.len != length) return null;
 
     var plans: std.ArrayList(mir_model.AggregateInitializerPlan) = .empty;
-    errdefer {
-        for (plans.items) |plan| plan.deinit(allocator);
-        plans.deinit(allocator);
+    var plans_transferred = false;
+    defer {
+        if (!plans_transferred) {
+            for (plans.items) |plan| plan.deinit(allocator);
+            plans.deinit(allocator);
+        }
     }
     for (items) |item| {
         const child = switch (array.child.*.kind) {
@@ -1709,9 +1712,14 @@ fn buildPureArrayGlobalInitializerPlan(
                 break :blk mir_model.AggregateInitializerPlan{ .scalar = value };
             },
         };
+        var child_transferred = false;
+        errdefer if (!child_transferred) child.deinit(allocator);
         try plans.append(allocator, child);
+        child_transferred = true;
     }
-    return .{ .array = try plans.toOwnedSlice(allocator) };
+    const owned = try plans.toOwnedSlice(allocator);
+    plans_transferred = true;
+    return .{ .array = owned };
 }
 
 fn isPureScalarArrayLeafType(ty: ast.TypeExpr) bool {

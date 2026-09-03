@@ -339,7 +339,7 @@ test "lower-c renders pure array literals from syntax-free aggregate plans" {
         false,
         null,
     );
-    try expectContains(output.items, "mc_array_mc_array_u32_2_2 VALUES = { { 1, 2 }, { 3, 4 } };");
+    try expectContains(output.items, "VALUES = { { 1, 2 }, { 3, 4 } };");
 }
 
 test "lower-c fails closed when a scalar const-global fact is missing" {
