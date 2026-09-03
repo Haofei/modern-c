@@ -1553,6 +1553,28 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             }
                         }
                         if (!checked_global.has_initializer_plan) {
+                            if (try directVerifiedGlobalCopyInitializer(
+                                allocator,
+                                initializer,
+                                checked_global,
+                                checked_globals.items,
+                                global_initializer_facts.items,
+                                &signature_types,
+                                &symbol_ids,
+                                &const_fns,
+                                &const_globals,
+                            )) |plan| {
+                                errdefer plan.deinit(allocator);
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = plan,
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
                             if (try buildGlobalAggregateInitializerPlan(
                                 allocator,
                                 initializer,
@@ -2093,6 +2115,70 @@ fn directScalarGlobalCopySourceName(
             const destination_canonical = transparentSignatureTypeIdForBuild(destination_type_id, signature_types, type_aliases, symbol_ids) orelse break :blk null;
             if (!cast_canonical.eql(destination_canonical)) break :blk null;
             break :blk try directScalarGlobalCopySourceName(cast.value.*, destination_type_id, signature_types, type_aliases, symbol_ids, const_fns, const_globals);
+        },
+        else => null,
+    };
+}
+
+/// Reuse an already-admitted non-scalar global initializer without retaining
+/// the later declaration's source expression. This is deliberately a strict
+/// copy, not a conversion: source and destination must have the same module
+/// `SignatureTypeId` and executable `ValueType`; casts are admitted only when
+/// they spell that same destination type. Forward references, externs, zero
+/// storage, and any missing prior plan remain on the fail-closed transitional
+/// path until they gain a dedicated plan.
+fn directVerifiedGlobalCopyInitializer(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    destination: CheckedGlobalFact,
+    prior_globals: []const CheckedGlobalFact,
+    prior_initializer_facts: []const GlobalInitializerFact,
+    signature_types: *SignatureTypeTableBuilder,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+) !?mir_model.GlobalInitializerPlan {
+    const source_name = try directExactGlobalCopySourceName(
+        initializer,
+        destination.signature_type_id,
+        signature_types,
+        const_fns,
+        const_globals,
+    ) orelse return null;
+    const source_symbol_id = symbol_ids.get(source_name) orelse return null;
+    const source = for (prior_globals) |candidate| {
+        if (candidate.symbol_id.eql(source_symbol_id)) break candidate;
+    } else return null;
+    if (source.is_extern or !source.has_initializer_plan or
+        !source.signature_type_id.eql(destination.signature_type_id) or
+        !ValueType.eql(source.ty, destination.ty)) return null;
+    const prior_fact = for (prior_initializer_facts) |fact| {
+        if (fact.global_symbol_id.eql(source_symbol_id)) break fact;
+    } else return null;
+    if (!ValueType.eql(prior_fact.value_ty, destination.ty)) return null;
+    return switch (prior_fact.plan) {
+        // Scalar copies have their own constant-evaluation path above. A zero
+        // plan has no initializer body and cannot be copied as-is onto an
+        // explicit initializer without weakening the plan invariant.
+        .scalar, .zero => null,
+        else => try prior_fact.plan.cloneForGlobalCopy(allocator),
+    };
+}
+
+fn directExactGlobalCopySourceName(
+    initializer: ast.Expr,
+    destination_type_id: SignatureTypeId,
+    signature_types: *SignatureTypeTableBuilder,
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+) !?[]const u8 {
+    return switch (initializer.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| directExactGlobalCopySourceName(inner.*, destination_type_id, signature_types, const_fns, const_globals),
+        .cast => |cast| blk: {
+            const cast_type_id = try signature_types.internTypeExpr(cast.ty.*, const_fns, const_globals);
+            if (!cast_type_id.eql(destination_type_id)) break :blk null;
+            break :blk try directExactGlobalCopySourceName(cast.value.*, destination_type_id, signature_types, const_fns, const_globals);
         },
         else => null,
     };
