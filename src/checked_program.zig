@@ -16,6 +16,15 @@ pub const CheckedProgram = struct {
     pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact) !CheckedProgram {
         for (callables, 0..) |callable, index| {
             if (!callable.symbol_id.isValid()) return error.InvalidCheckedProgram;
+            if (callable.kind == .global_initializer) {
+                if (callable.def_id.isValid()) return error.InvalidCheckedProgram;
+            } else {
+                if (!callable.def_id.isValid()) return error.InvalidCheckedProgram;
+                for (callables[0..index]) |prior| {
+                    if (prior.kind != .global_initializer and prior.def_id.eql(callable.def_id))
+                        return error.DuplicateDefinitionIdentity;
+                }
+            }
             if (callable.param_types.len != callable.param_count) return error.InvalidCheckedProgram;
             if (callable.kind == .extern_function) {
                 if (callable.body_id.isValid()) return error.InvalidCheckedProgram;
@@ -54,7 +63,8 @@ pub const CheckedProgram = struct {
 fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir.Module) bool {
     if (callables.len != module.functions.len) return false;
     for (callables, module.functions, 0..) |checked, function, index| {
-        if (!checked.symbol_id.eql(function.typed_symbol_id) or !checked.source_id.eql(function.typed_source_id)) return false;
+        if (!checked.symbol_id.eql(function.typed_symbol_id) or !checked.source_id.eql(function.typed_source_id) or
+            !checked.def_id.eql(function.typed_def_id)) return false;
         if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
         if (checked.param_count != function.param_count or checked.param_types.len != function.param_types.len or
             checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
@@ -71,4 +81,34 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
         if (checked.kind == .global_initializer and (checked.param_count != 0 or checked.return_ty != .void or checked.c_abi or checked.is_variadic)) return false;
     }
     return true;
+}
+
+test "CheckedProgram rejects duplicate source declaration identities" {
+    const callables = [_]mir.CheckedCallableFact{
+        .{
+            .def_id = .{ .file_id = 7, .ordinal = 3 },
+            .symbol_id = mir.SymbolId.fromIndex(0),
+            .source_id = .invalid,
+            .body_id = mir.BodyId.fromIndex(0),
+            .kind = .function,
+            .return_ty = .void,
+            .param_count = 0,
+            .c_abi = false,
+            .no_lang_trap = false,
+            .irq_context = false,
+        },
+        .{
+            .def_id = .{ .file_id = 7, .ordinal = 3 },
+            .symbol_id = mir.SymbolId.fromIndex(1),
+            .source_id = .invalid,
+            .body_id = mir.BodyId.fromIndex(1),
+            .kind = .function,
+            .return_ty = .void,
+            .param_count = 0,
+            .c_abi = false,
+            .no_lang_trap = false,
+            .irq_context = false,
+        },
+    };
+    try std.testing.expectError(error.DuplicateDefinitionIdentity, CheckedProgram.init(&callables, &.{}));
 }

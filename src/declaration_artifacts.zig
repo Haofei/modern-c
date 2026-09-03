@@ -34,12 +34,13 @@ pub const EarlyDeclarationArtifacts = struct {
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
-        for (resolved_decls) |item| {
+        for (resolved_decls, 0..) |item, ordinal| {
             const decl = item.decl;
+            const def_id = declarationDefId(item, ordinal);
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
-                    const function_mir = functionByName(typed_mir, fn_decl.name.text, false);
-                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, false, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
+                    const function_mir = functionByDefId(typed_mir, def_id);
+                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, false, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -48,8 +49,8 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
-                    const function_mir = functionByName(typed_mir, fn_decl.name.text, true);
-                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, true, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
+                    const function_mir = functionByDefId(typed_mir, def_id);
+                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, true, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -144,6 +145,12 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 };
 
+fn declarationDefId(item: anytype, ordinal: usize) mir.DefId {
+    if (@hasField(@TypeOf(item), "def_id") and item.def_id.isValid()) return item.def_id;
+    const file_id: u32 = if (@hasField(@TypeOf(item), "file_id")) @intFromEnum(item.file_id) else 0;
+    return .{ .file_id = file_id, .ordinal = @intCast(ordinal) };
+}
+
 fn deinitDeclArtifacts(allocator: std.mem.Allocator, artifacts: []const DeclArtifact) void {
     for (artifacts) |artifact| switch (artifact) {
         .function => |function| function.deinit(allocator),
@@ -178,15 +185,17 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 }
 
 pub const FunctionArtifact = struct {
+    def_id: mir.DefId,
     signature: codegen_attrs.FunctionSignatureFacts,
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
 
-    pub fn fromDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType, param_types: []const mir.ValueType) !FunctionArtifact {
+    pub fn fromDecl(allocator: std.mem.Allocator, def_id: mir.DefId, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType, param_types: []const mir.ValueType) !FunctionArtifact {
         const params = try allocator.alloc(codegen_attrs.FunctionParamFact, fn_decl.params.len);
         errdefer allocator.free(params);
         for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param, if (i < param_types.len) param_types[i] else .unknown);
         return .{
+            .def_id = def_id,
             .signature = .{
                 .name = fn_decl.name,
                 .params = params,
@@ -212,9 +221,10 @@ pub const FunctionArtifact = struct {
     }
 };
 
-fn functionByName(module: *const mir.Module, name: []const u8, is_extern: bool) ?mir.Function {
+fn functionByDefId(module: *const mir.Module, def_id: mir.DefId) ?mir.Function {
+    if (!def_id.isValid()) return null;
     for (module.functions, 0..) |function, index| {
-        if (!std.mem.eql(u8, function.name, name) or function.is_extern != is_extern) continue;
+        if (!function.typed_def_id.eql(def_id)) continue;
         if (index < module.checked_callables.len and module.checked_callables[index].kind == .global_initializer) continue;
         return function;
     }
@@ -414,6 +424,7 @@ test "declaration artifacts collect from resolved declaration stream" {
     defer std.testing.allocator.free(resolved_decls);
     for (parsed.decls(), 0..) |decl, i| {
         resolved_decls[i] = .{
+            .def_id = .{ .file_id = 0, .ordinal = @intCast(i) },
             .file_id = @enumFromInt(0),
             .decl = decl,
         };
@@ -432,6 +443,7 @@ test "declaration artifacts collect from resolved declaration stream" {
     for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
         .function => |function| {
             try std.testing.expectEqualStrings("inc", function.signature.name.text);
+            try std.testing.expect(function.def_id.eql(.{ .file_id = 0, .ordinal = 2 }));
             try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.return_ty));
             try std.testing.expectEqual(@as(usize, 1), function.signature.params.len);
             try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.params[0].value_ty));

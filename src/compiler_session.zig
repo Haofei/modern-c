@@ -153,6 +153,12 @@ pub const CompilationSession = struct {
         const root_id = if (graph.files.len != 0) graph.files[0].id else return error.MissingModuleGraph;
         const output = try allocator.alloc(module_parser.ResolvedDecl, decls.len);
         errdefer allocator.free(output);
+        // IDs are deliberately allocated only after async/generic expansion
+        // and private-name rewriting. Those passes may create or reorder
+        // declarations; assigning earlier would either lose identity or need
+        // an incremental database that this compiler does not have.
+        var next_decl_ordinal = std.AutoHashMap(loader.FileId, u32).init(allocator);
+        defer next_decl_ordinal.deinit();
         for (decls, 0..) |decl, index| {
             const file_id: loader.FileId = if (decl.span.file_id != diagnostics.invalid_file_id)
                 @enumFromInt(decl.span.file_id)
@@ -161,7 +167,14 @@ pub const CompilationSession = struct {
             else
                 return error.GeneratedDeclarationMissingFileIdentity;
             if (graph.fileById(file_id) == null) return error.InvalidModuleGraph;
-            output[index] = .{ .file_id = file_id, .decl = decl };
+            const ordinal = next_decl_ordinal.get(file_id) orelse 0;
+            if (ordinal == std.math.maxInt(u32)) return error.TooManyDeclarationsInFile;
+            try next_decl_ordinal.put(file_id, ordinal + 1);
+            output[index] = .{
+                .def_id = .{ .file_id = @intFromEnum(file_id), .ordinal = ordinal },
+                .file_id = file_id,
+                .decl = decl,
+            };
         }
         return .{
             .decls = output,

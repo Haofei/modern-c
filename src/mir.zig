@@ -79,6 +79,7 @@ pub const PointerKind = mir_model.PointerKind;
 pub const PointerShape = mir_model.PointerShape;
 pub const ResultShape = mir_model.ResultShape;
 pub const SourceId = mir_model.SourceId;
+pub const DefId = mir_model.DefId;
 pub const NodeId = mir_model.NodeId;
 pub const SymbolId = mir_model.SymbolId;
 pub const TypeId = mir_model.TypeId;
@@ -906,6 +907,17 @@ fn fileIdFromBuildItem(item: anytype) ?u32 {
     return if (@hasField(@TypeOf(item), "file_id")) @intFromEnum(item.file_id) else null;
 }
 
+fn defIdFromBuildItem(item: anytype, ordinal: usize) DefId {
+    if (@hasField(@TypeOf(item), "def_id") and item.def_id.isValid()) return item.def_id;
+    // Raw AST unit tests and compatibility callers have no per-file wrapper.
+    // Give them a deterministic request-local identity; real projects arrive
+    // here through CompilationSession with explicit per-file DefIds.
+    return .{
+        .file_id = fileIdFromBuildItem(item) orelse 0,
+        .ordinal = @intCast(ordinal),
+    };
+}
+
 pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, options: BuildOptions) !Module {
     return buildOptFromDeclItems(allocator, decls, options);
 }
@@ -1078,9 +1090,10 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     var checked_globals: std.ArrayList(CheckedGlobalFact) = .empty;
     errdefer checked_globals.deinit(allocator);
 
-    for (decl_items) |item| {
+    for (decl_items, 0..) |item, decl_ordinal| {
         const decl = declFromBuildItem(item);
         const typed_source_id = if (fileIdFromBuildItem(item)) |file_id| try internSourceId(&source_ids, file_id) else SourceId.invalid;
+        const typed_def_id = defIdFromBuildItem(item, decl_ordinal);
         switch (decl.kind) {
             .global_decl => |global| {
                 if (global.ty) |ty| {
@@ -1095,6 +1108,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     if (global.init) |initializer| {
                         checked_global.initializer_body_id = BodyId.fromIndex(checked_callables.items.len);
                         var checked: CheckedCallableFact = .{
+                            .def_id = .invalid,
                             .symbol_id = checked_global.symbol_id,
                             .source_id = typed_source_id,
                             .body_id = BodyId.fromIndex(checked_callables.items.len),
@@ -1128,6 +1142,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
                     var checked: CheckedCallableFact = .{
+                        .def_id = typed_def_id,
                         .symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text),
                         .source_id = typed_source_id,
                         .body_id = BodyId.fromIndex(checked_callables.items.len),
@@ -1157,6 +1172,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
                     const typed_symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text);
                     var checked: CheckedCallableFact = .{
+                        .def_id = typed_def_id,
                         .symbol_id = typed_symbol_id,
                         .source_id = typed_source_id,
                         .body_id = .invalid,
@@ -1181,6 +1197,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     checked_param_types_unowned = false;
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
+                        .typed_def_id = checked.def_id,
                         .typed_symbol_id = checked.symbol_id,
                         .typed_source_id = checked.source_id,
                         .return_ty = checked.return_ty,
@@ -1255,6 +1272,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
 }
 
 fn applyCheckedCallableFact(function: *Function, checked: CheckedCallableFact) void {
+    function.typed_def_id = checked.def_id;
     function.typed_symbol_id = checked.symbol_id;
     function.typed_source_id = checked.source_id;
     function.return_ty = checked.return_ty;
@@ -9594,9 +9612,7 @@ const FunctionBuilder = struct {
                     .place = try self.appendExecutablePlace(expr),
                     .access = self.executableMemoryAccess(expr, result_ty),
                 } };
-            }
-            else
-                .{ .symbol = try self.internExecutableFunctionSymbol(ident.text) },
+            } else .{ .symbol = try self.internExecutableFunctionSymbol(ident.text) },
             .int_literal => |literal| integer: {
                 const magnitude = numeric.parseIntegerLiteral(literal) orelse {
                     break :integer self.unsupportedExecutableExpression(.unsupported_integer_literal);

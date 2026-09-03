@@ -829,7 +829,7 @@ const LlvmEmitter = struct {
             // not silently omit a verified MIR function when its matching
             // artifact is absent: ordinary codegen has no AST body fallback
             // that could make such an ingress failure acceptable.
-            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse return error.UnsupportedLlvmEmission;
+            const artifact_index = self.functionArtifactIndexByDefId(fn_mir.typed_def_id) orelse return error.UnsupportedLlvmEmission;
             const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
                 .function => |function| function,
                 else => unreachable,
@@ -850,11 +850,12 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn functionArtifactIndexByName(self: *const LlvmEmitter, name: []const u8) ?usize {
+    fn functionArtifactIndexByDefId(self: *const LlvmEmitter, def_id: mir.DefId) ?usize {
+        if (!def_id.isValid()) return null;
         var i: usize = 0;
         while (i < self.codegen_artifacts.decl_artifacts.len) : (i += 1) {
             switch (self.codegen_artifacts.decl_artifacts[i]) {
-                .function => |function| if (std.mem.eql(u8, function.signature.name.text, name)) return i,
+                .function => |function| if (function.def_id.eql(def_id)) return i,
                 else => {},
             }
         }
@@ -1581,6 +1582,12 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn mirFunctionByDefId(self: *const LlvmEmitter, def_id: mir.DefId) ?mir.Function {
+        if (!def_id.isValid()) return null;
+        for (self.mir_module.functions) |function| if (function.typed_def_id.eql(def_id)) return function;
+        return null;
+    }
+
     fn executableTargetAbi(self: *const LlvmEmitter) mir_executable_llvm.TargetAbi {
         return switch (self.target_arch) {
             .riscv64 => .riscv64,
@@ -1725,7 +1732,7 @@ const LlvmEmitter = struct {
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
         if (isKsanHook(sig_facts.name.text)) return;
-        const fn_mir = self.mirFunctionByName(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
+        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedLlvmEmission;
         if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return error.UnsupportedLlvmEmission;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())

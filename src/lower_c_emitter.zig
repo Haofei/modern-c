@@ -641,7 +641,7 @@ pub const CEmitter = struct {
             // silently omit it: the old AST body fallback made that kind of
             // omission easy to hide.  Codegen has one body authority now, so
             // an incomplete ingress must fail closed.
-            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse return error.UnsupportedCEmission;
+            const artifact_index = self.functionArtifactIndexByDefId(fn_mir.typed_def_id) orelse return error.UnsupportedCEmission;
             const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
                 .function => |function| function,
                 else => unreachable,
@@ -662,11 +662,12 @@ pub const CEmitter = struct {
         }
     }
 
-    fn functionArtifactIndexByName(self: *const CEmitter, name: []const u8) ?usize {
+    fn functionArtifactIndexByDefId(self: *const CEmitter, def_id: mir.DefId) ?usize {
+        if (!def_id.isValid()) return null;
         var i: usize = 0;
         while (i < self.codegen_artifacts.decl_artifacts.len) : (i += 1) {
             switch (self.codegen_artifacts.decl_artifacts[i]) {
-                .function => |function| if (std.mem.eql(u8, function.signature.name.text, name)) return i,
+                .function => |function| if (function.def_id.eql(def_id)) return i,
                 else => {},
             }
         }
@@ -1191,7 +1192,7 @@ pub const CEmitter = struct {
     }
 
     fn emitFunctionPrototype(self: *CEmitter, function: anytype) !void {
-        const fn_mir = self.mirFunctionByName(function.signature.name.text) orelse return error.UnsupportedCEmission;
+        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedCEmission;
         try self.emitFunctionSignature(function.signature, fn_mir, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
@@ -1200,7 +1201,7 @@ pub const CEmitter = struct {
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
     fn emitFunctionForwardDecl(self: *CEmitter, function: anytype) !void {
-        const fn_mir = self.mirFunctionByName(function.signature.name.text) orelse return error.UnsupportedCEmission;
+        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedCEmission;
         try self.emitFunctionSignature(function.signature, fn_mir, !function.signature.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
@@ -1232,7 +1233,7 @@ pub const CEmitter = struct {
     fn emitExecutableMirNakedFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionRenderAttrs(render_attrs);
-        try self.emitFunctionSignature(function.signature, self.mirFunctionByName(function.signature.name.text) orelse return error.UnsupportedCEmission, !function.signature.exported, false);
+        try self.emitFunctionSignature(function.signature, self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedCEmission, !function.signature.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
         try mir_executable_c.emitNakedBody(self.allocator, self.out, body, 1);
         try self.out.appendSlice(self.allocator, "}\n\n");
@@ -1304,6 +1305,12 @@ pub const CEmitter = struct {
 
     fn mirFunctionByName(self: *const CEmitter, name: []const u8) ?mir.Function {
         for (self.mir_module.functions) |function| if (std.mem.eql(u8, function.name, name)) return function;
+        return null;
+    }
+
+    fn mirFunctionByDefId(self: *const CEmitter, def_id: mir.DefId) ?mir.Function {
+        if (!def_id.isValid()) return null;
+        for (self.mir_module.functions) |function| if (function.typed_def_id.eql(def_id)) return function;
         return null;
     }
 

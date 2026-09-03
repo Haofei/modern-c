@@ -30,6 +30,27 @@ fn TypedIndex(comptime name: []const u8) type {
 }
 
 pub const SourceId = TypedIndex("SourceId");
+/// Compile-request-local declaration identity. `file_id` is the existing
+/// per-file module identity and `ordinal` is assigned after frontend source
+/// transforms have produced the final declaration stream. It deliberately
+/// makes no cross-revision or on-disk-cache promise.
+pub const DefId = struct {
+    file_id: u32,
+    ordinal: u32,
+
+    pub const invalid: DefId = .{
+        .file_id = std.math.maxInt(u32),
+        .ordinal = std.math.maxInt(u32),
+    };
+
+    pub fn isValid(self: DefId) bool {
+        return self.file_id != invalid.file_id and self.ordinal != invalid.ordinal;
+    }
+
+    pub fn eql(self: DefId, other: DefId) bool {
+        return self.file_id == other.file_id and self.ordinal == other.ordinal;
+    }
+};
 pub const NodeId = TypedIndex("NodeId");
 pub const SymbolId = TypedIndex("SymbolId");
 pub const TypeId = TypedIndex("TypeId");
@@ -3787,6 +3808,7 @@ pub const FfiParamContract = struct {
 
 pub const Function = struct {
     name: []const u8,
+    typed_def_id: DefId = .invalid,
     typed_symbol_id: SymbolId = .invalid,
     typed_source_id: SourceId = .invalid,
     return_ty: ValueType,
@@ -3847,6 +3869,7 @@ pub const Function = struct {
 /// trees: bodies remain canonical MIR, while this table owns callable identity,
 /// signature representation, ABI, and closed effect flags.
 pub const CheckedCallableFact = struct {
+    def_id: DefId = .invalid,
     symbol_id: SymbolId,
     source_id: SourceId,
     body_id: BodyId,

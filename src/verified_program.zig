@@ -132,6 +132,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     const functions = try std.testing.allocator.alloc(mir.Function, 2);
     functions[0] = .{
         .name = "add_one",
+        .typed_def_id = .{ .file_id = 0, .ordinal = 0 },
         .typed_symbol_id = mir.SymbolId.fromIndex(0),
         .return_ty = .void,
         .no_lang_trap = false,
@@ -146,6 +147,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     };
     functions[1] = .{
         .name = "mc_ksan_check",
+        .typed_def_id = .{ .file_id = 0, .ordinal = 1 },
         .typed_symbol_id = mir.SymbolId.fromIndex(1),
         .return_ty = .void,
         .no_lang_trap = false,
@@ -160,6 +162,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     };
     const checked_callables = try std.testing.allocator.alloc(mir.CheckedCallableFact, 2);
     checked_callables[0] = .{
+        .def_id = .{ .file_id = 0, .ordinal = 0 },
         .symbol_id = mir.SymbolId.fromIndex(0),
         .source_id = .invalid,
         .body_id = mir.BodyId.fromIndex(0),
@@ -171,6 +174,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .irq_context = false,
     };
     checked_callables[1] = .{
+        .def_id = .{ .file_id = 0, .ordinal = 1 },
         .symbol_id = mir.SymbolId.fromIndex(1),
         .source_id = .invalid,
         .body_id = mir.BodyId.fromIndex(1),
