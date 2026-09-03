@@ -183,7 +183,8 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try appendSourcePointForDigest(allocator, out, fact.source);
         }
         for (function.integer_facts) |fact| {
-            try out.print(allocator, "integer_fact fn={s} literal={s} target={s} ", .{ function.name, fact.literal, fact.target_ty.name() });
+            const target_name = if (mir.integerFactTargetType(&function, fact)) |target_ty| target_ty.name() else "invalid";
+            try out.print(allocator, "integer_fact fn={s} literal={s} target={s} target_type_id={} typed_span_id={} ", .{ function.name, fact.literal, target_name, typedIndexOrMax(fact.target_type_id), typedIndexOrMax(fact.typed_span_id) });
             try appendSourcePointForDigest(allocator, out, fact.source);
         }
         for (function.const_get_facts) |fact| {

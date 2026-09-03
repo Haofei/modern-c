@@ -3314,7 +3314,11 @@ pub const AccessFact = union(enum) {
 
 pub const IntegerFact = struct {
     literal: []const u8,
-    target_ty: ValueType,
+    /// The canonical target type identity. Integer facts deliberately do not
+    /// duplicate its structural `ValueType`; consumers resolve it through the
+    /// owning function's type-identity table.
+    target_type_id: TypeId = .invalid,
+    typed_span_id: SpanId = .invalid,
     source: SourcePoint,
 };
 

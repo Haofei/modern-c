@@ -2335,6 +2335,64 @@ test "MIR float facts are the complete typed authority for float literals" {
     try std.testing.expectError(error.InvalidMirFloatFacts, mir.validateLoweringAdmission(mismatched));
 }
 
+test "MIR integer facts are the complete typed authority for integer literals" {
+    const source =
+        \\fn integer_value(other: u16) -> u8 {
+        \\    let value: u8 = 7;
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_integer_fact_admission.mc", source);
+    defer parsed.deinit();
+
+    var admitted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer admitted.deinit();
+    try mir.validateLoweringAdmission(admitted);
+    const function = functionByName(admitted, "integer_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.integer_facts.len != 0);
+    try std.testing.expect(mir.ValueType.eql(mir.integerFactTargetType(&function, function.integer_facts[0]).?, .{ .integer = "u8" }));
+    try std.testing.expect(function.integer_facts[0].target_type_id.isValid());
+    try std.testing.expect(function.integer_facts[0].typed_span_id.isValid());
+
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer missing.deinit();
+    const missing_function = functionByNameMut(&missing, "integer_value") orelse return error.TestUnexpectedResult;
+    const original_facts = missing_function.integer_facts;
+    missing_function.integer_facts = try std.testing.allocator.alloc(mir.IntegerFact, 0);
+    std.testing.allocator.free(original_facts);
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(missing));
+
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer duplicate.deinit();
+    try duplicateIntegerFact(functionByNameMut(&duplicate, "integer_value") orelse return error.TestUnexpectedResult, std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(duplicate));
+
+    var invalid = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid.deinit();
+    const invalid_fact = &((functionByNameMut(&invalid, "integer_value") orelse return error.TestUnexpectedResult).integer_facts[0]);
+    invalid_fact.target_type_id = mir.TypeId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(invalid));
+
+    var invalid_span = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid_span.deinit();
+    const invalid_span_fact = &((functionByNameMut(&invalid_span, "integer_value") orelse return error.TestUnexpectedResult).integer_facts[0]);
+    invalid_span_fact.typed_span_id = SpanId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(invalid_span));
+
+    var mismatched = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer mismatched.deinit();
+    const mismatched_function = functionByNameMut(&mismatched, "integer_value") orelse return error.TestUnexpectedResult;
+    const mismatched_fact = &mismatched_function.integer_facts[0];
+    for (mismatched_function.type_identities) |identity| {
+        const candidate = identity.ty orelse continue;
+        if (!mir.ValueType.eql(candidate, .{ .integer = "u16" })) continue;
+        mismatched_fact.target_type_id = identity.id;
+        break;
+    }
+    try std.testing.expect(!mismatched_fact.target_type_id.eql(.invalid));
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(mismatched));
+}
+
 test "MIR exposes generic typed span identity matching for codegen facts" {
     const source =
         \\extern fn close_a(value: u32) -> void;
@@ -2790,6 +2848,15 @@ fn duplicateFloatFact(function: *mir.Function, allocator: std.mem.Allocator) !vo
     facts[function.float_facts.len] = function.float_facts[0];
     allocator.free(function.float_facts);
     function.float_facts = facts;
+}
+
+fn duplicateIntegerFact(function: *mir.Function, allocator: std.mem.Allocator) !void {
+    if (function.integer_facts.len == 0) return error.TestUnexpectedResult;
+    const facts = try allocator.alloc(mir.IntegerFact, function.integer_facts.len + 1);
+    @memcpy(facts[0..function.integer_facts.len], function.integer_facts);
+    facts[function.integer_facts.len] = function.integer_facts[0];
+    allocator.free(function.integer_facts);
+    function.integer_facts = facts;
 }
 
 fn simpleTypeExprForTest(name: []const u8, span: ast.Span) ast.TypeExpr {
@@ -9181,9 +9248,9 @@ test "MIR dump emits target-typed integer literal facts" {
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=6") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=7 target_type=u8 recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 target_type_id=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 target_type_id=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=7 target_type=u8 target_type_id=") != null);
 }
 
 test "MIR dump exposes representation value identities" {

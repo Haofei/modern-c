@@ -2081,10 +2081,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.integer_facts) |fact| {
+            const target_name = if (integerFactTargetType(&function, fact)) |target_ty| target_ty.name() else "invalid";
             try out.print(
                 allocator,
-                "mir integer_fact fn={s} literal={s} target_type={s} recorded=true line={} column={}\n",
-                .{ function.name, fact.literal, fact.target_ty.name(), fact.source.line, fact.source.column },
+                "mir integer_fact fn={s} literal={s} target_type={s} target_type_id={} typed_span_id={} recorded=true line={} column={}\n",
+                .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize), fact.source.line, fact.source.column },
             );
         }
         for (function.bool_facts) |fact| {
@@ -2956,14 +2957,19 @@ pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRe
 
 pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFacts}!void {
     for (module.functions) |function| {
+        for (function.integer_facts) |fact| {
+            if (!integerFactTypedIdentitiesValid(function, fact)) return error.InvalidMirIntegerFacts;
+            const instruction_count = countMatchingIntegerInstructions(function, fact);
+            const fact_count = countMatchingIntegerFacts(function, fact);
+            if (instruction_count == 0 or instruction_count != fact_count) return error.InvalidMirIntegerFacts;
+        }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
-                if (instruction.kind != .integer_literal_conversion) continue;
-                if (!functionHasMatchingIntegerFact(function, instruction)) return error.InvalidMirIntegerFacts;
+                if (!isIntegerLiteralConversionInstruction(instruction)) continue;
+                const fact_count = countMatchingIntegerFactsForInstruction(function, instruction);
+                const instruction_count = countMatchingIntegerInstructionsForInstruction(function, instruction);
+                if (fact_count == 0 or fact_count != instruction_count) return error.InvalidMirIntegerFacts;
             }
-        }
-        for (function.integer_facts) |fact| {
-            if (!functionHasMatchingIntegerInstruction(function, fact)) return error.InvalidMirIntegerFacts;
         }
     }
 }
@@ -3001,6 +3007,19 @@ pub fn floatFactTargetType(function: *const Function, fact: FloatFact) ?ValueTyp
     const target_ty = function.type_identities[type_index].ty orelse return null;
     return switch (target_ty) {
         .float => |name| if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) target_ty else null,
+        else => null,
+    };
+}
+
+/// Resolves the sole type authority carried by an integer literal fact. A
+/// spelling-only identity is deliberately insufficient: it would make
+/// lowering recover type semantics from source-shaped data again.
+pub fn integerFactTargetType(function: *const Function, fact: IntegerFact) ?ValueType {
+    const type_index = if (fact.target_type_id.isValid()) fact.target_type_id.index() else return null;
+    if (type_index >= function.type_identities.len) return null;
+    const target_ty = function.type_identities[type_index].ty orelse return null;
+    return switch (target_ty) {
+        .integer => |name| if (checkedIntBoundsByName(name) != null) target_ty else null,
         else => null,
     };
 }
@@ -3895,9 +3914,6 @@ pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLowerin
         for (function.range_facts) |fact| {
             if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
         }
-        for (function.integer_facts) |fact| {
-            if (valueTypeIsUnknownPlaceholder(fact.target_ty)) return error.UnknownMirLoweringType;
-        }
         for (function.call_target_facts) |fact| {
             if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
         }
@@ -4307,27 +4323,62 @@ fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bo
     return sourcePointEquivalent(source, fact.source);
 }
 
-fn functionHasMatchingIntegerFact(function: Function, instruction: Instruction) bool {
-    for (function.integer_facts) |fact| {
-        if (!sameRepresentationValueType(fact.target_ty, instruction.result_ty)) continue;
-        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
-        if (!std.mem.eql(u8, fact.literal, instruction.detail)) continue;
-        return true;
-    }
-    return false;
+fn integerFactTypedIdentitiesValid(function: Function, fact: IntegerFact) bool {
+    if (integerFactTargetType(&function, fact) == null) return false;
+    const span_index = if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else return false;
+    if (span_index >= function.span_identities.len) return false;
+    return sourcePointEquivalent(function.span_identities[span_index].source, fact.source);
 }
 
-fn functionHasMatchingIntegerInstruction(function: Function, fact: IntegerFact) bool {
+fn isIntegerLiteralConversionInstruction(instruction: Instruction) bool {
+    return instruction.kind == .integer_literal_conversion;
+}
+
+fn integerFactMatchesInstruction(fact: IntegerFact, instruction: Instruction) bool {
+    return fact.target_type_id.eql(instruction.typed_result_ty) and
+        fact.typed_span_id.eql(instruction.typed_span_id) and
+        std.mem.eql(u8, fact.literal, instruction.detail);
+}
+
+fn countMatchingIntegerInstructions(function: Function, fact: IntegerFact) usize {
+    var count: usize = 0;
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
-            if (instruction.kind != .integer_literal_conversion) continue;
-            if (!sameRepresentationValueType(instruction.result_ty, fact.target_ty)) continue;
-            if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
-            if (!std.mem.eql(u8, instruction.detail, fact.literal)) continue;
-            return true;
+            if (isIntegerLiteralConversionInstruction(instruction) and integerFactMatchesInstruction(fact, instruction)) count += 1;
         }
     }
-    return false;
+    return count;
+}
+
+fn countMatchingIntegerFacts(function: Function, target: IntegerFact) usize {
+    var count: usize = 0;
+    for (function.integer_facts) |fact| {
+        if (!fact.target_type_id.eql(target.target_type_id) or !fact.typed_span_id.eql(target.typed_span_id)) continue;
+        if (!std.mem.eql(u8, fact.literal, target.literal)) continue;
+        count += 1;
+    }
+    return count;
+}
+
+fn countMatchingIntegerFactsForInstruction(function: Function, instruction: Instruction) usize {
+    var count: usize = 0;
+    for (function.integer_facts) |fact| {
+        if (integerFactMatchesInstruction(fact, instruction)) count += 1;
+    }
+    return count;
+}
+
+fn countMatchingIntegerInstructionsForInstruction(function: Function, target: Instruction) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!isIntegerLiteralConversionInstruction(instruction)) continue;
+            if (!instruction.typed_result_ty.eql(target.typed_result_ty) or !instruction.typed_span_id.eql(target.typed_span_id)) continue;
+            if (!std.mem.eql(u8, instruction.detail, target.detail)) continue;
+            count += 1;
+        }
+    }
+    return count;
 }
 
 fn functionHasMatchingBoolInstruction(function: Function, fact: BoolFact) bool {
@@ -17682,10 +17733,12 @@ const FunctionBuilder = struct {
     fn addIntegerLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
         const literal = integerFactLiteralText(expr);
         try self.addInstr(.integer_literal_conversion, literal, target_ty, span);
+        const source = self.sourcePoint(span);
         try self.integer_facts.append(self.allocator, .{
             .literal = literal,
-            .target_ty = target_ty,
-            .source = .{ .line = span.line, .column = span.column },
+            .target_type_id = try self.internTypeId(target_ty),
+            .typed_span_id = try self.internSpanId(source),
+            .source = source,
         });
     }
 

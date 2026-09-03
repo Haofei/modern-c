@@ -595,12 +595,13 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "fn addIntegerLiteralFact(",
         "pub fn validateIntegerFactsForLowering(",
         "fn targetTypeFactTypedIdentitiesValid(",
-        "fn functionHasMatchingIntegerFact(",
+        "pub fn integerFactTargetType(",
+        "fn integerFactTypedIdentitiesValid(",
         "fn integerFactLiteralText(",
     ],
     "src/mir_tests.zig": [
         "MIR dump emits target-typed integer literal facts",
-        "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true",
+        "mir integer_fact fn=integer_literals literal=255 target_type=u8 target_type_id=",
         "MIR target-type admission rejects target fact identity table drift",
     ],
     "src/lower_c.zig": [

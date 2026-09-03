@@ -6276,8 +6276,13 @@ fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, ta
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         if (function.integer_facts.len == 0) return error.TestUnexpectedResult;
-        function.integer_facts[0].target_ty = target_ty;
-        return;
+        for (function.type_identities) |identity| {
+            const candidate = identity.ty orelse continue;
+            if (!mir.ValueType.eql(candidate, target_ty)) continue;
+            function.integer_facts[0].target_type_id = identity.id;
+            return;
+        }
+        return error.TestUnexpectedResult;
     }
     return error.TestUnexpectedResult;
 }
@@ -10110,7 +10115,7 @@ test "LLVM rejects prebuilt MIR with stale call target facts" {
 
 test "LLVM rejects prebuilt MIR with stale integer facts" {
     const source =
-        \\fn integer_fact_gate() -> u8 {
+        \\fn integer_fact_gate(other: u16) -> u8 {
         \\    let a: u8 = 7;
         \\    return a;
         \\}

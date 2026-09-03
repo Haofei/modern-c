@@ -70,6 +70,7 @@ def main() -> int:
         "pub const ValueIdentity = struct {",
         "typed_target_owner_id: ?SymbolId = null,",
         "typed_target_owner_id: SymbolId = .invalid,",
+        "pub const IntegerFact = struct {\n    literal: []const u8,\n    /// The canonical target type identity.",
         "pub const FloatFact = struct {",
         "target_type_id: TypeId = .invalid,",
         "target_owner_identities: []SymbolIdentity = &.{},",
