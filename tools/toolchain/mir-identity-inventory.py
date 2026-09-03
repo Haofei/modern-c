@@ -93,6 +93,13 @@ def main() -> int:
         if "source:" in model[start:end]:
             fail(f"src/mir_model.zig {fact_name} duplicates source identity beside SpanId")
 
+    start = model.index("pub const RangeFact = struct {")
+    end = model.index("\n};", start)
+    range_fact = model[start:end]
+    for field in ("line:", "column:"):
+        if field in range_fact:
+            fail(f"src/mir_model.zig RangeFact duplicates {field[:-1]} beside SpanId")
+
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",

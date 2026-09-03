@@ -7389,16 +7389,18 @@ const LlvmEmitter = struct {
         const function_name = self.current_function orelse return error.UnsupportedLlvmEmission;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         const expected_target = self.current_mir_range_target orelse "value";
+        const span_id = mir.spanIdAtSource(function.*, mir.sourcePointFromSpan(span)) orelse return error.UnsupportedLlvmEmission;
         for (function.range_facts) |fact| {
             if (!std.mem.eql(u8, fact.target, expected_target)) continue;
             if (!std.mem.eql(u8, fact.op, op)) continue;
-            if (fact.line != span.line or fact.column != span.column) continue;
+            if (!fact.typed_span_id.eql(span_id)) continue;
+            const source = mir.sourcePointForSpanId(function.*, fact.typed_span_id) orelse return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  ; mir range_fact consumed fn={s} target={s} op={s} assumption=no_overflow source={d}:{d}\n", .{
                 function_name,
                 fact.target,
                 fact.op,
-                fact.line,
-                fact.column,
+                source.line,
+                source.column,
             });
             return;
         }

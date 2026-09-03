@@ -2091,10 +2091,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.range_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirRangeFacts;
             try out.print(
                 allocator,
-                "mir range_fact fn={s} region_id={} target={s} op={s} left={s} right={s} result_type={s} assumption=no_overflow recorded=true line={} column={}\n",
-                .{ function.name, fact.region_id, fact.target, fact.op, fact.left, fact.right, fact.result_ty.name(), fact.line, fact.column },
+                "mir range_fact fn={s} region_id={} target={s} op={s} left={s} right={s} result_type={s} assumption=no_overflow recorded=true line={} column={} typed_span_id={}\n",
+                .{ function.name, fact.region_id, fact.target, fact.op, fact.left, fact.right, fact.result_ty.name(), source.line, source.column, fact.typed_span_id.index() },
             );
         }
         for (function.bounds_facts) |fact| {
@@ -2383,10 +2384,11 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
             }
         }
         for (function.range_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirRangeFacts;
             try out.print(
                 allocator,
-                "mir verify fn={s} pass=range finding=no_overflow_range target={s} op={s} left={s} right={s} region_id={} recorded=true line={} column={}\n",
-                .{ function.name, fact.target, fact.op, fact.left, fact.right, fact.region_id, fact.line, fact.column },
+                "mir verify fn={s} pass=range finding=no_overflow_range target={s} op={s} left={s} right={s} region_id={} recorded=true line={} column={} typed_span_id={}\n",
+                .{ function.name, fact.target, fact.op, fact.left, fact.right, fact.region_id, source.line, source.column, fact.typed_span_id.index() },
             );
         }
     }
@@ -3003,6 +3005,22 @@ pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}
                 if (!isFloatLiteralInstruction(instruction)) continue;
                 if (countMatchingFloatFactsForInstruction(function, instruction) != 1) return error.InvalidMirFloatFacts;
             }
+        }
+    }
+}
+
+/// No-overflow facts are keyed solely by the executable operation's SpanId.
+/// They remain separately useful to C/LLVM for target-label diagnostics, but
+/// an admission candidate must still name one exact unchecked operation.
+pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}!void {
+    for (module.functions) |function| {
+        for (function.range_facts) |fact| {
+            if (!rangeFactTypedIdentityValid(function, fact)) return error.InvalidMirRangeFacts;
+            if (countMatchingRangeExpressions(function, fact) != 1) return error.InvalidMirRangeFacts;
+        }
+        for (function.executable_body.expressions) |expression| {
+            if (!uncheckedRangeExpression(expression)) continue;
+            if (countMatchingRangeFactsForExpression(function, expression) == 0) return error.InvalidMirRangeFacts;
         }
     }
 }
@@ -3877,6 +3895,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
+    InvalidMirRangeFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
     InvalidMirExecutableBody,
@@ -3894,6 +3913,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
     try validateFloatFactsForLowering(module);
+    try validateRangeFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateBindThunkFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
@@ -4376,6 +4396,56 @@ fn countMatchingIntegerFactsForInstruction(function: Function, instruction: Inst
 fn floatFactTypedIdentitiesValid(function: Function, fact: FloatFact) bool {
     if (floatFactTargetType(&function, fact) == null) return false;
     return sourcePointForSpanId(function, fact.typed_span_id) != null;
+}
+
+fn rangeFactTypedIdentityValid(function: Function, fact: RangeFact) bool {
+    if (fact.target.len == 0 or fact.op.len == 0 or fact.left.len == 0 or fact.right.len == 0) return false;
+    if (sourcePointForSpanId(function, fact.typed_span_id) == null) return false;
+    for (function.contract_regions) |region| {
+        if (region.id == fact.region_id) return std.mem.eql(u8, region.kind, "no_overflow");
+    }
+    return false;
+}
+
+fn uncheckedRangeExpression(expression: ExecutableExpression) bool {
+    return switch (expression.operation) {
+        .binary => |binary| binary.arithmetic == .unchecked,
+        else => false,
+    };
+}
+
+fn rangeFactMatchesExpression(fact: RangeFact, expression: ExecutableExpression) bool {
+    const binary = switch (expression.operation) {
+        .binary => |value| value,
+        else => return false,
+    };
+    if (binary.arithmetic != .unchecked or binary.contract_region_id == null) return false;
+    const op: []const u8 = switch (binary.op) {
+        .add => "add",
+        .sub => "sub",
+        .mul => "mul",
+        else => return false,
+    };
+    return fact.region_id == binary.contract_region_id.? and
+        fact.typed_span_id.eql(expression.span_id) and
+        std.mem.eql(u8, fact.op, op) and
+        sameValueType(fact.result_ty, expression.result_ty);
+}
+
+fn countMatchingRangeExpressions(function: Function, fact: RangeFact) usize {
+    var count: usize = 0;
+    for (function.executable_body.expressions) |expression| {
+        if (rangeFactMatchesExpression(fact, expression)) count += 1;
+    }
+    return count;
+}
+
+fn countMatchingRangeFactsForExpression(function: Function, expression: ExecutableExpression) usize {
+    var count: usize = 0;
+    for (function.range_facts) |fact| {
+        if (rangeFactMatchesExpression(fact, expression)) count += 1;
+    }
+    return count;
 }
 
 fn isFloatLiteralInstruction(instruction: Instruction) bool {
@@ -17636,12 +17706,12 @@ const FunctionBuilder = struct {
         const region_id = self.active_contract_region_id orelse return;
         if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow")) return;
         const target = self.assignment_target orelse "value";
+        const typed_span_id = try self.internSpanId(self.sourcePoint(span));
         for (self.range_facts.items) |fact| {
             if (fact.region_id == region_id and
                 std.mem.eql(u8, fact.target, target) and
                 std.mem.eql(u8, fact.op, op) and
-                fact.line == span.line and
-                fact.column == span.column) return;
+                fact.typed_span_id.eql(typed_span_id)) return;
         }
         try self.range_facts.append(self.allocator, .{
             .region_id = region_id,
@@ -17650,9 +17720,7 @@ const FunctionBuilder = struct {
             .left = exprText(args[0]),
             .right = exprText(args[1]),
             .result_ty = result_ty,
-            .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
-            .line = span.line,
-            .column = span.column,
+            .typed_span_id = typed_span_id,
         });
     }
 
@@ -17668,12 +17736,12 @@ const FunctionBuilder = struct {
         if (call.args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
         if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow")) return;
+        const typed_span_id = try self.internSpanId(self.sourcePoint(expr.span));
         for (self.range_facts.items) |fact| {
             if (fact.region_id == region_id and
                 std.mem.eql(u8, fact.target, target) and
                 std.mem.eql(u8, fact.op, op) and
-                fact.line == expr.span.line and
-                fact.column == expr.span.column) return;
+                fact.typed_span_id.eql(typed_span_id)) return;
         }
         try self.range_facts.append(self.allocator, .{
             .region_id = region_id,
@@ -17682,9 +17750,7 @@ const FunctionBuilder = struct {
             .left = exprText(call.args[0]),
             .right = exprText(call.args[1]),
             .result_ty = unchecked_target.result_ty,
-            .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
-            .line = expr.span.line,
-            .column = expr.span.column,
+            .typed_span_id = typed_span_id,
         });
     }
 

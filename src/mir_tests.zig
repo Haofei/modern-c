@@ -9115,6 +9115,46 @@ test "MIR records no_overflow range facts for unchecked add contract" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b") != null);
 }
 
+test "MIR range fact admission rejects invalid and mismatched SpanId facts" {
+    const source =
+        \\fn accumulate(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = a;
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        sum = unchecked.add(sum, b);
+        \\    }
+        \\    return sum;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_range_fact_admission.mc", source);
+    defer parsed.deinit();
+
+    var admitted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer admitted.deinit();
+    try mir.validateLoweringAdmission(admitted);
+
+    var invalid_span = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid_span.deinit();
+    const invalid_function = functionByNameMut(&invalid_span, "accumulate") orelse return error.TestUnexpectedResult;
+    const invalid_facts = try std.testing.allocator.alloc(RangeFact, invalid_function.range_facts.len + 1);
+    @memcpy(invalid_facts[0..invalid_function.range_facts.len], invalid_function.range_facts);
+    invalid_facts[invalid_function.range_facts.len] = invalid_facts[0];
+    invalid_facts[invalid_function.range_facts.len].typed_span_id = SpanId.fromIndex(4096);
+    std.testing.allocator.free(invalid_function.range_facts);
+    invalid_function.range_facts = invalid_facts;
+    try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateLoweringAdmission(invalid_span));
+
+    var mismatched = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer mismatched.deinit();
+    const mismatched_function = functionByNameMut(&mismatched, "accumulate") orelse return error.TestUnexpectedResult;
+    const mismatched_facts = try std.testing.allocator.alloc(RangeFact, mismatched_function.range_facts.len + 1);
+    @memcpy(mismatched_facts[0..mismatched_function.range_facts.len], mismatched_function.range_facts);
+    mismatched_facts[mismatched_function.range_facts.len] = mismatched_facts[0];
+    mismatched_facts[mismatched_function.range_facts.len].op = "sub";
+    std.testing.allocator.free(mismatched_function.range_facts);
+    mismatched_function.range_facts = mismatched_facts;
+    try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateLoweringAdmission(mismatched));
+}
+
 test "MIR records unchecked call identity and operand/result type facts" {
     const source =
         \\fn unchecked_ops(a: u32, b: u32) -> u32 {

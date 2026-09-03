@@ -6357,15 +6357,13 @@ pub const CEmitter = struct {
     }
 
     fn hasMirNoOverflowRangeFact(self: *CEmitter, target: []const u8, op: []const u8, span: ast_bridge.Span) bool {
-        const function_name = self.current_function orelse return false;
-        for (self.mir_module.functions) |function| {
-            if (!std.mem.eql(u8, function.name, function_name)) continue;
-            for (function.range_facts) |fact| {
-                if (!std.mem.eql(u8, fact.target, target)) continue;
-                if (!std.mem.eql(u8, fact.op, op)) continue;
-                if (fact.line != span.line or fact.column != span.column) continue;
-                return true;
-            }
+        const function = self.currentMirFunction() orelse return false;
+        const span_id = mir.spanIdAtSource(function.*, mir.sourcePointFromSpan(span)) orelse return false;
+        for (function.range_facts) |fact| {
+            if (!std.mem.eql(u8, fact.target, target)) continue;
+            if (!std.mem.eql(u8, fact.op, op)) continue;
+            if (!fact.typed_span_id.eql(span_id)) continue;
+            return true;
         }
         return false;
     }

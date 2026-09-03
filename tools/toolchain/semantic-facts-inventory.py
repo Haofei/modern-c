@@ -557,6 +557,7 @@ BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "try self.bounds_facts.append",
         "fn addRangeFactForUncheckedCall",
         "fn addAggregateRangeFactForUncheckedExpr",
+        "pub fn validateRangeFactsForLowering",
     ],
     "src/mir_tests.zig": [
         "MIR dump emits non-elided bounds facts",

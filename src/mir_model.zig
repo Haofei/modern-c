@@ -3257,9 +3257,9 @@ pub const RangeFact = struct {
     left: []const u8,
     right: []const u8,
     result_ty: ValueType,
+    /// Sole source identity for the proved unchecked operation. Display
+    /// coordinates are recovered from the owning function's span table.
     typed_span_id: SpanId = .invalid,
-    line: usize,
-    column: usize,
 };
 
 pub const BoundsFactKind = enum { index, slice };
