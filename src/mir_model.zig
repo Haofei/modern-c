@@ -4266,6 +4266,23 @@ pub const GlobalInitializerPlan = union(enum) {
             .scalar, .zero, .enum_case, .nullable_null, .global_address, .function_symbol => {},
         }
     }
+
+    /// Clone an admitted plan for a later declaration without recovering its
+    /// source expression. Plans that own bytes or recursive aggregate storage
+    /// make independent copies, so a copied global never aliases another
+    /// global fact's lifecycle.
+    pub fn clone(self: GlobalInitializerPlan, allocator: std.mem.Allocator) !GlobalInitializerPlan {
+        return switch (self) {
+            .scalar => |value| .{ .scalar = value },
+            .zero => .zero,
+            .aggregate => |value| .{ .aggregate = try value.clone(allocator) },
+            .enum_case => |value| .{ .enum_case = value },
+            .nullable_null => .nullable_null,
+            .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
+            .global_address => |value| .{ .global_address = value },
+            .function_symbol => |value| .{ .function_symbol = value },
+        };
+    }
 };
 
 /// A direct enum literal after name resolution.  The case is an index into
@@ -4300,6 +4317,10 @@ pub const StringBytesInitializerPlan = struct {
 
     pub fn deinit(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) void {
         if (self.bytes.len != 0) allocator.free(self.bytes);
+    }
+
+    pub fn clone(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) !StringBytesInitializerPlan {
+        return .{ .bytes = if (self.bytes.len == 0) &.{} else try allocator.dupe(u8, self.bytes) };
     }
 };
 
@@ -4339,6 +4360,43 @@ pub const AggregateInitializerPlan = union(enum) {
             },
             .string_bytes => |plan| plan.deinit(allocator),
         }
+    }
+
+    pub fn clone(self: AggregateInitializerPlan, allocator: std.mem.Allocator) !AggregateInitializerPlan {
+        return switch (self) {
+            .scalar => |value| .{ .scalar = value },
+            .function_symbol => |value| .{ .function_symbol = value },
+            .zero => .zero,
+            .enum_case => |value| .{ .enum_case = value },
+            .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
+            .global_address => |value| .{ .global_address = value },
+            .array => |items| blk: {
+                const cloned = try allocator.alloc(AggregateInitializerPlan, items.len);
+                var initialized: usize = 0;
+                errdefer {
+                    for (cloned[0..initialized]) |item| item.deinit(allocator);
+                    allocator.free(cloned);
+                }
+                for (items, 0..) |item, index| {
+                    cloned[index] = try item.clone(allocator);
+                    initialized += 1;
+                }
+                break :blk .{ .array = cloned };
+            },
+            .struct_ => |value| blk: {
+                const cloned = try allocator.alloc(StructInitializerFieldPlan, value.fields.len);
+                var initialized: usize = 0;
+                errdefer {
+                    for (cloned[0..initialized]) |field| field.value.deinit(allocator);
+                    allocator.free(cloned);
+                }
+                for (value.fields, 0..) |field, index| {
+                    cloned[index] = .{ .field_index = field.field_index, .value = try field.value.clone(allocator) };
+                    initialized += 1;
+                }
+                break :blk .{ .struct_ = .{ .struct_symbol_id = value.struct_symbol_id, .fields = cloned } };
+            },
+        };
     }
 };
 

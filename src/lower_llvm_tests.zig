@@ -5600,6 +5600,58 @@ test "LLVM emits function-symbol global and array plans without AST initializer 
     try expectContains(output.items, "@default_ops = internal global [2 x ptr] [ptr @add, ptr @mul]");
 }
 
+test "LLVM emits copied verified aggregate and relocation global plans without AST artifacts" {
+    const source =
+        \\open enum Mode: u32 { ready = 7 }
+        \\struct Table { left: u32, right: u32 }
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
+        \\global seed: u32 = 1;
+        \\global values: [2]u32 = .{ 7, 8 };
+        \\global copied_values: [2]u32 = values;
+        \\global table: Table = .{ .left = 11, .right = 12 };
+        \\global copied_table: Table = ((table) as Table);
+        \\global mode: Mode = .ready;
+        \\global copied_mode: Mode = mode;
+        \\global nullable: ?*mut u8 = null;
+        \\global copied_nullable: ?*mut u8 = (nullable);
+        \\global names: cstr = "names";
+        \\global copied_names: cstr = names;
+        \\global ptr: *const u32 = &seed;
+        \\global copied_ptr: *const u32 = ptr;
+        \\global ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
+        \\global copied_ops: [2]fn(u32, u32) -> u32 = ops;
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_global_copy_initializer_plans.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_global_copy_initializer_plans.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "@copied_values = internal global [2 x i32] [i32 7, i32 8]");
+    try expectContains(output.items, "@copied_table = internal global { i32, i32 } { i32 11, i32 12 }");
+    try expectContains(output.items, "@copied_mode = internal global i32 7");
+    try expectContains(output.items, "@copied_nullable = internal global ptr null");
+    try expectContains(output.items, "@copied_names = internal global ptr getelementptr");
+    try expectContains(output.items, "@copied_ptr = internal global ptr @seed");
+    try expectContains(output.items, "@copied_ops = internal global [2 x ptr] [ptr @add, ptr @mul]");
+}
+
 test "LLVM emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";

@@ -2064,6 +2064,65 @@ test "CheckedProgram admits direct function-symbol global and array initializer 
     module_mir.global_initializer_facts[0] = saved;
 }
 
+test "CheckedProgram clones prior verified non-scalar global plans" {
+    const source =
+        \\open enum Mode: u32 { ready = 7 }
+        \\struct Table { left: u32, right: u32 }
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
+        \\global seed: u32 = 1;
+        \\global values: [2]u32 = .{ 7, 8 };
+        \\global copied_values: [2]u32 = values;
+        \\global table: Table = .{ .left = 11, .right = 12 };
+        \\global copied_table: Table = ((table) as Table);
+        \\global mode: Mode = .ready;
+        \\global copied_mode: Mode = mode;
+        \\global nullable: ?*mut u8 = null;
+        \\global copied_nullable: ?*mut u8 = (nullable);
+        \\global names: cstr = "names";
+        \\global copied_names: cstr = names;
+        \\global ptr: *const u32 = &seed;
+        \\global copied_ptr: *const u32 = ptr;
+        \\global ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
+        \\global copied_ops: [2]fn(u32, u32) -> u32 = ops;
+    ;
+    var parsed = try test_support.parseCheckedModule("global_copy_initializer_plans.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const copied_names = for (module_mir.checked_globals) |global| {
+        const identity = module_mir.symbol_identities[global.symbol_id.index()];
+        if (std.mem.eql(u8, identity.spelling, "copied_names")) break global;
+    } else return error.TestUnexpectedResult;
+    const copied_names_fact = module_mir.checkedGlobalInitializer(copied_names) orelse return error.TestUnexpectedResult;
+    const copied_bytes = switch (copied_names_fact.plan) {
+        .string_bytes => |plan| plan.bytes,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("names", copied_bytes);
+    // The cloned bytes are independently owned rather than a dangling alias
+    // into the prior global's plan.
+    const source_names = for (module_mir.checked_globals) |global| {
+        const identity = module_mir.symbol_identities[global.symbol_id.index()];
+        if (std.mem.eql(u8, identity.spelling, "names")) break global;
+    } else return error.TestUnexpectedResult;
+    const source_names_fact = module_mir.checkedGlobalInitializer(source_names) orelse return error.TestUnexpectedResult;
+    const source_bytes = switch (source_names_fact.plan) {
+        .string_bytes => |plan| plan.bytes,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(copied_bytes.ptr != source_bytes.ptr);
+
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+}
+
 test "CheckedProgram admits decoded string-pointer global initializer plans" {
     const source =
         \\global greeting: cstr = "hi\n";
