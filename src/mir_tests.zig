@@ -1872,6 +1872,11 @@ test "MIR admits named struct global initializer plans only with canonical facts
     module_mir.global_initializer_facts[1].plan = .{ .aggregate = .{ .struct_ = invalid_plan } };
     try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
     module_mir.global_initializer_facts[1] = saved;
+
+    const saved_field = plan.fields[0].value;
+    @constCast(plan.fields)[0].value = .zero;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    @constCast(plan.fields)[0].value = saved_field;
 }
 
 test "CheckedProgram admits direct enum global initializer plans" {

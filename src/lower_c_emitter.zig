@@ -165,6 +165,26 @@ const memberExpr = syntax_bridge.memberExpr;
 const isStringLiteralTarget = type_bridge.isStringLiteralTarget;
 const isMmioStructAbi = type_bridge.isMmioStructAbi;
 
+fn appendCStringByte(allocator: std.mem.Allocator, out: *std.ArrayList(u8), byte: u8) !void {
+    switch (byte) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\'' => try out.appendSlice(allocator, "\\'"),
+        '?' => try out.appendSlice(allocator, "\\?"),
+        0 => try out.appendSlice(allocator, "\\000"),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        32...33, 35...38, 40...62, 64...91, 93...126 => try out.append(allocator, byte),
+        else => {
+            try out.append(allocator, '\\');
+            try out.append(allocator, '0' + ((byte >> 6) & 0x07));
+            try out.append(allocator, '0' + ((byte >> 3) & 0x07));
+            try out.append(allocator, '0' + (byte & 0x07));
+        },
+    }
+}
+
 pub fn appendLayoutAsserts(
     allocator: std.mem.Allocator,
     artifacts: CodegenDeclArtifacts,
@@ -1100,14 +1120,7 @@ pub const CEmitter = struct {
     }
 
     fn emitCStringByteTo(self: *CEmitter, out: *std.ArrayList(u8), byte: u8) !void {
-        switch (byte) {
-            '\\' => try out.appendSlice(self.scratch.allocator(), "\\\\"),
-            '"' => try out.appendSlice(self.scratch.allocator(), "\\\""),
-            '\n' => try out.appendSlice(self.scratch.allocator(), "\\n"),
-            '\r' => try out.appendSlice(self.scratch.allocator(), "\\r"),
-            '\t' => try out.appendSlice(self.scratch.allocator(), "\\t"),
-            else => if (byte >= 0x20 and byte <= 0x7e) try out.append(self.scratch.allocator(), byte) else try out.print(self.scratch.allocator(), "\\x{x:0>2}", .{byte}),
-        }
+        try appendCStringByte(self.scratch.allocator(), out, byte);
     }
 
     fn checkedGlobalSymbol(self: *const CEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
@@ -5688,23 +5701,7 @@ pub const CEmitter = struct {
     }
 
     fn emitCStringByte(self: *CEmitter, byte: u8) !void {
-        switch (byte) {
-            '\\' => try self.out.appendSlice(self.allocator, "\\\\"),
-            '"' => try self.out.appendSlice(self.allocator, "\\\""),
-            '\'' => try self.out.appendSlice(self.allocator, "\\'"),
-            '?' => try self.out.appendSlice(self.allocator, "\\?"),
-            0 => try self.out.appendSlice(self.allocator, "\\000"),
-            '\n' => try self.out.appendSlice(self.allocator, "\\n"),
-            '\r' => try self.out.appendSlice(self.allocator, "\\r"),
-            '\t' => try self.out.appendSlice(self.allocator, "\\t"),
-            32...33, 35...38, 40...62, 64...91, 93...126 => try self.out.append(self.allocator, byte),
-            else => {
-                try self.out.append(self.allocator, '\\');
-                try self.out.append(self.allocator, '0' + ((byte >> 6) & 0x07));
-                try self.out.append(self.allocator, '0' + ((byte >> 3) & 0x07));
-                try self.out.append(self.allocator, '0' + (byte & 0x07));
-            },
-        }
+        try appendCStringByte(self.allocator, self.out, byte);
     }
 
     fn emitF32Expr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {

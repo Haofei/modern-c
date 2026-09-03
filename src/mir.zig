@@ -2285,7 +2285,6 @@ fn buildStructGlobalInitializerLeaf(
         .grouped => |inner| return buildStructGlobalInitializerLeaf(allocator, inner.*, source_type, type_id, signature_types, type_aliases, symbol_ids, enum_facts, prior_globals, const_fns, const_globals, reflect_env),
         else => expression,
     };
-    if (ungrouped.kind == .uninit_literal) return .zero;
     if (try directEnumGlobalInitializerPlan(ungrouped, type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals)) |plan| {
         return .{ .enum_case = plan };
     }

@@ -4724,7 +4724,10 @@ fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module:
             owner_global.initializer_body_id.index(),
         ),
         .struct_ => |struct_plan| structInitializerPlanMatchesType(struct_plan, module, owner_global, type_id),
-        .zero => signatureTypeCanUseZeroInitializer(module, type_id),
+        // Aggregate leaves never use implicit zeroing: a missing top-level
+        // initializer has its own GlobalInitializerPlan.zero, while an
+        // explicit `uninit` nested in a static aggregate is rejected by sema.
+        .zero => false,
         .enum_case => |enum_plan| enumInitializerPlanMatchesType(enum_plan, module, type_id),
         .string_bytes => |string_plan| stringBytesInitializerPlanMatchesType(string_plan, module, type_id),
         .global_address => |address_plan| globalAddressInitializerPlanMatchesGlobalForType(address_plan, module, owner_global, type_id),
@@ -4743,14 +4746,6 @@ fn structInitializerPlanMatchesType(plan: anytype, module: Module, owner_global:
         if (!aggregateInitializerPlanMatchesModule(field.value, module, owner_global, expected.type_id)) return false;
     }
     return true;
-}
-
-fn signatureTypeCanUseZeroInitializer(module: Module, type_id: SignatureTypeId) bool {
-    const shape = transparentSignatureShape(module, type_id) orelse return false;
-    return switch (shape) {
-        .name, .pointer, .raw_many_pointer, .array => true,
-        else => false,
-    };
 }
 
 fn enumInitializerPlanMatchesType(plan: EnumInitializerPlan, module: Module, type_id: SignatureTypeId) bool {
