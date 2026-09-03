@@ -20,7 +20,7 @@ test "LLVM canonical MIR renders scalar closure capture through a thunk" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_closure.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_scalar_closure.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @scalar_bind");
     try expectContains(body, "; canonical executable MIR");
@@ -46,7 +46,7 @@ test "LLVM canonical MIR renders variadic cursor operations" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_varargs.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_varargs.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define i64 @sum_args(i32 signext %mc_arg_0, ...)");
     try expectContains(body, "; canonical executable MIR");
@@ -74,7 +74,7 @@ test "LLVM canonical MIR maps propagated Result errors" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_try_map_error.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_try_map_error.mc", source, &output);
 
     const converted = try llvmFunctionBody(output.items, "define internal { i1, i32, i64 } @converted");
     try expectContains(converted, "; canonical executable MIR");
@@ -100,7 +100,7 @@ test "LLVM canonical MIR renders packed field read-modify-write" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_packed_field_store.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_packed_field_store.mc", source, &output);
 
     const local = try llvmFunctionBody(output.items, "define internal i8 @update_local");
     try expectContains(local, "; canonical executable MIR");
@@ -120,7 +120,7 @@ test "LLVM canonical executable MIR preserves function render attributes" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_function_attrs.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_function_attrs.mc", source, &output);
 
     const hot = try llvmFunctionBody(output.items, "define signext i32 @hot_path(i32 signext %mc_arg_0) section \".text.hot\"");
     try expectContains(hot, "; canonical executable MIR");
@@ -136,7 +136,7 @@ test "LLVM canonical executable MIR renders projected structs with fixed-array f
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_array_field_layout.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nested_array_field_layout.mc", source, &output);
 
     const init = try llvmFunctionBody(output.items, "define internal void @ring_init");
     try expectContains(init, "; canonical executable MIR");
@@ -161,7 +161,7 @@ test "LLVM lexical unsafe and contract call bodies use canonical executable MIR"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_lexical_contract_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_lexical_contract_calls.mc", source, &output);
 
     const unsafe_body = try llvmFunctionBody(output.items, "define internal void @unsafe_call");
     try expectContains(unsafe_body, "; canonical executable MIR");
@@ -189,7 +189,7 @@ test "LLVM fixed-array signatures and direct calls use canonical executable MIR"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_fixed_array_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_fixed_array_calls.mc", source, &output);
 
     const returned = try llvmFunctionBody(output.items, "define internal [2 x i32] @return_array");
     try expectContains(returned, "; canonical executable MIR");
@@ -216,7 +216,7 @@ test "LLVM fixed-array element addresses use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_fixed_array_element_address.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_fixed_array_element_address.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @pass_array_element_address");
     try expectContains(body, "; canonical executable MIR");
@@ -238,7 +238,7 @@ test "LLVM callable parameters forward through canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_callable_parameter.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_callable_parameter.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @forward(ptr %mc_arg_0, i32 %mc_arg_1)");
     try expectContains(body, "; canonical executable MIR");
@@ -261,7 +261,7 @@ test "LLVM callable field stores use verified signatures" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_callable_field_store.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_callable_field_store.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @replace");
     try expectContains(body, "; canonical executable MIR");
@@ -291,7 +291,7 @@ test "LLVM valid slice representation check uses canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_valid_slice.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_valid_slice.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal { ptr, i64 } @identity_slice");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "extractvalue { ptr, i64 } %mc_arg_0, 0");
@@ -321,7 +321,7 @@ test "LLVM value optional construction needs no function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_value_optional.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_value_optional.mc", source, &output);
 
     const scalar = try llvmFunctionBody(output.items, "define internal { i1, i32 } @scalar");
     try expectContains(scalar, "; canonical executable MIR");
@@ -344,7 +344,7 @@ test "LLVM atomic loads use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_atomic_load.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_atomic_load.mc", source, &output);
 
     const relaxed = try llvmFunctionBody(output.items, "@load_global_relaxed");
     try expectContains(relaxed, "; canonical executable MIR");
@@ -374,7 +374,7 @@ test "LLVM atomic updates use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_atomic_update.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_atomic_update.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "@update");
     try expectContains(body, "; canonical executable MIR");
@@ -397,7 +397,7 @@ test "LLVM MMIO scalar accesses use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_mmio_scalar.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_mmio_scalar.mc", source, &output);
 
     const read = try llvmFunctionBody(output.items, "@read_relaxed");
     try expectContains(read, "; canonical executable MIR");
@@ -425,7 +425,7 @@ test "LLVM shared structural body plans cover nested, aggregate, workflow, and h
         defer std.testing.allocator.free(source);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendLlvmTestNoFunctionBodyFallback(case.name, source, &output);
+        try appendLlvmCheckedMirTest(case.name, source, &output);
         const body = try llvmFunctionBody(output.items, case.function_header);
         try expectContains(body, case.needle);
         if (std.mem.eql(u8, case.name, "llvm_plan_aggregate_assignment.mc")) {
@@ -480,7 +480,7 @@ test "LLVM emits assertion expression trees from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_assert_expression_tree.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_assert_expression_tree.mc", source, &output);
 
     const complex = try llvmFunctionBody(output.items, "define internal void @require_complex");
     try expectContains(complex, "; canonical executable MIR");
@@ -537,7 +537,7 @@ test "LLVM struct literal fields evaluate in lexical source order" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_literal_order.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_struct_literal_order.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @ordered_literal");
     const second = std.mem.indexOf(u8, body, "call i32 @mark(i32 2)") orelse return error.TestUnexpectedResult;
@@ -555,7 +555,7 @@ test "LLVM struct literal call fields lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_literal_call_fields.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_struct_literal_call_fields.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @ordered_literal");
     const first = std.mem.indexOf(u8, body, "call i32 @mark(i32 ") orelse return error.TestUnexpectedResult;
@@ -575,7 +575,7 @@ test "LLVM array literal call elements lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_literal_call_elements.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_array_literal_call_elements.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal [2 x i32] @ordered_literal");
     const first = std.mem.indexOf(u8, body, "call i32 @mark(i32 ") orelse return error.TestUnexpectedResult;
@@ -602,7 +602,7 @@ test "LLVM local uninit aggregate assignment returns lower from MIR without body
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_uninit_aggregate_assignment.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_uninit_aggregate_assignment.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_struct");
     try expectContains(struct_body, "; canonical executable MIR");
@@ -647,7 +647,7 @@ test "LLVM local aggregate place updates return from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_aggregate_place_update.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_aggregate_place_update.mc", source, &output);
 
     const field_body = try llvmFunctionBody(output.items, "define internal i32 @assign_field");
     try expectContains(field_body, "; canonical executable MIR");
@@ -691,7 +691,7 @@ test "LLVM direct-call aggregate projections return from MIR without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_direct_call_aggregate_projections.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_direct_call_aggregate_projections.mc", source, &output);
 
     const direct_array = try llvmFunctionBody(output.items, "define internal i32 @direct_array_call_index");
     try expectContains(direct_array, "; canonical executable MIR");
@@ -749,7 +749,7 @@ test "LLVM returns first fixed-array element from MIR CFG without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_canonical_foreach_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_canonical_foreach_return.mc", source, &output);
 
     const direct = try llvmFunctionBody(output.items, "define internal i32 @first_value");
     try expectContains(direct, "; canonical executable MIR");
@@ -796,7 +796,7 @@ test "LLVM emits break and continue while CFG from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_while_control.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_while_control.mc", source, &output);
 
     const stop = try llvmFunctionBody(output.items, "define internal void @stop");
     try expectContains(stop, "; canonical executable MIR");
@@ -817,7 +817,7 @@ test "LLVM function symbol returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_identity_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_identity_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal ptr @entry_of");
     try expectContains(body, "ret ptr @tick");
@@ -834,7 +834,7 @@ test "LLVM emits slice length returns from shared MIR plan without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_slice_length_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_slice_length_return.mc", source, &output);
 
     const const_body = try llvmFunctionBody(output.items, "define internal i64 @const_slice_len");
     try expectContains(const_body, "extractvalue { ptr, i64 } %mc_arg_0, 0");
@@ -861,7 +861,7 @@ test "LLVM emits slice foreach local updates from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_canonical_foreach_update.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_canonical_foreach_update.mc", source, &output);
 
     const sum = try llvmFunctionBody(output.items, "define internal i32 @sum");
     try expectContains(sum, "; canonical executable MIR");
@@ -890,7 +890,7 @@ test "LLVM literal unary components lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_literal_unary_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_literal_unary_components.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i1, i1 } @struct_ops");
     try expectContains(struct_body, "; canonical executable MIR");
@@ -921,7 +921,7 @@ test "LLVM literal compare components lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_literal_compare_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_literal_compare_components.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i1, i1 } @struct_ops");
     try expectContains(struct_body, "; canonical executable MIR");
@@ -952,7 +952,7 @@ test "LLVM literal checked arithmetic components lower from MIR without body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_literal_checked_arithmetic_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_literal_checked_arithmetic_components.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @struct_ops");
     try expectContains(struct_body, "; canonical executable MIR");
@@ -983,7 +983,7 @@ test "LLVM literal checked unary components lower from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_literal_checked_unary_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_literal_checked_unary_components.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @struct_ops");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, struct_body, "llvm.ssub.with.overflow.i32"));
@@ -1020,7 +1020,7 @@ test "LLVM local literal checked components return from MIR without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_literal_checked_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_literal_checked_components.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_struct");
     try expectContains(struct_body, "; canonical executable MIR");
@@ -1055,7 +1055,7 @@ test "LLVM assigned literal checked components return from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_assigned_literal_checked_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_assigned_literal_checked_components.mc", source, &output);
 
     const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_struct");
     try expectContains(struct_body, "; canonical executable MIR");
@@ -1099,7 +1099,7 @@ test "LLVM local and assigned literal call components return from MIR without bo
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_literal_call_components.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_assigned_literal_call_components.mc", source, &output);
 
     const local_struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_struct");
     try expectContains(local_struct_body, "call i32 @mark(i32 1)");
@@ -1186,7 +1186,7 @@ test "LLVM local and assigned aggregate direct calls return from MIR without bod
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_aggregate_direct_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_assigned_aggregate_direct_calls.mc", source, &output);
 
     const local_struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_struct");
     if (std.mem.indexOf(u8, local_struct_body, "; canonical executable MIR") != null) {
@@ -1272,7 +1272,7 @@ test "LLVM grouped scalar expressions return from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_grouped_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i16 @grouped_param");
     try expectContains(param_body, "ret i16 %");
@@ -1308,7 +1308,7 @@ test "LLVM void calls before grouped scalar returns lower from MIR without body 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_grouped_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i16 @side_then_grouped_param");
     const param_hit = std.mem.indexOf(u8, param_body, "call void @hit(i16 ") orelse return error.TestUnexpectedResult;
@@ -1358,7 +1358,7 @@ test "LLVM conditional grouped scalar returns lower from MIR without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_grouped_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i16 @choose_grouped_param");
     try expectCanonicalConditional(param_body);
@@ -1402,7 +1402,7 @@ test "LLVM conditional global and call returns lower from MIR without body fallb
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_global_call_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_global_call_returns.mc", source, &output);
 
     const global_body = try llvmFunctionBody(output.items, "define internal i32 @choose_global");
     try expectCanonicalConditional(global_body);
@@ -1481,7 +1481,7 @@ test "LLVM loop grouped scalar returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_grouped_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_loop_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i16 @loop_grouped_param");
     try expectContains(param_body, "br i1 %");
@@ -1513,7 +1513,7 @@ test "LLVM loop derived scalar returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_derived_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_loop_derived_scalar_returns.mc", source, &output);
 
     const compare_body = try llvmFunctionBody(output.items, "define internal i1 @loop_compare");
     try expectContains(compare_body, "br i1 %");
@@ -1547,7 +1547,7 @@ test "LLVM loop checked scalar returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_checked_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_loop_checked_scalar_returns.mc", source, &output);
 
     const add_body = try llvmFunctionBody(output.items, "define internal i16 @loop_checked_add");
     try expectContains(add_body, "br i1 %");
@@ -1585,7 +1585,7 @@ test "LLVM loop call and global returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_call_global_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_loop_call_global_returns.mc", source, &output);
 
     const call_body = try llvmFunctionBody(output.items, "define internal i16 @loop_direct_call");
     try expectContains(call_body, "br i1 %");
@@ -1744,7 +1744,7 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_subject.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_subject.mc", source, &output);
 
     const compare_body = try llvmFunctionBody(output.items, "define internal i32 @choose_cmp");
     try expectContains(compare_body, "icmp slt i32 ");
@@ -2048,7 +2048,7 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_conditional_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_conditional_calls.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @choose_void");
     try expectCanonicalConditional(param_body);
@@ -2261,7 +2261,7 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_call_sequence.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_call_sequence.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @sequence");
     try expectContains(body, "call void @hit(i32 1)");
@@ -2343,7 +2343,7 @@ test "LLVM emits pure local-only void functions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_local_only.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_local_only.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal void @local_only");
     try expectContains(local_body, "; canonical executable MIR");
@@ -2799,7 +2799,7 @@ test "LLVM preserves MIR void calls before simple returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_return");
     const hit1 = std.mem.indexOf(u8, body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
@@ -2827,7 +2827,7 @@ test "LLVM emits direct struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_param_field_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @first");
     try expectContains(body, "extractvalue { i32, i32 } %mc_arg_0, 0");
@@ -2871,7 +2871,7 @@ test "LLVM emits nested parameter and global field places from MIR without body 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_place_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nested_place_return.mc", source, &output);
 
     const update = try llvmFunctionBody(output.items, "define internal i32 @update");
     try expectContains(update, "; canonical executable MIR");
@@ -2922,7 +2922,7 @@ test "LLVM emits fixed-array constant-index places from MIR without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_place_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_array_place_return.mc", source, &output);
 
     const take = try llvmFunctionBody(output.items, "define internal i32 @take_row");
     try expectContains(take, "; canonical executable MIR");
@@ -2963,7 +2963,7 @@ test "LLVM checked dynamic fixed-array stores use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_dynamic_array_store.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_dynamic_array_store.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @store_at");
     try expectContains(body, "; canonical executable MIR");
@@ -2986,7 +2986,7 @@ test "LLVM emits conditional struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_param_field_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_param_field_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @choose");
     try expectCanonicalConditional(body);
@@ -3010,7 +3010,7 @@ test "LLVM emits conditional boolean struct field conditions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_param_bool_field.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_param_bool_field.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i1 @choose");
     try expectCanonicalConditional(body);
@@ -3035,7 +3035,7 @@ test "LLVM emits struct parameter field call arguments from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_call_args.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_param_field_call_args.mc", source, &output);
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @call_field");
     try expectContains(call_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
@@ -3063,7 +3063,7 @@ test "LLVM emits struct parameter field checked operands from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_checked_operands.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_param_field_checked_operands.mc", source, &output);
 
     const left_body = try llvmFunctionBody(output.items, "define internal i32 @add_left");
     try expectContains(left_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
@@ -3095,7 +3095,7 @@ test "LLVM emits struct parameter field comparisons from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_compare_operands.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_param_field_compare_operands.mc", source, &output);
 
     const left_body = try llvmFunctionBody(output.items, "define internal i1 @cmp_left");
     try expectContains(left_body, "extractvalue { i32, i32 } %mc_arg_0, 0");
@@ -3202,7 +3202,7 @@ test "LLVM emits simple struct literal returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_literal_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_struct_literal_returns.mc", source, &output);
 
     const make_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @make_pair");
     try expectContains(make_body, "; canonical executable MIR");
@@ -3351,7 +3351,7 @@ test "LLVM canonical executable MIR emits nested by-value struct member reads" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_struct_member.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_struct_member.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @read");
     try expectContains(body, "; canonical executable MIR");
@@ -3367,7 +3367,7 @@ test "LLVM canonical executable MIR emits nested parameter array indexes" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_parameter_array_index.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nested_parameter_array_index.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @read");
     try expectContains(body, "; canonical executable MIR");
@@ -3389,7 +3389,7 @@ test "LLVM canonical executable MIR emits guarded pointer member reads" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_pointer_member.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_pointer_member.mc", source, &output);
 
     for ([_][]const u8{
         "define internal i32 @winner",
@@ -3415,7 +3415,7 @@ test "LLVM canonical executable local pointer deref owns its representation edge
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_local_pointer_deref.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_local_pointer_deref.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @write");
     try expectContains(body, "; canonical executable MIR");
@@ -3432,7 +3432,7 @@ test "LLVM canonical executable MIR keeps ordinary len fields distinct from slic
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_len_field.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_struct_len_field.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @read_len");
     try expectContains(body, "; canonical executable MIR");
@@ -3461,7 +3461,7 @@ test "LLVM emits simple array literal returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_literal_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_array_literal_returns.mc", source, &output);
 
     const direct_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @array_direct");
     try expectContains(direct_body, "; canonical executable MIR");
@@ -3522,7 +3522,7 @@ test "LLVM emits array control-flow returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_control_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_array_control_returns.mc", source, &output);
 
     const choose_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @choose_array");
     try expectCanonicalConditional(choose_body);
@@ -3606,7 +3606,7 @@ test "LLVM emits scalar comparison returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_comparison_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_scalar_comparison_returns.mc", source, &output);
 
     const lt_body = try llvmFunctionBody(output.items, "define internal i1 @lt_u32");
     try expectContains(lt_body, "icmp ult i32 ");
@@ -3678,7 +3678,7 @@ test "LLVM emits typed unary call-target returns from MIR without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_unary_call_target_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_typed_unary_call_target_returns.mc", source, &output);
 
     const float_bits = try llvmFunctionBody(output.items, "define internal i32 @float_bits");
     try expectContains(float_bits, "bitcast float %mc_arg_0 to i32");
@@ -3737,7 +3737,7 @@ test "LLVM emits typed binary domain calls from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_binary_domain_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_typed_binary_domain_calls.mc", source, &output);
 
     try expectContains(try llvmFunctionBody(output.items, "define internal i32 @wrap_add(i32 %mc_arg_0, i32 %mc_arg_1)"), "add i32 %mc_arg_0, %mc_arg_1");
     const before = try llvmFunctionBody(output.items, "define internal i1 @seq_before(i32 %mc_arg_0, i32 %mc_arg_1)");
@@ -3797,7 +3797,7 @@ test "LLVM emits checked arithmetic returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_arithmetic_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_checked_arithmetic_returns.mc", source, &output);
 
     const add_body = try llvmFunctionBody(output.items, "define internal i32 @add_u32");
     try expectContains(add_body, "@llvm.uadd.with.overflow.i32");
@@ -3853,7 +3853,7 @@ test "LLVM emits checked division returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_division_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_checked_division_returns.mc", source, &output);
 
     const signed_body = try llvmFunctionBody(output.items, "define internal i32 @div_i32");
     try expectContains(signed_body, "call void @mc_trap_DivideByZero()");
@@ -3882,7 +3882,7 @@ test "LLVM emits checked mod and shift returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_mod_shift_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_checked_mod_shift_returns.mc", source, &output);
 
     const mod_body = try llvmFunctionBody(output.items, "define internal i32 @mod_u32");
     try expectContains(mod_body, "call void @mc_trap_DivideByZero()");
@@ -3926,7 +3926,7 @@ test "LLVM emits checked unary returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_unary_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_checked_unary_returns.mc", source, &output);
 
     const neg_body = try llvmFunctionBody(output.items, "define internal i32 @neg_i32");
     try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");
@@ -3968,7 +3968,7 @@ test "LLVM target-types negated integer literals in canonical MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_target_typed_negated_literals.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_target_typed_negated_literals.mc", source, &output);
 
     const suffix_body = try llvmFunctionBody(output.items, "define internal i8 @inferred_suffix");
     try expectContains(suffix_body, "; canonical executable MIR");
@@ -4012,7 +4012,7 @@ test "LLVM emits logical-not returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_logical_not_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_logical_not_returns.mc", source, &output);
 
     const not_body = try llvmFunctionBody(output.items, "define internal i1 @not_param");
     try expectContains(not_body, "xor i1 %");
@@ -4055,7 +4055,7 @@ test "LLVM emits basic scalar returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_basic_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_basic_scalar_returns.mc", source, &output);
 
     const int_body = try llvmFunctionBody(output.items, "define internal i32 @int_literal");
     try expectContains(int_body, "ret i32 42");
@@ -4096,7 +4096,7 @@ test "LLVM emits local and assigned scalar returns from MIR without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_scalar_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_assigned_scalar_returns.mc", source, &output);
 
     const local_int_body = try llvmFunctionBody(output.items, "define internal i32 @local_int");
     try expectContains(local_int_body, "store i32 42");
@@ -4133,7 +4133,7 @@ test "LLVM preserves nullable pointer promotion locals from MIR without body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_pointer_promotions.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nullable_pointer_promotions.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal ptr @local_promotion");
     try expectContains(local_body, "; canonical executable MIR");
@@ -4187,7 +4187,7 @@ test "LLVM emits nullable pointer try from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_pointer_try.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nullable_pointer_try.mc", source, &output);
 
     const unwrap_param_body = try llvmFunctionBody(output.items, "define internal ptr @unwrap_param");
     try expectContains(unwrap_param_body, "icmp eq ptr %");
@@ -4237,7 +4237,7 @@ test "LLVM emits value optional and Result try from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_aggregate_try.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_aggregate_try.mc", source, &output);
 
     const optional_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_value");
     try expectContains(optional_body, "; canonical executable MIR");
@@ -4303,7 +4303,7 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_variant_control.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_variant_control.mc", source, &output);
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_call_or_zero");
     try expectContains(call_body, "call ptr @maybe_ptr()");
@@ -4354,7 +4354,7 @@ test "LLVM emits nullable none returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_none_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nullable_none_returns.mc", source, &output);
 
     const direct_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @direct_none");
     try expectContains(direct_body, "ret { i1, i32 } zeroinitializer");
@@ -4384,7 +4384,7 @@ test "LLVM emits conditional nullable none returns from MIR without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_nullable_none_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_nullable_none_returns.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @choose_none");
     try expectContains(body, "; canonical executable MIR");
@@ -4404,7 +4404,7 @@ test "LLVM preserves MIR void calls before nullable none returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_nullable_none_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_nullable_none_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @side_then_none");
     const hit = std.mem.indexOf(u8, body, "call void @hit(i32 7)") orelse return error.TestUnexpectedResult;
@@ -4426,7 +4426,7 @@ test "LLVM emits loop nullable none returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_nullable_none_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_loop_nullable_none_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @loop_then_none");
     const branch = std.mem.indexOf(u8, body, "br i1 %mc_arg_0") orelse return error.TestUnexpectedResult;
@@ -4451,7 +4451,7 @@ test "LLVM emits enum literal returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_literal_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i64 @color");
     try expectContains(body, "ret i64 1");
@@ -4468,7 +4468,7 @@ test "LLVM emits enum variant raw values from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_variant_raw.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_variant_raw.mc", source, &output);
 
     const closed = try llvmFunctionBody(output.items, "define internal i32 @closed_variant_raw");
     try expectContains(closed, "; canonical executable MIR");
@@ -4492,7 +4492,7 @@ test "LLVM emits nominal scalar resource flow from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nominal_scalar_resource.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nominal_scalar_resource.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @critical_read");
     try expectContains(body, "; canonical executable MIR");
@@ -4510,7 +4510,7 @@ test "LLVM emits nested fixed-array aggregates from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nested_array_aggregate.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_nested_array_aggregate.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { [2 x [2 x i32]] } @make_bag");
     try expectContains(body, "; canonical executable MIR");
@@ -4526,7 +4526,7 @@ test "LLVM compares value optionals with null from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_optional_null_compare.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_optional_null_compare.mc", source, &output);
 
     const present_body = try llvmFunctionBody(output.items, "define internal i1 @is_present");
     try expectContains(present_body, "; canonical executable MIR");
@@ -4562,7 +4562,7 @@ test "LLVM emits local and loop enum returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_loop_enum_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_loop_enum_returns.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i64 @local_color");
     try expectContains(local_body, "; canonical executable MIR");
@@ -4607,7 +4607,7 @@ test "LLVM preserves MIR void calls before local enum returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_local_enum_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_local_enum_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i64 @side_then_local_color");
     const local_hit = std.mem.indexOf(u8, local_body, "call void @hit(i32 2)") orelse return error.TestUnexpectedResult;
@@ -4639,7 +4639,7 @@ test "LLVM emits conditional enum literal returns from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_enum_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_enum_literal_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i64 @choose");
     try expectCanonicalConditional(body);
@@ -4693,7 +4693,7 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_direct_call_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_direct_call_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_call");
     const hit = std.mem.indexOf(u8, body, "call void @hit(i32 ") orelse return error.TestUnexpectedResult;
@@ -4769,7 +4769,7 @@ test "LLVM emits enum literal direct-call arguments from MIR without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_direct_call_argument.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_direct_call_argument.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i8 @pass");
     try expectContains(body, "call i8 @sink(i8 2)");
@@ -4788,7 +4788,7 @@ test "LLVM emits enum literal compare operands from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_compare_operands.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_literal_compare_operands.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i1 @is_read");
     try expectContains(body, "call void @mc_trap_InvalidRepresentation()");
@@ -4807,7 +4807,7 @@ test "LLVM emits enum literal explicit casts from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_explicit_cast.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_literal_explicit_cast.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i8 @cast_mode");
     try expectContains(body, "ret i8 2");
@@ -4824,7 +4824,7 @@ test "LLVM emits enum, pointer-address, and signedness casts from executable MIR
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_representation_casts.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_representation_casts.mc", source, &output);
 
     const enum_body = try llvmFunctionBody(output.items, "define internal i8 @enum_raw");
     try expectContains(enum_body, "; canonical executable MIR");
@@ -4844,7 +4844,7 @@ test "LLVM emits transparent integer domain casts from executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_domain_casts.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_domain_casts.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @wrapping_add_u64");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "add i64");
@@ -4862,7 +4862,7 @@ test "LLVM scalar switch returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_switch.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_scalar_switch.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @classify");
     try expectContains(body, "; canonical executable MIR");
@@ -4888,7 +4888,7 @@ test "LLVM emits local global returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_global_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_global_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_global_return");
     try expectContains(local_body, "; canonical executable MIR");
@@ -4911,7 +4911,7 @@ test "LLVM inferred local global return lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_global_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_global_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @inferred_global_return");
     try expectContains(body, "; canonical executable MIR");
@@ -4935,7 +4935,7 @@ test "LLVM preserves MIR void calls before global returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_global_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_global_return.mc", source, &output);
 
     const direct_body = try llvmFunctionBody(output.items, "define internal i32 @side_then_global_return");
     const direct_hit = std.mem.indexOf(u8, direct_body, "call void @hit(i32 ") orelse return error.TestUnexpectedResult;
@@ -4980,7 +4980,7 @@ test "LLVM preserves MIR void calls before conditional returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_conditional_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_calls_before_conditional_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_cond");
     const hit = std.mem.indexOf(u8, body, "call void @hit(i32 ") orelse return error.TestUnexpectedResult;
@@ -5008,7 +5008,7 @@ test "LLVM discarded direct-call results lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_discarded_direct_call_result.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_discarded_direct_call_result.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @discard_value");
     const call_text = "call i32 @combine(i32 %mc_arg_0, i32 %mc_arg_1)";
@@ -5034,7 +5034,7 @@ test "LLVM zero-argument function-pointer calls lower from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_zero_arg_function_pointer_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_zero_arg_function_pointer_calls.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @call_entry_param");
     try expectContains(param_body, "; canonical executable MIR");
@@ -5083,7 +5083,7 @@ test "LLVM typed indirect call returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_indirect_call_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_typed_indirect_call_returns.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal i32 @apply");
     try expectContains(param_body, "; canonical executable MIR");
@@ -5166,12 +5166,6 @@ fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []a
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
-fn appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, module_mir);
-    defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
-}
-
 test "LLVM rejects a verified body with missing declaration facts" {
     const source =
         \\fn value() -> u32 { return 7; }
@@ -5200,12 +5194,12 @@ test "LLVM rejects a verified body with missing declaration facts" {
     );
 }
 
-fn appendLlvmTestNoFunctionBodyFallback(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
+fn appendLlvmCheckedMirTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, output, source_name, .{}, false, .riscv64, false, null);
+    try appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, source_name, .{}, false, .riscv64, false, null);
 }
 
 fn appendLlvmTargetTest(source_name: []const u8, source: []const u8, target: @import("backend.zig").TargetArch, output: *std.ArrayList(u8)) !void {
@@ -5363,7 +5357,7 @@ test "LLVM generated locals and blocks avoid source parameter names" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_name_collisions.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_name_collisions.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @collisions");
     try expectContains(body, "; canonical executable MIR");
@@ -5382,7 +5376,7 @@ test "LLVM nominal declarations shadow same-named library scalars" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_shadowed_library_scalar.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_shadowed_library_scalar.mc", source, &output);
     try expectContains(output.items, "define internal { i32 } @identity({ i32 } %mc_arg_0)");
     try expectNotContains(output.items, "define internal i8 @identity(i8 %value)");
 }
@@ -5397,7 +5391,7 @@ test "LLVM target-typed char literals require MIR facts" {
     {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendLlvmTestNoFunctionBodyFallback("llvm_mir_char_literal_facts.mc", source, &output);
+        try appendLlvmCheckedMirTest("llvm_mir_char_literal_facts.mc", source, &output);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i16 65") != null);
     }
     {
@@ -5445,7 +5439,7 @@ test "LLVM local and assigned char literal returns lower without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_char_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_assigned_char_literal_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i16 @local_char");
     try expectContains(local_body, "i16 65");
@@ -5522,7 +5516,7 @@ test "LLVM float literal returns lower without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_float_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_float_literal_return.mc", source, &output);
 
     const small_body = try llvmFunctionBody(output.items, "define internal float @small");
     try expectContains(small_body, "ret float bitcast (i32 1069547520 to float)");
@@ -5802,7 +5796,7 @@ test "LLVM rejects prebuilt MIR with missing target type facts" {
     defer module_mir.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_result_constructor_target_type_facts.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_result_constructor_target_type_facts.mc", source, &complete_output);
 
     try clearTargetTypeFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
@@ -5987,7 +5981,7 @@ test "LLVM consumes f32 and f64 literal target type facts" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_float_target_type_facts.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_float_target_type_facts.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@small = internal global float") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@wide = internal global double") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "fmul float") != null);
@@ -6006,7 +6000,7 @@ test "LLVM consumes enum-literal target type facts across contexts" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_target_type_facts.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_target_type_facts.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@global_mode = internal global i8 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i8 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@sink(i8 2)") != null);
@@ -6077,7 +6071,7 @@ test "LLVM conversion literal source type comes from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conversion_literal_source_type.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conversion_literal_source_type.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "trunc i32 300 to i8") != null);
 }
 
@@ -6087,7 +6081,7 @@ test "LLVM negative integer literal uses the MIR unary result type" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_negative_integer_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_negative_integer_literal_return.mc", source, &output);
     try expectContains(output.items, "ret i32 -1");
 }
 
@@ -6101,7 +6095,7 @@ test "LLVM explicit casts require MIR source and target type facts" {
     defer parsed.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_explicit_cast_type_facts.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_explicit_cast_type_facts.mc", source, &complete_output);
     try expectContains(complete_output.items, "zext i32 ");
     try expectContains(complete_output.items, " to i64");
 
@@ -6141,7 +6135,7 @@ test "LLVM local and assigned explicit casts lower from MIR without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_explicit_cast_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_assigned_explicit_cast_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i64 @local_cast");
     try expectContains(local_body, "zext i32 ");
@@ -6176,7 +6170,7 @@ test "LLVM local and assigned conversion calls lower from MIR without body fallb
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_conversion_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_assigned_conversion_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i8 @local_conversion");
     try expectContains(local_body, "; canonical executable MIR");
@@ -6497,7 +6491,7 @@ test "LLVM rejects prebuilt MIR with missing integer facts" {
     defer module_mir.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_integer_fact_gate.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_integer_fact_gate.mc", source, &complete_output);
 
     try clearIntegerFactsForFunction(&module_mir, "integer_fact_gate");
 
@@ -6666,7 +6660,7 @@ test "LLVM executable MIR forget evaluates its operand once without a release ca
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_discard_value.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_discard_value.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "@forget_result");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call i32 @next_value()"));
     try std.testing.expect(std.mem.indexOf(u8, body, "forget_unchecked(") == null);
@@ -7432,7 +7426,7 @@ test "LLVM wrapping arithmetic requires MIR identity and operand/result type fac
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_wrapping_call_facts.mc", .{}, false, .riscv64, false, null);
+    try appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_wrapping_call_facts.mc", .{}, false, .riscv64, false, null);
     try expectContains(complete_output.items, " = add i32 %mc_arg_0, 1");
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -7460,7 +7454,7 @@ test "LLVM emits wrapping arithmetic call from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_wrapping_call.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_wrapping_call.mc", source, &output);
     try expectContains(output.items, " = add i32 %mc_arg_0, 1");
 }
 
@@ -7478,7 +7472,7 @@ test "LLVM emits local wrapping arithmetic from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_wrapping_call.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_wrapping_call.mc", source, &output);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = add i32 %mc_arg_0, 1"));
 }
 
@@ -7497,7 +7491,7 @@ test "LLVM unchecked arithmetic requires MIR identity and operand/result type fa
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_unchecked_call_facts.mc", .{}, false, .riscv64, false, null);
+    try appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_unchecked_call_facts.mc", .{}, false, .riscv64, false, null);
     try expectContains(complete_output.items, " = add i32 %mc_arg_0, 1");
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -7527,7 +7521,7 @@ test "LLVM emits unchecked arithmetic call from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_unchecked_call.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_unchecked_call.mc", source, &output);
     try expectContains(output.items, "mir range_fact consumed region=1 op=add assumption=no_overflow");
     try expectContains(output.items, " = add i32 %mc_arg_0, 1");
 }
@@ -7550,7 +7544,7 @@ test "LLVM emits local unchecked arithmetic from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_unchecked_call.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_unchecked_call.mc", source, &output);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "mir range_fact consumed region=1 op=add assumption=no_overflow"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = add i32 %mc_arg_0, 1"));
 }
@@ -7570,7 +7564,7 @@ test "LLVM emits unchecked sub and mul returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_unchecked_sub_mul_calls.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_unchecked_sub_mul_calls.mc", source, &output);
     try expectContains(output.items, "mir range_fact consumed region=1 op=sub assumption=no_overflow");
     try expectContains(output.items, " = sub i32 %mc_arg_0, %mc_arg_1");
     try expectContains(output.items, "mir range_fact consumed region=1 op=mul assumption=no_overflow");
@@ -7955,7 +7949,7 @@ test "LLVM grouped expressions consume their own MIR result facts" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_grouped_expression_result_fact_gate.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_grouped_expression_result_fact_gate.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "grouped_result") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -7988,7 +7982,7 @@ test "LLVM grouped direct calls consume the outer MIR result fact" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_grouped_call_result_fact_gate.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_grouped_call_result_fact_gate.mc", source, &complete_output);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -8015,7 +8009,7 @@ test "LLVM direct-call inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_direct_call_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_direct_call_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @caller");
     try expectContains(body, "call i64 @make_count()");
     try expectContains(body, "ret i64 %");
@@ -8030,7 +8024,7 @@ test "LLVM literal inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_literal_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @literal_local");
     try expectContains(body, "store i32 7");
     try expectContains(body, "ret i32 %");
@@ -8045,7 +8039,7 @@ test "LLVM bool-literal inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_bool_literal_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_bool_literal_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i1 @bool_local");
     try expectContains(body, "store i1 true");
     try expectContains(body, "ret i1 %");
@@ -8060,7 +8054,7 @@ test "LLVM checked-unary inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_checked_unary_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_checked_unary_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "llvm.ssub.with.overflow.i64") != null);
 }
 
@@ -8073,7 +8067,7 @@ test "LLVM checked-binary inferred local lowers without function body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_checked_binary_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_checked_binary_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "llvm.uadd.with.overflow.i64") != null);
 }
 
@@ -8086,7 +8080,7 @@ test "LLVM logical-not inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_logical_not_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_logical_not_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i1 @not_local");
     try expectContains(body, "xor i1 %");
     try expectContains(body, ", true");
@@ -8100,7 +8094,7 @@ test "LLVM logical return tree lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_logical_return_tree.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_logical_return_tree.mc", source, &output);
     const and_body = try llvmFunctionBody(output.items, "define internal i1 @bool_and");
     const or_body = try llvmFunctionBody(output.items, "define internal i1 @bool_or");
     const nested = try llvmFunctionBody(output.items, "define internal i1 @nested_bool");
@@ -8121,7 +8115,7 @@ test "LLVM compare inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_compare_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_compare_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i1 @compare_local");
     try expectContains(body, "icmp ult i64 ");
 }
@@ -8135,7 +8129,7 @@ test "LLVM copied inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_copy_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_copy_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @copy_local");
     try expectContains(body, "store i64 %mc_arg_0");
     try expectContains(body, "ret i64 %");
@@ -8151,7 +8145,7 @@ test "LLVM param-field copied inferred local lowers without function body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_param_field_copy_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_param_field_copy_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i64") != null);
 }
 
@@ -8164,7 +8158,7 @@ test "LLVM null inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_null_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_null_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @null_local");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "zeroinitializer");
@@ -8586,7 +8580,7 @@ test "LLVM explicit traps require exact MIR reason identities" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_explicit_trap_target_facts.mc", .{}, false, .riscv64, false, null);
+    try appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_explicit_trap_target_facts.mc", .{}, false, .riscv64, false, null);
     for ([_][]const u8{ "Bounds", "NullUnwrap", "IntegerOverflow", "DivideByZero", "InvalidShift", "InvalidRepresentation", "Assert", "Unreachable" }) |reason| {
         const helper = try std.fmt.allocPrint(std.testing.allocator, "call void @mc_trap_{s}()", .{reason});
         defer std.testing.allocator.free(helper);
@@ -8616,7 +8610,7 @@ test "LLVM emits explicit traps from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_explicit_traps.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_explicit_traps.mc", source, &output);
     try expectContains(output.items, "call void @mc_trap_Bounds()");
     try expectContains(output.items, "call void @mc_trap_Assert()");
     try expectContains(output.items, "call void @mc_trap_Unreachable()");
@@ -8633,7 +8627,7 @@ test "LLVM runtime asserts require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_assert_condition_type_facts.mc", .{}, false, .riscv64, false, null);
+    try appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_assert_condition_type_facts.mc", .{}, false, .riscv64, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "br i1 %") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "call void @mc_trap_Assert()") != null);
 
@@ -8658,7 +8652,7 @@ test "LLVM emits runtime assert from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_runtime_assert.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_runtime_assert.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @require_flag");
     try expectContains(body, "; canonical executable MIR");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "br i1 %mc_arg_0"));
@@ -8677,7 +8671,7 @@ test "LLVM while loops require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_loop_condition_type_facts.mc", .{}, false, .riscv64, false, null);
+    try appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_loop_condition_type_facts.mc", .{}, false, .riscv64, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "br i1 %") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -8701,7 +8695,7 @@ test "LLVM emits void-returning while loop from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_returning_while_loop.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_void_returning_while_loop.mc", source, &output);
     try expectContains(output.items, "br i1 %mc_arg_0");
     try expectContains(output.items, "ret void");
 }
@@ -8771,7 +8765,7 @@ test "LLVM emits enum switch returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_switch_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_switch_returns.mc", source, &output);
     try expectContains(output.items, "; canonical executable MIR");
     try expectContains(output.items, "switch ");
     try expectContains(output.items, "label %mc_block_");
@@ -8793,7 +8787,7 @@ test "LLVM emits multi-arm enum switch returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_switch_multi_arm_returns.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_enum_switch_multi_arm_returns.mc", source, &output);
     try expectContains(output.items, "; canonical executable MIR");
     try expectContains(output.items, "switch ");
     try expectContains(output.items, "label %mc_block_");
@@ -9262,7 +9256,7 @@ test "LLVM inferred local direct calls require MIR types" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_call_types.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_inferred_local_call_types.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@make_count") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -9783,7 +9777,7 @@ test "LLVM ordinary direct calls require MIR result and argument types" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_direct_call_type_facts.mc", source, &complete_output);
+    try appendLlvmCheckedMirTest("llvm_mir_direct_call_type_facts.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "call i64 @widen(i64") != null);
 
     var missing_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -9819,7 +9813,7 @@ test "LLVM ordinary direct calls require MIR result and argument types" {
     try std.testing.expect(changed);
     var stale_signature_output: std.ArrayList(u8) = .empty;
     defer stale_signature_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirExecutableBody, appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &stale_signature, &stale_signature_output, "llvm_direct_call_signature_mutation.mc", .{}, false, .riscv64, false, null));
+    try std.testing.expectError(error.InvalidMirExecutableBody, appendLlvmCheckedMirProfileDeclsTest(std.testing.allocator, parsed.decls(), &stale_signature, &stale_signature_output, "llvm_direct_call_signature_mutation.mc", .{}, false, .riscv64, false, null));
 }
 
 test "LLVM indirect calls require MIR callee signature facts" {
@@ -9865,7 +9859,7 @@ test "LLVM direct global closure calls use canonical fat-value loads" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_direct_global_closure.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_direct_global_closure.mc", source, &output);
 
     for ([_][]const u8{ "@invoke", "@invoke_at" }) |name| {
         const body = try llvmFunctionBody(output.items, name);
@@ -9922,7 +9916,7 @@ test "LLVM emits opaque asm from canonical executable MIR" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_canonical_opaque_asm.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_canonical_opaque_asm.mc", source, &output);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "; canonical executable MIR"));
     try expectContains(output.items, "call void asm sideeffect \"pause\", \"~{memory}\"()");
     try expectContains(output.items, "call void asm sideeffect \"cli\\0A\\09hlt\", \"~{memory}\"()");
@@ -9948,7 +9942,7 @@ test "LLVM emits precise asm from canonical executable MIR" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_canonical_precise_asm.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_canonical_precise_asm.mc", source, &output);
     try expectContains(output.items, "; canonical executable MIR");
     try expectContains(output.items, "call i64 asm sideeffect \"bsf $1, $0\", \"=r,r,~{cc}\"");
 }
@@ -10160,7 +10154,7 @@ test "LLVM backend emits a backend_name alias for the override symbol" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_backend_name_alias.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_backend_name_alias.mc", source, &output);
 
     // The function keeps its source name; the override is exposed via a module-level alias.
     try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i64 @helper(i64 %") != null);
@@ -10176,7 +10170,7 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_smoke_checked_add.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_smoke_checked_add.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i32 @add_one(i32 %") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@llvm.uadd.with.overflow.i32") != null);
@@ -10340,7 +10334,7 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_aggregate_return_pointer_fact.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_aggregate_return_pointer_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_direct_holder");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "mc_aggregate_pointer_ready_");
@@ -10459,7 +10453,7 @@ test "LLVM lowers pointer parameter field stores after specialized plan retireme
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_param_field_store.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_pointer_param_field_store.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @store_cell");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "getelementptr inbounds { i32 }, ptr %mc_arg_0, i32 0, i32 0");
@@ -10710,7 +10704,7 @@ test "LLVM admits plain unary returns from MIR (bitwise not, wrapping negate)" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_plain_unary.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_plain_unary.mc", source, &output);
     const bnot = try llvmFunctionBody(output.items, "define internal i32 @bnot");
     try expectContains(bnot, "; canonical executable MIR");
     try expectContains(bnot, "xor i32 %");
@@ -10798,7 +10792,7 @@ test "LLVM emits global address direct-call args from MIR without body fallback"
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_address_call_arg.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_global_address_call_arg.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_global_address_arg");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "call i32 @consume_ptr(ptr @shared_counter)");
@@ -10815,7 +10809,7 @@ test "LLVM emits global address returns from MIR without body fallback" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_address_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_global_address_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal ptr @returned_global_pointer");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "ret ptr @shared_counter");
@@ -10833,7 +10827,7 @@ test "LLVM emits local global address returns from MIR without body fallback" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_global_address_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_local_global_address_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal ptr @local_global_pointer");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "store ptr @shared_counter");
@@ -10852,7 +10846,7 @@ test "LLVM emits conditional global address returns from MIR without body fallba
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_global_address_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_conditional_global_address_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal ptr @branched_global_pointer");
     try expectContains(body, "ret ptr @shared_counter");
 }
@@ -12296,7 +12290,7 @@ test "LLVM checked pointer-root field store does not use function body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_root_store.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_pointer_root_store.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal void @store_value");
     try expectContains(body, "; canonical executable MIR");
     const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
@@ -12313,7 +12307,7 @@ test "LLVM checked pointer-to-integer cast does not use function body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_to_integer.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_pointer_to_integer.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @pointer_to_usize");
     try expectContains(body, "; canonical executable MIR");
     const guard = std.mem.indexOf(u8, body, "icmp eq ptr %mc_arg_0, null") orelse return error.TestUnexpectedResult;
@@ -12330,7 +12324,7 @@ test "LLVM address representation cast does not use function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_address_representation_cast.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_address_representation_cast.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i64 @address_value");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "ret i64 %mc_arg_0");
@@ -12345,7 +12339,7 @@ test "LLVM checked scalar local return does not use function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_local_checked_return.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_scalar_local_checked_return.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @local_copy");
     try expectContains(body, "@llvm.uadd.with.overflow.i32(i32 %mc_arg_0, i32 1)");
     try expectContains(body, "call void @mc_trap_IntegerOverflow()");
@@ -12367,7 +12361,7 @@ test "LLVM canonical executable MIR preserves typed high-word local and flag-set
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_canonical_scalar_expressions.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_canonical_scalar_expressions.mc", source, &output);
 
     const high = try llvmFunctionBody(output.items, "define internal i32 @high_word");
     try expectContains(high, "lshr i64 %mc_arg_0, 32");
@@ -12408,7 +12402,7 @@ test "LLVM scalar control plans preserve checked local CFGs without body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_canonical_scalar_control.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_canonical_scalar_control.mc", source, &output);
 
     const adjust = try llvmFunctionBody(output.items, "define internal i32 @adjust");
     try expectContains(adjust, "alloca i32");
@@ -12442,7 +12436,7 @@ test "LLVM canonical slice bucket lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_access_plan_slice_bucket.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_access_plan_slice_bucket.mc", source, &output);
 
     const read_body = try llvmFunctionBody(output.items, "define internal i8 @read_slice");
     try expectContains(read_body, "mc_representation_ready_");
@@ -12480,7 +12474,7 @@ test "LLVM canonical access lowering materializes locals and addresses without b
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_structural_access_plan.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_structural_access_plan.mc", source, &output);
 
     const global_field = try llvmFunctionBody(output.items, "define internal i32 @global_field_address");
     try expectContains(global_field, "getelementptr inbounds { i32 }, ptr @shared_holder");
@@ -12518,7 +12512,7 @@ test "LLVM canonical access lowering handles store-return and range terminals wi
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_structural_access_terminals.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_structural_access_terminals.mc", source, &output);
 
     const global_field = try llvmFunctionBody(output.items, "define internal i32 @address_global_field");
     try expectContains(global_field, "store atomic i32 %mc_arg_0");
@@ -12559,7 +12553,7 @@ test "LLVM canonical executable MIR lowers broad local bodies without AST fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_body_broad.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_body_broad.mc", source, &output);
 
     const pipeline = try llvmFunctionBody(output.items, "define internal i32 @local_pipeline");
     try expectContains(pipeline, "; canonical executable MIR");
@@ -12583,7 +12577,7 @@ test "LLVM canonical executable MIR models explicit uninit as storage without a 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_uninit_local.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_uninit_local.mc", source, &output);
 
     for ([_][]const u8{
         "define internal i32 @explicit_uninit",
@@ -12617,7 +12611,7 @@ test "LLVM canonical executable MIR owns scalar integer conversions" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_trap_conversion.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_trap_conversion.mc", source, &output);
 
     const narrow = try llvmFunctionBody(output.items, "define internal i8 @narrow_unsigned");
     try expectContains(narrow, "; canonical executable MIR");
@@ -12666,7 +12660,7 @@ test "LLVM canonical executable MIR owns serial compare Result" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_serial_compare.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_serial_compare.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i1, i8, i8 } @compare");
     try expectContains(body, "; canonical executable MIR");
@@ -12686,7 +12680,7 @@ test "LLVM canonical executable MIR owns bounded counter Result" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_counter_elapsed_bounded.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_counter_elapsed_bounded.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i1, i64, i8 } @bounded");
     try expectContains(body, "; canonical executable MIR");
@@ -12704,7 +12698,7 @@ test "LLVM canonical executable MIR precedes legacy specialized plans" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_body_preferred.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_body_preferred.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @identity");
     try expectContains(body, "; canonical executable MIR");
@@ -12719,7 +12713,7 @@ test "LLVM canonical executable MIR lowers pure scalar bitcasts without body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_scalar_bitcast.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_scalar_bitcast.mc", source, &output);
 
     const bits_to_float = try llvmFunctionBody(output.items, "define internal float @bits_to_float");
     try expectContains(bits_to_float, "; canonical executable MIR");
@@ -12746,7 +12740,7 @@ test "LLVM canonical executable MIR emits raw scalar load and store without AST 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_raw_scalar.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_raw_scalar.mc", source, &output);
 
     const load = try llvmFunctionBody(output.items, "define internal i32 @load");
     try expectContains(load, "; canonical executable MIR");
@@ -12787,7 +12781,7 @@ test "LLVM canonical executable MIR owns reflection constants without AST fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_reflection_constants.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_reflection_constants.mc", source, &output);
 
     const packet_size = try llvmFunctionBody(output.items, "define internal i64 @packet_size");
     try expectContains(packet_size, "; canonical executable MIR");
@@ -12818,7 +12812,7 @@ test "LLVM canonical executable MIR guards parameter deref load and address iden
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_executable_parameter_deref.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_executable_parameter_deref.mc", source, &output);
 
     const read = try llvmFunctionBody(output.items, "define internal i32 @read");
     try expectContains(read, "; canonical executable MIR");
@@ -12847,7 +12841,7 @@ test "LLVM local-address access tag lowers checked update without function body 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_local_address_tag.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_local_address_tag.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @local_address");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "@llvm.uadd.with.overflow.i32");
@@ -12897,7 +12891,7 @@ test "LLVM ordinary bool global accesses use byte-sized atomics" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_ordinary_bool_global.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_ordinary_bool_global.mc", source, &output);
 
     const load_body = try llvmFunctionBody(output.items, "define internal i1 @read_flag");
     try expectContains(load_body, "load atomic i8, ptr @flag unordered, align 1");
@@ -12922,7 +12916,7 @@ test "LLVM immutable scalar global value reads avoid atomic traffic" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_immutable_scalar_global.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_immutable_scalar_global.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @read_limit");
     try expectContains(body, "load i32, ptr @LIMIT");
@@ -12945,7 +12939,7 @@ test "LLVM scalar global reads lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_global_reads.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_scalar_global_reads.mc", source, &output);
 
     const load_body = try llvmFunctionBody(output.items, "define internal i1 @read_flag");
     try expectContains(load_body, "load atomic i8, ptr @flag unordered, align 1");
@@ -12975,7 +12969,7 @@ test "LLVM simple functions and race-safe globals lower from MIR without body fa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_simple_functions_race_safe_globals.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_simple_functions_race_safe_globals.mc", source, &output);
 
     const add_body = try llvmFunctionBody(output.items, "define internal i32 @add");
     try expectContains(add_body, "@llvm.uadd.with.overflow.i32");
@@ -13041,7 +13035,7 @@ test "LLVM omits checked comptime blocks from canonical runtime bodies" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_comptime_block.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_comptime_block.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @accept_pure_comptime_block");
     try expectContains(body, "; canonical executable MIR");
     try expectContains(body, "ret i32 1");
@@ -13056,7 +13050,7 @@ test "LLVM renders canonical string bytes without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_string_bytes.mc", source, &output);
+    try appendLlvmCheckedMirTest("llvm_mir_string_bytes.mc", source, &output);
     const escaped_body = try llvmFunctionBody(output.items, "define internal ptr @escaped");
     try expectContains(escaped_body, "; canonical executable MIR");
     try expectContains(escaped_body, "getelementptr [12 x i8], ptr @.str.");

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/codegen-ingress-migration.json",
-  "purpose": "Ratcheted migration budget for AST-shaped payloads still carried beside VerifiedProgram into C/LLVM codegen.",
+  "purpose": "Ratcheted migration budget for the remaining AST-shaped declaration payloads beside VerifiedProgram into C/LLVM codegen. Completed function-body fallback telemetry is intentionally retired.",
   "policy": {
     "direction": "counts may decrease without replacement; increases require a deliberate migration-plan update",
     "stable_goal": "LowerRequest carries VerifiedProgram plus syntax-free typed tables; backend render-only attributes are removed or isolated behind verified emit plans",
@@ -11,12 +11,6 @@
     "src/declaration_artifacts.zig": {
       "params: []ast.Param": 0,
       "return_type: ?ast.TypeExpr": 0,
-      "body: ?ast.Block": 0,
-      "body_fallback: FunctionBodyFallback": 0,
-      "pub const FunctionBodyFallbackArtifact = struct": 0,
-      "function_body_fallbacks: []const FunctionBodyFallbackArtifact": 0,
-      "syntax: ?ast.Block": 0,
-      "syntax: ast.Block": 0,
       "backend_attrs: []const ast.Attr": 0,
       "ty: ?ast.TypeExpr": 0,
       "init: ?ast.Expr": 0,
@@ -139,16 +133,6 @@
     "src/codegen_signature.zig": {
       "pub const FunctionParamFact = struct": 1,
       "pub fn fromParam(param: ast_bridge.Param, value_ty: mir.ValueType) FunctionParamFact": 1
-    }
-  },
-  "mir_body_fast_path_ratchet": {
-    "src/lower_c_tests.zig": {
-      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 167,
-      "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 0
-    },
-    "src/lower_llvm_tests.zig": {
-      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 167,
-      "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 0
     }
   },
   "backend_artifact_consumers": {

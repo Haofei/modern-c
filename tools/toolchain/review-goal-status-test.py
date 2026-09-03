@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the active review goal status manifest.
+"""Validate the completed review-goal closure record.
 
 This gate is deliberately scoped to the current language/compiler review goals.
 It prevents accidental drift where an incomplete goal loses its ratcheted debt
@@ -83,7 +83,7 @@ def main() -> int:
         require(data.get("schema_version") == 1, "schema_version must be 1")
         require(data.get("source_of_truth") == "docs/review-goal-status.json", "source_of_truth mismatch")
         goals = data.get("goals")
-        require(isinstance(goals, list) and len(goals) == 3, "goals must contain exactly the three active review goals")
+        require(isinstance(goals, list) and len(goals) == 3, "goals must contain exactly the three closed review goals")
         expected_ids = ["function-body-fallback", "minimal-checked-program", "real-module-graph"]
         actual_ids = [goal.get("id") for goal in goals]
         require(actual_ids == expected_ids, f"goal order mismatch: expected {expected_ids}, got {actual_ids}")

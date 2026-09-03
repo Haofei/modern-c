@@ -41,12 +41,6 @@ fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Dec
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
-fn appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, module_mir);
-    defer artifacts.deinit(allocator);
-    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
-}
-
 test "lower-c rejects a verified body with missing declaration facts" {
     const source =
         \\fn value() -> u32 { return 7; }
@@ -73,7 +67,6 @@ test "lower-c rejects a verified body with missing declaration facts" {
         ),
     );
 }
-
 fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: []const u8, generated_c_path: ?[]const u8) !void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
@@ -100,7 +93,7 @@ test "lower-c canonical MIR renders scalar closure capture through a thunk" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_closure.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_scalar_closure.mc", source, &output);
 
     try expectContains(output.items, "static MC_UNUSED uint32_t mc_envthunk_add_scalar(void *mc_env, uint32_t mc_a0)");
     try expectContains(output.items, "add_scalar((uint32_t)(uintptr_t)mc_env, mc_a0)");
@@ -126,7 +119,7 @@ test "lower-c canonical MIR renders variadic cursor operations" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_varargs.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_varargs.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "int64_t sum_args(int32_t count, ...)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -154,7 +147,7 @@ test "lower-c canonical MIR maps propagated Result errors" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_try_map_error.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_try_map_error.mc", source, &output);
 
     const converted = try cFunctionBody(output.items, "static mc_result_u32_mc_type_name_7_HighErr converted");
     try expectContains(converted, "/* canonical executable MIR */");
@@ -179,7 +172,7 @@ test "lower-c canonical MIR renders packed field read-modify-write" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_packed_field_store.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_packed_field_store.mc", source, &output);
 
     const local = try cFunctionBody(output.items, "update_local(");
     try expectContains(local, "/* canonical executable MIR */");
@@ -199,7 +192,7 @@ test "lower-c canonical executable MIR preserves function render attributes" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_function_attrs.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_function_attrs.mc", source, &output);
 
     const hot = try cFunctionBody(output.items, "__attribute__((section(\".text.hot\"))) uint32_t hot_path");
     try expectContains(hot, "/* canonical executable MIR */");
@@ -221,7 +214,7 @@ test "lower-c lexical unsafe and contract call bodies use canonical executable M
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_lexical_contract_calls.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_lexical_contract_calls.mc", source, &output);
 
     const unsafe_body = try cFunctionBody(output.items, "static void unsafe_call");
     try expectContains(unsafe_body, "/* canonical executable MIR */");
@@ -249,7 +242,7 @@ test "lower-c fixed-array signatures and direct calls use canonical executable M
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fixed_array_calls.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_fixed_array_calls.mc", source, &output);
 
     const returned = try cFunctionBody(output.items, "static mc_array_u32_2 return_array");
     try expectContains(returned, "/* canonical executable MIR */");
@@ -276,7 +269,7 @@ test "lower-c fixed-array element addresses use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fixed_array_element_address.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_fixed_array_element_address.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static void pass_array_element_address(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -299,7 +292,7 @@ test "lower-c callable parameters forward through canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_callable_parameter.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_callable_parameter.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "MC_UNUSED static void forward");
     try expectContains(body, "/* canonical executable MIR */");
@@ -315,7 +308,7 @@ test "lower-c callable field stores use verified signatures" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_callable_field_store.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_callable_field_store.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static void replace(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -334,7 +327,7 @@ test "lower-c valid slice representation check uses canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_valid_slice.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_valid_slice.mc", source, &output);
     const body = try cFunctionBody(output.items, "mc_slice_const_u32 identity_slice");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "__auto_type mc_exec_tmp_0 = items;");
@@ -361,7 +354,7 @@ test "lower-c value optional construction needs no function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_value_optional.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_value_optional.mc", source, &output);
 
     const scalar = try cFunctionBody(output.items, "mc_opt_u32 scalar");
     try expectContains(scalar, "/* canonical executable MIR */");
@@ -384,7 +377,7 @@ test "lower-c atomic loads use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_atomic_load.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_atomic_load.mc", source, &output);
 
     const relaxed = try cFunctionBody(output.items, "load_global_relaxed(");
     try expectContains(relaxed, "/* canonical executable MIR */");
@@ -412,7 +405,7 @@ test "lower-c atomic updates use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_atomic_update.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_atomic_update.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "update(");
     try expectContains(body, "/* canonical executable MIR */");
@@ -436,7 +429,7 @@ test "lower-c MMIO scalar accesses use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_mmio_scalar.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_mmio_scalar.mc", source, &output);
 
     const read = try cFunctionBody(output.items, "read_relaxed(");
     try expectContains(read, "/* canonical executable MIR */");
@@ -468,7 +461,7 @@ test "lower-c function symbol returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_identity_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_identity_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_fnptr_4_void entry_of(void)");
     try expectContains(body, "return tick;");
@@ -489,7 +482,7 @@ test "lower-c executable body renders broad CFG calls without AST fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_cfg.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_cfg.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t executable_cfg(bool flag, uint32_t seed)");
     try expectContains(body, "mc_bb_");
@@ -531,7 +524,7 @@ test "lower-c executable MIR owns reflection constants without AST fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_reflection_constants.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_reflection_constants.mc", source, &output);
 
     const packet_size = try cFunctionBody(output.items, "static uintptr_t packet_size(void)");
     try expectContains(packet_size, "= 4;");
@@ -565,7 +558,7 @@ test "lower-c emits slice length returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_slice_length_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_slice_length_return.mc", source, &output);
 
     const const_body = try cFunctionBody(output.items, "static uintptr_t const_slice_len(mc_slice_const_u8 values)");
     try expectContains(const_body, ".ptr == NULL && ");
@@ -591,7 +584,7 @@ test "lower-c emits assertion expression trees from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_assert_expression_tree.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_assert_expression_tree.mc", source, &output);
 
     const complex = try cFunctionBody(output.items, "static void require_complex(uint32_t a, uint32_t b, bool flag)");
     try expectContains(complex, "/* canonical executable MIR */");
@@ -655,7 +648,7 @@ test "lower-c emits strict nullable control plans from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_variant_control.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_variant_control.mc", source, &output);
 
     const call = try cFunctionBody(output.items, "static uint32_t unwrap_call_or_zero(void)");
     try expectContains(call, "/* canonical executable MIR */");
@@ -707,7 +700,7 @@ test "lower-c emits scalar CFG plans from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_cfg.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_scalar_cfg.mc", source, &output);
 
     const adjust = try cFunctionBody(output.items, "static uint32_t adjust(uint32_t n, bool flag)");
     if (isCanonicalExecutableCBody(adjust)) {
@@ -757,7 +750,7 @@ test "lower-c emits nullable binding and checked fallback return from MIR withou
     defer module_mir.deinit();
     try std.testing.expect(module_mir.functions[0].executable_body.isComplete());
     try mir_executable_body.verify(&module_mir.functions[0]);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_binding_fallback.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nullable_binding_fallback.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint8_t * unwrap_or(uint8_t * maybe, uint8_t * fallback)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -789,7 +782,7 @@ test "lower-c canonical executable MIR preserves high-word typing and flag-set o
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_canonical_scalar_expressions.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_canonical_scalar_expressions.mc", .{}, false, null);
 
     const high = try cFunctionBody(output.items, "static uint32_t high_word(uint64_t v)");
     try expectContains(high, "/* canonical executable MIR */");
@@ -825,7 +818,7 @@ test "lower-c emits nested classify conditional return from MIR without body fal
     defer module_mir.deinit();
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "bool_switch.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "bool_switch.mc", .{}, false, null);
 
     const body = try cFunctionBody(output.items, "static uint32_t classify(uint32_t x, bool flag)");
     try expectCanonicalConditional(body);
@@ -863,7 +856,7 @@ test "lower-c emits aggregate assignment sequences from canonical MIR" {
     try std.testing.expect(module_mir.functions[6].executable_body.isComplete());
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_canonical_aggregate_assignment.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_canonical_aggregate_assignment.mc", .{}, false, null);
     const sequence = try cFunctionBody(output.items, "static uint32_t aggregate_call_after_assignment(void)");
     try expectContains(sequence, "/* canonical executable MIR */");
     try expectContains(sequence, "row;");
@@ -914,7 +907,7 @@ test "lower-c emits canonical local workflows without body fallback" {
     defer module_mir.deinit();
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_workflow.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_workflow.mc", .{}, false, null);
     const vtable = try cFunctionBody(output.items, "static uint32_t local_vtable_call(uint32_t x, uint32_t y)");
     try std.testing.expect(isCanonicalExecutableCBody(vtable));
     try expectContains(vtable, "(BinOp){ mul }");
@@ -967,7 +960,7 @@ test "lower-c emits loop-local array through canonical MIR without body fallback
     defer module_mir.deinit();
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_alloca_hoist.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_alloca_hoist.mc", .{}, false, null);
     const body = try cFunctionBody(output.items, "uint32_t alloca_hoist_run(void)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "mc_array_u8_256 scratch;");
@@ -1014,7 +1007,7 @@ test "lower-c emits access slice plans without body fallback" {
     defer module_mir.deinit();
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_access_slice.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mir_access_slice.mc", .{}, false, null);
     const read_slice = try cFunctionBody(output.items, "static uint32_t read_slice(");
     try expectContains(read_slice, "/* canonical executable MIR */");
     try expectContains(read_slice, "mc_race_load_u32");
@@ -1048,7 +1041,7 @@ test "lower-c emits local address update from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_address_update.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_address_update.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t update(uint32_t seed)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -1074,7 +1067,7 @@ test "lower-c emits the structural access tail from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_structural_access_tail.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_structural_access_tail.mc", source, &output);
 
     const global_field = try cFunctionBody(output.items, "static uint32_t address_global_field(uint32_t value)");
     try expectContains(global_field, "mc_race_store_u32");
@@ -1290,7 +1283,7 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_subject.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_subject.mc", source, &output);
 
     const compare_body = try cFunctionBody(output.items, "static int32_t choose_cmp(int32_t a, int32_t b)");
     try expectCanonicalConditional(compare_body);
@@ -1646,7 +1639,7 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_conditional_calls.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_conditional_calls.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static void choose_void(bool flag)");
     if (isCanonicalExecutableCBody(param_body)) try expectCanonicalConditional(param_body) else try expectContains(param_body, "if (flag)");
@@ -1891,7 +1884,7 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_call_sequence.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_call_sequence.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static void sequence(void)");
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, body, "hit("));
@@ -1974,7 +1967,7 @@ test "lower-c emits pure local-only void functions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_local_only.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_local_only.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static void local_only(void)");
     if (isCanonicalExecutableCBody(local_body)) try expectContains(local_body, "uint32_t x") else try expectNotContains(local_body, "uint32_t x");
@@ -2430,7 +2423,7 @@ test "lower-c preserves MIR void calls before simple returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t side_then_return(int32_t x)");
     const hit1 = std.mem.indexOf(u8, body, "hit(") orelse return error.TestUnexpectedResult;
@@ -2458,7 +2451,7 @@ test "lower-c emits direct struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_param_field_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t first(Pair p)");
     try expectContains(body, if (isCanonicalExecutableCBody(body)) ").a;" else "return p.a;");
@@ -2503,7 +2496,7 @@ test "lower-c emits nested parameter and global field places from MIR without bo
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_place_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nested_place_return.mc", source, &output);
 
     const update = try cFunctionBody(output.items, "static uint32_t update(uint32_t value)");
     try expectContains(update, "/* canonical executable MIR */");
@@ -2560,7 +2553,7 @@ test "lower-c emits fixed-array constant-index places from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_place_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_array_place_return.mc", source, &output);
 
     const take = try cFunctionBody(output.items, "static uint32_t take_row(mc_array_u32_2 row)");
     try expectContains(take, "/* canonical executable MIR */");
@@ -2599,7 +2592,7 @@ test "lower-c checked dynamic fixed-array stores use canonical executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_dynamic_array_store.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_dynamic_array_store.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static void store_at(uintptr_t index, uint32_t value)");
     try std.testing.expect(isCanonicalExecutableCBody(body));
@@ -2629,7 +2622,7 @@ test "lower-c emits local aggregate projection updates from MIR without body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_projection_updates.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_aggregate_projection_updates.mc", source, &output);
 
     const field_body = try cFunctionBody(output.items, "static uint32_t assign_field(uint32_t value)");
     try expectContains(field_body, "/* canonical executable MIR */");
@@ -2663,7 +2656,7 @@ test "lower-c emits conditional struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_param_field_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_param_field_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t choose(bool flag, Pair p)");
     try expectCanonicalConditional(body);
@@ -2687,7 +2680,7 @@ test "lower-c emits conditional boolean struct field conditions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_param_bool_field.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_param_bool_field.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static bool choose(Flags f)");
     try expectCanonicalConditional(body);
@@ -2712,7 +2705,7 @@ test "lower-c emits struct parameter field call arguments from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_call_args.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_param_field_call_args.mc", source, &output);
 
     const call_body = try cFunctionBody(output.items, "static uint32_t call_field(Pair p)");
     if (isCanonicalExecutableCBody(call_body)) {
@@ -2742,7 +2735,7 @@ test "lower-c emits struct parameter field checked operands from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_checked_operands.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_param_field_checked_operands.mc", source, &output);
 
     const left_body = try cFunctionBody(output.items, "static uint32_t add_left(Pair p, uint32_t x)");
     if (isCanonicalExecutableCBody(left_body)) {
@@ -2775,7 +2768,7 @@ test "lower-c emits struct parameter field comparisons from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_compare_operands.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_param_field_compare_operands.mc", source, &output);
 
     const left_body = try cFunctionBody(output.items, "static bool cmp_left(Pair p, uint32_t x)");
     if (isCanonicalExecutableCBody(left_body)) {
@@ -2887,7 +2880,7 @@ test "lower-c emits simple struct literal returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_struct_literal_returns.mc", source, &output);
 
     const make_body = try cFunctionBody(output.items, "static Pair make_pair(int32_t a, int32_t b)");
     try expectContains(make_body, "/* canonical executable MIR */");
@@ -3035,7 +3028,7 @@ test "lower-c canonical executable MIR emits nested by-value struct member reads
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_struct_member.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_struct_member.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t read(Outer outer)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -3051,7 +3044,7 @@ test "lower-c canonical executable MIR emits nested parameter array indexes" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_parameter_array_index.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nested_parameter_array_index.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t read(");
     try expectContains(body, "/* canonical executable MIR */");
@@ -3067,7 +3060,7 @@ test "C canonical executable MIR keeps ordinary len fields distinct from slice l
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_len_field.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_struct_len_field.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t read_len(WithLen value)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -3097,7 +3090,7 @@ test "lower-c emits simple array literal returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_literal_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_array_literal_returns.mc", source, &output);
 
     const direct_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_direct(uint32_t a, uint32_t b)");
     try expectContains(direct_body, "(mc_array_u32_2){ .elems = {");
@@ -3135,7 +3128,7 @@ test "lower-c preserves local aggregate assignment and return from MIR without b
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_aggregate_assignment_canonical.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_aggregate_assignment_canonical.mc", source, &output);
 
     const array_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_assignment(void)");
     try expectContains(array_body, "/* canonical executable MIR */");
@@ -3191,7 +3184,7 @@ test "lower-c emits array control-flow returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_control_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_array_control_returns.mc", source, &output);
 
     const choose_body = try cFunctionBody(output.items, "static mc_array_u32_2 choose_array(bool flag, uint32_t a, uint32_t b)");
     try expectCanonicalConditional(choose_body);
@@ -3272,7 +3265,7 @@ test "lower-c emits scalar comparison returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_comparison_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_scalar_comparison_returns.mc", source, &output);
 
     const lt_body = try cFunctionBody(output.items, "static bool lt_u32(uint32_t a, uint32_t b)");
     try expectLegacyOrCanonicalReturn(lt_body, "return (a < b);", " < ");
@@ -3343,7 +3336,7 @@ test "lower-c emits checked arithmetic returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_arithmetic_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_checked_arithmetic_returns.mc", source, &output);
 
     const add_body = try cFunctionBody(output.items, "static uint32_t add_u32(uint32_t a, uint32_t b)");
     try expectLegacyOrCanonicalReturn(add_body, "return mc_checked_add_u32(a, b);", "mc_checked_add_u32(");
@@ -3404,7 +3397,7 @@ test "lower-c emits checked unary returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_unary_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_checked_unary_returns.mc", source, &output);
 
     const neg_body = try cFunctionBody(output.items, "static int32_t neg_i32(int32_t a)");
     try expectLegacyOrCanonicalReturn(neg_body, "return mc_checked_neg_i32(a);", "mc_checked_neg_i32(");
@@ -3439,7 +3432,7 @@ test "lower-c target-types negated integer literals in canonical MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_target_typed_negated_literals.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_target_typed_negated_literals.mc", source, &output);
 
     const suffix_body = try cFunctionBody(output.items, "static int8_t inferred_suffix(void)");
     try expectContains(suffix_body, "/* canonical executable MIR */");
@@ -3467,7 +3460,7 @@ test "lower-c emits negative integer literal return from MIR without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_negative_integer_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_negative_integer_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t negative_one(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -3486,7 +3479,7 @@ test "lower-c emits conversion literal return from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conversion_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conversion_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint8_t convert(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -3510,7 +3503,7 @@ test "lower-c emits typed unary call-target returns from MIR without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_unary_call_target_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_typed_unary_call_target_returns.mc", source, &output);
 
     const float_bits = try cFunctionBody(output.items, "static uint32_t float_bits(float value)");
     try expectContains(float_bits, "mc_exec_tmp_0 = value;");
@@ -3580,7 +3573,7 @@ test "lower-c emits typed binary domain calls from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_binary_domain_calls.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_typed_binary_domain_calls.mc", source, &output);
 
     try expectContains(try cFunctionBody(output.items, "static uint32_t wrap_add(uint32_t a, uint32_t b)"), "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))");
     try expectContains(try cFunctionBody(output.items, "static bool seq_before(uint32_t a, uint32_t b)"), "(((int32_t)((mc_exec_tmp_0) - (mc_exec_tmp_1))) < 0)");
@@ -3611,7 +3604,7 @@ test "lower-c emits char literal return from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_char_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_char_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint16_t char_value(void)");
     try expectContains(body, "65;");
@@ -3663,7 +3656,7 @@ test "lower-c emits float literal returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_float_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_float_literal_return.mc", source, &output);
 
     const small_body = try cFunctionBody(output.items, "static float small(void)");
     try expectContains(small_body, "__builtin_bit_cast(float, ((uint32_t)0x3FC00000U))");
@@ -3721,7 +3714,7 @@ test "lower-c emits plain float binary returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_plain_float_binary_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_plain_float_binary_returns.mc", source, &output);
 
     const product_body = try cFunctionBody(output.items, "static float product(void)");
     try std.testing.expect(std.mem.count(u8, product_body, "__builtin_bit_cast(float") >= 2);
@@ -3761,7 +3754,7 @@ test "lower-c emits local and assigned char literal returns from MIR without bod
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_char_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_assigned_char_literal_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint16_t local_char(void)");
     try expectContains(local_body, "65;");
@@ -3834,7 +3827,7 @@ test "lower-c emits logical-not returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_logical_not_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_logical_not_returns.mc", source, &output);
 
     const not_body = try cFunctionBody(output.items, "static bool not_param(bool flag)");
     try expectLegacyOrCanonicalReturn(not_body, "return !flag;", "(!");
@@ -3872,7 +3865,7 @@ test "lower-c emits basic scalar returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_basic_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_basic_scalar_returns.mc", source, &output);
 
     const int_body = try cFunctionBody(output.items, "static uint32_t int_literal(void)");
     try expectLegacyOrCanonicalReturn(int_body, "return 42;", " = 42;");
@@ -3907,7 +3900,7 @@ test "lower-c emits local and assigned scalar returns from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_assigned_scalar_returns.mc", source, &output);
 
     const local_int_body = try cFunctionBody(output.items, "static uint32_t local_int(void)");
     try expectLegacyOrCanonicalReturn(local_int_body, "return 42;", " = 42;");
@@ -3943,7 +3936,7 @@ test "lower-c preserves nullable pointer promotion locals from MIR without body 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_pointer_promotions.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nullable_pointer_promotions.mc", source, &output);
 
     const none_body = try cFunctionBody(output.items, "static uint8_t * pointer_none(void)");
     try expectContains(none_body, "= NULL;");
@@ -3996,7 +3989,7 @@ test "lower-c emits nullable pointer try from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_pointer_try.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nullable_pointer_try.mc", source, &output);
 
     const unwrap_param_body = try cFunctionBody(output.items, "static uint8_t * unwrap_param(uint8_t * maybe)");
     try expectContains(unwrap_param_body, "= maybe;");
@@ -4038,7 +4031,7 @@ test "lower-c emits nullable none returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_none_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nullable_none_returns.mc", source, &output);
 
     const direct_body = try cFunctionBody(output.items, "static mc_opt_u32 direct_none(void)");
     try expectContains(direct_body, "/* canonical executable MIR */");
@@ -4068,7 +4061,7 @@ test "lower-c emits conditional nullable none returns from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_nullable_none_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_nullable_none_returns.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_opt_u32 choose_none(bool flag)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -4087,7 +4080,7 @@ test "lower-c preserves MIR void calls before nullable none returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_nullable_none_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_nullable_none_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_opt_u32 side_then_none(void)");
     const hit = std.mem.indexOf(u8, body, "hit(") orelse return error.TestUnexpectedResult;
@@ -4108,7 +4101,7 @@ test "lower-c emits loop nullable none returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_nullable_none_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_loop_nullable_none_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_opt_u32 loop_then_none(bool flag)");
     try expectLegacyOrCanonicalLoop(body, "while (flag)");
@@ -4130,7 +4123,7 @@ test "lower-c emits enum literal returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Color color(void)");
     // Canonical executable MIR carries the enum's numeric tag and nominal
@@ -4148,7 +4141,7 @@ test "lower-c emits enum variant raw values from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_variant_raw.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_variant_raw.mc", source, &output);
 
     const closed = try cFunctionBody(output.items, "static uint32_t closed_variant_raw(void)");
     try expectContains(closed, "/* canonical executable MIR */");
@@ -4172,7 +4165,7 @@ test "lower-c emits nominal scalar resource flow from MIR without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nominal_scalar_resource.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nominal_scalar_resource.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t critical_read(uint32_t reg)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -4190,7 +4183,7 @@ test "lower-c emits nested fixed-array aggregates from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nested_array_aggregate.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_nested_array_aggregate.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Bag make_bag(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -4206,7 +4199,7 @@ test "lower-c compares value optionals with null from MIR without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_optional_null_compare.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_optional_null_compare.mc", source, &output);
 
     const present_body = try cFunctionBody(output.items, "static bool is_present(uint32_t value)");
     try expectContains(present_body, "/* canonical executable MIR */");
@@ -4242,7 +4235,7 @@ test "lower-c emits local and loop enum returns from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_loop_enum_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_loop_enum_returns.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static Color local_color(void)");
     try expectContains(local_body, "/* canonical executable MIR */");
@@ -4286,7 +4279,7 @@ test "lower-c preserves MIR void calls before local enum returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_local_enum_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_local_enum_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static Color side_then_local_color(void)");
     const local_hit = std.mem.indexOf(u8, local_body, "hit(") orelse return error.TestUnexpectedResult;
@@ -4319,7 +4312,7 @@ test "lower-c emits conditional enum literal returns from MIR without body fallb
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_enum_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_enum_literal_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Color choose(bool flag)");
     try expectCanonicalConditional(body);
@@ -4369,7 +4362,7 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_direct_call_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_direct_call_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t side_then_call(void)");
     const hit = std.mem.indexOf(u8, body, "hit(") orelse return error.TestUnexpectedResult;
@@ -4448,7 +4441,7 @@ test "lower-c emits local-init call feeding return call from MIR without body fa
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_init_call_feeds_return_call.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_init_call_feeds_return_call.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_call_arg(uint32_t seed)");
     if (isCanonicalExecutableCBody(local_body)) {
@@ -4500,7 +4493,7 @@ test "lower-c emits discarded and indirect calls from MIR without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_call_statements.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_call_statements.mc", source, &output);
 
     const discard_body = try cFunctionBody(output.items, "static void discard_value(uint32_t left, uint32_t right)");
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, discard_body, if (isCanonicalExecutableCBody(discard_body)) "= combine(" else "combine(left, right);"));
@@ -4534,7 +4527,7 @@ test "lower-c emits enum literal direct-call arguments from MIR without body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_direct_call_argument.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_direct_call_argument.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Mode pass(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -4553,7 +4546,7 @@ test "lower-c emits enum literal compare operands from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_compare_operands.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_literal_compare_operands.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static bool is_read(Mode mode)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -4572,7 +4565,7 @@ test "lower-c emits enum literal explicit casts from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_explicit_cast.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_literal_explicit_cast.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Mode cast_mode(void)");
     try expectContains(body, "mc_exec_tmp_1 = ((Mode)(mc_exec_tmp_0));");
@@ -4589,7 +4582,7 @@ test "lower-c emits enum, pointer-address, and signedness casts from executable 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_representation_casts.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_representation_casts.mc", source, &output);
 
     for ([_][]const u8{ "static uint8_t enum_raw(Mode mode)", "static uintptr_t pointer_address(uint8_t * pointer)", "static int64_t signed_bits(uint64_t value)" }) |signature| {
         const body = try cFunctionBody(output.items, signature);
@@ -4607,7 +4600,7 @@ test "lower-c emits transparent integer domain casts from executable MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_domain_casts.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_domain_casts.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint64_t wrapping_add_u64(uint64_t a, uint64_t b)");
     try expectContains(body, "/* canonical executable MIR */");
 }
@@ -4624,7 +4617,7 @@ test "lower-c scalar switch returns lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_switch.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_scalar_switch.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t classify(int32_t n)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -4651,7 +4644,7 @@ test "lower-c emits local global returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_global_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_global_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_global_return(void)");
     try expectContains(local_body, "mc_race_load_u32(&g)");
@@ -4677,7 +4670,7 @@ test "lower-c inferred local global return lowers without function body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_global_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_global_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t inferred_global_return(void)");
     try expectContains(body, "mc_race_load_u32(&g)");
@@ -4701,7 +4694,7 @@ test "lower-c preserves MIR void calls before global returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_global_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_global_return.mc", source, &output);
 
     const direct_body = try cFunctionBody(output.items, "static uint32_t side_then_global_return(void)");
     const direct_hit = std.mem.indexOf(u8, direct_body, "hit(") orelse return error.TestUnexpectedResult;
@@ -4733,7 +4726,7 @@ test "lower-c scalar global reads lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_global_reads.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_scalar_global_reads.mc", source, &output);
 
     const load_body = try cFunctionBody(output.items, "static bool read_flag(void)");
     try expectContains(load_body, "mc_race_load_bool(&flag)");
@@ -4757,7 +4750,7 @@ test "lower-c ordinary bool global accesses lower from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_ordinary_bool_global.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_ordinary_bool_global.mc", source, &output);
 
     const load_body = try cFunctionBody(output.items, "static bool read_flag(void)");
     try expectContains(load_body, "mc_race_load_bool(&flag)");
@@ -4775,7 +4768,7 @@ test "lower-c immutable scalar global reads lower from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_immutable_scalar_global.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_immutable_scalar_global.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t read_limit(void)");
     try expectContains(body, "LIMIT");
@@ -4804,7 +4797,7 @@ test "lower-c preserves MIR void calls before conditional returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_conditional_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_conditional_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t side_then_cond(bool flag)");
     const hit = std.mem.indexOf(u8, body, "hit(") orelse return error.TestUnexpectedResult;
@@ -4877,7 +4870,7 @@ test "lower-c typed indirect call returns lower from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_indirect_call_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_typed_indirect_call_returns.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint32_t apply(");
     try expectContains(param_body, "/* canonical executable MIR */");
@@ -4963,13 +4956,13 @@ fn appendCheckedCTest(source_name: []const u8, source: []const u8, output: *std.
     try appendCDeclsTest(std.testing.allocator, parsed.decls(), output);
 }
 
-fn appendCheckedCTestNoFunctionBodyFallback(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
+fn appendCheckedCTestWithMir(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 test "lower-c synthesized function-pointer names encode pointer mutability" {
@@ -4979,7 +4972,7 @@ test "lower-c synthesized function-pointer names encode pointer mutability" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fnptr_structural_names.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_fnptr_structural_names.mc", source, &output);
 
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "typedef void (*mc_fnptr"));
     try expectContains(output.items, "mc_type_ptr_c_2_u8");
@@ -4996,7 +4989,7 @@ test "lower-c struct literal call fields lower from MIR in lexical order" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_call_fields.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_struct_literal_call_fields.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Pair ordered_literal(void)");
     const first = std.mem.indexOf(u8, body, "mark(") orelse return error.TestUnexpectedResult;
@@ -5015,7 +5008,7 @@ test "lower-c struct literal call fields keep source order from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_source_order.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_struct_literal_source_order.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static Pair ordered_literal(void)");
     if (isCanonicalExecutableCBody(body)) {
@@ -5040,7 +5033,7 @@ test "lower-c array literal call elements lower from MIR in lexical order" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_literal_call_elements.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_array_literal_call_elements.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_array_u32_2 ordered_literal(void)");
     const first = std.mem.indexOf(u8, body, "mark(") orelse return error.TestUnexpectedResult;
@@ -5061,7 +5054,7 @@ test "lower-c literal unary components lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_unary_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_literal_unary_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Flags struct_ops(bool flag, bool other)");
     try expectContains(struct_body, "/* canonical executable MIR */");
@@ -5084,7 +5077,7 @@ test "lower-c literal compare components lower from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_compare_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_literal_compare_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Flags struct_ops(bool flag, bool other)");
     try expectContains(struct_body, "/* canonical executable MIR */");
@@ -5108,7 +5101,7 @@ test "lower-c literal checked arithmetic components lower from MIR without body 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_checked_arithmetic_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_literal_checked_arithmetic_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Pair struct_ops(uint32_t a, uint32_t b, uint32_t c)");
     try expectContains(struct_body, "/* canonical executable MIR */");
@@ -5132,7 +5125,7 @@ test "lower-c literal checked unary components lower from MIR without body fallb
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_checked_unary_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_literal_checked_unary_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Pair struct_ops(int32_t a, int32_t b)");
     if (isCanonicalExecutableCBody(struct_body)) {
@@ -5159,7 +5152,7 @@ test "lower-c local literal checked components return from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_literal_checked_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_literal_checked_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Pair local_struct(uint32_t a, uint32_t b, uint32_t c)");
     try expectContains(struct_body, "/* canonical executable MIR */");
@@ -5187,7 +5180,7 @@ test "lower-c assigned literal checked components return from MIR without body f
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_assigned_literal_checked_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_assigned_literal_checked_components.mc", source, &output);
 
     const struct_body = try cFunctionBody(output.items, "static Pair assigned_struct(uint32_t a, uint32_t b, uint32_t c)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, struct_body, "mc_checked_add_u32("));
@@ -5225,7 +5218,7 @@ test "lower-c local and assigned literal call components return from MIR without
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_literal_call_components.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_assigned_literal_call_components.mc", source, &output);
 
     const local_struct_body = try cFunctionBody(output.items, "static Pair local_struct(void)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, local_struct_body, "mark("));
@@ -5276,7 +5269,7 @@ test "lower-c local and assigned aggregate direct calls return from MIR without 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_aggregate_direct_calls.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_assigned_aggregate_direct_calls.mc", source, &output);
 
     const local_struct_body = try cFunctionBody(output.items, "static Pair local_struct(uint32_t value)");
     try expectLegacyOrCanonicalReturn(local_struct_body, "return make_pair(value);", "= make_pair(");
@@ -5316,7 +5309,7 @@ test "lower-c grouped scalar expressions return from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_grouped_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint16_t grouped_param(uint16_t value)");
     try expectLegacyOrCanonicalReturn(param_body, "return value;", " = value;");
@@ -5348,7 +5341,7 @@ test "lower-c void calls before grouped scalar returns lower from MIR without bo
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_grouped_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_calls_before_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint16_t side_then_grouped_param(uint16_t value)");
     const param_hit = std.mem.indexOf(u8, param_body, "hit(") orelse return error.TestUnexpectedResult;
@@ -5394,7 +5387,7 @@ test "lower-c conditional grouped scalar returns lower from MIR without body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_grouped_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint16_t choose_grouped_param(bool flag, uint16_t value)");
     try expectCanonicalConditional(param_body);
@@ -5440,7 +5433,7 @@ test "lower-c conditional global and call returns lower from MIR without body fa
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_global_call_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_global_call_returns.mc", source, &output);
 
     const global_body = try cFunctionBody(output.items, "static uint32_t choose_global(bool flag)");
     try expectCanonicalConditional(global_body);
@@ -5519,7 +5512,7 @@ test "lower-c loop grouped scalar returns lower from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_grouped_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_loop_grouped_scalar_returns.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint16_t loop_grouped_param(bool flag, uint16_t value)");
     try expectLegacyOrCanonicalLoop(param_body, "while (flag)");
@@ -5549,7 +5542,7 @@ test "lower-c loop derived scalar returns lower from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_derived_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_loop_derived_scalar_returns.mc", source, &output);
 
     const compare_body = try cFunctionBody(output.items, "static bool loop_compare(bool flag, uint16_t value)");
     try expectLegacyOrCanonicalLoop(compare_body, "while (flag)");
@@ -5580,7 +5573,7 @@ test "lower-c loop checked scalar returns lower from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_checked_scalar_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_loop_checked_scalar_returns.mc", source, &output);
 
     const add_body = try cFunctionBody(output.items, "static uint16_t loop_checked_add(bool flag, uint16_t value)");
     try expectLegacyOrCanonicalLoop(add_body, "while (flag)");
@@ -5616,7 +5609,7 @@ test "lower-c loop call and global returns lower from MIR without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_call_global_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_loop_call_global_returns.mc", source, &output);
 
     const call_body = try cFunctionBody(output.items, "static uint16_t loop_direct_call(bool flag, uint16_t value)");
     try expectLegacyOrCanonicalLoop(call_body, "while (flag)");
@@ -5965,7 +5958,7 @@ test "lower-c rejects prebuilt MIR with missing target type facts" {
     defer module_mir.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_result_constructor_target_type_facts.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_mir_result_constructor_target_type_facts.mc", source, &complete_output);
 
     try clearTargetTypeFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
@@ -6205,7 +6198,7 @@ test "lower-c explicit casts require MIR source and target type facts" {
     defer parsed.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_explicit_cast_type_facts.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_mir_explicit_cast_type_facts.mc", source, &complete_output);
     try expectContains(complete_output.items, "((uint64_t)(mc_exec_tmp_");
 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -6230,7 +6223,7 @@ test "lower-c local and assigned explicit casts lower from MIR without body fall
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_explicit_cast_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_assigned_explicit_cast_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint64_t local_cast(uint32_t value)");
     try expectContains(local_body, "((uint64_t)(mc_exec_tmp_");
@@ -6258,7 +6251,7 @@ test "lower-c local and assigned conversion calls lower from MIR without body fa
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_conversion_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_assigned_conversion_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint8_t local_conversion(uint64_t value)");
     try expectContains(local_body, "/* canonical executable MIR */");
@@ -6633,7 +6626,7 @@ test "lower-c rejects prebuilt MIR with missing integer facts" {
     defer module_mir.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_integer_fact_gate.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_mir_integer_fact_gate.mc", source, &complete_output);
 
     try clearIntegerFactsForFunction(&module_mir, "integer_fact_gate");
     var output: std.ArrayList(u8) = .empty;
@@ -6801,7 +6794,7 @@ test "lower-c executable MIR forget evaluates its operand once without a release
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_discard_value.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_discard_value.mc", source, &output);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "next_value()"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "forget_unchecked(") == null);
@@ -6822,7 +6815,7 @@ test "lower-c wrapping arithmetic requires MIR identity and operand/result type 
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_wrapping_call_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_wrapping_call_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))") != null);
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -6850,7 +6843,7 @@ test "lower-c emits wrapping arithmetic call from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_wrapping_call.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_wrapping_call.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))") != null);
 }
 
@@ -6868,7 +6861,7 @@ test "lower-c emits local wrapping arithmetic from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_wrapping_call.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_wrapping_call.mc", source, &output);
     try expectContains(try cFunctionBody(output.items, "static uint32_t local_wrap(uint32_t a)"), "((uint32_t)(mc_exec_tmp_0) + (uint32_t)(mc_exec_tmp_1))");
     try expectContains(try cFunctionBody(output.items, "static uint32_t assigned_wrap(uint32_t a)"), "((uint32_t)(mc_exec_tmp_1) + (uint32_t)(mc_exec_tmp_2))");
 }
@@ -6888,7 +6881,7 @@ test "lower-c unchecked arithmetic requires MIR identity and operand/result type
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_unchecked_call_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_unchecked_call_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "MC_MIR_RANGE no_overflow region=1 op=add") != null);
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -6918,7 +6911,7 @@ test "lower-c emits unchecked arithmetic call from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_unchecked_call.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_unchecked_call.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=add") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " + ") != null);
 }
@@ -6941,7 +6934,7 @@ test "lower-c emits local unchecked arithmetic from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_unchecked_call.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_unchecked_call.mc", source, &output);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=add"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
 }
@@ -6961,7 +6954,7 @@ test "lower-c emits unchecked sub and mul returns from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_unchecked_sub_mul_calls.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_unchecked_sub_mul_calls.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=sub") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " - ") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow region=1 op=mul") != null);
@@ -7369,7 +7362,7 @@ test "lower-c grouped expressions consume their own MIR result facts" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_grouped_expression_result_fact_gate.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_mir_grouped_expression_result_fact_gate.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "grouped_result") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -7402,7 +7395,7 @@ test "lower-c grouped direct calls consume the outer MIR result fact" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_grouped_call_result_fact_gate.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_mir_grouped_call_result_fact_gate.mc", source, &complete_output);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -7429,7 +7422,7 @@ test "lower-c direct-call inferred local lowers without function body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_direct_call_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_direct_call_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint64_t caller(void)");
     try expectLegacyOrCanonicalReturn(body, "return make_count();", "= make_count(");
 }
@@ -7443,7 +7436,7 @@ test "lower-c literal inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_literal_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t literal_local(void)");
     try expectLegacyOrCanonicalReturn(body, "return 7;", " = 7;");
 }
@@ -7457,7 +7450,7 @@ test "lower-c bool-literal inferred local lowers without function body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_bool_literal_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_bool_literal_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static bool bool_local(void)");
     try expectLegacyOrCanonicalReturn(body, "return true;", " = true;");
 }
@@ -7471,7 +7464,7 @@ test "lower-c checked-unary inferred local lowers without function body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_checked_unary_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_checked_unary_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_neg_i64(") != null);
 }
 
@@ -7484,7 +7477,7 @@ test "lower-c checked-binary inferred local lowers without function body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_checked_binary_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_checked_binary_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint64_t binary_local(uint64_t left, uint64_t right)");
     try expectLegacyOrCanonicalReturn(body, "return mc_checked_add_u64(left, right);", "mc_checked_add_u64(");
 }
@@ -7498,7 +7491,7 @@ test "lower-c logical-not inferred local lowers without function body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_logical_not_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_logical_not_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static bool not_local(bool enabled)");
     try expectLegacyOrCanonicalReturn(body, "return !enabled;", "(!");
 }
@@ -7511,7 +7504,7 @@ test "lower-c logical return tree lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_logical_return_tree.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_logical_return_tree.mc", source, &output);
     const and_body = try cFunctionBody(output.items, "static bool bool_and(bool a, bool b)");
     const or_body = try cFunctionBody(output.items, "static bool bool_or(bool a, bool b)");
     const nested_body = try cFunctionBody(output.items, "static bool nested_bool(bool a, bool b, bool c)");
@@ -7532,7 +7525,7 @@ test "lower-c compare inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_compare_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_compare_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static bool compare_local(uint64_t left, uint64_t right)");
     try expectLegacyOrCanonicalReturn(body, "return (left < right);", " < ");
 }
@@ -7546,7 +7539,7 @@ test "lower-c copied inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_copy_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_copy_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return value;") != null);
 }
 
@@ -7560,7 +7553,7 @@ test "lower-c param-field copied inferred local lowers without function body fal
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_param_field_copy_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_param_field_copy_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, ").value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
 }
@@ -7574,7 +7567,7 @@ test "lower-c null inferred local lowers without function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_null_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_inferred_local_null_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static mc_opt_u32 null_local(void)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "(mc_opt_u32){ .present = false }");
@@ -7631,7 +7624,7 @@ test "lower-c projects direct aggregate call results from MIR without body fallb
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_direct_call_projected_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_direct_call_projected_return.mc", source, &output);
 
     const direct_body = try cFunctionBody(output.items, "static uint32_t direct_array_call_index(uint32_t seed, uintptr_t index)");
     try expectContains(direct_body, "/* canonical executable MIR */");
@@ -7689,7 +7682,7 @@ test "lower-c returns first fixed-array element from MIR CFG without body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_canonical_foreach_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_canonical_foreach_return.mc", source, &output);
 
     const direct = try cFunctionBody(output.items, "static uint32_t first_value(uint32_t seed)");
     try expectContains(direct, "/* canonical executable MIR */");
@@ -7734,7 +7727,7 @@ test "lower-c emits break and continue while CFG from MIR without body fallback"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_while_control.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_while_control.mc", source, &output);
 
     const stop = try cFunctionBody(output.items, "static void stop(bool flag)");
     try expectContains(stop, "/* canonical executable MIR */");
@@ -7765,7 +7758,7 @@ test "lower-c emits slice foreach local updates from MIR without body fallback" 
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_canonical_foreach_update.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_canonical_foreach_update.mc", source, &output);
 
     const sum = try cFunctionBody(output.items, "static uint32_t sum(");
     try expectContains(sum, "/* canonical executable MIR */");
@@ -8223,7 +8216,7 @@ test "lower-c runtime asserts require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_assert_condition_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_assert_condition_type_facts.mc", .{}, false, null);
     const complete_body = try cFunctionBody(complete_output.items, "static void require_flag(bool flag)");
     try expectContains(complete_body, "/* canonical executable MIR */");
     try expectContains(complete_body, "if (!(mc_exec_tmp_");
@@ -8251,7 +8244,7 @@ test "lower-c emits runtime assert from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_runtime_assert.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_runtime_assert.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void require_flag(bool flag)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "if (!(mc_exec_tmp_");
@@ -8270,7 +8263,7 @@ test "lower-c while loops require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_loop_condition_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_loop_condition_type_facts.mc", .{}, false, null);
     const complete_body = try cFunctionBody(complete_output.items, "static void wait_for_flag(bool flag)");
     try expectLegacyOrCanonicalLoop(complete_body, "while (flag)");
 
@@ -8295,7 +8288,7 @@ test "lower-c emits void-returning while loop from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_returning_while_loop.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_void_returning_while_loop.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void wait_for_flag(bool flag)");
     try expectLegacyOrCanonicalLoop(body, "while (flag)");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return;") != null);
@@ -8366,7 +8359,7 @@ test "lower-c emits enum switch returns from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_switch_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_switch_returns.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0:") != null);
@@ -8389,7 +8382,7 @@ test "lower-c emits multi-arm enum switch returns from MIR without body fallback
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_switch_multi_arm_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_switch_multi_arm_returns.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "= 1;") != null);
@@ -9545,7 +9538,7 @@ test "lower-c inferred local dyn dispatch calls require MIR types" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_inferred_local_dyn_dispatch_call_types.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_inferred_local_dyn_dispatch_call_types.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t result") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->scale(") != null);
@@ -9592,7 +9585,7 @@ test "lower-c ordinary direct calls require MIR result and argument types" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_direct_call_type_facts.mc", source, &complete_output);
+    try appendCheckedCTestWithMir("c_mir_direct_call_type_facts.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "widen(") != null);
 
     var missing_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -9820,7 +9813,7 @@ test "lower-c consumes MIR aggregate-return pointer facts and fails closed when 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_aggregate_return_pointer_fact.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_aggregate_return_pointer_fact.mc", source, &output);
     try expectContains(output.items, "/* canonical executable MIR */");
     try expectContains(output.items, "mc_race_load_u32");
 
@@ -9852,7 +9845,7 @@ test "lower-c lowers pointer parameter field stores after specialized plan retir
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_param_field_store.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_pointer_param_field_store.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void store_cell(Cell * cell)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectContains(body, "mc_race_store_u32(&(cell->value), (uint32_t)mc_exec_tmp_");
@@ -9883,7 +9876,7 @@ test "lower-c emits global address direct-call args from MIR without body fallba
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_call_arg.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_global_address_call_arg.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t use_global_address_arg(void)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectNeedlesInOrder(body, &.{ "= &shared_counter;", "= consume_ptr(", "return mc_exec_tmp_" });
@@ -9900,7 +9893,7 @@ test "lower-c emits global address returns from MIR without body fallback" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_global_address_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t * returned_global_pointer(void)");
     try expectContains(body, "/* canonical executable MIR */");
     try expectNeedlesInOrder(body, &.{ "= &shared_counter;", "return mc_exec_tmp_" });
@@ -9918,7 +9911,7 @@ test "lower-c emits local global address returns from MIR without body fallback"
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_global_address_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_local_global_address_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t * local_global_pointer(void)");
     try expectNeedlesInOrder(body, &.{
         "= &shared_counter;",
@@ -9939,7 +9932,7 @@ test "lower-c emits conditional global address returns from MIR without body fal
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_global_address_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_conditional_global_address_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t * branched_global_pointer(bool flag)");
     try expectCanonicalConditional(body);
     try expectContains(body, "= &shared_counter;");
@@ -10510,7 +10503,7 @@ test "lower-c canonical executable MIR models explicit uninit as storage without
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_uninit_local.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_uninit_local.mc", source, &output);
 
     for ([_][]const u8{
         "static uint32_t explicit_uninit(uint32_t value)",
@@ -10624,7 +10617,7 @@ test "lower-c canonical executable scalar parameter deref guards exact represent
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_pointer_deref.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_pointer_deref.mc", source, &output);
 
     const read = try cFunctionBody(output.items, "static uint32_t read(");
     const read_guard = std.mem.indexOf(u8, read, "if (pointer == NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
@@ -10654,7 +10647,7 @@ test "lower-c canonical executable local pointer deref owns its representation e
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_local_pointer_deref.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_local_pointer_deref.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static void write(");
     try expectContains(body, "/* canonical executable MIR */");
@@ -10865,7 +10858,7 @@ test "lower-c emits raw scalar load and store from typed MIR without body fallba
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, module.decls, &module_mir, &output, .kernel, "raw_scalar_executable.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, module.decls, &module_mir, &output, .kernel, "raw_scalar_executable.mc", .{}, false, null);
     const load = try cFunctionBody(output.items, "static uint32_t load(uintptr_t address)");
     try expectContains(load, "/* canonical executable MIR */");
     try expectContains(load, "mc_raw_load_u32(");
@@ -10918,7 +10911,7 @@ test "lower-c admits plain unary returns from MIR (bitwise not, wrapping negate)
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_plain_unary.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_plain_unary.mc", source, &output);
 
     const bnot = try cFunctionBody(output.items, "static uint32_t bnot(uint32_t a)");
     try expectContains(bnot, "/* canonical executable MIR */");
@@ -11003,7 +10996,7 @@ test "lower-c pointer member load uses typed place without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_executable_pointer_member.mc", source, &output);
+    try appendCheckedCTestWithMir("c_executable_pointer_member.mc", source, &output);
     const first_body = try cFunctionBody(output.items, "static int32_t read_first(Pair * pair)");
     try expectContains(first_body, "mc_race_load_i32(");
     try expectContains(first_body, "if (pair == NULL) mc_trap_InvalidRepresentation();");
@@ -11240,7 +11233,7 @@ test "lower-c backend_name attribute emits asm label" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_backend_name_alias.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_backend_name_alias.mc", source, &output);
 
     try std.testing.expect(std.mem.count(u8, output.items, "__asm__(\"rss_helper_x\")") == 1);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "helper(uint64_t x) __asm__(\"rss_helper_x\");") != null);
@@ -11893,7 +11886,7 @@ test "lower-c emits Result try in local initializers" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_result_try.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_result_try.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static mc_result_u32_Error add_one(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -11935,7 +11928,7 @@ test "lower-c emits Result try in return statements" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_result_try_return.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_result_try_return.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static uint32_t unwrap_param(mc_result_u32_Error result)");
     try expectContains(param_body, "/* canonical executable MIR */");
@@ -11991,7 +11984,7 @@ test "lower-c emits Result try in return call arguments" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_result_try_call_args.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_result_try_call_args.mc", source, &output);
 
     const arg_body = try cFunctionBody(output.items, "static uint32_t arg_try(void)");
     try expectContains(arg_body, "/* canonical executable MIR */");
@@ -12016,7 +12009,7 @@ test "lower-c emits value optional try from MIR without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_value_optional_try.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_value_optional_try.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t unwrap_value(mc_opt_u32 maybe)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -12119,7 +12112,7 @@ test "lower-c emits try in local initializer call arguments" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_try_local_initializer.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_try_local_initializer.mc", source, &output);
 
     const result_body = try cFunctionBody(output.items, "static mc_result_u32_Error local_result_try(void)");
     try expectContains(result_body, "/* canonical executable MIR */");
@@ -12174,7 +12167,7 @@ test "lower-c emits try in assignment and expression statements" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_try_assignment_expr_stmt.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_try_assignment_expr_stmt.mc", source, &output);
 
     const assign_result = try cFunctionBody(output.items, "static mc_result_u32_Error assign_result_try(void)");
     try expectContains(assign_result, "/* canonical executable MIR */");
@@ -12214,7 +12207,7 @@ test "lower-c emits simple functions and race-safe globals" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_simple_functions_race_safe_globals.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_simple_functions_race_safe_globals.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "static MC_UNUSED uint32_t shared_counter = 0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t add(uint32_t a, uint32_t b)") != null);
@@ -12263,7 +12256,7 @@ test "lower-c checked pointer-root field store does not use function body fallba
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_root_store.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_pointer_root_store.mc", source, &output);
     const body = try cFunctionBody(output.items, "static void store_value(Env * env, uint32_t value)");
     try expectContains(body, if (isCanonicalExecutableCBody(body))
         "mc_race_store_u32(&(env->value), (uint32_t)mc_exec_tmp_"
@@ -12279,7 +12272,7 @@ test "lower-c checked pointer-to-integer cast does not use function body fallbac
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_to_integer.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_pointer_to_integer.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uintptr_t pointer_to_usize(uint32_t * p)");
     try expectContains(body, "/* canonical executable MIR */");
     const guard = std.mem.indexOf(u8, body, "== NULL) mc_trap_InvalidRepresentation();") orelse return error.TestUnexpectedResult;
@@ -12296,7 +12289,7 @@ test "lower-c address representation cast does not use function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_address_representation_cast.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_address_representation_cast.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uintptr_t address_value(uintptr_t value)");
     try expectContains(body, "= ((uintptr_t)(mc_exec_tmp_0));");
     try expectContains(body, "return mc_exec_tmp_1;");
@@ -12311,7 +12304,7 @@ test "lower-c checked scalar local return does not use function body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_local_checked_return.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_scalar_local_checked_return.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t local_copy(uint32_t n)");
     try expectContains(body, "mc_checked_add_u32(");
     try expectContains(body, if (isCanonicalExecutableCBody(body)) "uint32_t x = mc_exec_tmp_" else "uint32_t x = mc_checked_add_u32(n, 1);");
@@ -12838,7 +12831,7 @@ test "lower-c emits checked u32 mod and shifts from MIR without body fallback" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_mod_shift_returns.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_checked_mod_shift_returns.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mod_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shl_u32(") != null);
@@ -12932,7 +12925,7 @@ test "lower-c emits target-typed enum literals" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_target_type_facts.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_enum_target_type_facts.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef uint8_t Mode;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_read = 1") != null);
@@ -13207,7 +13200,7 @@ test "lower-c sanitizes C header names used as fields" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_field_reserved_names.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_field_reserved_names.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t offsetof_;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t uint32_t_;") != null);
@@ -14096,7 +14089,7 @@ test "lower-c emits opaque volatile asm" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_asm.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_asm.mc", source, &output);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void asm_in_unsafe(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"pause\" ::: \"memory\");") != null);
@@ -14124,7 +14117,7 @@ test "lower-c emits precise asm with operands" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("emit_c_precise_asm.mc", source, &output);
+    try appendCheckedCTestWithMir("emit_c_precise_asm.mc", source, &output);
     try expectContains(output.items, "/* canonical executable MIR */");
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"bsf %1, %0\" : \"=r\"(idx) : \"r\"(mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_PRECISE_ASM out(\"rax\")->idx in(\"rbx\") */") != null);
@@ -14175,7 +14168,7 @@ test "lower-c omits pure comptime blocks from C runtime output" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_comptime_block.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_comptime_block.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_pure_comptime_block(void)") != null);
     const body = try cFunctionBody(output.items, "static uint32_t accept_pure_comptime_block(void)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -14192,7 +14185,7 @@ test "lower-c renders canonical string bytes without body fallback" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_string_bytes.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_string_bytes.mc", source, &output);
     const escaped_body = try cFunctionBody(output.items, "static char const * escaped(void)");
     try expectContains(escaped_body, "/* canonical executable MIR */");
     try expectContains(escaped_body, "tri\\?\\?/line\\nquote\\\"");
@@ -14210,7 +14203,7 @@ test "lower-c emits explicit traps and unreachable" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_explicit_traps.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_explicit_traps.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t trap_as_value(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable();") != null);
@@ -14298,7 +14291,7 @@ test "lower-c uses type-directed helpers for fixed-width checked arithmetic" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fixed_width_arith.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_fixed_width_arith.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_SIGNED(i32, int32_t, INT32_MIN, INT32_MAX)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_i32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_div_i32(") != null);
@@ -14667,7 +14660,7 @@ test "C canonical executable MIR owns scalar integer conversions" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_trap_conversion.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_trap_conversion.mc", source, &output);
 
     try std.testing.expectEqual(@as(usize, 14), std.mem.count(u8, output.items, "/* canonical executable MIR */"));
     const narrow = try cFunctionBody(output.items, "MC_UNUSED static uint8_t narrow_unsigned(uint32_t value)");
@@ -14713,7 +14706,7 @@ test "C canonical executable MIR owns serial compare Result" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_serial_compare.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_serial_compare.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "MC_UNUSED static mc_result_Order_AmbiguousSerialOrder compare(uint32_t a, uint32_t b)");
     try expectContains(body, "/* canonical executable MIR */");
@@ -14732,7 +14725,7 @@ test "C canonical executable MIR owns bounded counter Result" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTestNoFunctionBodyFallback("c_mir_counter_elapsed_bounded.mc", source, &output);
+    try appendCheckedCTestWithMir("c_mir_counter_elapsed_bounded.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "MC_UNUSED static mc_result_mc_type_generic_8_Duration_1_3_u64_AmbiguousCounterInterval bounded(uint64_t now, uint64_t start, uint64_t max)");
     try expectContains(body, "/* canonical executable MIR */");

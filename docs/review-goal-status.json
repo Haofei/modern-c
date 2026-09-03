@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/review-goal-status.json",
-  "purpose": "Machine-readable status for the active review goals: close codegen AST body fallback, establish a minimal syntax-free CheckedProgram, then cut over to a bounded real module graph.",
+  "purpose": "Machine-readable closure record for the completed compiler-architecture review goals: remove codegen AST body fallback, establish a minimal syntax-free CheckedProgram, then cut over to a bounded real module graph.",
   "policy": {
     "scope": "language/compiler architecture only",
     "not_scope": "production readiness, kernel productization, package registry, LSP product work",
@@ -19,7 +19,7 @@
         "strict_llvm": "canonical executable MIR only; no function-body fallback ingress or legacy emitter remains",
         "broad_c": "all previously reachable fallback cases are canonical or fail closed as explicitly unsupported",
         "broad_llvm": "all previously reachable fallback cases are canonical or fail closed as explicitly unsupported",
-        "completion_note": "The AST fallback request payload, specialized plans, census scaffolding, and both legacy body emitters are deleted."
+        "completion_note": "The AST fallback request payload, specialized plans, census scaffolding, stale fallback-named test wrappers, and both legacy body emitters are deleted."
       },
       "completion_evidence": [
         {
