@@ -26,14 +26,14 @@
       "overlay_union_decl: ast.OverlayUnionDecl": 1
     },
     "src/codegen_attrs.zig": {
-      "transitional_ret_type: ?ast_bridge.TypeExpr": 1,
+      "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
       "ty: ?ast_bridge.TypeExpr": 1,
       "init: ?ast_bridge.Expr": 1,
       "TraitDeclFacts": 0,
       "ImplTraitFacts": 0
     },
     "src/codegen_signature.zig": {
-      "ty: ast_bridge.TypeExpr": 1
+      "ty: ast_bridge.TypeExpr": 0
     }
   },
   "normalized_fact_anchors": {
@@ -136,8 +136,8 @@
       "params: []const ast_bridge.Param": 0,
       "params: []const FunctionParamFact": 1,
       "return_type: ?ast_bridge.TypeExpr": 0,
-      "transitional_ret_type: ?ast_bridge.TypeExpr": 1,
-      "pub fn transitionalReturnType(self: FunctionSignatureFacts) ?ast_bridge.TypeExpr": 1,
+      "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
+      "pub fn transitionalReturnType(self: FunctionSignatureFacts) ?ast_bridge.TypeExpr": 0,
       "has_definition: bool": 1,
       "backend_name: ?[]const u8": 1,
       "c_abi: bool": 1,

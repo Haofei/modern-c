@@ -476,9 +476,9 @@ const LlvmEmitter = struct {
     need_dbg_value: bool = false,
     current_debug_scope: ?usize = null,
     current_debug_span: ?ast_bridge.Span = null,
-    current_return_ty: ?ast_bridge.TypeExpr = null,
+    current_return_ty: ?TransitionalTypeExpr = null,
     current_function: ?[]const u8 = null,
-    current_params: ?[]const codegen_attrs.FunctionParamFact = null,
+    current_params: ?[]const lower_llvm_model.FnParam = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
@@ -653,17 +653,26 @@ const LlvmEmitter = struct {
 
     fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
-        const ret_ty = sig.transitionalReturnType() orelse simpleType(function.signature.name.span, "void");
+        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedLlvmEmission;
+        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len)
+            return error.UnsupportedLlvmEmission;
+        const ret_ty = try self.signatureTypeExpr(sig.return_type_id, sig.name.span);
         _ = try self.llvmType(ret_ty);
-        // Keep the existing body bridge for this transitional pass, but admit
-        // every callable signature through the module-owned syntax-free table
-        // first.  This gives the LLVM path one canonical recursive signature
-        // representation without copying type shapes into a second registry.
         const signature_ret = try self.llvmSignatureType(sig.return_type_id);
         if (!std.mem.eql(u8, signature_ret, try self.llvmType(ret_ty))) return error.UnsupportedLlvmEmission;
-        for (sig.params) |param| {
+        const params = try self.scratch.allocator().alloc(lower_llvm_model.FnParam, sig.params.len);
+        for (sig.params, fn_mir.param_types, 0..) |param, mir_param_ty, index| {
+            if (!mir.ValueType.eql(param.value_ty, mir_param_ty)) return error.UnsupportedLlvmEmission;
+            const param_ty = try self.signatureTypeExpr(param.type_id, param.name.span);
             const signature_param = try self.llvmSignatureType(param.type_id);
-            if (!std.mem.eql(u8, signature_param, try self.llvmType(param.ty))) return error.UnsupportedLlvmEmission;
+            if (!std.mem.eql(u8, signature_param, try self.llvmType(param_ty))) return error.UnsupportedLlvmEmission;
+            params[index] = .{
+                .name = param.name,
+                .value_ty = param.value_ty,
+                .type_id = param.type_id,
+                .ty = param_ty,
+                .is_comptime = param.is_comptime,
+            };
         }
         const debug_id: ?usize = if (function.body_facts.has_definition) blk: {
             const id = self.debug_next_id;
@@ -681,7 +690,7 @@ const LlvmEmitter = struct {
             .return_ty = sig.return_ty,
             .return_type_id = sig.return_type_id,
             .ret = ret_ty,
-            .params = sig.params,
+            .params = params,
             .c_abi = sig.c_abi,
             .is_variadic = sig.is_variadic,
             .debug_id = debug_id,
@@ -1410,7 +1419,8 @@ const LlvmEmitter = struct {
         };
         const sig_facts = function.signature;
         if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
-        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
+        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
+        const ret_ty = fn_sig.ret;
         const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
             try self.llvmSignatureType(sig_facts.return_type_id)
         else
@@ -1418,7 +1428,6 @@ const LlvmEmitter = struct {
                 error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
                 else => return err,
             };
-        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
 
         const old_scope = self.current_debug_scope;
@@ -1430,7 +1439,7 @@ const LlvmEmitter = struct {
         self.current_debug_span = sig_facts.name.span;
         self.current_return_ty = ret_ty;
         self.current_function = sig_facts.name.text;
-        self.current_params = sig_facts.params;
+        self.current_params = fn_sig.params;
         defer {
             self.current_debug_scope = old_scope;
             self.current_debug_span = old_span;
@@ -1442,13 +1451,13 @@ const LlvmEmitter = struct {
         const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
 
         try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
-        for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
+        for (fn_sig.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
             try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.executableFunctionParamType(fn_mir, param, i), param_ext, executable_parameter.local.raw });
         }
         if (fn_mir.executable_body.is_variadic) {
-            if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+            if (fn_sig.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.appendSlice(self.allocator, "...");
         }
         const entry_label = try self.functionEntryLabel();
@@ -1485,7 +1494,8 @@ const LlvmEmitter = struct {
         };
         const sig_facts = function.signature;
         if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
-        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
+        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return false;
+        const ret_ty = fn_sig.ret;
         const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
             try self.llvmSignatureType(sig_facts.return_type_id)
         else
@@ -1493,7 +1503,6 @@ const LlvmEmitter = struct {
                 error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
                 else => return err,
             };
-        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return false;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
         const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
 
@@ -1510,7 +1519,7 @@ const LlvmEmitter = struct {
         }
 
         try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
-        for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, index| {
+        for (fn_sig.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, index| {
             if (index != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
             try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.executableFunctionParamType(fn_mir, param, index), param_ext, executable_parameter.local.raw });
@@ -1710,7 +1719,7 @@ const LlvmEmitter = struct {
         return std.mem.eql(u8, left_type, right_type);
     }
 
-    fn executableFunctionParamType(self: *LlvmEmitter, function: mir.Function, param: codegen_attrs.FunctionParamFact, index: usize) ![]const u8 {
+    fn executableFunctionParamType(self: *LlvmEmitter, function: mir.Function, param: lower_llvm_model.FnParam, index: usize) ![]const u8 {
         if (index >= function.param_types.len or !mir.ValueType.eql(param.value_ty, function.param_types[index]))
             return error.UnsupportedLlvmEmission;
         const executable_parameter = if (index < function.executable_body.parameters.len) function.executable_body.parameters[index] else null;
@@ -1852,14 +1861,14 @@ const LlvmEmitter = struct {
         const sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
         try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, ret_llvm, sig_facts.name.text });
-        for (sig_facts.params, 0..) |param, i| {
+        for (sig.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
             try self.out.appendSlice(self.allocator, try self.executableFunctionParamType(fn_mir, param, i));
             if (param_ext.len != 0) try self.out.print(self.allocator, " {s}", .{std.mem.trimEnd(u8, param_ext, " ")});
         }
-        if (sig_facts.is_variadic) {
-            if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+        if (sig.is_variadic) {
+            if (sig.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.appendSlice(self.allocator, "...");
         }
         try self.out.appendSlice(self.allocator, ")\n\n");
@@ -9594,6 +9603,60 @@ const LlvmEmitter = struct {
         };
     }
 
+    /// Materialize a transient AST-shaped type only inside LLVM's legacy body
+    /// mechanics.  This is deliberately one-way: callable artifacts retain
+    /// only `SignatureTypeId`, and this routine reads no source type payload.
+    fn signatureTypeExpr(self: *LlvmEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
+        const alloc = self.scratch.allocator();
+        const child = struct {
+            fn make(emitter: *LlvmEmitter, child_id: mir.SignatureTypeId, source_span: diagnostics.Span) anyerror!*TransitionalTypeExpr {
+                const value = try emitter.scratch.allocator().create(TransitionalTypeExpr);
+                value.* = try emitter.signatureTypeExpr(child_id, source_span);
+                return value;
+            }
+        }.make;
+        return .{ .span = span, .kind = switch (shape) {
+            .name => |name| .{ .name = .{ .text = name, .span = span } },
+            .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
+            .member => |node| .{ .member = .{
+                .base = try child(self, node.base, span),
+                .field = .{ .text = node.field, .span = span },
+            } },
+            .nullable => |node| .{ .nullable = try child(self, node, span) },
+            .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
+            .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
+            .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
+            .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
+            .array => |node| blk: {
+                const length = node.length orelse return error.UnsupportedLlvmEmission;
+                const text = try std.fmt.allocPrint(alloc, "{d}", .{length});
+                break :blk .{ .array = .{
+                    .len = .{ .span = span, .kind = .{ .int_literal = text } },
+                    .child = try child(self, node.child, span),
+                } };
+            },
+            .generic => |node| blk: {
+                const args = try alloc.alloc(TransitionalTypeExpr, node.args.len);
+                for (node.args, 0..) |arg, index| args[index] = try self.signatureTypeExpr(arg, span);
+                break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
+            },
+            .fn_pointer => |node| blk: {
+                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
+                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
+                break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(self, node.ret, span) } };
+            },
+            .closure_type => |node| blk: {
+                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
+                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
+                break :blk .{ .closure_type = .{ .params = params, .ret = try child(self, node.ret, span) } };
+            },
+            // Dynamic trait codegen is explicitly not qualified.  Do not
+            // invent a source-shaped fallback while materializing signatures.
+            .dyn_trait => return error.UnsupportedLlvmEmission,
+        } };
+    }
+
     fn llvmSignatureNameType(self: *LlvmEmitter, name: []const u8) ![]const u8 {
         if (std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never")) return "void";
         if (isOpaqueAddressTypeName(name)) return "i64";
@@ -9602,7 +9665,7 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, name, "bool")) return "i1";
         if (std.mem.eql(u8, name, "f32")) return "float";
         if (std.mem.eql(u8, name, "f64")) return "double";
-        // Aliases and aggregate declarations are module-level transitional
+        // Aliases and aggregates are module-level transitional
         // type artifacts.  They are intentionally not carried by FnSig.
         if (self.type_aliases.get(name)) |target| return self.llvmType(target);
         if (self.enum_types.get(name)) |decl| return self.llvmType(enumReprType(decl));
@@ -9642,7 +9705,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn resultLlvmType(self: *LlvmEmitter, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) ![]const u8 {
+    fn resultLlvmType(self: *LlvmEmitter, ok_ty: TransitionalTypeExpr, err_ty: TransitionalTypeExpr) ![]const u8 {
         return std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s}, {s} }}", .{ try self.resultPayloadLlvmType(ok_ty), try self.resultPayloadLlvmType(err_ty) });
     }
 

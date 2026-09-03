@@ -216,7 +216,6 @@ pub const FunctionArtifact = struct {
                 .params = params,
                 .return_ty = return_ty,
                 .return_type_id = return_type_id,
-                .transitional_ret_type = fn_decl.return_type,
                 .exported = fn_decl.exported,
                 .is_extern = is_extern,
                 .is_const = fn_decl.is_const,

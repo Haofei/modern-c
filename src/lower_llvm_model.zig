@@ -1,5 +1,4 @@
 const ast_bridge = @import("ast_bridge.zig");
-const codegen_signature = @import("codegen_signature.zig");
 const mir_model = @import("mir_model.zig");
 const type_layout = @import("layout.zig");
 
@@ -17,18 +16,29 @@ pub const LocalSlotKind = enum {
 };
 
 pub const FnSig = struct {
-    /// Canonical callable result identity.  `ret` remains only for legacy
-    /// expression-body lowering until those consumers are cut over.
+    /// Canonical callable result identity. `ret` is a backend-local transient
+    /// materialized from `return_type_id`; it is never source-signature data.
     return_ty: mir_model.ValueType,
     return_type_id: mir_model.SignatureTypeId,
     ret: ast_bridge.TypeExpr,
-    params: []const codegen_signature.FunctionParamFact,
+    params: []const FnParam,
     c_abi: bool = false,
     is_variadic: bool = false,
     debug_id: ?usize = null,
     // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error
     // path when the propagated error type differs from the function's error type.
     error_from: bool = false,
+};
+
+/// Backend-local callable parameter mechanics.  The AST type is synthesized
+/// from the module-owned signature table solely for legacy expression-body
+/// rendering; declaration artifacts never carry it.
+pub const FnParam = struct {
+    name: ast_bridge.Ident,
+    value_ty: mir_model.ValueType,
+    type_id: mir_model.SignatureTypeId,
+    ty: ast_bridge.TypeExpr,
+    is_comptime: bool = false,
 };
 
 // A generated env-widening thunk for a scalar-env `bind`. `fname` is the real

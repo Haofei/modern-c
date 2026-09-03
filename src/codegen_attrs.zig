@@ -18,9 +18,6 @@ pub const FunctionSignatureFacts = struct {
     return_ty: mir.ValueType,
     /// Module-owned recursive source type shape.
     return_type_id: mir.SignatureTypeId = .invalid,
-    /// Transitional LLVM signature ingress.  C has cut over to
-    /// `return_type_id`; this field remains until LLVM materialization lands.
-    transitional_ret_type: ?ast_bridge.TypeExpr,
     exported: bool,
     is_extern: bool,
     is_const: bool,
@@ -29,9 +26,6 @@ pub const FunctionSignatureFacts = struct {
     error_from: bool,
     backend_name: ?[]const u8,
 
-    pub fn transitionalReturnType(self: FunctionSignatureFacts) ?ast_bridge.TypeExpr {
-        return self.transitional_ret_type;
-    }
 };
 
 pub const FunctionBodyFacts = struct {
