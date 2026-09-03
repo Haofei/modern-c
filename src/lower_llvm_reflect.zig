@@ -13,7 +13,7 @@ const type_bridge = @import("type_bridge.zig");
 const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
-const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
+const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
 const alignForward = lower_llvm_type.alignForward;
 const exprAsType = lower_llvm_type.exprAsType;
 const isDynTraitLlvmType = lower_llvm_type.isDynTraitLlvmType;
@@ -36,7 +36,7 @@ pub const ReflectEnv = struct {
     enum_types: *const std.StringHashMap(ast_bridge.EnumDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    tagged_unions: *const std.StringHashMap(TaggedUnionInfo),
     struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
@@ -134,10 +134,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: us
             if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
             if (env.type_aliases.get(name.text)) |aliased| return comptimeSizeOf(env, aliased, depth + 1);
             if (env.overlay_unions.get(name.text)) |info| return @intCast(info.size);
-            if (env.tagged_unions.get(name.text)) |union_decl| {
-                const layout = taggedUnionLayout(env, union_decl, depth + 1) orelse return null;
-                return @intCast(layout.size);
-            }
+            if (env.tagged_unions.get(name.text)) |info| return @intCast(info.layout.size);
             if (env.struct_types.get(name.text)) |struct_decl| return comptimeStructSize(env, struct_decl, depth + 1);
             if (env.enum_types.get(name.text)) |enum_decl| return comptimeSizeOf(env, enumReprType(enum_decl), depth + 1);
             if (env.packed_bits.get(name.text)) |info| return comptimeSizeOf(env, info.repr, depth + 1);
@@ -197,10 +194,7 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: u
             if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
             if (env.type_aliases.get(name.text)) |aliased| return comptimeAlignOf(env, aliased, depth + 1);
             if (env.overlay_unions.get(name.text)) |info| return @intCast(info.alignment);
-            if (env.tagged_unions.get(name.text)) |union_decl| {
-                const layout = taggedUnionLayout(env, union_decl, depth + 1) orelse return null;
-                return @intCast(layout.alignment);
-            }
+            if (env.tagged_unions.get(name.text)) |info| return @intCast(info.layout.alignment);
             if (env.struct_types.get(name.text)) |struct_decl| return comptimeStructAlign(env, struct_decl, depth + 1);
             if (env.enum_types.get(name.text)) |enum_decl| return comptimeAlignOf(env, enumReprType(enum_decl), depth + 1);
             if (env.packed_bits.get(name.text)) |info| return comptimeAlignOf(env, info.repr, depth + 1);
@@ -275,10 +269,6 @@ pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, fiel
 
 pub fn comptimeStructLayout(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
     return type_layout.comptimeStructLayout(*const ReflectEnv, env, struct_decl, wanted_field, depth, comptimeSizeOf, comptimeAlignOf);
-}
-
-pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?TaggedUnionLayout {
-    return type_layout.comptimeTaggedUnionLayout(*const ReflectEnv, env, union_decl.cases, depth, comptimeSizeOf, comptimeAlignOf);
 }
 
 fn packedBitsInfoForType(env: *const ReflectEnv, ty: ast_bridge.TypeExpr) ?PackedBitsInfo {

@@ -13491,7 +13491,7 @@ test "LLVM backend emits cstr as ptr" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "i64 5, 1") != null);
 }
 
-test "LLVM reflection rejects oversized tagged union layout without panicking" {
+test "MIR admission rejects oversized tagged union layout before LLVM lowering" {
     const source =
         \\union Big {
         \\    data: [18446744073709551615]u8,
@@ -13504,7 +13504,7 @@ test "LLVM reflection rejects oversized tagged union layout without panicking" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_reflect_big_union.mc", source, &output));
+    try std.testing.expectError(error.InvalidMirTaggedUnionFacts, appendLlvmTest("llvm_reflect_big_union.mc", source, &output));
 }
 
 test "LLVM check elision is scoped to the current function" {

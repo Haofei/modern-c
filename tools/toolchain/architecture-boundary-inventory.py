@@ -54,7 +54,7 @@ EXACT_BACKEND_COUNTS = {
     # may only lower this count.
     # Float literal lowering now consumes typed FloatFact identity instead of
     # a target-type AST payload, removing one backend syntax reference.
-    "ast_bridge.": 2719,
+    "ast_bridge.": 2717,
     "declaration_artifacts.": 20,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
