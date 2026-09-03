@@ -3,7 +3,7 @@
 //! The C/LLVM backends admit a function body through the verified-MIR fast path
 //! (`emitSimpleMirFunction`) when they recognize its shape, and otherwise fall
 //! back to rendering the transitional AST body artifact
-//! (`FunctionBodyFallbackArtifact.syntax: ast.Block`). Closing the P0 goal
+//! (the retired function-body AST fallback ingress). Closing the P0 goal
 //! ("codegen no longer ingests an AST body") means shrinking that fallback to
 //! zero. Today the shapes are attacked one at a time, blindly — there is no
 //! frequency-ranked worklist of what still falls back.

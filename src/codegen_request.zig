@@ -3,7 +3,6 @@ const std = @import("std");
 const codegen_options = @import("codegen_options.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
-const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
 const verified_program = @import("verified_program.zig");
 
@@ -17,7 +16,6 @@ const verified_program = @import("verified_program.zig");
 pub const LowerRequest = struct {
     program: verified_program.VerifiedProgram,
     declaration_artifacts: CgDeclArtifacts,
-    function_bodies: CodegenFunctionBodyArtifacts,
     out: *std.ArrayList(u8),
     opts: codegen_options.LowerOptions,
 };
@@ -33,9 +31,9 @@ pub const EmitMapRequest = struct {
     opts: codegen_options.LowerOptions,
 };
 
-test "codegen requests keep syntax mechanics behind named artifact fields" {
+test "codegen requests keep source map mechanics out of ordinary lowering" {
     try std.testing.expect(@hasField(LowerRequest, "declaration_artifacts"));
-    try std.testing.expect(@hasField(LowerRequest, "function_bodies"));
+    try std.testing.expect(!@hasField(LowerRequest, "function_bodies"));
     try std.testing.expect(!@hasField(LowerRequest, "source_map_artifacts"));
     try std.testing.expect(!@hasField(EmitMapRequest, "declaration_artifacts"));
     try std.testing.expect(!@hasField(EmitMapRequest, "function_bodies"));

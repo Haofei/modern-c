@@ -1419,7 +1419,7 @@ test "LLVM conditional global and call returns lower from MIR without body fallb
     try expectNotContains(call_body, "alloca");
 }
 
-test "LLVM conditional statement returns prefer MIR when fallback body exists" {
+test "LLVM conditional statement returns lower from MIR" {
     const source =
         \\extern fn hit(value: u32) -> void;
         \\extern fn make(value: u32) -> u32;
@@ -1432,32 +1432,19 @@ test "LLVM conditional statement returns prefer MIR when fallback body exists" {
         \\    }
         \\}
     ;
-    const poison_source =
-        \\fn choose_call(flag: bool, value: u32) -> u32 {
-        \\    return 99;
-        \\}
-    ;
     var parsed = try test_support.parseModule("llvm_mir_fallback_poison.mc", source);
     defer parsed.deinit();
-    var poison = try test_support.parseModule("llvm_mir_fallback_poison_body.mc", poison_source);
-    defer poison.deinit();
 
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls());
     defer artifacts.deinit(std.testing.allocator);
 
-    const poison_body = poison.decls()[0].kind.fn_decl.body.?;
-    var fallback = [_]declaration_artifacts.FunctionBodyFallbackArtifact{.{
-        .name = "choose_call",
-        .syntax = poison_body,
-    }};
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
         artifacts.codegen(),
-        .{ .function_body_fallbacks = fallback[0..] },
         &module_mir,
         &output,
         "llvm_mir_fallback_poison.mc",
@@ -1472,7 +1459,6 @@ test "LLVM conditional statement returns prefer MIR when fallback body exists" {
     try expectCanonicalConditional(call_body);
     try expectContains(call_body, "call void @hit(i32 %mc_arg_1)");
     try expectContains(call_body, "call i32 @make(i32 %mc_arg_1)");
-    try expectNotContains(call_body, "ret i32 99");
 }
 
 test "LLVM loop grouped scalar returns lower from MIR without body fallback" {
@@ -5177,13 +5163,13 @@ fn appendLlvmCheckedMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl
 fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), declaration_artifacts.CodegenFunctionBodyArtifacts.empty, module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
 fn appendLlvmTestNoFunctionBodyFallback(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
@@ -20466,7 +20452,6 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{
         .program = verified,
         .declaration_artifacts = early_metadata.codegen(),
-        .function_bodies = early_metadata.codegenFunctionBodies(),
         .out = &out,
         .opts = .{
             .profile = .kernel,

@@ -20,7 +20,7 @@ fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *st
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
 
 fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
@@ -38,13 +38,13 @@ fn appendCProfileWithSourcePathDeclsTest(allocator: std.mem.Allocator, decls: []
 fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
+    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), declaration_artifacts.CodegenFunctionBodyArtifacts.empty, module_mir, out, profile, source_path, checks, stub_asm, reporter);
+    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: []const u8, generated_c_path: ?[]const u8) !void {
@@ -5449,7 +5449,7 @@ test "lower-c conditional global and call returns lower from MIR without body fa
     try expectNotContains(call_body, "mc_tmp");
 }
 
-test "lower-c conditional statement returns prefer MIR when fallback body exists" {
+test "lower-c conditional statement returns lower from MIR" {
     const source =
         \\extern fn hit(value: u32) -> void;
         \\extern fn make(value: u32) -> u32;
@@ -5462,32 +5462,19 @@ test "lower-c conditional statement returns prefer MIR when fallback body exists
         \\    }
         \\}
     ;
-    const poison_source =
-        \\fn choose_call(flag: bool, value: u32) -> u32 {
-        \\    return 99;
-        \\}
-    ;
     var parsed = try test_support.parseModule("c_mir_fallback_poison.mc", source);
     defer parsed.deinit();
-    var poison = try test_support.parseModule("c_mir_fallback_poison_body.mc", poison_source);
-    defer poison.deinit();
 
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls());
     defer artifacts.deinit(std.testing.allocator);
 
-    const poison_body = poison.decls()[0].kind.fn_decl.body.?;
-    var fallback = [_]declaration_artifacts.FunctionBodyFallbackArtifact{.{
-        .name = "choose_call",
-        .syntax = poison_body,
-    }};
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
         artifacts.codegen(),
-        .{ .function_body_fallbacks = fallback[0..] },
         &module_mir,
         &output,
         .kernel,
@@ -5502,7 +5489,6 @@ test "lower-c conditional statement returns prefer MIR when fallback body exists
     try expectContains(call_body, "hit(");
     try expectContains(call_body, "= make(");
     try expectContains(call_body, "return mc_exec_tmp_");
-    try expectNotContains(call_body, "99");
 }
 
 test "lower-c loop grouped scalar returns lower from MIR without body fallback" {

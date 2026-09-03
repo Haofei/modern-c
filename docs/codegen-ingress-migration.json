@@ -14,7 +14,7 @@
       "body: ?ast.Block": 0,
       "body_fallback: FunctionBodyFallback": 0,
       "pub const FunctionBodyFallbackArtifact = struct": 0,
-      "function_body_fallbacks: []const FunctionBodyFallbackArtifact": 2,
+      "function_body_fallbacks: []const FunctionBodyFallbackArtifact": 0,
       "syntax: ?ast.Block": 0,
       "syntax: ast.Block": 0,
       "backend_attrs: []const ast.Attr": 0,
@@ -30,11 +30,6 @@
       "union_decl: ast.UnionDecl": 1,
       "packed_bits_decl: ast.PackedBitsDecl": 1,
       "overlay_union_decl: ast.OverlayUnionDecl": 1
-    },
-    "src/declaration_artifact_fallbacks.zig": {
-      "pub const FunctionBodyFallbackArtifact = struct": 1,
-      "syntax: ast.Block": 1,
-      "pub fn findLegacyFunctionBody(fallbacks: []const FunctionBodyFallbackArtifact, name: []const u8) ?ast.Block": 1
     }
   },
   "normalized_fact_anchors": {
@@ -135,12 +130,12 @@
   },
   "mir_body_fast_path_ratchet": {
     "src/lower_c_tests.zig": {
-      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 170,
-      "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
+      "appendCheckedCTestNoFunctionBodyFallback(\"c_mir_": 171,
+      "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 0
     },
     "src/lower_llvm_tests.zig": {
-      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 166,
-      "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
+      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 167,
+      "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 0
     }
   },
   "fallback_census_ratchet": {

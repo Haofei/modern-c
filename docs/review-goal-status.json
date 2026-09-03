@@ -11,31 +11,42 @@
     {
       "id": "function-body-fallback",
       "priority": "P0",
-      "status": "incomplete",
+      "status": "complete",
       "requested_end_state": "FunctionArtifact/body fallback is no longer an AST body ingress for codegen; codegen is driven by VerifiedProgram/MIR typed facts.",
       "progress": {
-        "measured_at": "2026-09-01",
+        "measured_at": "2026-09-02",
         "strict_c": "168/168 admitted through canonical MIR, 0 fallback, 0 specialized, 0 plan definitions",
         "strict_llvm": "168/168 admitted through canonical MIR, 0 fallback, 0 specialized, 0 plan definitions",
-        "broad_c": "1606/1818 admitted through canonical MIR, 212 explicit AST fallbacks",
-        "broad_llvm": "1658/1872 admitted through canonical MIR, 214 explicit AST fallbacks",
-        "completion_note": "Specialized-plan retirement is complete. P0 remains incomplete until the fallback artifact and both backend AST-body ingress branches are deleted."
+        "broad_c": "pre-cutover snapshot: 1606/1818 canonical; the 212 legacy cases now fail closed instead of entering AST codegen",
+        "broad_llvm": "pre-cutover snapshot: 1658/1872 canonical; the 214 legacy cases now fail closed instead of entering AST codegen",
+        "completion_note": "Specialized plans and the function-body AST fallback ingress are deleted. Non-canonical bodies now fail closed as unsupported."
       },
-      "current_evidence": [
+      "completion_evidence": [
         {
-          "file": "src/declaration_artifact_fallbacks.zig",
-          "needle": "pub const FunctionBodyFallbackArtifact = struct",
-          "expected_count_while_incomplete": 1
+          "file": "src/codegen_request.zig",
+          "needle": "!@hasField(LowerRequest, \"function_bodies\")"
         },
         {
-          "file": "src/declaration_artifact_fallbacks.zig",
-          "needle": "syntax: ast.Block",
-          "expected_count_while_incomplete": 1
+          "file": "src/lower_c_emitter.zig",
+          "needle": "fallback_census.record(.c, .unsupported"
         },
         {
-          "file": "docs/codegen-ingress-migration.json",
-          "needle": "\"function_body_fallbacks: []const FunctionBodyFallbackArtifact\": 2",
-          "expected_count_while_incomplete": 1
+          "file": "src/lower_llvm.zig",
+          "needle": "fallback_census.record(.llvm, .unsupported"
+        }
+      ],
+      "retired_evidence": [
+        {
+          "file": "src/declaration_artifacts.zig",
+          "needle": "function_body_fallbacks"
+        },
+        {
+          "file": "src/lower_c_emitter.zig",
+          "needle": "legacyFunctionBody"
+        },
+        {
+          "file": "src/lower_llvm.zig",
+          "needle": "legacyFunctionBody"
         }
       ]
     },

@@ -5,7 +5,6 @@ const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
-const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
@@ -44,7 +43,7 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendCProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.function_bodies, request.program, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendCProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.program, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 fn backendEmitMap(
@@ -88,7 +87,6 @@ pub fn appendStructDeclsWithMirArtifacts(
 pub fn appendCProfileWithMirArtifacts(
     allocator: std.mem.Allocator,
     artifacts: CgDeclArtifacts,
-    function_bodies: CodegenFunctionBodyArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     profile: Profile,
@@ -104,13 +102,12 @@ pub fn appendCProfileWithMirArtifacts(
         error.StaleMirTargetTypeFacts => return error.UnsupportedCEmission,
         else => return err,
     };
-    return appendCProfileWithVerifiedProgram(allocator, artifacts, function_bodies, program, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithVerifiedProgram(allocator, artifacts, program, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
     early_metadata: CgDeclArtifacts,
-    function_bodies: CodegenFunctionBodyArtifacts,
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     profile: Profile,
@@ -130,7 +127,6 @@ fn appendCProfileWithVerifiedProgram(
     try lower_c_emitter.appendModuleMir(
         allocator,
         early_metadata,
-        function_bodies,
         program.typed_mir,
         out,
         source_path,

@@ -270,7 +270,8 @@ remain an explicit fallback until canonical MIR owns them.
 
 ## Completion condition
 
-P0 completes only when the broad fallback reaches zero and these are deleted:
+P0 is complete: non-canonical function bodies now fail closed, and these
+ordinary-codegen syntax ingress paths have been deleted:
 
 - `FunctionBodyFallbackArtifact.syntax: ast.Block`;
 - `function_body_fallbacks` from codegen artifacts;

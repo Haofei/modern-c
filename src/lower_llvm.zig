@@ -7,7 +7,6 @@ const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
-const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
@@ -269,13 +268,12 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.function_bodies, request.program, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.program, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendLlvmCheckedMirArtifacts(
     allocator: std.mem.Allocator,
     artifacts: CodegenDeclArtifacts,
-    function_bodies: CodegenFunctionBodyArtifacts,
     module_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -292,13 +290,12 @@ pub fn appendLlvmCheckedMirArtifacts(
         error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
         else => return err,
     };
-    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, artifacts, function_bodies, program, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, artifacts, program, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
     early_metadata: CodegenDeclArtifacts,
-    function_bodies: CodegenFunctionBodyArtifacts,
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -353,7 +350,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .codegen_artifacts = early_metadata,
-        .function_bodies = function_bodies,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
         .global_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
@@ -451,7 +447,6 @@ const LlvmEmitter = struct {
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
     codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
-    function_bodies: CodegenFunctionBodyArtifacts = CodegenFunctionBodyArtifacts.empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -833,9 +828,6 @@ const LlvmEmitter = struct {
                 fallback_census.record(.llvm, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
                 return error.UnsupportedLlvmEmission;
-            } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
-                fallback_census.record(.llvm, .fallback, .ast_fallback, canonical_status, canonical_detail, self.source_path, fn_mir);
-                try self.emitFunction(function, body, render_attrs);
             } else {
                 fallback_census.record(.llvm, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 return error.UnsupportedLlvmEmission;
