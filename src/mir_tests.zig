@@ -7460,7 +7460,9 @@ test "MIR verifier rejects malformed structural access facts" {
         else => {},
     };
     try std.testing.expect(corrupted_span_table);
-    try std.testing.expectError(error.InvalidAccessFact, mir_body_plan.verify(misaligned));
+    // The shared identity table is validated before individual access facts,
+    // so corrupting its slot must fail at that stronger boundary.
+    try std.testing.expectError(error.InvalidSpanIdentity, mir_body_plan.verify(misaligned));
 }
 
 test "MIR owns MMIO read write identities and complete types" {
