@@ -58,6 +58,7 @@ pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]co
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetValueTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.ValueType;
 pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void;
 
 pub const AccessContext = struct {
@@ -108,6 +109,8 @@ pub const ReplacementEmitContext = struct {
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
     emit_read_sequenced_binary_value_temp: EmitReadSequencedBinaryValueTempFn,
+    mir_owned_target_type: MirOwnedTargetTypeFn,
+    mir_owned_target_value_type: MirOwnedTargetValueTypeFn,
 };
 
 pub const CallEmitContext = struct {
@@ -160,11 +163,25 @@ pub fn emitReadExprWithReplacements(
             try ctx.out.appendSlice(ctx.allocator, ")");
         },
         .call => |node| {
+            const fn_name = calleeIdentName(node.callee.*);
+            const fn_info = if (fn_name) |name| ctx.functions.get(name) else null;
             try ctx.emit_expr(ctx.emit_ctx, node.callee.*, locals);
             try ctx.out.appendSlice(ctx.allocator, "(");
             for (node.args, 0..) |arg, i| {
                 if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-                const arg_target_ty: ?ast_bridge.TypeExpr = null;
+                const arg_target_ty = if (fn_info) |info|
+                    if (i < info.params.len) blk: {
+                        const owner = fn_name orelse return error.UnsupportedCEmission;
+                        const expected_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, owner, i) orelse return error.UnsupportedCEmission;
+                        const target_value_ty = ctx.mir_owned_target_value_type(ctx.emit_ctx, .direct_call_argument, arg.span, owner, i) orelse return error.UnsupportedCEmission;
+                        if (!mir.ValueType.eql(target_value_ty, info.params[i].value_ty)) return error.UnsupportedCEmission;
+                        break :blk expected_ty;
+                    } else if (!info.is_variadic)
+                        return error.UnsupportedCEmission
+                    else
+                        null
+                else
+                    null;
                 try emitReadExprWithReplacements(ctx, arg, locals, arg_target_ty, replacements);
             }
             try ctx.out.appendSlice(ctx.allocator, ")");

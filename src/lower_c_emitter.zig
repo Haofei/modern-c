@@ -1887,6 +1887,8 @@ pub const CEmitter = struct {
             .global_assignment_target = globalAssignmentTargetForMmio,
             .emit_assign_target = emitAssignTargetForMmio,
             .emit_read_sequenced_binary_value_temp = emitMmioReadSequencedBinaryValueTempForMmio,
+            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
+            .mir_owned_target_value_type = mirOwnedTargetValueTypeForLowering,
         };
     }
 
@@ -2202,6 +2204,8 @@ pub const CEmitter = struct {
             .emit_nullable_try_sequenced_binary_value_temp = emitNullableTrySequencedBinaryValueTempForTry,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
+            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
+            .mir_owned_target_value_type = mirOwnedTargetValueTypeForLowering,
         };
     }
 
@@ -3960,8 +3964,10 @@ pub const CEmitter = struct {
         }
         var temps: std.ArrayList(SequencedArgTemp) = .empty;
         defer temps.deinit(self.scratch.allocator());
-        for (cleanup.args) |arg| {
-            const target_ty = self.operandEmitType(arg, locals) orelse return error.UnsupportedCEmission;
+        for (cleanup.args, 0..) |arg, i| {
+            const fact = self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, cleanup.fn_name, i) orelse return error.UnsupportedCEmission;
+            if (!mir.ValueType.eql(fact.result_ty, info.params[i].value_ty)) return error.UnsupportedCEmission;
+            const target_ty = fact.target_ty;
             try temps.append(self.scratch.allocator(), try self.emitSequencedCallArgTemp(arg, locals, target_ty));
         }
         try self.writeIndent();
@@ -8878,6 +8884,8 @@ pub const CEmitter = struct {
             .array_len_text_for_expr = arrayLenTextForInfo,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
+            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
+            .mir_owned_target_value_type = mirOwnedTargetValueTypeForLowering,
         };
     }
 

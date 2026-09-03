@@ -37,6 +37,8 @@ pub const CTypeForFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, styl
 pub const ArrayLenTextForExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetValueTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.ValueType;
 
 pub const Context = struct {
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
@@ -51,6 +53,8 @@ pub const Context = struct {
     array_len_text_for_expr: ArrayLenTextForExprFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
+    mir_owned_target_type: MirOwnedTargetTypeFn,
+    mir_owned_target_value_type: MirOwnedTargetValueTypeFn,
 };
 
 // C-only representation policy for globals. This chooses aggregate syntax
@@ -300,11 +304,10 @@ pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast_bridge.Expr, locals: *s
             }
             const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
             const info = ctx.functions.get(fn_name) orelse break :blk null;
-            // Direct-call result representation is owned by MIR.  This
-            // body-only helper cannot reconstruct it from a function
-            // signature, so leave the optional fast path unavailable.
-            _ = info;
-            break :blk null;
+            const result_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result, node.callee.*.span, fn_name, null) orelse break :blk null;
+            const result_value_ty = ctx.mir_owned_target_value_type(ctx.emit_ctx, .direct_call_result, node.callee.*.span, fn_name, null) orelse break :blk null;
+            if (!mir.ValueType.eql(result_value_ty, info.return_ty)) break :blk null;
+            break :blk try nullableInnerCTypeForType(ctx, result_ty);
         },
         .grouped => |inner| try nullableInnerCTypeForExpr(ctx, inner.*, locals),
         else => null,
@@ -376,4 +379,88 @@ fn cTypeFor(ctx: Context, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
 
 fn resolveAliasType(ctx: Context, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {
     return type_bridge.resolveAliasType(ctx.type_aliases, ty);
+}
+
+test "nullable direct-call payload requires an agreeing MIR result fact" {
+    const TestState = struct {
+        target_ty: ast_bridge.TypeExpr,
+        result_ty: mir.ValueType,
+
+        fn cType(_: *anyopaque, _: ast_bridge.TypeExpr, _: StructTypeStyle) anyerror![]const u8 {
+            return "Payload";
+        }
+
+        fn arrayLen(_: *anyopaque, _: ast_bridge.Expr) anyerror![]const u8 {
+            return "0";
+        }
+
+        fn callKind(_: *anyopaque, _: ast_bridge.Span) ?mir.CallTargetKind {
+            return null;
+        }
+
+        fn targetType(_: *anyopaque, _: mir.TargetTypeKind, _: ast_bridge.Span) ?ast_bridge.TypeExpr {
+            return null;
+        }
+
+        fn ownedTargetType(ctx: *anyopaque, _: mir.TargetTypeKind, _: ast_bridge.Span, _: []const u8, _: ?usize) ?ast_bridge.TypeExpr {
+            const state: *const @This() = @ptrCast(@alignCast(ctx));
+            return state.target_ty;
+        }
+
+        fn ownedTargetValueType(ctx: *anyopaque, _: mir.TargetTypeKind, _: ast_bridge.Span, _: []const u8, _: ?usize) ?mir.ValueType {
+            const state: *const @This() = @ptrCast(@alignCast(ctx));
+            return state.result_ty;
+        }
+    };
+
+    const span: ast_bridge.Span = .{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    var payload = ast_bridge.TypeExpr{ .span = span, .kind = .{ .name = .{ .text = "Payload", .span = span } } };
+    const nullable = ast_bridge.TypeExpr{ .span = span, .kind = .{ .nullable = &payload } };
+    var callee = ast_bridge.Expr{ .span = span, .kind = .{ .ident = .{ .text = "make_nullable", .span = span } } };
+    const call = ast_bridge.Expr{ .span = span, .kind = .{ .call = .{ .callee = &callee, .type_args = &.{}, .args = &.{} } } };
+
+    var type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(std.testing.allocator);
+    defer type_aliases.deinit();
+    var functions = std.StringHashMap(FnInfo).init(std.testing.allocator);
+    defer functions.deinit();
+    try functions.put("make_nullable", .{
+        .params = &.{},
+        .return_ty = .{ .nullable_value = "Payload" },
+        .return_type_id = .invalid,
+        .is_extern = true,
+    });
+    var structs = std.StringHashMap(ast_bridge.StructDecl).init(std.testing.allocator);
+    defer structs.deinit();
+    var packed_bits = std.StringHashMap(PackedBitsInfo).init(std.testing.allocator);
+    defer packed_bits.deinit();
+    var overlay_unions = std.StringHashMap(OverlayUnionInfo).init(std.testing.allocator);
+    defer overlay_unions.deinit();
+    var tagged_unions = std.StringHashMap(ast_bridge.UnionDecl).init(std.testing.allocator);
+    defer tagged_unions.deinit();
+    var enums = std.StringHashMap(ast_bridge.EnumDecl).init(std.testing.allocator);
+    defer enums.deinit();
+    var locals = std.StringHashMap(LocalInfo).init(std.testing.allocator);
+    defer locals.deinit();
+
+    var state = TestState{ .target_ty = nullable, .result_ty = .{ .nullable_value = "Payload" } };
+    const ctx: Context = .{
+        .type_aliases = &type_aliases,
+        .functions = &functions,
+        .structs = &structs,
+        .packed_bits = &packed_bits,
+        .overlay_unions = &overlay_unions,
+        .tagged_unions = &tagged_unions,
+        .enums = &enums,
+        .emit_ctx = &state,
+        .c_type_for = TestState.cType,
+        .array_len_text_for_expr = TestState.arrayLen,
+        .mir_call_target_kind = TestState.callKind,
+        .mir_target_type = TestState.targetType,
+        .mir_owned_target_type = TestState.ownedTargetType,
+        .mir_owned_target_value_type = TestState.ownedTargetValueType,
+    };
+
+    try std.testing.expectEqualStrings("Payload", (try nullableInnerCTypeForExpr(ctx, call, &locals)).?);
+    state.result_ty = .{ .nullable_value = "Other" };
+    try std.testing.expect((try nullableInnerCTypeForExpr(ctx, call, &locals)) == null);
 }

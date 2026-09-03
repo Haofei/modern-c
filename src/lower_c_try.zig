@@ -82,6 +82,8 @@ pub const TryReplacementEmitContext = struct {
     emit_nullable_try_sequenced_binary_value_temp: EmitNullableTrySequencedBinaryValueTempFn,
     mir_call_target_kind: lower_c_call.MirCallTargetKindFn,
     mir_target_type: lower_c_call.MirTargetTypeFn,
+    mir_owned_target_type: lower_c_call.MirOwnedTargetTypeFn,
+    mir_owned_target_value_type: lower_c_call.MirOwnedTargetValueTypeFn,
 };
 
 pub const TryCallEmitContext = struct {
@@ -167,11 +169,25 @@ pub fn emitTryExprWithReplacements(
                 try ctx.out.appendSlice(ctx.allocator, ")");
                 return;
             }
+            const fn_name = calleeIdentName(node.callee.*);
+            const fn_info = if (fn_name) |name| ctx.functions.get(name) else null;
             try ctx.emit_expr(ctx.emit_ctx, node.callee.*, locals);
             try ctx.out.appendSlice(ctx.allocator, "(");
             for (node.args, 0..) |arg, i| {
                 if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-                const arg_target_ty: ?ast_bridge.TypeExpr = null;
+                const arg_target_ty = if (fn_info) |info|
+                    if (i < info.params.len) blk: {
+                        const owner = fn_name orelse return error.UnsupportedCEmission;
+                        const expected_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, owner, i) orelse return error.UnsupportedCEmission;
+                        const target_value_ty = ctx.mir_owned_target_value_type(ctx.emit_ctx, .direct_call_argument, arg.span, owner, i) orelse return error.UnsupportedCEmission;
+                        if (!mir.ValueType.eql(target_value_ty, info.params[i].value_ty)) return error.UnsupportedCEmission;
+                        break :blk expected_ty;
+                    } else if (!info.is_variadic)
+                        return error.UnsupportedCEmission
+                    else
+                        null
+                else
+                    null;
                 try emitTryExprWithReplacements(ctx, mode, arg, locals, arg_target_ty, replacements);
             }
             try ctx.out.appendSlice(ctx.allocator, ")");
