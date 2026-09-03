@@ -1214,7 +1214,12 @@ const LlvmEmitter = struct {
         if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| {
             if (syntax_bridge.callExpr(expr)) |call| {
                 if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
-                    const fact_payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, semantic_ty) orelse return error.UnsupportedLlvmEmission;
+                    // The payload/result target facts belong to the complete
+                    // call expression.  The call-target fact alone belongs to
+                    // the callee span.  Once TargetTypeFact stopped retaining
+                    // duplicate SourcePoint coordinates, using the callee
+                    // span here could no longer alias the expression SpanId.
+                    const fact_payload_ty = self.atomicInitPayloadTypeAt(expr.span, semantic_ty) orelse return error.UnsupportedLlvmEmission;
                     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
                     return try self.emitGlobalInitializer(call.args[0], fact_payload_ty);
                 }
@@ -8153,7 +8158,7 @@ const LlvmEmitter = struct {
         }
         if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, expected_ty) orelse return error.UnsupportedLlvmEmission;
+            const payload_ty = self.atomicInitPayloadTypeAt(span, expected_ty) orelse return error.UnsupportedLlvmEmission;
             return try self.emitAtomicValueForStorage(call.args[0], payload_ty);
         }
         if (call_kind) |kind| {
