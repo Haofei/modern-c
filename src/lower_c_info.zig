@@ -300,8 +300,11 @@ pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast_bridge.Expr, locals: *s
             }
             const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
             const info = ctx.functions.get(fn_name) orelse break :blk null;
-            const ret_ty = info.return_type orelse break :blk null;
-            break :blk try nullableInnerCTypeForType(ctx, ret_ty);
+            // Direct-call result representation is owned by MIR.  This
+            // body-only helper cannot reconstruct it from a function
+            // signature, so leave the optional fast path unavailable.
+            _ = info;
+            break :blk null;
         },
         .grouped => |inner| try nullableInnerCTypeForExpr(ctx, inner.*, locals),
         else => null,

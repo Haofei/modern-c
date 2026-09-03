@@ -13,6 +13,7 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_executable_c = @import("mir_executable_c.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
+const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const type_bridge = @import("type_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
@@ -260,6 +261,10 @@ pub const CEmitter = struct {
     // plain type name does.
     fn_ptr_types: std.StringHashMap(ast_bridge.TypeExpr),
     closure_types: std.StringHashMap(ast_bridge.TypeExpr),
+    // Signature-only aggregate declarations are derived directly from the
+    // module-owned SignatureTypeTable.  Unlike the legacy body registries
+    // above, these records deliberately store only an ID, never TypeExpr.
+    signature_type_defs: std.AutoHashMap(mir.SignatureTypeId, void),
     // `bind(scalar, f)` closures: the env is a non-pointer scalar that must be
     // widened through `uintptr_t` to fit the closure's `void *` env slot. Calling
     // `f` directly through the `(void *, ...)` code-pointer cast would be an ABI
@@ -333,6 +338,7 @@ pub const CEmitter = struct {
             .opt_types = std.StringHashMap(lower_c_model.OptInfo).init(allocator),
             .fn_ptr_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
+            .signature_type_defs = std.AutoHashMap(mir.SignatureTypeId, void).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
@@ -353,6 +359,7 @@ pub const CEmitter = struct {
         self.deinitOwnedStringProvenanceMap(&self.mir_pointer_array_elements);
         self.deinitOwnedStringProvenanceMap(&self.mir_aggregate_pointer_fields);
         self.mir_pointer_local_provenance.deinit();
+        self.signature_type_defs.deinit();
         self.scratch.deinit();
     }
 
@@ -483,7 +490,7 @@ pub const CEmitter = struct {
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
-        try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_type = sig.transitionalReturnType(), .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
+        try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_ty = sig.return_ty, .return_type_id = sig.return_type_id, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
         if (!function.signature.is_extern) if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }
@@ -545,6 +552,7 @@ pub const CEmitter = struct {
         // Value optionals `?T` join the dependency-ordered aggregate emission (a `?T`
         // typedef embeds its payload by value, and a struct/Result may embed a `?T`).
         try self.emitOrderedAggregates();
+        try self.emitSignatureTypeDefinitions();
     }
 
     fn emitMmioStructTypes(self: *CEmitter) !void {
@@ -559,6 +567,92 @@ pub const CEmitter = struct {
             },
             else => {},
         };
+    }
+
+    /// Materialize aggregate callable-signature types without looking at an
+    /// AST TypeExpr.  The legacy body registries remain for body lowering;
+    /// signature-only declarations are owned by this one recursive walk.
+    fn emitSignatureTypeDefinitions(self: *CEmitter) !void {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| {
+                try self.emitSignatureTypeDefinition(function.signature.return_type_id);
+                for (function.signature.params) |param| try self.emitSignatureTypeDefinition(param.type_id);
+            },
+            else => {},
+        };
+    }
+
+    fn emitSignatureTypeDefinition(self: *CEmitter, id: mir.SignatureTypeId) !void {
+        if (self.signature_type_defs.contains(id)) return;
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+        switch (shape) {
+            .qualified => |node| try self.emitSignatureTypeDefinition(node.child),
+            .pointer => |node| try self.emitSignatureTypeDefinition(node.child),
+            .raw_many_pointer => |node| try self.emitSignatureTypeDefinition(node.child),
+            .slice => |node| try self.emitSignatureTypeDefinition(node.child),
+            .array => |node| try self.emitSignatureTypeDefinition(node.child),
+            .nullable => |child| try self.emitSignatureTypeDefinition(child),
+            .generic => |node| for (node.args) |arg| try self.emitSignatureTypeDefinition(arg),
+            .fn_pointer => |node| {
+                try self.emitSignatureTypeDefinition(node.ret);
+                for (node.params) |param| try self.emitSignatureTypeDefinition(param);
+            },
+            .closure_type => |node| {
+                try self.emitSignatureTypeDefinition(node.ret);
+                for (node.params) |param| try self.emitSignatureTypeDefinition(param);
+            },
+            .name, .enum_literal, .member => {},
+            .dyn_trait => return error.UnsupportedCEmission,
+        }
+        try self.signature_type_defs.put(id, {});
+
+        switch (shape) {
+            .slice => |node| {
+                const name = try self.cSignatureType(id);
+                if (self.slice_types.contains(name)) return;
+                const child = try self.cSignatureType(node.child);
+                const ptr = if (node.mutability == .mut) try std.fmt.allocPrint(self.scratch.allocator(), "{s} *", .{child}) else try std.fmt.allocPrint(self.scratch.allocator(), "{s} const *", .{child});
+                try self.out.print(self.allocator, "typedef struct {s} {{\n    {s} ptr;\n    uintptr_t len;\n}} {s};\n\n", .{ name, ptr, name });
+            },
+            .array => |node| {
+                const name = try self.cSignatureType(id);
+                if (self.array_types.contains(name)) return;
+                const length = node.length orelse return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "typedef struct {s} {{\n    {s} elems[{d}];\n}} {s};\n\n", .{ name, try self.cSignatureType(node.child), length, name });
+            },
+            .nullable => |child| if (!self.signatureTypeIsPointerLike(child)) {
+                const name = try self.cSignatureType(id);
+                if (self.opt_types.contains(name)) return;
+                try self.out.print(self.allocator, "typedef struct {s} {{\n    bool present;\n    {s} value;\n}} {s};\n\n", .{ name, try self.cSignatureType(child), name });
+            },
+            .generic => |node| if (std.mem.eql(u8, node.base, "Result") and node.args.len == 2) {
+                const name = try self.cSignatureType(id);
+                if (self.result_types.contains(name)) return;
+                const ok = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, node.args[0])) "unsigned char" else try self.cSignatureType(node.args[0]);
+                const err = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, node.args[1])) "unsigned char" else try self.cSignatureType(node.args[1]);
+                try self.out.print(self.allocator, "typedef struct {s} {{\n    bool is_ok;\n    union {{\n        {s} ok;\n        {s} err;\n    }} payload;\n}} {s};\n\n", .{ name, ok, err, name });
+            },
+            .fn_pointer => |node| {
+                const name = try self.cSignatureType(id);
+                if (self.fn_ptr_types.contains(name)) return;
+                try self.out.print(self.allocator, "typedef {s} (*{s})(", .{ try self.cSignatureType(node.ret), name });
+                if (node.params.len == 0) {
+                    try self.out.appendSlice(self.allocator, "void");
+                } else for (node.params, 0..) |param, index| {
+                    if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+                    try self.out.appendSlice(self.allocator, try self.cSignatureType(param));
+                }
+                try self.out.appendSlice(self.allocator, ");\n\n");
+            },
+            .closure_type => |node| {
+                const name = try self.cSignatureType(id);
+                if (self.closure_types.contains(name)) return;
+                try self.out.print(self.allocator, "typedef struct {{ {s} (*code)(void *", .{try self.cSignatureType(node.ret)});
+                for (node.params) |param| try self.out.print(self.allocator, ", {s}", .{try self.cSignatureType(param)});
+                try self.out.print(self.allocator, "); void *env; }} {s};\n\n", .{name});
+            },
+            else => {},
+        }
     }
 
     pub fn emitFunctionDeclarations(self: *CEmitter) anyerror!void {
@@ -1299,27 +1393,133 @@ pub const CEmitter = struct {
 
     fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, fn_mir: mir.Function, is_static: bool, with_asm_label: bool) !void {
         if (!std.mem.eql(u8, sig.name.text, fn_mir.name)) return error.UnsupportedCEmission;
-        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len) return error.UnsupportedCEmission;
-        const ret = mir_executable_c.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig.return_ty) catch |err| switch (err) {
-            error.UnsupportedType => if (sig.transitionalReturnType()) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void",
-            else => return err,
-        };
+        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len or !self.mir_module.signature_types.contains(sig.return_type_id)) return error.UnsupportedCEmission;
+        const ret = try self.cSignatureType(sig.return_type_id);
         const param_types = try self.scratch.allocator().alloc([]const u8, sig.params.len);
         for (sig.params, fn_mir.param_types, 0..) |param, param_ty, index| {
-            if (!mir.ValueType.eql(param.value_ty, param_ty)) return error.UnsupportedCEmission;
-            // PointerShape intentionally carries only the immediate pointee
-            // spelling; nullable pointees and declaration-level volatile/MMIO
-            // qualifiers still need the transitional normalized-type cutover.
-            // Do not claim a canonical rendering until that information exists.
-            param_types[index] = switch (param_ty) {
-                .pointer, .nullable_pointer, .address => try self.cTypeFor(param.ty, .typedef_name),
-                else => mir_executable_c.renderType(self.scratch.allocator(), &fn_mir.executable_body, param_ty) catch |err| switch (err) {
-                    error.UnsupportedType => try self.cTypeFor(param.ty, .typedef_name),
-                    else => return err,
-                },
-            };
+            if (!mir.ValueType.eql(param.value_ty, param_ty) or !self.mir_module.signature_types.contains(param.type_id)) return error.UnsupportedCEmission;
+            param_types[index] = try self.cSignatureType(param.type_id);
         }
         try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, ret, param_types, is_static, with_asm_label);
+    }
+
+    /// Render a callable signature type from the module-owned syntax-free
+    /// table.  This intentionally does not recreate an AST TypeExpr.
+    fn cSignatureType(self: *CEmitter, id: mir.SignatureTypeId) ![]const u8 {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+        return switch (shape) {
+            // Type aliases live in TransitionalTypeDeclArtifact, not in a
+            // function artifact.  Following that declaration dependency here
+            // is therefore still syntax-free at the callable boundary.
+            .name => |name| if (self.type_aliases.get(name)) |target|
+                try self.cTypeFor(target, .typedef_name)
+            else
+                primitiveCTypeName(name) orelse try self.cIdent(name),
+            .enum_literal => |name| try self.cIdent(name),
+            .qualified => |node| try self.cSignatureType(node.child),
+            .pointer => |node| blk: {
+                const child = try self.cSignatureType(node.child);
+                break :blk std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{ child, if (node.mutability == .constant) " const" else "" });
+            },
+            .raw_many_pointer => |node| blk: {
+                const child = try self.cSignatureType(node.child);
+                break :blk std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{ child, if (node.mutability == .constant) " const" else "" });
+            },
+            .slice => |node| std.fmt.allocPrint(self.scratch.allocator(), "mc_slice_{s}_{s}", .{ if (node.mutability == .mut) "mut" else "const", try self.cSignatureSuffix(node.child) }),
+            .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "mc_array_{s}_{d}", .{ try self.cSignatureSuffix(node.child), node.length orelse return error.UnsupportedCEmission }),
+            .nullable => |child| if (self.signatureTypeIsPointerLike(child))
+                self.cSignatureType(child)
+            else
+                std.fmt.allocPrint(self.scratch.allocator(), "mc_opt_{s}", .{try self.cSignatureSuffix(child)}),
+            .generic => |node| self.cSignatureGenericType(node.base, node.args),
+            .fn_pointer => |node| self.cSignatureCallableType("mc_fnptr", node.ret, node.params),
+            .closure_type => |node| self.cSignatureCallableType("mc_closure", node.ret, node.params),
+            .member => error.UnsupportedCEmission,
+            .dyn_trait => error.UnsupportedCEmission,
+        };
+    }
+
+    fn cSignatureGenericType(self: *CEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {
+        if (std.mem.eql(u8, base, "Result") and args.len == 2)
+            return std.fmt.allocPrint(self.scratch.allocator(), "mc_result_{s}_{s}", .{ try self.cSignatureSuffix(args[0]), try self.cSignatureSuffix(args[1]) });
+        if ((std.mem.eql(u8, base, "wrap") or std.mem.eql(u8, base, "sat") or std.mem.eql(u8, base, "serial") or std.mem.eql(u8, base, "counter") or std.mem.eql(u8, base, "Secret") or std.mem.eql(u8, base, "Duration") or std.mem.eql(u8, base, "atomic") or std.mem.eql(u8, base, "MaybeUninit") or std.mem.eql(u8, base, "Reg") or std.mem.eql(u8, base, "RegBits")) and args.len >= 1)
+            return self.cSignatureType(args[0]);
+        if (std.mem.eql(u8, base, "DmaBuf") and args.len == 2)
+            return std.fmt.allocPrint(self.scratch.allocator(), "{s} *", .{try self.cSignatureType(args[0])});
+        if (std.mem.eql(u8, base, "MmioPtr") and args.len == 1)
+            return std.fmt.allocPrint(self.scratch.allocator(), "{s} volatile *", .{try self.cSignatureType(args[0])});
+        if ((std.mem.eql(u8, base, "UserPtr") or std.mem.eql(u8, base, "PhysPtr")) and args.len >= 1)
+            return "uintptr_t";
+        return error.UnsupportedCEmission;
+    }
+
+    fn cSignatureCallableType(self: *CEmitter, prefix: []const u8, ret: mir.SignatureTypeId, params: []const mir.SignatureTypeId) anyerror![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(self.scratch.allocator(), prefix);
+        try out.print(self.scratch.allocator(), "_{d}_{s}", .{ (try self.cSignatureSuffix(ret)).len, try self.cSignatureSuffix(ret) });
+        for (params) |param| {
+            const suffix = try self.cSignatureSuffix(param);
+            try out.print(self.scratch.allocator(), "_{d}_{s}", .{ suffix.len, suffix });
+        }
+        return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn cSignatureSuffix(self: *CEmitter, id: mir.SignatureTypeId) anyerror![]const u8 {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+        return switch (shape) {
+            .name => |name| if (self.structs.contains(name))
+                std.fmt.allocPrint(self.scratch.allocator(), "mc_type_struct_{d}_{s}", .{ name.len, name })
+            else if (primitiveCTypeName(name) != null)
+                name
+            else
+                std.fmt.allocPrint(self.scratch.allocator(), "mc_type_name_{d}_{s}", .{ name.len, name }),
+            .enum_literal => |name| std.fmt.allocPrint(self.scratch.allocator(), "mc_type_enum_{d}_{s}", .{ name.len, name }),
+            .qualified => |node| self.cSignatureFramedUnary("mc_type_qualified", node.mutability, node.child),
+            .pointer => |node| self.cSignatureFramedUnary("mc_type_ptr", node.mutability, node.child),
+            .raw_many_pointer => |node| self.cSignatureFramedUnary("mc_type_manyptr", node.mutability, node.child),
+            .slice => |node| self.cSignatureFramedUnary("mc_type_slice", node.mutability, node.child),
+            .nullable => |child| self.cSignatureFramed("mc_type_nullable", &.{child}),
+            .array => |node| blk: {
+                const child = try self.cSignatureSuffix(node.child);
+                const len = try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{node.length orelse return error.UnsupportedCEmission});
+                break :blk self.cSignatureFramedTexts("mc_type_array", &.{ child, len });
+            },
+            .generic => |node| blk: {
+                var out: std.ArrayList(u8) = .empty;
+                try out.print(self.scratch.allocator(), "mc_type_generic_{d}_{s}_{d}", .{ node.base.len, node.base, node.args.len });
+                for (node.args) |arg| {
+                    const suffix = try self.cSignatureSuffix(arg);
+                    try out.print(self.scratch.allocator(), "_{d}_{s}", .{ suffix.len, suffix });
+                }
+                break :blk out.toOwnedSlice(self.scratch.allocator());
+            },
+            .fn_pointer => |node| self.cSignatureCallableType("mc_type_fnptr", node.ret, node.params),
+            .closure_type => |node| self.cSignatureCallableType("mc_type_closure", node.ret, node.params),
+            .member, .dyn_trait => error.UnsupportedCEmission,
+        };
+    }
+
+    fn cSignatureFramedUnary(self: *CEmitter, prefix: []const u8, mutability: mir.TypeMutability, child: mir.SignatureTypeId) anyerror![]const u8 {
+        const suffix = try self.cSignatureSuffix(child);
+        const code: []const u8 = switch (mutability) { .none => "n", .mut => "m", .constant => "c" };
+        return std.fmt.allocPrint(self.scratch.allocator(), "{s}_{s}_{d}_{s}", .{ prefix, code, suffix.len, suffix });
+    }
+
+    fn cSignatureFramed(self: *CEmitter, prefix: []const u8, ids: []const mir.SignatureTypeId) anyerror![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(self.scratch.allocator(), prefix);
+        for (ids) |id| {
+            const suffix = try self.cSignatureSuffix(id);
+            try out.print(self.scratch.allocator(), "_{d}_{s}", .{ suffix.len, suffix });
+        }
+        return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn cSignatureFramedTexts(self: *CEmitter, prefix: []const u8, texts: []const []const u8) anyerror![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(self.scratch.allocator(), prefix);
+        for (texts) |text| try out.print(self.scratch.allocator(), "_{d}_{s}", .{ text.len, text });
+        return out.toOwnedSlice(self.scratch.allocator());
     }
 
     fn emitFunctionRenderAttrs(self: *CEmitter, attrs: codegen_attrs.FunctionRenderAttrs) !void {
@@ -1614,9 +1814,14 @@ pub const CEmitter = struct {
             .temp_index = &self.temp_index,
             .emit_ctx = self,
             .c_type = cTypeForDefs,
+            .signature_c_type = cSignatureTypeForDispatch,
             .emit_expr = emitExprForCall,
-            .is_void_type = isVoidTypeForDispatch,
         };
+    }
+
+    fn cSignatureTypeForDispatch(ctx: *anyopaque, id: mir.SignatureTypeId) anyerror![]const u8 {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.cSignatureType(id);
     }
 
     fn mmioContext(self: *CEmitter) lower_c_mmio.Context {
@@ -1749,6 +1954,7 @@ pub const CEmitter = struct {
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
             .mir_owned_target_type = mirOwnedTargetTypeForLowering,
+            .mir_owned_target_value_type = mirOwnedTargetValueTypeForLowering,
         };
     }
 
@@ -1983,6 +2189,7 @@ pub const CEmitter = struct {
             .temp_index = &self.temp_index,
             .type_aliases = &self.type_aliases,
             .functions = &self.functions,
+            .signature_types = &self.mir_module.signature_types,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
             .emit_expr_with_target = emitExprWithTargetForArith,
@@ -2322,6 +2529,11 @@ pub const CEmitter = struct {
         return if (self.mirTargetTypeFactAtOwned(kind, span, target_owner, target_index)) |fact| fact.target_ty else null;
     }
 
+    fn mirOwnedTargetValueTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.ValueType {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return if (self.mirTargetTypeFactAtOwned(kind, span, target_owner, target_index)) |fact| fact.result_ty else null;
+    }
+
     fn mirConstGetIndexForLowering(ctx: *anyopaque, span: ast_bridge.Span) ?usize {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mirConstGetIndexAt(span);
@@ -2577,8 +2789,7 @@ pub const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = function.signature.name.text;
         defer self.current_function = previous_function;
-        for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
-        if (function.signature.transitionalReturnType()) |ret| try self.collectTypeArtifacts(ret);
+        // Signature types are rendered from the module-owned type table.
         if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionBodyTypeArtifacts(fn_mir);
     }
 
@@ -2783,10 +2994,19 @@ pub const CEmitter = struct {
         return lower_c_collect.bindEnvIsPointerLike(&self.type_aliases, ty);
     }
 
+    fn signatureTypeIsPointerLike(self: *CEmitter, id: mir.SignatureTypeId) bool {
+        const shape = self.mir_module.signature_types.get(id) orelse return false;
+        return switch (shape) {
+            .pointer, .raw_many_pointer => true,
+            .qualified => |node| self.signatureTypeIsPointerLike(node.child),
+            else => false,
+        };
+    }
+
     fn collectBindThunkFact(self: *CEmitter, fact: mir.BindThunkFact) !void {
         const info = self.functions.get(fact.target_fn) orelse return;
         if (info.params.len == 0 or info.is_extern) return;
-        if (self.bindEnvIsPointerLike(info.params[0].ty)) return;
+        if (self.signatureTypeIsPointerLike(info.params[0].type_id)) return;
         const name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_envthunk_{s}", .{fact.target_fn});
         if (!self.bind_thunks.contains(name)) try self.bind_thunks.put(name, .{ .fname = fact.target_fn, .info = info });
     }
@@ -2795,7 +3015,7 @@ pub const CEmitter = struct {
     // first parameter is the (typed) env; the closure drops it to void*.
     fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !void {
         const plan = try self.bindEmitPlan(node, target_ty);
-        if (!self.bindEnvIsPointerLike(plan.info.params[0].ty)) {
+        if (!self.signatureTypeIsPointerLike(plan.info.params[0].type_id)) {
             try lower_c_dispatch.emitScalarEnvBind(self.dispatchContext(), node, locals, plan);
             return;
         }
@@ -3740,8 +3960,9 @@ pub const CEmitter = struct {
         }
         var temps: std.ArrayList(SequencedArgTemp) = .empty;
         defer temps.deinit(self.scratch.allocator());
-        for (cleanup.args, info.params) |arg, param| {
-            try temps.append(self.scratch.allocator(), try self.emitSequencedCallArgTemp(arg, locals, param.ty));
+        for (cleanup.args) |arg| {
+            const target_ty = self.operandEmitType(arg, locals) orelse return error.UnsupportedCEmission;
+            try temps.append(self.scratch.allocator(), try self.emitSequencedCallArgTemp(arg, locals, target_ty));
         }
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}", .{try self.cIdent(cleanup.fn_name)});
@@ -4865,7 +5086,6 @@ pub const CEmitter = struct {
             const target_ty = if (fn_info) |info|
                 if (i < info.params.len) blk: {
                     const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, fn_name.?, i) orelse return error.UnsupportedCEmission).target_ty;
-                    if (!std.meta.eql(fact_ty, info.params[i].ty)) return error.UnsupportedCEmission;
                     break :blk fact_ty;
                 } else null
             else
@@ -6062,7 +6282,9 @@ pub const CEmitter = struct {
     fn emitNestedSequencedCallValueTemp(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
         const callee_name = calleeIdentName(call.callee.*) orelse return null;
         const fn_info = self.functions.get(callee_name) orelse return null;
-        const return_ty = fn_info.return_type orelse return null;
+        const result_fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee_name, null) orelse return null;
+        if (!mir.ValueType.eql(result_fact.result_ty, fn_info.return_ty)) return null;
+        const return_ty = result_fact.target_ty;
         if (isVoidType(return_ty) or !fn_info.acceptsArgCount(call.args.len)) return null;
 
         var nested_temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
@@ -6836,8 +7058,7 @@ pub const CEmitter = struct {
         };
         const callee = calleeIdentName(call.callee.*) orelse return false;
         const fn_info = self.functions.get(callee) orelse return false;
-        const return_ty = fn_info.return_type orelse return false;
-        const source_struct = self.directStructTypeName(return_ty) orelse return false;
+        const source_struct = (signature_type_mechanics.nominalName(self.mir_module.signature_types, fn_info.return_type_id) catch return false) orelse return false;
         const dest_struct = self.directStructTypeName(dest_ty) orelse return false;
         if (!std.mem.eql(u8, source_struct, dest_struct)) return false;
         if (!self.mirOwnsAggregateReturnSummary(callee)) return false;
@@ -8434,11 +8655,9 @@ pub const CEmitter = struct {
     fn directCallReturnTypeForCall(self: *CEmitter, call: anytype) ?ast_bridge.TypeExpr {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
-        const fact_ty = if (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null)) |fact| fact.target_ty else return null;
-        if (info.return_type) |declared_ty| {
-            if (!std.meta.eql(fact_ty, declared_ty)) return null;
-        } else if (!isVoidType(fact_ty)) return null;
-        return fact_ty;
+        const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse return null;
+        if (!mir.ValueType.eql(fact.result_ty, info.return_ty)) return null;
+        return fact.target_ty;
     }
 
     // Simple builtin call-result queries consume an already-produced MIR

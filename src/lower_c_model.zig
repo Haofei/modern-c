@@ -67,7 +67,8 @@ pub const LoopJumps = struct {
 
 pub const FnInfo = struct {
     params: []const codegen_signature.FunctionParamFact,
-    return_type: ?ast_bridge.TypeExpr,
+    return_ty: mir.ValueType,
+    return_type_id: mir.SignatureTypeId,
     is_extern: bool,
     is_variadic: bool = false,
     // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error

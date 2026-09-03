@@ -41,6 +41,7 @@ pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Ex
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetValueTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.ValueType;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -87,6 +88,7 @@ pub const TempContext = struct {
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
     mir_owned_target_type: MirOwnedTargetTypeFn,
+    mir_owned_target_value_type: MirOwnedTargetValueTypeFn,
 };
 
 pub const LocalInitContext = struct {
@@ -125,7 +127,8 @@ pub fn collectSequencedArgTemps(
     for (call.args, 0..) |arg, i| {
         const target_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
         if (i < fn_info.params.len) {
-            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+            const target_value_ty = ctx.mir_owned_target_value_type(ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+            if (!mir.ValueType.eql(target_value_ty, fn_info.params[i].value_ty)) return error.UnsupportedCEmission;
         } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.scratch, try ctx.emit_arg_temp(ctx.emit_ctx, arg, locals, target_ty));
     }
@@ -191,7 +194,8 @@ pub fn emitSequencedCallAssignmentResultTemp(ctx: TempContext, functions: *const
     const fn_info = sequencedCallFnInfo(functions, call) orelse return null;
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     const return_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result, call.callee.*.span, target_owner, null) orelse return error.UnsupportedCEmission;
-    if (fn_info.return_type == null or !std.meta.eql(return_ty, fn_info.return_type.?)) return error.UnsupportedCEmission;
+    const return_value_ty = ctx.mir_owned_target_value_type(ctx.emit_ctx, .direct_call_result, call.callee.*.span, target_owner, null) orelse return error.UnsupportedCEmission;
+    if (!mir.ValueType.eql(return_value_ty, fn_info.return_ty)) return error.UnsupportedCEmission;
     if (isVoidType(return_ty) or !fn_info.acceptsArgCount(call.args.len)) return null;
 
     var temps = try collectSequencedArgTemps(ctx, call, locals, fn_info);
@@ -290,8 +294,7 @@ pub fn emitBitcastAssignmentStmt(ctx: TempContext, assignment: anytype, locals: 
 pub fn externNonNullReturnInfo(functions: *const std.StringHashMap(FnInfo), call: anytype) ?FnInfo {
     const callee_name = calleeIdentName(call.callee.*) orelse return null;
     const fn_info = functions.get(callee_name) orelse return null;
-    const return_ty = fn_info.return_type orelse return null;
-    if (!fn_info.is_extern or !isNonNullPointerType(return_ty) or !fn_info.acceptsArgCount(call.args.len)) return null;
+    if (!fn_info.is_extern or fn_info.return_ty != .pointer or !fn_info.acceptsArgCount(call.args.len)) return null;
     return fn_info;
 }
 
@@ -300,7 +303,8 @@ pub fn emitExternNonNullCallValueTemp(ctx: TempContext, functions: *const std.St
     const fn_info = externNonNullReturnInfo(functions, call) orelse return null;
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     const return_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result, call.callee.*.span, target_owner, null) orelse return error.UnsupportedCEmission;
-    if (!std.meta.eql(return_ty, fn_info.return_type.?)) return error.UnsupportedCEmission;
+    const return_value_ty = ctx.mir_owned_target_value_type(ctx.emit_ctx, .direct_call_result, call.callee.*.span, target_owner, null) orelse return error.UnsupportedCEmission;
+    if (!mir.ValueType.eql(return_value_ty, fn_info.return_ty)) return error.UnsupportedCEmission;
 
     var temps = try collectSequencedArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.scratch);

@@ -3761,7 +3761,7 @@ pub const Checker = struct {
         const e2 = ast_query.typeName(resolveAliasType(fn_err, ctx)) orelse return;
         if (std.mem.eql(u8, e1, e2)) return; // same error type: propagate as-is (unchanged behavior)
         const functions = ctx.functions orelse return;
-        if (error_from.resolve(functions, e1, e2) != null) return; // an #[error_from] conversion exists
+        if (error_from.resolveAst(functions, e1, e2) != null) return; // an #[error_from] conversion exists
         self.errorCode(span, "E_NO_ERROR_CONVERSION", "'?' cannot convert the propagated error to the function's error type; declare an #[error_from] fn converting it");
     }
 

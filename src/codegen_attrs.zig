@@ -16,11 +16,10 @@ pub const FunctionSignatureFacts = struct {
     params: []const FunctionParamFact,
     /// Canonical semantic return type produced by the checked MIR builder.
     return_ty: mir.ValueType,
-    /// Module-owned recursive source type shape. Kept in parallel with the
-    /// transitional AST payload until signature renderers cut over.
+    /// Module-owned recursive source type shape.
     return_type_id: mir.SignatureTypeId = .invalid,
-    /// Compatibility payload for backend helpers that have not yet moved to
-    /// `return_ty`. Function signature emission must not use this field.
+    /// Transitional LLVM signature ingress.  C has cut over to
+    /// `return_type_id`; this field remains until LLVM materialization lands.
     transitional_ret_type: ?ast_bridge.TypeExpr,
     exported: bool,
     is_extern: bool,

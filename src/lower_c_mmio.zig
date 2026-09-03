@@ -160,12 +160,11 @@ pub fn emitReadExprWithReplacements(
             try ctx.out.appendSlice(ctx.allocator, ")");
         },
         .call => |node| {
-            const fn_info = if (calleeIdentName(node.callee.*)) |name| ctx.functions.get(name) else null;
             try ctx.emit_expr(ctx.emit_ctx, node.callee.*, locals);
             try ctx.out.appendSlice(ctx.allocator, "(");
             for (node.args, 0..) |arg, i| {
                 if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-                const arg_target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                const arg_target_ty: ?ast_bridge.TypeExpr = null;
                 try emitReadExprWithReplacements(ctx, arg, locals, arg_target_ty, replacements);
             }
             try ctx.out.appendSlice(ctx.allocator, ")");
@@ -701,8 +700,10 @@ pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals:
     const call = syntax_bridge.callExpr(assignment.value) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    const call_return_ty = fn_info.return_type orelse return false;
-    if (lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
+    const owner = calleeIdentName(call.callee.*) orelse return false;
+    const call_return_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_result, call.callee.*.span, owner, null) orelse return false;
+    const call_return_value_ty = ctx.call_ctx.mir_owned_target_value_type(ctx.call_ctx.emit_ctx, .direct_call_result, call.callee.*.span, owner, null) orelse return false;
+    if (!mir.ValueType.eql(call_return_value_ty, fn_info.return_ty) or lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitReadCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.emit.scratch);
@@ -830,7 +831,8 @@ fn emitReadCallArgTemps(ctx: CallEmitContext, call: anytype, locals: *std.String
     for (call.args, 0..) |arg, i| {
         const target_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
         if (i < fn_info.params.len) {
-            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+            const value_ty = ctx.call_ctx.mir_owned_target_value_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+            if (!mir.ValueType.eql(value_ty, fn_info.params[i].value_ty)) return error.UnsupportedCEmission;
         } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.emit.scratch, try emitReadCallArgTemp(ctx, arg, locals, target_ty));
     }

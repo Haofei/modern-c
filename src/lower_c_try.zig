@@ -69,6 +69,7 @@ pub const TryReplacementEmitContext = struct {
     temp_index: *usize,
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     functions: *const std.StringHashMap(lower_c_model.FnInfo),
+    signature_types: *const mir.SignatureTypeTable,
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
@@ -166,12 +167,11 @@ pub fn emitTryExprWithReplacements(
                 try ctx.out.appendSlice(ctx.allocator, ")");
                 return;
             }
-            const fn_info = if (calleeIdentName(node.callee.*)) |name| ctx.functions.get(name) else null;
             try ctx.emit_expr(ctx.emit_ctx, node.callee.*, locals);
             try ctx.out.appendSlice(ctx.allocator, "(");
             for (node.args, 0..) |arg, i| {
                 if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-                const arg_target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                const arg_target_ty: ?ast_bridge.TypeExpr = null;
                 try emitTryExprWithReplacements(ctx, mode, arg, locals, arg_target_ty, replacements);
             }
             try ctx.out.appendSlice(ctx.allocator, ")");
@@ -322,8 +322,10 @@ pub fn emitResultTryCallAssignment(ctx: TryCallEmitContext, assignment: anytype,
     const call = callExpr(assignment.value) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    const call_return_ty = fn_info.return_type orelse return false;
-    if (lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
+    const owner = calleeIdentName(call.callee.*) orelse return false;
+    const call_return_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_result, call.callee.*.span, owner, null) orelse return false;
+    const call_return_value_ty = ctx.call_ctx.mir_owned_target_value_type(ctx.call_ctx.emit_ctx, .direct_call_result, call.callee.*.span, owner, null) orelse return false;
+    if (!mir.ValueType.eql(call_return_value_ty, fn_info.return_ty) or lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitResultTryCallArgTemps(ctx, call, locals, fn_info, return_ty, .stmt);
     defer temps.deinit(ctx.replacement.scratch);
@@ -337,8 +339,10 @@ pub fn emitNullableTryCallAssignment(ctx: TryCallEmitContext, assignment: anytyp
     const call = callExpr(assignment.value) orelse return false;
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    const call_return_ty = fn_info.return_type orelse return false;
-    if (lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
+    const owner = calleeIdentName(call.callee.*) orelse return false;
+    const call_return_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_result, call.callee.*.span, owner, null) orelse return false;
+    const call_return_value_ty = ctx.call_ctx.mir_owned_target_value_type(ctx.call_ctx.emit_ctx, .direct_call_result, call.callee.*.span, owner, null) orelse return false;
+    if (!mir.ValueType.eql(call_return_value_ty, fn_info.return_ty) or lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitNullableTryCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.replacement.scratch);
@@ -751,7 +755,8 @@ fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *st
     for (call.args, 0..) |arg, i| {
         const target_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
         if (i < fn_info.params.len) {
-            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+            const value_ty = ctx.call_ctx.mir_owned_target_value_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+            if (!mir.ValueType.eql(value_ty, fn_info.params[i].value_ty)) return error.UnsupportedCEmission;
         } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.replacement.scratch, try emitResultTryCallArgTempWithMode(ctx, arg, locals, target_ty, return_ty, mode));
     }
@@ -792,7 +797,8 @@ fn emitNullableTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *
     for (call.args, 0..) |arg, i| {
         const target_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
         if (i < fn_info.params.len) {
-            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+            const value_ty = ctx.call_ctx.mir_owned_target_value_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+            if (!mir.ValueType.eql(value_ty, fn_info.params[i].value_ty)) return error.UnsupportedCEmission;
         } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.replacement.scratch, try emitNullableTryCallArgTemp(ctx, arg, locals, target_ty));
     }
@@ -841,7 +847,7 @@ fn emitPropagatedTryErrReturn(ctx: TryDirectEmitContext, ret_c: []const u8, temp
 fn errorConversionFn(ctx: TryDirectEmitContext, enclosing_return_ty: ast_bridge.TypeExpr, operand_result_ty: ast_bridge.TypeExpr) ?[]const u8 {
     const e1 = resultPayloadTypeForTag(operand_result_ty, "err") orelse return null;
     const e2 = resultPayloadTypeForTag(enclosing_return_ty, "err") orelse return null;
-    return error_from.resolveTypes(ctx.replacement.functions, e1, e2);
+    return error_from.resolveTypes(ctx.replacement.functions, ctx.replacement.signature_types.*, e1, e2);
 }
 
 fn emitResultTryLocalOperandTemp(ctx: TryDirectEmitContext, operand: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), operand_result_ty: ast_bridge.TypeExpr) ![]const u8 {

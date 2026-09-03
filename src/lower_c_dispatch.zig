@@ -4,13 +4,14 @@ const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
+const mir = @import("mir.zig");
 
 const BindThunk = lower_c_model.BindThunk;
 const FnInfo = lower_c_model.FnInfo;
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const SignatureCTypeFn = *const fn (ctx: *anyopaque, id: mir.SignatureTypeId) anyerror![]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const IsVoidTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool;
 
 const LocalInfo = lower_c_model.LocalInfo;
 
@@ -21,8 +22,8 @@ pub const Context = struct {
     temp_index: *usize,
     emit_ctx: *anyopaque,
     c_type: CTypeFn,
+    signature_c_type: SignatureCTypeFn,
     emit_expr: EmitExprFn,
-    is_void_type: IsVoidTypeFn,
 };
 
 pub const BindEmitPlan = struct {
@@ -44,21 +45,17 @@ pub fn emitBindThunks(ctx: Context, bind_thunks: *std.StringHashMap(BindThunk)) 
 
 fn emitBindThunk(ctx: Context, thunk_name: []const u8, thunk: BindThunk) !void {
     const info = thunk.info;
-    const returns_void = if (info.return_type) |rt| ctx.is_void_type(ctx.emit_ctx, rt) else true;
+    const returns_void = info.return_ty == .void or info.return_ty == .never;
     try emitBindThunkSignature(ctx, thunk_name, info);
     try emitBindThunkBody(ctx, thunk.fname, info, returns_void);
 }
 
 fn emitBindThunkSignature(ctx: Context, thunk_name: []const u8, info: FnInfo) !void {
     try ctx.out.appendSlice(ctx.allocator, "static MC_UNUSED ");
-    if (info.return_type) |rt| {
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, rt));
-    } else {
-        try ctx.out.appendSlice(ctx.allocator, "void");
-    }
+    try ctx.out.appendSlice(ctx.allocator, try ctx.signature_c_type(ctx.emit_ctx, info.return_type_id));
     try ctx.out.print(ctx.allocator, " {s}(void *mc_env", .{thunk_name});
     for (info.params[1..], 0..) |param, i| {
-        try ctx.out.print(ctx.allocator, ", {s} mc_a{d}", .{ try ctx.c_type(ctx.emit_ctx, param.ty), i });
+        try ctx.out.print(ctx.allocator, ", {s} mc_a{d}", .{ try ctx.signature_c_type(ctx.emit_ctx, param.type_id), i });
     }
     try ctx.out.appendSlice(ctx.allocator, ") {\n    ");
 }
@@ -66,7 +63,7 @@ fn emitBindThunkSignature(ctx: Context, thunk_name: []const u8, info: FnInfo) !v
 fn emitBindThunkBody(ctx: Context, fn_name: []const u8, info: FnInfo, returns_void: bool) !void {
     if (!returns_void) try ctx.out.appendSlice(ctx.allocator, "return ");
     try ctx.out.print(ctx.allocator, "{s}((", .{fn_name});
-    try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, info.params[0].ty));
+    try ctx.out.appendSlice(ctx.allocator, try ctx.signature_c_type(ctx.emit_ctx, info.params[0].type_id));
     try ctx.out.appendSlice(ctx.allocator, ")(uintptr_t)mc_env");
     for (info.params[1..], 0..) |_, i| {
         try ctx.out.print(ctx.allocator, ", mc_a{d}", .{i});
@@ -83,11 +80,11 @@ pub fn emitScalarEnvBind(ctx: Context, node: anytype, locals: ?*std.StringHashMa
 
 pub fn emitPointerEnvBind(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), plan: BindEmitPlan) !void {
     try ctx.out.print(ctx.allocator, "({s}){{ .code = (", .{plan.cname});
-    try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, plan.ret_ty));
+        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, plan.ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*)(void *");
     for (plan.info.params[1..]) |param| {
         try ctx.out.appendSlice(ctx.allocator, ", ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, param.ty));
+        try ctx.out.appendSlice(ctx.allocator, try ctx.signature_c_type(ctx.emit_ctx, param.type_id));
     }
     try ctx.out.print(ctx.allocator, ")){s}, .env = (void *)(", .{plan.fname});
     try ctx.emit_expr(ctx.emit_ctx, node.args[0], locals);

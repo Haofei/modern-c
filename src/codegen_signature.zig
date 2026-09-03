@@ -6,12 +6,11 @@ const mir = @import("mir_model.zig");
 
 pub const FunctionParamFact = struct {
     name: ast_bridge.Ident,
-    /// Canonical checked parameter type. Signature emission must prefer this
-    /// value over the transitional syntax payload below.
+    /// Canonical checked parameter type.
     value_ty: mir.ValueType,
-    /// Module-owned recursive type shape. This remains alongside `ty` during
-    /// the declaration-artifact migration; renderers do not consume it yet.
+    /// Module-owned recursive source type shape.
     type_id: mir.SignatureTypeId = .invalid,
+    /// Transitional LLVM signature ingress.  C has cut over to `type_id`.
     ty: ast_bridge.TypeExpr,
     is_comptime: bool = false,
 
