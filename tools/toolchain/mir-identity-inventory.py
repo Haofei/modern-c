@@ -92,6 +92,11 @@ def main() -> int:
     if "target_ty:" in model[instruction_start:instruction_end]:
         fail("src/mir_model.zig Instruction duplicates target syntax beside SignatureTypeId")
 
+    function_start = model.index("pub const Function = struct {")
+    function_end = model.index("\n\n/// Syntax-free semantic summary", function_start)
+    if "generated_type_expr_" in model[function_start:function_end]:
+        fail("src/mir_model.zig Function retains builder-only generated type syntax")
+
     for fact_name in ("IntegerFact", "FloatFact"):
         start = model.index(f"pub const {fact_name} = struct {{")
         end = model.index("\n};", start)

@@ -8149,10 +8149,7 @@ const FunctionBuilder = struct {
         self.bind_thunk_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
         self.ownership_events.deinit(self.allocator);
-        for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
-        self.generated_type_expr_nodes.deinit(self.allocator);
-        for (self.generated_type_expr_args.items) |args| self.allocator.free(args);
-        self.generated_type_expr_args.deinit(self.allocator);
+        self.freeGeneratedTypeExprs();
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -8271,16 +8268,6 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(value_identities);
         const target_owner_identities = try self.buildTargetOwnerIdentities();
         errdefer self.allocator.free(target_owner_identities);
-        const generated_type_expr_nodes = try self.generated_type_expr_nodes.toOwnedSlice(self.allocator);
-        errdefer {
-            for (generated_type_expr_nodes) |node| self.allocator.destroy(node);
-            self.allocator.free(generated_type_expr_nodes);
-        }
-        const generated_type_expr_args = try self.generated_type_expr_args.toOwnedSlice(self.allocator);
-        errdefer {
-            for (generated_type_expr_args) |args| self.allocator.free(args);
-            self.allocator.free(generated_type_expr_args);
-        }
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -8352,9 +8339,6 @@ const FunctionBuilder = struct {
         self.executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(self.allocator);
         self.executable_loop_targets.deinit(self.allocator);
         self.executable_loop_targets = .empty;
-        self.generated_type_expr_nodes = .empty;
-        self.generated_type_expr_args = .empty;
-
         var result: Function = .{
             .name = self.name,
             .return_ty = self.return_ty,
@@ -8383,12 +8367,15 @@ const FunctionBuilder = struct {
             .target_owner_identities = target_owner_identities,
             .ownership_events = ownership_events,
             .executable_body = executable_body,
-            .generated_type_expr_nodes = generated_type_expr_nodes,
-            .generated_type_expr_args = generated_type_expr_args,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
         };
+        // Generated AST nodes are builder-local scaffolding for source-phase
+        // inference. By this point every surviving type dependency has been
+        // interned into the signature table or executable MIR, so retaining
+        // the allocations in Function would be an AST compatibility escape.
+        self.freeGeneratedTypeExprs();
         // The verifier is the executable-body authority. The producer still
         // carries conservative migration checks, but an unclassified false
         // negative must not permanently strand a fully verified body on the
@@ -8407,6 +8394,15 @@ const FunctionBuilder = struct {
             };
         }
         return result;
+    }
+
+    fn freeGeneratedTypeExprs(self: *FunctionBuilder) void {
+        for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
+        self.generated_type_expr_nodes.deinit(self.allocator);
+        self.generated_type_expr_nodes = .empty;
+        for (self.generated_type_expr_args.items) |args| self.allocator.free(args);
+        self.generated_type_expr_args.deinit(self.allocator);
+        self.generated_type_expr_args = .empty;
     }
 
     fn finishExecutableBody(
@@ -21670,10 +21666,6 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     if (function.param_types.len != 0) allocator.free(function.param_types);
     if (function.signature_param_type_ids.len != 0) allocator.free(function.signature_param_type_ids);
-    for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
-    if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);
-    for (function.generated_type_expr_args) |args| allocator.free(args);
-    if (function.generated_type_expr_args.len != 0) allocator.free(function.generated_type_expr_args);
     for (function.pointer_provenance_facts) |fact| {
         if (fact.field_path) |field_path| allocator.free(field_path);
     }

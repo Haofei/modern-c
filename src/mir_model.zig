@@ -3986,8 +3986,6 @@ pub const Function = struct {
     /// builders replace it with a populated body; omission is explicitly
     /// incomplete and can never reach mechanical codegen.
     executable_body: ExecutableBody = .{ .complete = false },
-    generated_type_expr_nodes: []*ast.TypeExpr = &.{},
-    generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -4578,10 +4576,6 @@ pub const Module = struct {
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             if (function.param_types.len != 0) self.allocator.free(function.param_types);
             if (function.signature_param_type_ids.len != 0) self.allocator.free(function.signature_param_type_ids);
-            for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
-            if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
-            for (function.generated_type_expr_args) |args| self.allocator.free(args);
-            if (function.generated_type_expr_args.len != 0) self.allocator.free(function.generated_type_expr_args);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }
