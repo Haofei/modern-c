@@ -2318,7 +2318,7 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     try expectContains(result_ok_body, "mc_result_");
 
     const result_err_body = try cFunctionBody(output.items, "static void store_result_err(void)");
-    try expectContains(result_err_body, "result = (");
+    try expectContains(result_err_body, "result = mc_exec_tmp_");
     try expectContains(result_err_body, ".is_ok = false");
     try expectContains(result_err_body, ".payload.err = E_bad");
 
