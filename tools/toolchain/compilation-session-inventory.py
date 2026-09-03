@@ -124,7 +124,26 @@ def main() -> int:
         "pub fn writeArtifactWithMetadata(",
         "pub fn publishExistingFileWithMetadata(",
     )
-    require("src/test_root.zig", 'const compiler_session = @import("compiler_session.zig");')
+    # `test-unit` is partitioned in the build registry. Keep the composition
+    # root and the request-context coverage anchor explicit so a future shard
+    # edit cannot silently drop session tests.
+    require(
+        "src/test_root.zig",
+        'const core = @import("test_root_core.zig");',
+        'const mir = @import("test_root_mir.zig");',
+        'const lower_c = @import("test_shard_lower_c.zig");',
+        'const lower_llvm = @import("test_shard_lower_llvm.zig");',
+    )
+    require("src/test_root_core.zig", 'const compiler_session = @import("compiler_session.zig");')
+    require(
+        "build/compiler.zig",
+        '"test-unit-core", "src/test_root_core.zig"',
+        '"test-unit-mir", "src/test_root_mir.zig"',
+        "unit_test_step.dependOn(unit_core_step);",
+        "unit_test_step.dependOn(unit_mir_step);",
+        "unit_test_step.dependOn(lower_c_shard_step);",
+        "unit_test_step.dependOn(lower_llvm_shard_step);",
+    )
 
     print("PASS: compilation-session-inventory - per-file request context is the only production path")
     return 0

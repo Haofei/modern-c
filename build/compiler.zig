@@ -47,22 +47,14 @@ pub fn build(b: *std.Build) h.Ctx {
     const run_step = b.step("run", "Run the MC compiler");
     run_step.dependOn(&run_cmd.step);
 
-    const unit_test_module = b.createModule(.{
-        .root_source_file = b.path("src/test_root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    unit_test_module.addOptions("build_options", options);
-    unit_test_module.addAnonymousImport("diagnostics_reference_md", .{
-        .root_source_file = b.path("docs/diagnostics.md"),
-    });
-    const unit_tests = b.addTest(.{
-        .root_module = unit_test_module,
-        .filters = test_filters,
-    });
-    const test_cmd = b.addRunArtifact(unit_tests);
+    // Preserve the historical `test-unit` coverage, while executing its four
+    // test-disjoint roots in parallel. The root composition stays in
+    // `src/test_root.zig`; this build registry owns the partition wiring.
     const unit_test_step = b.step("test-unit", "Run compiler unit tests");
-    unit_test_step.dependOn(&test_cmd.step);
+    const unit_core_step = addTestShard(b, target, optimize, options, test_filters, "test-unit-core", "src/test_root_core.zig", "Run compiler core/front-end unit-test partition");
+    const unit_mir_step = addTestShard(b, target, optimize, options, test_filters, "test-unit-mir", "src/test_root_mir.zig", "Run compiler MIR model/verifier unit-test partition");
+    unit_test_step.dependOn(unit_core_step);
+    unit_test_step.dependOn(unit_mir_step);
 
     const frontend_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-frontend", "src/test_shard_frontend.zig", "Run frontend lexer/parser/loader unit-test shard");
     const sema_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-sema", "src/test_shard_sema.zig", "Run semantic analysis and monomorphization unit-test shard");
@@ -70,6 +62,8 @@ pub fn build(b: *std.Build) h.Ctx {
     const lower_c_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-lower-c", "src/test_shard_lower_c.zig", "Run C backend unit-test shard");
     const lower_llvm_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-lower-llvm", "src/test_shard_lower_llvm.zig", "Run LLVM backend unit-test shard");
     const backend_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-backend", "src/test_shard_backend.zig", "Run C/LLVM backend unit-test shard");
+    unit_test_step.dependOn(lower_c_shard_step);
+    unit_test_step.dependOn(lower_llvm_shard_step);
 
     const unit_shards_step = b.step("test-unit-shards", "Run compiler unit-test shards");
     unit_shards_step.dependOn(frontend_shard_step);
@@ -100,9 +94,11 @@ pub fn build(b: *std.Build) h.Ctx {
     // `test` has no install dep (in-process unit tests). Registered into ctx so
     // the tier aggregations can depend on its command step like the others.
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&test_cmd.step);
+    test_step.dependOn(unit_test_step);
     test_step.dependOn(&spec_test_cmd.step);
     ctx.cmds.put("test-unit", unit_test_step) catch @panic("OOM");
+    ctx.cmds.put("test-unit-core", unit_core_step) catch @panic("OOM");
+    ctx.cmds.put("test-unit-mir", unit_mir_step) catch @panic("OOM");
     ctx.cmds.put("test-shard-frontend", frontend_shard_step) catch @panic("OOM");
     ctx.cmds.put("test-shard-sema", sema_shard_step) catch @panic("OOM");
     ctx.cmds.put("test-shard-mir-cleanup", mir_cleanup_shard_step) catch @panic("OOM");
