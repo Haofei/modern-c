@@ -68,21 +68,27 @@ have been removed.
 
 ## Current queue
 
-Do these in order unless a failing test forces a narrower slice:
+The review is executed as ten bounded cutovers. A row is complete only when its
+old ingress is physically absent and an inventory or admission test prevents it
+from returning.
 
-1. Finish the global cutover. Scalar `const` declarations already emit from
-   checked MIR facts; remove the remaining global type and initializer syntax
-   payloads without introducing a second type table.
-2. Normalize type-declaration codegen facts and delete
-   `TransitionalTypeDeclArtifact`. Dynamic-trait declaration ingress is already
-   removed and remains fail-closed.
-3. Move comptime evaluation before `LowerRequest` construction, after global
-   initializers no longer require backend-owned source expressions.
-4. Reduce backend `ast_bridge`, `eval`, and `declaration_artifacts` imports to
-   zero, lowering the exact ratchets with every deletion.
-5. Remove legacy MIR compatibility projections after their canonical typed
-   replacements are direct builder outputs.
-6. Keep advanced language forms experimental and frozen during this cutover.
+| Priority | Cutover | Status | Exit condition |
+|---|---|---|---|
+| P0 | Function-body fallback | complete | Both backends consume only verified executable MIR; legacy body emitters and fallback request payloads are absent. |
+| P0 | Function/body type payloads | complete | Callable signatures and body declaration-shape dependencies are `SignatureTypeId`s; no body `ast.TypeExpr` fact exists. |
+| P0 | Global declarations | active | Every admitted global has a syntax-free initializer plan; `GlobalArtifact` and `GlobalInitFacts.init` are deleted. |
+| P0 | Type declarations | active | Struct, enum, tagged union, overlay union, packed bits, and aliases use checked facts; `TransitionalTypeDeclArtifact` is deleted. |
+| P1 | Trait/dynamic declaration ingress | complete | Qualified codegen rejects dynamic traits before lowering and retains no trait-method AST artifact. |
+| P1 | Backend comptime provider | blocked by globals | Comptime evaluation finishes before request construction; `ComptimeFunctionDeclarations` and backend `eval` imports are deleted. |
+| P1 | MIR compatibility projections | active | Canonical typed IDs replace AST/source/string double-writes one domain at a time; each removed field is ratcheted at zero. |
+| P1 | Per-file module identity | complete | No combined source or textual inclusion path exists; spans and definitions retain per-file identity. |
+| P1 | Minimal CheckedProgram | complete | Syntax-free callable/global/signature facts are admitted before verified MIR without adding a second expression IR. |
+| P1 | Final backend request | blocked by globals/types/comptime | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
+
+Active work proceeds in dependency order: finish globals and type declarations,
+remove the backend comptime provider, delete remaining MIR compatibility
+projections, then close `LowerRequest`. Advanced language forms stay frozen
+during this cutover.
 
 The callable-signature ingress is closed: parameter and return types are owned
 by `SignatureTypeTable`, and neither `FunctionParamFact` nor
