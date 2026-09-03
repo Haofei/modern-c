@@ -67,6 +67,79 @@ test "lower-c rejects a verified body with missing declaration facts" {
         ),
     );
 }
+
+test "lower-c renders scalar const globals from verified MIR facts" {
+    const source =
+        \\const COUNT: u32 = 1 + 2;
+        \\const ENABLED: bool = true;
+        \\const NEG_ZERO: f32 = -0.0;
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithMir("c_scalar_const_global_facts.mc", source, &output);
+
+    try expectContains(output.items, "uint32_t COUNT = 3;");
+    try expectContains(output.items, "bool ENABLED = 1;");
+    try expectContains(output.items, "float NEG_ZERO = __builtin_bit_cast(float, ((uint32_t)0x80000000U));");
+}
+
+test "lower-c scalar const globals do not retain an AST initializer dependency" {
+    const source = "const COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("c_scalar_const_global_no_ast_init.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (@constCast(artifacts.decl_artifacts)) |*artifact| switch (artifact.*) {
+        .global => |*global| global.initializer.init = null,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_scalar_const_global_no_ast_init.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "uint32_t COUNT = 3;");
+}
+
+test "lower-c fails closed when a scalar const-global fact is missing" {
+    const source = "const COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("c_missing_scalar_const_global_fact.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const saved_facts = module_mir.const_global_scalar_inits;
+    defer module_mir.const_global_scalar_inits = saved_facts;
+    module_mir.const_global_scalar_inits = &.{};
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.MissingConstGlobalScalarInitFact,
+        lower_c.appendCProfileWithMirArtifacts(
+            std.testing.allocator,
+            artifacts.codegen(),
+            &module_mir,
+            &output,
+            .kernel,
+            "c_missing_scalar_const_global_fact.mc",
+            .{},
+            false,
+            null,
+        ),
+    );
+}
 fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: []const u8, generated_c_path: ?[]const u8) !void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);

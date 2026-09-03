@@ -222,16 +222,25 @@ pub fn appendCComptimeFloat(
     value: eval.ComptimeFloat,
     as_f32: bool,
 ) !void {
-    if (as_f32 or value.width == 32) {
-        const bits: u32 = @bitCast(value.asF32());
-        try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits});
+    try appendCFloatBits(allocator, out, value.bits, value.width, as_f32);
+}
+
+/// Render a frontend-owned floating constant without requiring callers to
+/// retain the evaluator's value representation.
+pub fn appendCFloatBits(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    bits: u64,
+    width: u8,
+    as_f32: bool,
+) !void {
+    if (width != 32 and width != 64) return error.UnsupportedCEmission;
+    if (as_f32 or width == 32) {
+        const raw_bits: u32 = @truncate(bits);
+        try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{raw_bits});
         return;
     }
-    try out.print(
-        allocator,
-        "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))",
-        .{value.bits},
-    );
+    try out.print(allocator, "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))", .{bits});
 }
 
 pub fn negatedLiteralIsI64Min(expr: ast_bridge.Expr) bool {

@@ -726,10 +726,17 @@ pub const CEmitter = struct {
         return self.source_path;
     }
 
-    // Fold a `const` global initializer to its C constant text (section 22).
-    fn constGlobalCValue(self: *CEmitter, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) !?[]const u8 {
-        const value = self.foldConstGlobalValue(expr, ty) orelse return null;
-        return switch (value) {
+    // Scalar const globals are rendered from a verified MIR fact. Aggregates
+    // retain the transitional AST route until they receive their own
+    // syntax-free const-value representation.
+    fn constGlobalCValue(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !?[]const u8 {
+        const fact = self.mir_module.constGlobalScalarInit(global.initializer.body_id) orelse {
+            if (mir.valueTypeRequiresScalarConstInitFact(global.signature.value_ty) and global.initializer.body_id.isValid())
+                return error.UnsupportedCEmission;
+            return null;
+        };
+        if (!mir.ValueType.eql(fact.value_ty, global.signature.value_ty) or !fact.value.isCompatibleWith(fact.value_ty)) return error.UnsupportedCEmission;
+        return switch (fact.value) {
             // Values above the signed-64 range need an unsigned suffix, or C
             // reads the decimal literal as implicitly unsigned (a warning).
             .int => |n| blk: {
@@ -745,11 +752,9 @@ pub const CEmitter = struct {
             .boolean => |b| if (b) "1" else "0",
             .float => |f| blk: {
                 var text: std.ArrayList(u8) = .empty;
-                try appendCComptimeFloat(self.scratch.allocator(), &text, f, f.width == 32);
+                try lower_c_const.appendCFloatBits(self.scratch.allocator(), &text, f.bits, f.width, f.width == 32);
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
-            // Aggregate / byte-string const globals are not lowered to a C scalar here.
-            .void, .tag, .bytes, .array, .@"struct" => null,
         };
     }
 
@@ -1533,9 +1538,9 @@ pub const CEmitter = struct {
         try self.emitDeclarator(ty, name);
     }
 
-    fn constGlobalCValueForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) anyerror!?[]const u8 {
+    fn constGlobalCValueForGlobal(ctx: *anyopaque, global: declaration_artifacts.GlobalArtifact) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.constGlobalCValue(expr, ty);
+        return self.constGlobalCValue(global);
     }
 
     fn emitExprForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void {

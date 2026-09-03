@@ -768,6 +768,9 @@ pub const executableCheckedBinaryTrapRequirements = mir_model.executableCheckedB
 pub const CallableKind = mir_model.CallableKind;
 pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
+pub const ConstScalarValue = mir_model.ConstScalarValue;
+pub const ConstGlobalScalarInitFact = mir_model.ConstGlobalScalarInitFact;
+pub const valueTypeRequiresScalarConstInitFact = mir_model.valueTypeRequiresScalarConstInitFact;
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
 pub const BuildOptions = mir_model.BuildOptions;
@@ -1236,6 +1239,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     }
     var checked_globals: std.ArrayList(CheckedGlobalFact) = .empty;
     errdefer checked_globals.deinit(allocator);
+    var const_global_scalar_inits: std.ArrayList(mir_model.ConstGlobalScalarInitFact) = .empty;
+    errdefer const_global_scalar_inits.deinit(allocator);
 
     for (decl_items, 0..) |item, decl_ordinal| {
         const decl = declFromBuildItem(item);
@@ -1282,6 +1287,20 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             try checked_callables.append(allocator, checked);
                             checked_param_types_unowned = false;
                             try functions.append(allocator, function);
+                        }
+                        if (global.is_const) {
+                            if (const_globals.get(global.name.text)) |value| {
+                                if (constScalarValueFromComptime(value)) |scalar| {
+                                    const global_ty = checked_global.ty;
+                                    if (scalar.isCompatibleWith(global_ty)) {
+                                        try const_global_scalar_inits.append(allocator, .{
+                                            .initializer_body_id = checked_global.initializer_body_id,
+                                            .value_ty = global_ty,
+                                            .value = scalar,
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                     try checked_globals.append(allocator, checked_global);
@@ -1417,6 +1436,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer allocator.free(checked_globals_slice);
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
+    const const_global_scalar_inits_slice = try const_global_scalar_inits.toOwnedSlice(allocator);
+    errdefer allocator.free(const_global_scalar_inits_slice);
 
     var built_module: Module = .{
         .allocator = allocator,
@@ -1425,6 +1446,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .signature_types = signature_type_table,
         .checked_callables = checked_callables_slice,
         .checked_globals = checked_globals_slice,
+        .const_global_scalar_inits = const_global_scalar_inits_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
@@ -1433,6 +1455,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     };
     try attachFunctionCleanupCfgs(allocator, &built_module);
     return built_module;
+}
+
+fn constScalarValueFromComptime(value: eval.ComptimeValue) ?mir_model.ConstScalarValue {
+    return switch (value) {
+        .int => |number| .{ .int = number },
+        .uint => |number| .{ .uint = number },
+        .boolean => |boolean| .{ .boolean = boolean },
+        .float => |float| .{ .float = .{ .bits = float.bits, .width = float.width } },
+        .void, .tag, .bytes, .array, .@"struct" => null,
+    };
 }
 
 fn applyCheckedCallableFact(allocator: std.mem.Allocator, function: *Function, checked: CheckedCallableFact) !void {

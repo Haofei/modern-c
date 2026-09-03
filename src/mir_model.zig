@@ -4032,6 +4032,72 @@ pub const CheckedGlobalFact = struct {
     is_extern: bool,
 };
 
+/// Syntax-free scalar value already evaluated by the frontend for a `const`
+/// global initializer.  This deliberately excludes aggregates and enum tags:
+/// their rendering still depends on transitional aggregate/type artifacts.
+pub const ConstScalarValue = union(enum) {
+    int: i128,
+    uint: u128,
+    boolean: bool,
+    float: struct {
+        bits: u64,
+        width: u8,
+    },
+
+    pub fn isCompatibleWith(self: ConstScalarValue, ty: ValueType) bool {
+        return switch (self) {
+            .int => |value| integerConstValueFits(value, ty),
+            .uint => |value| unsignedConstValueFits(value, ty),
+            .boolean => ty == .bool,
+            .float => |value| switch (ty) {
+                .float => |name| (value.width == 32 and std.mem.eql(u8, name, "f32")) or
+                    (value.width == 64 and std.mem.eql(u8, name, "f64")),
+                else => false,
+            },
+        };
+    }
+};
+
+fn integerConstValueFits(value: i128, ty: ValueType) bool {
+    const info = executableIntegerStorageInfo(ty) orelse return false;
+    if (!info.signed) return value >= 0 and unsignedConstValueFits(@intCast(value), ty);
+    if (info.bits == 128) return true;
+    if (info.bits == 0 or info.bits > 128) return false;
+    const shift: std.math.Log2Int(i128) = @intCast(info.bits - 1);
+    const minimum = -(@as(i128, 1) << shift);
+    const maximum = (@as(i128, 1) << shift) - 1;
+    return value >= minimum and value <= maximum;
+}
+
+fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
+    const info = executableIntegerStorageInfo(ty) orelse return false;
+    if (info.bits == 0 or info.bits > 128) return false;
+    if (info.signed) {
+        if (info.bits == 128) return value <= @as(u128, @intCast(std.math.maxInt(i128)));
+        const shift: std.math.Log2Int(u128) = @intCast(info.bits - 1);
+        return value <= (@as(u128, 1) << shift) - 1;
+    }
+    if (info.bits == 128) return true;
+    const shift: std.math.Log2Int(u128) = @intCast(info.bits);
+    return value <= (@as(u128, 1) << shift) - 1;
+}
+
+/// A scalar const-global value is keyed by the checked initializer body, not
+/// by a source spelling.  `CheckedProgram` verifies that the body belongs to
+/// exactly one `const` global before code generation can consume this fact.
+pub const ConstGlobalScalarInitFact = struct {
+    initializer_body_id: BodyId,
+    value_ty: ValueType,
+    value: ConstScalarValue,
+};
+
+pub fn valueTypeRequiresScalarConstInitFact(ty: ValueType) bool {
+    return switch (ty) {
+        .bool, .integer, .domain_integer, .float => true,
+        else => false,
+    };
+}
+
 pub const Module = struct {
     allocator: std.mem.Allocator,
     symbol_identities: []SymbolIdentity = &.{},
@@ -4039,11 +4105,23 @@ pub const Module = struct {
     signature_types: SignatureTypeTable = .{},
     checked_callables: []CheckedCallableFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
+    const_global_scalar_inits: []ConstGlobalScalarInitFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
     type_ownership_facts: []TypeOwnershipFact = &.{},
     aggregate_return_summaries: []AggregateReturnSummaryFact = &.{},
     aggregate_return_pointer_facts: []AggregateReturnPointerFact = &.{},
+
+    pub fn constGlobalScalarInit(self: Module, body_id: BodyId) ?ConstGlobalScalarInitFact {
+        if (!body_id.isValid()) return null;
+        var found: ?ConstGlobalScalarInitFact = null;
+        for (self.const_global_scalar_inits) |fact| {
+            if (!fact.initializer_body_id.eql(body_id)) continue;
+            if (found != null) return null;
+            found = fact;
+        }
+        return found;
+    }
 
     pub fn deinit(self: *Module) void {
         for (self.functions) |function| {
@@ -4102,6 +4180,7 @@ pub const Module = struct {
             self.allocator.free(self.checked_callables);
         }
         if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
+        if (self.const_global_scalar_inits.len != 0) self.allocator.free(self.const_global_scalar_inits);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);

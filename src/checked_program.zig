@@ -15,8 +15,14 @@ pub const CheckedProgram = struct {
     /// Borrowed module-owned signature type graph. The checked program never
     /// owns syntax or source type expressions.
     signature_types: mir.SignatureTypeTable,
+    const_global_scalar_inits: []const mir.ConstGlobalScalarInitFact,
 
-    pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact, signature_types: mir.SignatureTypeTable) !CheckedProgram {
+    pub fn init(
+        callables: []const mir.CheckedCallableFact,
+        globals: []const mir.CheckedGlobalFact,
+        signature_types: mir.SignatureTypeTable,
+        const_global_scalar_inits: []const mir.ConstGlobalScalarInitFact,
+    ) !CheckedProgram {
         if (!signature_types.validate()) return error.InvalidCheckedProgram;
         for (callables, 0..) |callable, index| {
             if (!callable.symbol_id.isValid()) return error.InvalidCheckedProgram;
@@ -56,7 +62,30 @@ pub const CheckedProgram = struct {
                     return error.InvalidCheckedProgram;
             }
         }
-        return .{ .callables = callables, .globals = globals, .signature_types = signature_types };
+        for (const_global_scalar_inits, 0..) |fact, index| {
+            if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
+                return error.InvalidConstGlobalScalarInitFact;
+            const callable = callables[fact.initializer_body_id.index()];
+            if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id))
+                return error.InvalidConstGlobalScalarInitFact;
+            const global = globalForInitializer(callables, globals, fact.initializer_body_id) orelse return error.InvalidConstGlobalScalarInitFact;
+            if (!global.is_const or !mir.ValueType.eql(global.ty, fact.value_ty) or !fact.value.isCompatibleWith(fact.value_ty))
+                return error.InvalidConstGlobalScalarInitFact;
+            for (const_global_scalar_inits[0..index]) |prior| {
+                if (prior.initializer_body_id.eql(fact.initializer_body_id)) return error.DuplicateConstGlobalScalarInitFact;
+            }
+        }
+        for (globals) |global| {
+            if (requiresScalarConstInitFact(global)) {
+                _ = scalarConstInitFactForGlobal(const_global_scalar_inits, global) orelse return error.MissingConstGlobalScalarInitFact;
+            }
+        }
+        return .{
+            .callables = callables,
+            .globals = globals,
+            .signature_types = signature_types,
+            .const_global_scalar_inits = const_global_scalar_inits,
+        };
     }
 
     pub fn body(self: CheckedProgram, body_id: mir.BodyId) ?mir.CheckedCallableFact {
@@ -69,9 +98,39 @@ pub const CheckedProgram = struct {
     pub fn matchesMir(self: CheckedProgram, module: mir.Module) bool {
         return self.globals.ptr == module.checked_globals.ptr and self.globals.len == module.checked_globals.len and
             self.signature_types.shapes.ptr == module.signature_types.shapes.ptr and self.signature_types.shapes.len == module.signature_types.shapes.len and
+            self.const_global_scalar_inits.ptr == module.const_global_scalar_inits.ptr and
+            self.const_global_scalar_inits.len == module.const_global_scalar_inits.len and
             callableFactsMatchMir(self.callables, module);
     }
 };
+
+fn requiresScalarConstInitFact(global: mir.CheckedGlobalFact) bool {
+    if (!global.is_const or !global.initializer_body_id.isValid()) return false;
+    return mir.valueTypeRequiresScalarConstInitFact(global.ty);
+}
+
+fn scalarConstInitFactForGlobal(facts: []const mir.ConstGlobalScalarInitFact, global: mir.CheckedGlobalFact) ?mir.ConstGlobalScalarInitFact {
+    var found: ?mir.ConstGlobalScalarInitFact = null;
+    for (facts) |fact| {
+        if (!fact.initializer_body_id.eql(global.initializer_body_id)) continue;
+        if (found != null) return null;
+        found = fact;
+    }
+    return found;
+}
+
+fn globalForInitializer(
+    callables: []const mir.CheckedCallableFact,
+    globals: []const mir.CheckedGlobalFact,
+    body_id: mir.BodyId,
+) ?mir.CheckedGlobalFact {
+    if (!body_id.isValid() or body_id.index() >= callables.len) return null;
+    const callable = callables[body_id.index()];
+    for (globals) |global| {
+        if (global.initializer_body_id.eql(body_id) and global.symbol_id.eql(callable.symbol_id)) return global;
+    }
+    return null;
+}
 
 fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir.Module) bool {
     if (callables.len != module.functions.len) return false;
@@ -143,7 +202,7 @@ test "CheckedProgram rejects duplicate source declaration identities" {
             .irq_context = false,
         },
     };
-    try std.testing.expectError(error.DuplicateDefinitionIdentity, CheckedProgram.init(&callables, &.{}, signature_types));
+    try std.testing.expectError(error.DuplicateDefinitionIdentity, CheckedProgram.init(&callables, &.{}, signature_types, &.{}));
 }
 
 test "declaration identity must belong to the callable source file" {

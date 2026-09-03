@@ -5194,6 +5194,52 @@ test "LLVM rejects a verified body with missing declaration facts" {
     );
 }
 
+test "LLVM renders scalar const globals from verified MIR facts" {
+    const source =
+        \\const COUNT: u32 = 1 + 2;
+        \\const ENABLED: bool = true;
+        \\const NEG_ZERO: f32 = -0.0;
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmExecutableMirTest("llvm_scalar_const_global_facts.mc", source, &output);
+
+    try expectContains(output.items, "@COUNT = internal constant i32 3");
+    try expectContains(output.items, "@ENABLED = internal constant i1 1");
+    try expectContains(output.items, "@NEG_ZERO = internal constant float bitcast (i32 2147483648 to float)");
+}
+
+test "LLVM fails closed when a scalar const-global fact is missing" {
+    const source = "const COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("llvm_missing_scalar_const_global_fact.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const saved_facts = module_mir.const_global_scalar_inits;
+    defer module_mir.const_global_scalar_inits = saved_facts;
+    module_mir.const_global_scalar_inits = &.{};
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.MissingConstGlobalScalarInitFact,
+        lower_llvm.appendLlvmCheckedMirArtifacts(
+            std.testing.allocator,
+            artifacts.codegen(),
+            &module_mir,
+            &output,
+            "llvm_missing_scalar_const_global_fact.mc",
+            .{},
+            false,
+            .riscv64,
+            false,
+            null,
+        ),
+    );
+}
+
 fn appendLlvmExecutableMirTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

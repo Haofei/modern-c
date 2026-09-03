@@ -23,7 +23,7 @@ const staticCInitializerRef = lower_c_const.staticCInitializerRef;
 
 pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
-pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) anyerror!?[]const u8;
+pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, global: declaration_artifacts.GlobalArtifact) anyerror!?[]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
 pub const EmitExprWithTargetForOwnerFn = *const fn (ctx: *anyopaque, owner: ?[]const u8, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
@@ -87,16 +87,19 @@ pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact
     // runtime provides — resolve it by name. Plain `global` stays file-local `static`.
     try ctx.out.appendSlice(ctx.allocator, if (sig.exported) "MC_UNUSED " else "static MC_UNUSED ");
     try ctx.out.print(ctx.allocator, "{s} {s}", .{ rendered_type, sig.name.text });
+    // Scalar const values are verified MIR facts keyed by the initializer
+    // BodyId. Their C rendering must not depend on retaining an AST
+    // initializer payload in the declaration artifact.
+    if (sig.is_const and init_facts.body_id.isValid()) {
+        if (try ctx.const_global_c_value(ctx.emit_ctx, global)) |text| {
+            try ctx.out.print(ctx.allocator, " = {s};\n\n", .{text});
+            return;
+        }
+    }
     if (init_facts.init) |initializer| {
         // A `const` global (section 22) emits its folded compile-time value,
         // so initializers like `MAX * 2` that reference earlier const
         // globals lower to a plain C constant.
-        if (sig.is_const) {
-            if (try ctx.const_global_c_value(ctx.emit_ctx, initializer, sig.ty)) |text| {
-                try ctx.out.print(ctx.allocator, " = {s};\n\n", .{text});
-                return;
-            }
-        }
         if (staticCInitializerRef(initializer, ctx.static_initializers, ctx.functions, ctx.scratch)) |static_initializer| {
             try ctx.out.appendSlice(ctx.allocator, " = ");
             if (try emitStaticCInitializer(ctx.allocator, ctx.out, static_initializer.expr)) {

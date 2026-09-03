@@ -788,7 +788,17 @@ const LlvmEmitter = struct {
         // compiled units may each define the same name (e.g. `PAGE`) without a link-time
         // duplicate-symbol error. Only `export global` keeps default (external) linkage.
         const visibility: []const u8 = if (sig.exported) "" else "internal ";
-        const init = if (init_facts.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
+        const init = if (self.mir_module.constGlobalScalarInit(init_facts.body_id)) |fact|
+            try self.scalarConstGlobalInitializer(fact)
+        else if (sig.is_const and init_facts.body_id.isValid() and mir.valueTypeRequiresScalarConstInitFact(sig.value_ty))
+            return error.UnsupportedLlvmEmission
+        else if (init_facts.init) |expr|
+            if (sig.is_const)
+                try self.emitConstAggregateGlobalInitializer(expr, ty)
+            else
+                try self.emitGlobalInitializer(expr, ty)
+        else
+            try self.zeroInitializer(ty);
         try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ sig.name.text, visibility, kind, llvm_ty, init });
     }
 
@@ -1024,6 +1034,17 @@ const LlvmEmitter = struct {
         };
     }
 
+    /// `const` scalar globals must already have a verified scalar fact before
+    /// codegen.  Aggregate and enum forms retain their bounded transitional
+    /// AST evaluator until a recursive const-value table replaces them.
+    fn emitConstAggregateGlobalInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) ![]const u8 {
+        if (self.foldConstGlobalValue(expr, ty)) |value| switch (value) {
+            .tag, .array, .@"struct" => return try self.comptimeValueInitializer(value, ty),
+            .void, .int, .uint, .float, .boolean, .bytes => return error.UnsupportedLlvmEmission,
+        };
+        return self.emitGlobalInitializer(expr, ty);
+    }
+
     fn globalAddressInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.global_types.contains(ident.text))
@@ -1185,6 +1206,20 @@ const LlvmEmitter = struct {
                 break :blk try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i64 {d} to double)", .{bits});
             },
             .void, .bytes => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn scalarConstGlobalInitializer(self: *LlvmEmitter, fact: mir.ConstGlobalScalarInitFact) ![]const u8 {
+        if (!fact.value.isCompatibleWith(fact.value_ty)) return error.UnsupportedLlvmEmission;
+        return switch (fact.value) {
+            .int => |number| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{number}),
+            .uint => |number| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{number}),
+            .boolean => |value| if (value) "1" else "0",
+            .float => |value| switch (value.width) {
+                32 => try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i32 {d} to float)", .{@as(u32, @truncate(value.bits))}),
+                64 => try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i64 {d} to double)", .{value.bits}),
+                else => error.UnsupportedLlvmEmission,
+            },
         };
     }
 
