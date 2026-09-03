@@ -70,14 +70,23 @@ have been removed.
 
 Do these in order unless a failing test forces a narrower slice:
 
-1. Remove the transitional function return-type syntax payload.
-2. Normalize global, type-declaration, and trait declaration codegen facts.
-3. Move comptime evaluation before `LowerRequest` construction.
+1. Finish the global cutover. Scalar `const` declarations already emit from
+   checked MIR facts; remove the remaining global type and initializer syntax
+   payloads without introducing a second type table.
+2. Normalize type-declaration codegen facts and delete
+   `TransitionalTypeDeclArtifact`. Dynamic-trait declaration ingress is already
+   removed and remains fail-closed.
+3. Move comptime evaluation before `LowerRequest` construction, after global
+   initializers no longer require backend-owned source expressions.
 4. Reduce backend `ast_bridge`, `eval`, and `declaration_artifacts` imports to
    zero, lowering the exact ratchets with every deletion.
 5. Remove legacy MIR compatibility projections after their canonical typed
    replacements are direct builder outputs.
 6. Keep advanced language forms experimental and frozen during this cutover.
+
+The callable-signature ingress is closed: parameter and return types are owned
+by `SignatureTypeTable`, and neither `FunctionParamFact` nor
+`FunctionSignatureFacts` retains a source `TypeExpr`.
 
 ## Patch rules
 
