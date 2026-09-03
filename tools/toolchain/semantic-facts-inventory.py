@@ -721,7 +721,7 @@ ANCHORS: dict[str, list[str]] = {
     "src/mir_model.zig": [
         "pub const ValueType = union(enum)",
         "pub const Instruction = struct",
-        "value_id: ?[]const u8",
+        "typed_value_id: ?ValueId = null",
         "contract_region_id: ?usize",
         "pub const IntegerFact = struct",
         "pub const RangeFact = struct",

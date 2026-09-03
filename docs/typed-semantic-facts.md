@@ -45,8 +45,10 @@ mirror backed by a function-owned `target_owner_identity` table, target-type
 facts now double-write typed `TypeId` result identities and typed `SpanId`
 source identities alongside their metadata instructions, and
 `mir-identity-inventory-test` gates those seeds. This is a migration anchor only;
-legacy string/value/type identity remains live until the later Phase 2 slices
-move those domains onto typed IDs.
+legacy source/type identity remains live until the later Phase 2 slices move
+those domains onto typed IDs. Value occurrence spelling is already owned once
+by `Function.value_identities`; instructions and representation facts carry
+only `ValueId` references.
 
 The MIR verifier also checks instruction-carried `TypeId`, `SpanId`, and
 `ValueId` rows plus target-type owner `SymbolId` rows against the owning
@@ -57,8 +59,8 @@ tables, and `lower-mir` prints the target-type `typed_result_ty_id`,
 `typed_span_id`, and `typed_target_owner_id` on the owned fact row.
 Representation-fact admission now also requires fact-carried `typed_result_ty_id`
 and `typed_span_id` mirrors to match the owning function identity tables;
-`lower-mir` prints those rows plus the optional representation `typed_value_id`
-mirror. Hand-built compatibility MIR may still leave unrelated typed fields
+`lower-mir` prints those rows plus the representation `typed_value_id`.
+Hand-built compatibility MIR may still leave unrelated typed fields
 invalid, but it cannot make a representation fact and its instruction drift
 together back to untyped result-type or line/column matching.
 
@@ -157,10 +159,10 @@ module-wide fallback has been retired; current-function compatibility queries ar
   inspection artifact. It is useful for fixtures, but backends do not consume
   it.
 - `mcc lower-mir` builds MIR through `src/mir.zig`. `src/mir_model.zig` gives
-  instructions a `ValueType`, source line/column, optional `value_id`, contract
+  instructions a `ValueType`, source line/column, optional `ValueId`, contract
   metadata, `RangeFact`, `RepresentationFact`, and `elided_bounds`; the dump
-  prints instruction `value_id` fields plus explicit `mir representation_fact`
-  and `mir elided_bounds_fact` rows for representation identity and optimized
+  resolves `value_id` display text through `Function.value_identities` plus
+  explicit `mir representation_fact` and `mir elided_bounds_fact` rows for representation identity and optimized
   check-elision source points.
 - `src/mir.zig` already records range/elision facts for optimizer-visible
   checks. `Function.elided_bounds` is a span-keyed list of source points where a
@@ -1023,7 +1025,7 @@ at entry instead of treating the AST as a second representation authority.
 | Boundary | Evidence |
 |---|---|
 | Owned fact model | `src/mir_model.zig` owns `RepresentationFact` rows in `Function.representation_facts`; `src/mir.zig` records rows through the `representationFactKind` producer path. |
-| Stable identity key | Facts match by instruction kind, result type, source point, detail, textual `value_id`, and the typed `ValueId` mirror when present; `lower-mir` prints the legacy instruction `value_id=...` and `mir representation_fact ... value_id=...` rows. |
+| Stable identity key | Facts match by instruction kind, result type, source point, detail, and `ValueId`; the value spelling is stored once in `Function.value_identities` and `lower-mir` resolves it only for display. |
 | Flow-proven nonnull bindings | A nullable-pointer `if let` or switch binding records a scope-local nonnull proof. Uses still emit matching typed-load and representation-check facts, but the statically discharged check has no `InvalidRepresentation` trap edge. Shadowed bindings restore the outer proof state; ordinary pointer parameters remain trapping. |
 | Backend admission gate | C and LLVM receive a `VerifiedProgram`; `VerifiedProgram.init` calls the unified `validateLoweringAdmission` seam before emission. That seam includes `validateRepresentationFactsForLowering` and rejects `.unknown` placeholders in admitted representation fact types. |
 | Missing-fact rejection | `lower-c rejects prebuilt MIR with missing representation facts` and `LLVM rejects prebuilt MIR with missing representation facts` remove required rows and expect `InvalidMirRepresentationFacts`. |

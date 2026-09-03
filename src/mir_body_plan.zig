@@ -448,9 +448,7 @@ fn verifyInstructions(function: *const mir.Function) !void {
             instruction.typed_switch_pattern_count > mir.Instruction.max_switch_patterns) return error.InvalidInstructionMetadata;
 
         if (instruction.typed_value_id) |value_id| {
-            const identity = valueIdentity(function, value_id) orelse return error.InvalidValueReference;
-            const spelling = instruction.value_id orelse return error.InvalidValueReference;
-            if (!std.mem.eql(u8, identity.spelling, spelling)) return error.InvalidValueReference;
+            _ = valueIdentity(function, value_id) orelse return error.InvalidValueReference;
         }
         if (instruction.typed_operand_value_id.isValid() and valueIdentity(function, instruction.typed_operand_value_id) == null) {
             return error.InvalidValueReference;
@@ -784,10 +782,10 @@ test "MIR body plan verifier rejects inconsistent typed successor" {
     try std.testing.expectError(error.InconsistentTypedSuccessor, verify(&fixture.function));
 }
 
-test "MIR body plan verifier rejects value identity mismatch" {
+test "MIR body plan verifier rejects invalid value identity" {
     var fixture = Fixture{};
     fixture.init();
-    fixture.value_identities[0].spelling = "other";
+    fixture.instruction[0].typed_value_id = mir.ValueId.fromIndex(1);
     try std.testing.expectError(error.InvalidValueReference, verify(&fixture.function));
 }
 
@@ -819,7 +817,6 @@ const Fixture = struct {
             .result_ty = .{ .integer = "u32" },
             .typed_result_ty = mir.TypeId.fromIndex(0),
             .detail = "input",
-            .value_id = "input",
             .typed_value_id = mir.ValueId.fromIndex(0),
             .typed_span_id = mir.SpanId.fromIndex(0),
             .line = 1,

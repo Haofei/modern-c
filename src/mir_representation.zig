@@ -24,7 +24,7 @@ pub fn defaultInstructionValueId(kind: Instruction.Kind, detail: []const u8) ?[]
 
 pub fn producerHasDominatingCheck(block: Block, producer_index: usize, ty: ValueType) bool {
     const expected_kind = checkKind(ty) orelse return true;
-    const expected_value_id = block.instructions[producer_index].value_id;
+    const expected_value_id = block.instructions[producer_index].typed_value_id;
     var i = producer_index + 1;
     while (i < block.instructions.len) : (i += 1) {
         const instruction = block.instructions[i];
@@ -38,7 +38,7 @@ pub fn producerHasDominatingCheck(block: Block, producer_index: usize, ty: Value
 
 pub fn useHasDominatingCheck(allocator: std.mem.Allocator, function: Function, block_index: usize, instruction_index: usize, ty: ValueType) !bool {
     const expected_kind = checkKind(ty) orelse return true;
-    const expected_value_id = function.blocks[block_index].instructions[instruction_index].value_id;
+    const expected_value_id = function.blocks[block_index].instructions[instruction_index].typed_value_id;
     if (block_index >= function.blocks.len) return false;
     // The recursion guard must cover every block; a fixed cap would force a conservative
     // false-positive (E_REPRESENTATION_CHECK_MISSING) on large functions.
@@ -48,7 +48,7 @@ pub fn useHasDominatingCheck(allocator: std.mem.Allocator, function: Function, b
     return blockHasDominatingCheck(function, block_index, instruction_index, expected_kind, expected_value_id, visiting);
 }
 
-fn blockHasDominatingCheck(function: Function, block_index: usize, before_index: usize, expected_kind: []const u8, expected_value_id: ?[]const u8, visiting: []bool) bool {
+fn blockHasDominatingCheck(function: Function, block_index: usize, before_index: usize, expected_kind: []const u8, expected_value_id: ?mir_model.ValueId, visiting: []bool) bool {
     if (block_index >= function.blocks.len) return false;
     const block = function.blocks[block_index];
     var i = before_index;
@@ -74,13 +74,13 @@ fn blockHasDominatingCheck(function: Function, block_index: usize, before_index:
     return saw_predecessor;
 }
 
-fn checkMatches(instruction: Instruction, expected_kind: []const u8, expected_value_id: ?[]const u8) bool {
+fn checkMatches(instruction: Instruction, expected_kind: []const u8, expected_value_id: ?mir_model.ValueId) bool {
     if (instruction.kind != .representation_check) return false;
     const actual_kind = checkKind(instruction.result_ty) orelse return false;
     if (!std.mem.eql(u8, actual_kind, expected_kind)) return false;
-    const actual_value_id = instruction.value_id;
+    const actual_value_id = instruction.typed_value_id;
     if (expected_value_id) |expected| {
-        if (actual_value_id) |actual| return std.mem.eql(u8, actual, expected);
+        if (actual_value_id) |actual| return actual.eql(expected);
         return false;
     }
     return actual_value_id == null;

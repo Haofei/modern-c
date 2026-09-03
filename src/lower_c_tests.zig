@@ -6374,17 +6374,17 @@ fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, ta
     return error.TestUnexpectedResult;
 }
 
-fn retargetRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8, value_id: []const u8) !void {
+fn retargetRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         if (function.representation_facts.len == 0) return error.TestUnexpectedResult;
-        function.representation_facts[0].value_id = value_id;
+        function.representation_facts[0].typed_value_id = mir.ValueId.fromIndex(function.value_identities.len);
         return;
     }
     return error.TestUnexpectedResult;
 }
 
-fn appendStaleRepresentationFactForFunction(module_mir: *mir.Module, name: []const u8, value_id: []const u8) !void {
+fn appendStaleRepresentationFactForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         if (function.representation_facts.len == 0) return error.TestUnexpectedResult;
@@ -6393,7 +6393,7 @@ fn appendStaleRepresentationFactForFunction(module_mir: *mir.Module, name: []con
         errdefer facts.deinit(module_mir.allocator);
         try facts.appendSlice(module_mir.allocator, function.representation_facts);
         var stale = function.representation_facts[0];
-        stale.value_id = value_id;
+        stale.typed_value_id = mir.ValueId.fromIndex(function.value_identities.len);
         try facts.append(module_mir.allocator, stale);
 
         module_mir.allocator.free(function.representation_facts);
@@ -6535,7 +6535,7 @@ test "lower-c rejects prebuilt MIR with stale representation facts" {
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try retargetRepresentationFactsForFunction(&module_mir, "representation_fact_gate", "stale_value");
+    try retargetRepresentationFactsForFunction(&module_mir, "representation_fact_gate");
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -6556,7 +6556,7 @@ test "lower-c rejects prebuilt MIR with extra stale representation facts" {
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try appendStaleRepresentationFactForFunction(&module_mir, "representation_fact_gate", "extra_stale_value");
+    try appendStaleRepresentationFactForFunction(&module_mir, "representation_fact_gate");
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -6602,7 +6602,7 @@ test "lower-c rejects prebuilt MIR with stale Result try payload representation 
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    try retargetRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate", "stale_try_payload");
+    try retargetRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate");
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);

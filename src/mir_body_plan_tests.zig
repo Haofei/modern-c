@@ -43,10 +43,9 @@ test "body plan keeps rejecting typed identity drift in accepted MIR" {
         if (std.mem.eql(u8, candidate.name, "branch_cleanup")) break candidate;
     } else return error.TestUnexpectedResult;
     for (function.blocks) |*block| for (block.instructions) |*instruction| {
-        if (instruction.typed_value_id) |id| {
-            instruction.value_id = "stale";
+        if (instruction.typed_value_id != null) {
+            instruction.typed_value_id = mir.ValueId.fromIndex(function.value_identities.len);
             try std.testing.expectError(error.InvalidValueReference, body_plan.verify(function));
-            _ = id;
             return;
         }
     };

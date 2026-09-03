@@ -155,7 +155,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                     instruction.target_owner orelse "none",
                     optionalTypedIndexOrMax(instruction.typed_target_owner_id),
                     optionalUsizeOrMax(instruction.target_index),
-                    instruction.value_id orelse "none",
+                    if (instruction.typed_value_id) |id| valueSpelling(function, id) else "none",
                     optionalTypedIndexOrMax(instruction.typed_value_id),
                     typedIndexOrMax(instruction.typed_span_id),
                     instruction.line,
@@ -228,7 +228,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                 fact.detail,
                 fact.result_ty.name(),
                 typedIndexOrMax(fact.typed_result_ty),
-                fact.value_id,
+                valueSpelling(function, fact.typed_value_id),
                 typedIndexOrMax(fact.typed_value_id),
                 typedIndexOrMax(fact.typed_span_id),
             });
@@ -243,6 +243,12 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
 
 fn appendSourcePointForDigest(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source: mir.SourcePoint) !void {
     try out.print(allocator, "file={} line={} column={} offset={} len={}\n", .{ source.file_id, source.line, source.column, source.offset, source.len });
+}
+
+fn valueSpelling(function: mir.Function, id: mir.ValueId) []const u8 {
+    if (!id.isValid() or id.index() >= function.value_identities.len) return "none";
+    const identity = function.value_identities[id.index()];
+    return if (identity.id.eql(id)) identity.spelling else "none";
 }
 
 fn sourcePointAsSpan(line: usize, column: usize, offset: usize, len: usize, file_id: u32) mir.SourcePoint {

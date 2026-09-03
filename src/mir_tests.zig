@@ -8937,20 +8937,17 @@ test "MIR dump exposes representation value identities" {
     try std.testing.expectEqual(@as(usize, 2), return_fn.representation_facts.len);
     try std.testing.expectEqual(.typed_load, return_fn.representation_facts[0].kind);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].detail);
-    try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].value_id);
     try std.testing.expect(return_fn.representation_facts[0].typed_result_ty.isValid());
     try std.testing.expect(return_fn.representation_facts[0].typed_result_ty.eql(return_mut_ptr_identity.id));
     try std.testing.expect(return_fn.representation_facts[0].typed_value_id.isValid());
     try std.testing.expect(return_fn.representation_facts[0].typed_value_id.eql(return_p_identity.id));
     try std.testing.expectEqual(.representation_check, return_fn.representation_facts[1].kind);
     try std.testing.expectEqualStrings("nonnull_pointer", return_fn.representation_facts[1].detail);
-    try std.testing.expectEqualStrings("p", return_fn.representation_facts[1].value_id);
     try std.testing.expectEqual(return_fn.representation_facts[0].typed_result_ty, return_fn.representation_facts[1].typed_result_ty);
     try std.testing.expectEqual(return_fn.representation_facts[0].typed_value_id, return_fn.representation_facts[1].typed_value_id);
     try std.testing.expectEqual(@as(usize, 3), read_fn.representation_facts.len);
     try std.testing.expectEqual(.typed_load, read_fn.representation_facts[0].kind);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].detail);
-    try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].value_id);
     try std.testing.expect(read_fn.representation_facts[0].typed_result_ty.isValid());
     try std.testing.expect(read_fn.representation_facts[0].typed_result_ty.eql(read_mut_ptr_identity.id));
     try std.testing.expect(read_fn.representation_facts[0].typed_value_id.isValid());
@@ -8959,17 +8956,14 @@ test "MIR dump exposes representation value identities" {
     try std.testing.expect(read_fn.representation_facts[0].typed_span_id.eql(read_load_span_identity.id));
     try std.testing.expectEqual(.representation_check, read_fn.representation_facts[1].kind);
     try std.testing.expectEqualStrings("nonnull_pointer", read_fn.representation_facts[1].detail);
-    try std.testing.expectEqualStrings("p", read_fn.representation_facts[1].value_id);
     try std.testing.expectEqual(read_fn.representation_facts[0].typed_result_ty, read_fn.representation_facts[1].typed_result_ty);
     try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[1].typed_value_id);
     try std.testing.expectEqual(.representation_use, read_fn.representation_facts[2].kind);
     try std.testing.expectEqualStrings("deref_base", read_fn.representation_facts[2].detail);
-    try std.testing.expectEqualStrings("p", read_fn.representation_facts[2].value_id);
     try std.testing.expectEqual(read_fn.representation_facts[0].typed_result_ty, read_fn.representation_facts[2].typed_result_ty);
     try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[2].typed_value_id);
     for (read_fn.blocks) |block| for (block.instructions) |instruction| {
-        if (instruction.value_id) |value_id| if (std.mem.eql(u8, value_id, "p")) {
-            try std.testing.expect(instruction.typed_value_id != null);
+        if (instruction.typed_value_id) |value_id| if (value_id.eql(read_p_identity.id)) {
             try std.testing.expect(instruction.typed_result_ty.isValid());
             try std.testing.expect(instruction.typed_span_id.isValid());
             try std.testing.expectEqual(read_fn.representation_facts[0].typed_result_ty, instruction.typed_result_ty);
@@ -11832,13 +11826,13 @@ test "MIR verifier matches representation identity across predecessor paths" {
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var entry_instructions = [_]Instruction{};
     var then_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "p", .line = 2, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 2, .column = 5 },
     };
     var else_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "p", .line = 3, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 3, .column = 5 },
     };
     var join_instructions = [_]Instruction{
-        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .value_id = "p", .line = 4, .column = 5 },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0), .line = 4, .column = 5 },
     };
     var entry_successors = [_]usize{ 1, 2 };
     var then_successors = [_]usize{3};
@@ -11853,6 +11847,7 @@ test "MIR verifier matches representation identity across predecessor paths" {
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
+    var value_identities = [_]mir.ValueIdentity{.{ .id = ValueId.fromIndex(0), .spelling = "p" }};
     var functions = [_]Function{
         .{
             .name = "identity_dominated_use",
@@ -11863,6 +11858,7 @@ test "MIR verifier matches representation identity across predecessor paths" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .value_identities = value_identities[0..],
             .pointer_provenance_facts = &.{},
             .representation_facts = &.{},
             .elided_bounds = &.{},
@@ -11880,13 +11876,13 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var entry_instructions = [_]Instruction{};
     var then_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "p", .line = 2, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 2, .column = 5 },
     };
     var else_instructions = [_]Instruction{
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "q", .line = 3, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(1), .line = 3, .column = 5 },
     };
     var join_instructions = [_]Instruction{
-        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .value_id = "p", .line = 4, .column = 5 },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0), .line = 4, .column = 5 },
     };
     var entry_successors = [_]usize{ 1, 2 };
     var then_successors = [_]usize{3};
@@ -11901,6 +11897,10 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
+    var value_identities = [_]mir.ValueIdentity{
+        .{ .id = ValueId.fromIndex(0), .spelling = "p" },
+        .{ .id = ValueId.fromIndex(1), .spelling = "q" },
+    };
     var functions = [_]Function{
         .{
             .name = "wrong_identity_predecessor_use",
@@ -11911,6 +11911,7 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .value_identities = value_identities[0..],
             .pointer_provenance_facts = &.{},
             .representation_facts = &.{},
             .elided_bounds = &.{},
@@ -12001,9 +12002,9 @@ test "MIR verifier rejects missing representation check on non-return typed use"
 test "MIR verifier rejects representation check for the wrong value identity" {
     const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     var instructions = [_]Instruction{
-        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "checked_ptr", .value_id = "checked_ptr", .line = 1, .column = 5 },
-        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "checked_ptr", .line = 1, .column = 9 },
-        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .value_id = "unchecked_ptr", .line = 2, .column = 5 },
+        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "checked_ptr", .typed_value_id = ValueId.fromIndex(0), .line = 1, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0), .line = 1, .column = 9 },
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .typed_value_id = ValueId.fromIndex(1), .line = 2, .column = 5 },
     };
     var successors = [_]usize{};
     var blocks = [_]Block{
@@ -12012,6 +12013,10 @@ test "MIR verifier rejects representation check for the wrong value identity" {
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
+    var value_identities = [_]mir.ValueIdentity{
+        .{ .id = ValueId.fromIndex(0), .spelling = "checked_ptr" },
+        .{ .id = ValueId.fromIndex(1), .spelling = "unchecked_ptr" },
+    };
     var functions = [_]Function{
         .{
             .name = "wrong_identity_return",
@@ -12022,6 +12027,7 @@ test "MIR verifier rejects representation check for the wrong value identity" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .value_identities = value_identities[0..],
             .pointer_provenance_facts = &.{},
             .representation_facts = &.{},
             .elided_bounds = &.{},

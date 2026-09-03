@@ -1697,7 +1697,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
-                const value_id = instruction.value_id orelse "none";
+                const value_id = if (instruction.typed_value_id) |id| valueSpelling(function, id) orelse "none" else "none";
                 if (instruction.target_index) |index| {
                     const target_owner = instruction.target_owner orelse "none";
                     try out.print(
@@ -1837,7 +1837,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     @tagName(fact.kind),
                     fact.detail,
                     fact.result_ty.name(),
-                    fact.value_id,
+                    valueSpelling(function, fact.typed_value_id) orelse "none",
                     fact.source.line,
                     fact.source.column,
                     if (fact.typed_result_ty.isValid()) fact.typed_result_ty.index() else std.math.maxInt(usize),
@@ -2693,13 +2693,7 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     } else if (instruction.typed_callee_root_value_id.isValid() or instruction.typed_callee_root_span_id.isValid() or instruction.callee_field_index != null) {
         return false;
     }
-    if (instruction.typed_value_id) |value_id| {
-        if (!value_id.isValid()) return false;
-        const index = value_id.index();
-        if (index >= function.value_identities.len) return false;
-        const spelling = instruction.value_id orelse return false;
-        if (!std.mem.eql(u8, function.value_identities[index].spelling, spelling)) return false;
-    }
+    if (instruction.typed_value_id) |value_id| if (!valueIdValid(function, value_id)) return false;
     if (instruction.typed_target_owner_id) |owner_id| {
         if (!owner_id.isValid()) return false;
         const index = owner_id.index();
@@ -2954,6 +2948,10 @@ fn spanIdMatchesSource(function: Function, id: SpanId, source: SourcePoint) bool
 }
 fn valueIdValid(function: Function, id: ValueId) bool {
     return id.index() < function.value_identities.len and function.value_identities[id.index()].id.eql(id);
+}
+fn valueSpelling(function: Function, id: ValueId) ?[]const u8 {
+    if (!id.isValid() or !valueIdValid(function, id)) return null;
+    return function.value_identities[id.index()].spelling;
 }
 fn typeIdValid(function: Function, id: TypeId) bool {
     return id.index() < function.type_identities.len and function.type_identities[id.index()].id.eql(id);
@@ -4134,13 +4132,11 @@ fn functionHasMatchingFloatInstruction(function: Function, fact: FloatFact) bool
 }
 
 fn functionHasMatchingRepresentationFact(function: Function, instruction: Instruction) bool {
-    const value_id = instruction.value_id orelse "none";
     for (function.representation_facts) |fact| {
         if (fact.kind != instruction.kind) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!representationSourceMatches(instruction, fact)) continue;
         if (!std.mem.eql(u8, fact.detail, instruction.detail)) continue;
-        if (!std.mem.eql(u8, fact.value_id, value_id)) continue;
         if (!representationTypedSpansCompatible(instruction, fact)) continue;
         if (!representationTypedResultTypesCompatible(instruction, fact)) continue;
         if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
@@ -4157,7 +4153,6 @@ fn functionHasMatchingRepresentationInstruction(function: Function, fact: Repres
             if (!sameRepresentationValueType(instruction.result_ty, fact.result_ty)) continue;
             if (!representationSourceMatches(instruction, fact)) continue;
             if (!std.mem.eql(u8, instruction.detail, fact.detail)) continue;
-            if (!std.mem.eql(u8, instruction.value_id orelse "none", fact.value_id)) continue;
             if (!representationTypedSpansCompatible(instruction, fact)) continue;
             if (!representationTypedResultTypesCompatible(instruction, fact)) continue;
             if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
@@ -17096,7 +17091,6 @@ const FunctionBuilder = struct {
             .result_ty = ty,
             .typed_result_ty = typed_result_ty,
             .detail = detail,
-            .value_id = resolved_value_id,
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
             .typed_value_id = typed_value_id,
             .typed_span_id = typed_span_id,
@@ -17111,7 +17105,6 @@ const FunctionBuilder = struct {
                 .detail = detail,
                 .result_ty = ty,
                 .typed_result_ty = typed_result_ty,
-                .value_id = resolved_value_id orelse "none",
                 .typed_value_id = typed_value_id orelse .invalid,
                 .typed_span_id = typed_span_id,
                 .source = source,
