@@ -1047,7 +1047,55 @@ pub const CEmitter = struct {
                 try text.appendSlice(self.scratch.allocator(), " }");
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
+            .struct_ => |struct_plan| blk: {
+                const struct_fact = self.structFact(struct_plan.struct_symbol_id) orelse return error.UnsupportedCEmission;
+                if (struct_plan.fields.len != struct_fact.fields.len) return error.UnsupportedCEmission;
+                var text: std.ArrayList(u8) = .empty;
+                try text.appendSlice(self.scratch.allocator(), "{ ");
+                for (struct_plan.fields, 0..) |field, index| {
+                    if (field.field_index != index or index >= struct_fact.fields.len) return error.UnsupportedCEmission;
+                    const struct_field = struct_fact.fields[index];
+                    if (index != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    try text.print(self.scratch.allocator(), ".{s} = {s}", .{ struct_field.spelling, try self.cAggregateGlobalInitializer(field.value, struct_field.type_id) });
+                }
+                try text.appendSlice(self.scratch.allocator(), " }");
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+            .zero => "{ 0 }",
+            .enum_case => |value| blk: {
+                const enum_fact = self.enumFact(value.enum_symbol_id) orelse return error.UnsupportedCEmission;
+                if (!enum_fact.repr_type_id.eql(value.repr_type_id) or value.case_index >= enum_fact.cases.len) return error.UnsupportedCEmission;
+                break :blk try self.cEnumCaseInitializer(value.enum_symbol_id, enum_fact.cases[value.case_index]);
+            },
+            .string_bytes => |value| blk: {
+                const ty = try self.cSignatureType(id);
+                var text: std.ArrayList(u8) = .empty;
+                try text.print(self.scratch.allocator(), "(({s})\"", .{ty});
+                for (value.bytes) |byte| try self.emitCStringByteTo(&text, byte);
+                try text.appendSlice(self.scratch.allocator(), "\")");
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+            .global_address => |value| blk: {
+                const target = self.checkedGlobalSymbolId(value.target_symbol_id) orelse return error.UnsupportedCEmission;
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "&{s}", .{target});
+            },
         };
+    }
+
+    fn structFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.StructFact {
+        for (self.mir_module.structs) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        return null;
+    }
+
+    fn emitCStringByteTo(self: *CEmitter, out: *std.ArrayList(u8), byte: u8) !void {
+        switch (byte) {
+            '\\' => try out.appendSlice(self.scratch.allocator(), "\\\\"),
+            '"' => try out.appendSlice(self.scratch.allocator(), "\\\""),
+            '\n' => try out.appendSlice(self.scratch.allocator(), "\\n"),
+            '\r' => try out.appendSlice(self.scratch.allocator(), "\\r"),
+            '\t' => try out.appendSlice(self.scratch.allocator(), "\\t"),
+            else => if (byte >= 0x20 and byte <= 0x7e) try out.append(self.scratch.allocator(), byte) else try out.print(self.scratch.allocator(), "\\x{x:0>2}", .{byte}),
+        }
     }
 
     fn checkedGlobalSymbol(self: *const CEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {

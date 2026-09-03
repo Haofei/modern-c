@@ -430,6 +430,27 @@ test "lower-c renders pure array literals from syntax-free aggregate plans" {
     try expectContains(output.items, "VALUES = { { 1, 2 }, { 3, 4 } };");
 }
 
+test "lower-c renders named struct global literals from syntax-free plans" {
+    const source =
+        \\open enum Mode: u32 { ready = 7 }
+        \\struct Config { retries: u32, mode: Mode, label: cstr, source: *const u32 }
+        \\global backing: u32 = 9;
+        \\global config: Config = .{ .retries = 3, .mode = .ready, .label = "cfg", .source = &backing };
+    ;
+    var parsed = try test_support.parseCheckedModule("c_named_struct_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checkedGlobalInitializer(module_mir.checked_globals[1]) != null);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_named_struct_global_plan.mc", .{}, false, null);
+    try expectContains(output.items, "config = { .retries = 3, .mode = Mode_ready, .label = ((char const *)\"cfg\"), .source = &backing };");
+}
+
 test "lower-c fails closed when a scalar const-global fact is missing" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("c_missing_scalar_const_global_fact.mc", source);

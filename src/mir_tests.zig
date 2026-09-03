@@ -1833,6 +1833,45 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     module_mir.global_initializer_facts[0] = saved;
 }
 
+test "MIR admits named struct global initializer plans only with canonical facts" {
+    const source =
+        \\open enum Mode: u32 { ready = 7 }
+        \\struct Config { retries: u32, mode: Mode, label: cstr, source: *const u32 }
+        \\global backing: u32 = 9;
+        \\global config: Config = .{ .retries = 3, .mode = .ready, .label = "cfg", .source = &backing };
+    ;
+    var parsed = try test_support.parseCheckedModule("named_struct_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    const fact = module_mir.checkedGlobalInitializer(module_mir.checked_globals[1]) orelse return error.TestUnexpectedResult;
+    const plan = switch (fact.plan) {
+        .aggregate => |aggregate| switch (aggregate) {
+            .struct_ => |struct_plan| struct_plan,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 4), plan.fields.len);
+    try mir.validateLoweringAdmission(module_mir);
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    const saved = module_mir.global_initializer_facts[1];
+    var invalid_plan = plan;
+    invalid_plan.struct_symbol_id = .invalid;
+    module_mir.global_initializer_facts[1].plan = .{ .aggregate = .{ .struct_ = invalid_plan } };
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved;
+}
+
 test "CheckedProgram admits direct enum global initializer plans" {
     const source =
         \\enum Mode: u8 { idle = 1, active = 7 }

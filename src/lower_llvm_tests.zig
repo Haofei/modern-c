@@ -5602,6 +5602,38 @@ test "LLVM emits decoded string-byte global plans without AST initializer artifa
     try expectContains(output.items, "@.str.0 = private unnamed_addr constant [4 x i8] c\"hi\\0A\\00\"");
 }
 
+test "LLVM emits named struct global literals from syntax-free plans" {
+    const source =
+        \\open enum Mode: u32 { ready = 7 }
+        \\struct Config { retries: u32, mode: Mode, label: cstr, source: *const u32 }
+        \\global backing: u32 = 9;
+        \\global config: Config = .{ .retries = 3, .mode = .ready, .label = "cfg", .source = &backing };
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_named_struct_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checkedGlobalInitializer(module_mir.checked_globals[1]) != null);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_named_struct_global_plan.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "@config = internal global { i32, i32, ptr, ptr } { i32 3, i32 7, ptr getelementptr ([4 x i8], ptr @.str.0, i64 0, i64 0), ptr @backing }");
+}
+
 test "LLVM fails closed when a scalar const-global fact is missing" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("llvm_missing_scalar_const_global_fact.mc", source);

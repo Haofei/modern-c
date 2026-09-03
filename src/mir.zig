@@ -1557,6 +1557,32 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             }
                         }
                         if (!checked_global.has_initializer_plan) {
+                            if (try buildNamedStructGlobalInitializerPlan(
+                                allocator,
+                                initializer,
+                                checked_global.signature_type_id,
+                                &signature_types,
+                                type_alias_facts.items,
+                                &symbol_ids,
+                                struct_facts.items,
+                                enum_facts.items,
+                                &ast_structs,
+                                checked_globals.items,
+                                &const_fns,
+                                &const_globals,
+                                &reflect_env,
+                            )) |plan| {
+                                errdefer plan.deinit(allocator);
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .aggregate = plan },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
                             if (try directEnumGlobalInitializerPlan(
                                 initializer,
                                 checked_global.signature_type_id,
@@ -2120,6 +2146,176 @@ fn isPureScalarArrayLeafType(ty: ast.TypeExpr) bool {
     };
 }
 
+/// Admit a complete named struct literal only after canonical StructFact has
+/// assigned every field identity and recursive signature type. The builder
+/// reads source expressions once; neither backend receives them.
+fn buildNamedStructGlobalInitializerPlan(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    global_type_id: SignatureTypeId,
+    signature_types: *SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    struct_facts: []const StructFact,
+    enum_facts: []const EnumFact,
+    ast_structs: *const std.StringHashMap(ast.StructDecl),
+    prior_globals: []const CheckedGlobalFact,
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    reflect_env: *const MirReflectEnv,
+) !?mir_model.AggregateInitializerPlan {
+    const literal_fields = switch (initializer.kind) {
+        .struct_literal => |fields| fields,
+        .grouped => |inner| return buildNamedStructGlobalInitializerPlan(allocator, inner.*, global_type_id, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, const_fns, const_globals, reflect_env),
+        else => return null,
+    };
+    const fact = resolveStructFactForSignatureType(global_type_id, signature_types, type_aliases, symbol_ids, struct_facts) orelse return null;
+    if (fact.is_c_union or fact.is_mmio or fact.type_params.len != 0 or literal_fields.len != fact.fields.len) return null;
+    const struct_decl = blk: {
+        var it = ast_structs.iterator();
+        while (it.next()) |entry| {
+            const symbol_id = symbol_ids.get(entry.key_ptr.*) orelse continue;
+            if (symbol_id.eql(fact.symbol_id)) break :blk entry.value_ptr.*;
+        }
+        return null;
+    };
+    if (struct_decl.fields.len != fact.fields.len) return null;
+    // A complete named literal must name each canonical field exactly once.
+    // Do this before selecting values so a duplicate or unknown source field
+    // cannot be silently hidden by the syntax-to-fact conversion.
+    for (literal_fields, 0..) |candidate, candidate_index| {
+        const is_known = for (fact.fields) |field_fact| {
+            if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break true;
+        } else false;
+        if (!is_known) return null;
+        for (literal_fields[0..candidate_index]) |prior| {
+            if (std.mem.eql(u8, prior.name.text, candidate.name.text)) return null;
+        }
+    }
+
+    const fields = try allocator.alloc(mir_model.StructInitializerFieldPlan, fact.fields.len);
+    var fields_initialized: usize = 0;
+    var fields_transferred = false;
+    defer {
+        if (!fields_transferred) {
+            for (fields[0..fields_initialized]) |field| field.value.deinit(allocator);
+            allocator.free(fields);
+        }
+    }
+    for (fact.fields, struct_decl.fields, 0..) |field_fact, source_field, index| {
+        if (!std.mem.eql(u8, field_fact.spelling, source_field.name.text)) return null;
+        const source_value = for (literal_fields) |candidate| {
+            if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break candidate.value;
+        } else return null;
+        const value = try buildStructGlobalInitializerLeaf(
+            allocator,
+            source_value,
+            source_field.ty,
+            field_fact.type_id,
+            signature_types,
+            type_aliases,
+            symbol_ids,
+            enum_facts,
+            prior_globals,
+            const_fns,
+            const_globals,
+            reflect_env,
+        ) orelse return null;
+        fields[index] = .{ .field_index = @intCast(index), .value = value };
+        fields_initialized += 1;
+    }
+    fields_transferred = true;
+    return .{ .struct_ = .{ .struct_symbol_id = fact.symbol_id, .fields = fields } };
+}
+
+fn buildStructGlobalInitializerLeaf(
+    allocator: std.mem.Allocator,
+    expression: ast.Expr,
+    source_type: ast.TypeExpr,
+    type_id: SignatureTypeId,
+    signature_types: *SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    enum_facts: []const EnumFact,
+    prior_globals: []const CheckedGlobalFact,
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    reflect_env: *const MirReflectEnv,
+) !?mir_model.AggregateInitializerPlan {
+    const ungrouped = switch (expression.kind) {
+        .grouped => |inner| return buildStructGlobalInitializerLeaf(allocator, inner.*, source_type, type_id, signature_types, type_aliases, symbol_ids, enum_facts, prior_globals, const_fns, const_globals, reflect_env),
+        else => expression,
+    };
+    if (ungrouped.kind == .uninit_literal) return .zero;
+    if (try directEnumGlobalInitializerPlan(ungrouped, type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals)) |plan| {
+        return .{ .enum_case = plan };
+    }
+    if (try directStringBytesInitializerPlanForType(allocator, ungrouped, type_id, signature_types, type_aliases, symbol_ids)) |plan| {
+        return .{ .string_bytes = plan };
+    }
+    if (directGlobalAddressInitializerPlanForType(ungrouped, type_id, prior_globals, signature_types, type_aliases, symbol_ids)) |plan| {
+        return .{ .global_address = plan };
+    }
+    // Do not send pointer, string, or nominal aggregate fields through the
+    // scalar evaluator just to discover they are not scalar. Besides being
+    // needless work, its temporary type substitution owns syntax nodes that
+    // belong to the scalar-only path. The signature table is the authority
+    // for this dispatch.
+    if (signatureTypeIsDirectScalarLeaf(type_id, signature_types)) {
+        if (try foldMutableScalarGlobalInitializer(allocator, ungrouped, source_type, const_fns, const_globals, reflect_env)) |value| {
+            return .{ .scalar = value };
+        }
+    }
+    return null;
+}
+
+fn signatureTypeIsDirectScalarLeaf(type_id: SignatureTypeId, signature_types: *const SignatureTypeTableBuilder) bool {
+    const shape = signature_types.get(type_id) orelse return false;
+    return switch (shape) {
+        .qualified => |node| signatureTypeIsDirectScalarLeaf(node.child, signature_types),
+        .name => |name| std.mem.eql(u8, name, "bool") or std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64") or isDirectScalarIntegerName(name),
+        else => false,
+    };
+}
+
+fn isDirectScalarIntegerName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "u16") or
+        std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "u64") or
+        std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "usize") or
+        std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "i16") or
+        std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "i64") or
+        std.mem.eql(u8, name, "i128") or std.mem.eql(u8, name, "isize");
+}
+
+fn resolveStructFactForSignatureType(
+    initial_type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    struct_facts: []const StructFact,
+) ?StructFact {
+    var current_type_id = initial_type_id;
+    var steps: usize = 0;
+    while (steps <= type_aliases.len) : (steps += 1) {
+        const name = switch (signature_types.get(current_type_id) orelse return null) {
+            .name => |value| value,
+            .qualified => |value| {
+                current_type_id = value.child;
+                continue;
+            },
+            else => return null,
+        };
+        const symbol_id = symbol_ids.get(name) orelse return null;
+        for (struct_facts) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        for (type_aliases) |alias| {
+            if (!alias.symbol_id.eql(symbol_id)) continue;
+            current_type_id = alias.target_type_id;
+            break;
+        } else return null;
+    }
+    return null;
+}
+
 fn directEnumGlobalInitializerPlan(
     initializer: ast.Expr,
     global_type_id: SignatureTypeId,
@@ -2191,22 +2387,10 @@ fn directStringBytesGlobalInitializerPlan(
         .cstr, .pointer => {},
         else => return null,
     }
-    if (!signatureTypeIsStringPointer(global.signature_type_id, signature_types, type_aliases, symbol_ids)) return null;
-    if (directStringLiteral(initializer)) |literal| {
-        if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
-        var bytes = try allocator.alloc(u8, literal.len - 2);
-        errdefer allocator.free(bytes);
-        const decoded = string_literal.decodeInto(bytes, literal) catch {
-            allocator.free(bytes);
-            return null;
-        };
-        if (decoded.len == 0) {
-            allocator.free(bytes);
-            return .{ .bytes = &.{} };
-        }
-        bytes = try allocator.realloc(bytes, decoded.len);
-        return .{ .bytes = bytes };
+    if (directStringLiteral(initializer) != null) {
+        return directStringBytesInitializerPlanForType(allocator, initializer, global.signature_type_id, signature_types, type_aliases, symbol_ids);
     }
+    if (!signatureTypeIsStringPointer(global.signature_type_id, signature_types, type_aliases, symbol_ids)) return null;
     const source_name = directGlobalIdentifierName(initializer) orelse return null;
     const source_symbol_id = symbol_ids.get(source_name) orelse return null;
     for (prior_initializer_facts) |fact| {
@@ -2217,6 +2401,31 @@ fn directStringBytesGlobalInitializerPlan(
         };
     }
     return null;
+}
+
+fn directStringBytesInitializerPlanForType(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) !?mir_model.StringBytesInitializerPlan {
+    const literal = directStringLiteral(initializer) orelse return null;
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+    if (!signatureTypeIsStringPointer(type_id, signature_types, type_aliases, symbol_ids)) return null;
+    var bytes = try allocator.alloc(u8, literal.len - 2);
+    errdefer allocator.free(bytes);
+    const decoded = string_literal.decodeInto(bytes, literal) catch {
+        allocator.free(bytes);
+        return null;
+    };
+    if (decoded.len == 0) {
+        allocator.free(bytes);
+        return .{ .bytes = &.{} };
+    }
+    bytes = try allocator.realloc(bytes, decoded.len);
+    return .{ .bytes = bytes };
 }
 
 fn directStringLiteral(initializer: ast.Expr) ?[]const u8 {
@@ -2268,6 +2477,17 @@ fn directGlobalAddressInitializerPlan(
     symbol_ids: *const std.StringHashMap(SymbolId),
 ) ?mir_model.GlobalAddressInitializerPlan {
     if (global.ty != .pointer) return null;
+    return directGlobalAddressInitializerPlanForType(initializer, global.signature_type_id, prior_globals, signature_types, type_aliases, symbol_ids);
+}
+
+fn directGlobalAddressInitializerPlanForType(
+    initializer: ast.Expr,
+    type_id: SignatureTypeId,
+    prior_globals: []const CheckedGlobalFact,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) ?mir_model.GlobalAddressInitializerPlan {
     const target_name = directAddressOfGlobalName(initializer) orelse return null;
     const target_symbol_id = symbol_ids.get(target_name) orelse return null;
     const target = for (prior_globals) |candidate| {
@@ -2275,7 +2495,7 @@ fn directGlobalAddressInitializerPlan(
     } else return null;
     if (target.is_extern or !target.has_initializer_plan) return null;
 
-    const global_shape_id = transparentSignatureTypeIdForBuild(global.signature_type_id, signature_types, type_aliases, symbol_ids) orelse return null;
+    const global_shape_id = transparentSignatureTypeIdForBuild(type_id, signature_types, type_aliases, symbol_ids) orelse return null;
     const pointee_id = switch (signature_types.get(global_shape_id) orelse return null) {
         .pointer => |pointer| pointer.child,
         else => return null,

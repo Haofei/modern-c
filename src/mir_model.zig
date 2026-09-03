@@ -4301,21 +4301,40 @@ pub const StringBytesInitializerPlan = struct {
     }
 };
 
-/// Recursive, syntax-free initializer tree for the deliberately narrow
-/// aggregate family admitted today: fixed arrays whose leaves are already
-/// checked scalar values. Struct fields, addresses, strings, atomic calls and
-/// relocations remain outside this plan until they have their own facts.
+/// A named field of a declared-struct global literal. The index is the field
+/// identity; spelling and layout are recovered only from StructFact.
+pub const StructInitializerFieldPlan = struct {
+    field_index: u32,
+    value: AggregateInitializerPlan,
+};
+
+/// Recursive, syntax-free initializer tree. Fixed arrays and fully named
+/// ordinary struct literals are admitted only when every leaf has an explicit
+/// backend-independent plan.
 pub const AggregateInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     array: []const AggregateInitializerPlan,
+    struct_: struct {
+        struct_symbol_id: SymbolId,
+        fields: []const StructInitializerFieldPlan,
+    },
+    zero,
+    enum_case: EnumInitializerPlan,
+    string_bytes: StringBytesInitializerPlan,
+    global_address: GlobalAddressInitializerPlan,
 
     pub fn deinit(self: AggregateInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
-            .scalar => {},
+            .scalar, .zero, .enum_case, .global_address => {},
             .array => |items| {
                 for (items) |item| item.deinit(allocator);
                 if (items.len != 0) allocator.free(items);
             },
+            .struct_ => |plan| {
+                for (plan.fields) |field| field.value.deinit(allocator);
+                if (plan.fields.len != 0) allocator.free(plan.fields);
+            },
+            .string_bytes => |plan| plan.deinit(allocator),
         }
     }
 };
@@ -4367,7 +4386,25 @@ pub fn aggregateInitializerPlanMatchesType(
             },
             else => false,
         },
+        // CheckedProgram deliberately owns only the signature table.  The
+        // accompanying Module admission validates the StructFact, canonical
+        // field identities, and every leaf before codegen can construct this
+        // view.  Here retain the narrow cross-table invariant available at
+        // this layer: a named aggregate root with a non-empty field identity
+        // sequence.  Do not reintroduce an AST-shaped struct description.
+        .struct_ => |struct_plan| switch (shape) {
+            .name => structInitializerPlanHasCanonicalFieldOrder(struct_plan),
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child),
+            else => false,
+        },
+        .zero, .enum_case, .string_bytes, .global_address => false,
     };
+}
+
+fn structInitializerPlanHasCanonicalFieldOrder(plan: anytype) bool {
+    if (!plan.struct_symbol_id.isValid()) return false;
+    for (plan.fields, 0..) |field, index| if (field.field_index != index) return false;
+    return true;
 }
 
 fn scalarInitializerMatchesShape(value: ConstScalarValue, types: SignatureTypeTable, shape: TypeShape) bool {
@@ -4471,7 +4508,7 @@ pub const Module = struct {
             .zero => if (!global.initializer_body_id.isValid() and !fact.initializer_body_id.isValid()) fact else null,
             .aggregate => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
-                aggregateInitializerPlanMatchesType(plan, self.signature_types, global.signature_type_id)) fact else null,
+                aggregateInitializerPlanMatchesModule(plan, self, global, global.signature_type_id)) fact else null,
             .enum_case => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 enumInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
@@ -4622,15 +4659,54 @@ pub const Module = struct {
     }
 };
 
-fn enumInitializerPlanMatchesGlobal(plan: EnumInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
+    return switch (plan) {
+        .scalar, .array => aggregateInitializerPlanMatchesType(plan, module.signature_types, type_id),
+        .struct_ => |struct_plan| structInitializerPlanMatchesType(struct_plan, module, owner_global, type_id),
+        .zero => signatureTypeCanUseZeroInitializer(module, type_id),
+        .enum_case => |enum_plan| enumInitializerPlanMatchesType(enum_plan, module, type_id),
+        .string_bytes => |string_plan| stringBytesInitializerPlanMatchesType(string_plan, module, type_id),
+        .global_address => |address_plan| globalAddressInitializerPlanMatchesGlobalForType(address_plan, module, owner_global, type_id),
+    };
+}
+
+fn structInitializerPlanMatchesType(plan: anytype, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
+    if (!plan.struct_symbol_id.isValid() or !signatureTypeResolvesToSymbol(module, type_id, plan.struct_symbol_id)) return false;
+    const fact = for (module.structs) |candidate| {
+        if (candidate.symbol_id.eql(plan.struct_symbol_id)) break candidate;
+    } else return false;
+    if (fact.is_c_union or fact.is_mmio or fact.type_params.len != 0 or plan.fields.len != fact.fields.len) return false;
+    for (plan.fields, 0..) |field, index| {
+        if (field.field_index != index or index >= fact.fields.len) return false;
+        const expected = fact.fields[index];
+        if (!aggregateInitializerPlanMatchesModule(field.value, module, owner_global, expected.type_id)) return false;
+    }
+    return true;
+}
+
+fn signatureTypeCanUseZeroInitializer(module: Module, type_id: SignatureTypeId) bool {
+    const shape = transparentSignatureShape(module, type_id) orelse return false;
+    return switch (shape) {
+        .name, .pointer, .raw_many_pointer, .array => true,
+        else => false,
+    };
+}
+
+fn enumInitializerPlanMatchesType(plan: EnumInitializerPlan, module: Module, type_id: SignatureTypeId) bool {
     if (!plan.enum_symbol_id.isValid() or !module.signature_types.contains(plan.repr_type_id)) return false;
     const identity = if (plan.enum_symbol_id.index() < module.symbol_identities.len) module.symbol_identities[plan.enum_symbol_id.index()] else return false;
     if (!identity.id.eql(plan.enum_symbol_id) or identity.kind != .type_) return false;
-    if (!signatureTypeResolvesToSymbol(module, global.signature_type_id, plan.enum_symbol_id)) return false;
+    if (!signatureTypeResolvesToSymbol(module, type_id, plan.enum_symbol_id)) return false;
     const enum_fact = for (module.enums) |candidate| {
         if (candidate.symbol_id.eql(plan.enum_symbol_id)) break candidate;
     } else return false;
     if (!enum_fact.repr_type_id.eql(plan.repr_type_id) or plan.case_index >= enum_fact.cases.len) return false;
+    return true;
+}
+
+fn enumInitializerPlanMatchesGlobal(plan: EnumInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+    if (!enumInitializerPlanMatchesType(plan, module, global.signature_type_id)) return false;
+    const identity = module.symbol_identities[plan.enum_symbol_id.index()];
     return switch (global.ty) {
         .closed_enum => |name| std.mem.eql(u8, name, identity.spelling),
         .open_enum => |name| std.mem.eql(u8, name, identity.spelling),
@@ -4651,12 +4727,8 @@ fn nullableNullInitializerPlanMatchesGlobal(module: Module, global: CheckedGloba
     };
 }
 
-fn stringBytesInitializerPlanMatchesGlobal(_: StringBytesInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
-    switch (global.ty) {
-        .cstr, .pointer => {},
-        else => return false,
-    }
-    const shape = transparentSignatureShape(module, global.signature_type_id) orelse return false;
+fn stringBytesInitializerPlanMatchesType(_: StringBytesInitializerPlan, module: Module, type_id: SignatureTypeId) bool {
+    const shape = transparentSignatureShape(module, type_id) orelse return false;
     return switch (shape) {
         .name => |name| std.mem.eql(u8, name, "cstr"),
         .pointer => |pointer| switch (transparentSignatureShape(module, pointer.child) orelse return false) {
@@ -4671,10 +4743,23 @@ fn stringBytesInitializerPlanMatchesGlobal(_: StringBytesInitializerPlan, module
     };
 }
 
+fn stringBytesInitializerPlanMatchesGlobal(plan: StringBytesInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+    switch (global.ty) {
+        .cstr, .pointer => {},
+        else => return false,
+    }
+    return stringBytesInitializerPlanMatchesType(plan, module, global.signature_type_id);
+}
+
 fn globalAddressInitializerPlanMatchesGlobal(plan: GlobalAddressInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
-    if (global.ty != .pointer or !plan.target_symbol_id.isValid()) return false;
+    if (global.ty != .pointer) return false;
+    return globalAddressInitializerPlanMatchesGlobalForType(plan, module, global, global.signature_type_id);
+}
+
+fn globalAddressInitializerPlanMatchesGlobalForType(plan: GlobalAddressInitializerPlan, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
+    if (!plan.target_symbol_id.isValid()) return false;
     const current_index = for (module.checked_globals, 0..) |candidate, index| {
-        if (candidate.symbol_id.eql(global.symbol_id)) break index;
+        if (candidate.symbol_id.eql(owner_global.symbol_id)) break index;
     } else return false;
     const target = for (module.checked_globals, 0..) |candidate, index| {
         if (candidate.symbol_id.eql(plan.target_symbol_id)) break .{ .global = candidate, .index = index };
@@ -4682,9 +4767,9 @@ fn globalAddressInitializerPlanMatchesGlobal(plan: GlobalAddressInitializerPlan,
     if (target.index >= current_index or target.global.is_extern or !target.global.has_initializer_plan or
         module.checkedGlobalInitializer(target.global) == null)
         return false;
-    const global_shape = module.signature_types.get(transparentSignatureTypeId(module, global.signature_type_id) orelse return false) orelse return false;
-    const pointee = switch (global_shape) {
-        .pointer => |shape| shape.child,
+    const shape = transparentSignatureShape(module, type_id) orelse return false;
+    const pointee = switch (shape) {
+        .pointer => |value| value.child,
         else => return false,
     };
     const canonical_pointee = transparentSignatureTypeId(module, pointee) orelse return false;

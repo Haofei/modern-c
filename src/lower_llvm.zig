@@ -1054,7 +1054,44 @@ const LlvmEmitter = struct {
                 try text.append(self.scratch.allocator(), ']');
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
+            .struct_ => |struct_plan| blk: {
+                const struct_fact = self.structFact(struct_plan.struct_symbol_id) orelse return error.UnsupportedLlvmEmission;
+                if (struct_plan.fields.len != struct_fact.fields.len) return error.UnsupportedLlvmEmission;
+                var text: std.ArrayList(u8) = .empty;
+                try text.appendSlice(self.scratch.allocator(), "{ ");
+                for (struct_plan.fields, 0..) |field, index| {
+                    if (field.field_index != index or index >= struct_fact.fields.len) return error.UnsupportedLlvmEmission;
+                    const struct_field = struct_fact.fields[index];
+                    if (index != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmSignatureType(struct_field.type_id), try self.llvmAggregateGlobalInitializer(field.value, struct_field.type_id) });
+                }
+                try text.appendSlice(self.scratch.allocator(), " }");
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+            .zero => "zeroinitializer",
+            .enum_case => |value| blk: {
+                const enum_fact = self.enumFact(value.enum_symbol_id) orelse return error.UnsupportedLlvmEmission;
+                if (!enum_fact.repr_type_id.eql(value.repr_type_id) or value.case_index >= enum_fact.cases.len) return error.UnsupportedLlvmEmission;
+                break :blk try self.llvmEnumCaseInitializer(enum_fact.cases[value.case_index]);
+            },
+            .string_bytes => |value| blk: {
+                const string = try self.internCanonicalStringLiteral(value.bytes);
+                break :blk try std.fmt.allocPrint(
+                    self.scratch.allocator(),
+                    "getelementptr ([{d} x i8], ptr @{s}, i64 0, i64 0)",
+                    .{ string.len, string.name },
+                );
+            },
+            .global_address => |value| blk: {
+                const target = self.checkedGlobalSymbolId(value.target_symbol_id) orelse return error.UnsupportedLlvmEmission;
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{target});
+            },
         };
+    }
+
+    fn structFact(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?mir.StructFact {
+        for (self.mir_module.structs) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        return null;
     }
 
     fn checkedGlobalSymbol(self: *const LlvmEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
