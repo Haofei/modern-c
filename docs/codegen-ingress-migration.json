@@ -30,6 +30,16 @@
       "union_decl: ast.UnionDecl": 1,
       "packed_bits_decl: ast.PackedBitsDecl": 1,
       "overlay_union_decl: ast.OverlayUnionDecl": 1
+    },
+    "src/codegen_attrs.zig": {
+      "transitional_ret_type: ?ast_bridge.TypeExpr": 1,
+      "ty: ?ast_bridge.TypeExpr": 1,
+      "init: ?ast_bridge.Expr": 1,
+      "methods: []const ast_bridge.TraitMethodSig": 1,
+      "methods: []const ast_bridge.ImplTraitMethod": 1
+    },
+    "src/codegen_signature.zig": {
+      "ty: ast_bridge.TypeExpr": 1
     }
   },
   "normalized_fact_anchors": {
@@ -128,7 +138,7 @@
     },
     "src/codegen_signature.zig": {
       "pub const FunctionParamFact = struct": 1,
-      "pub fn fromParam(param: ast_bridge.Param) FunctionParamFact": 1
+      "pub fn fromParam(param: ast_bridge.Param, value_ty: mir.ValueType) FunctionParamFact": 1
     }
   },
   "mir_body_fast_path_ratchet": {

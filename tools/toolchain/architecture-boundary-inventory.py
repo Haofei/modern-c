@@ -95,7 +95,7 @@ EXACT_FILE_COUNTS = {
     ("src/driver_codegen_inputs.zig", "session.buildVerifiedProgramFromDecls(decls"): 0,
     ("src/driver_codegen_inputs.zig", "session.buildVerifiedProgramFromResolvedDecls(resolved_decls"): 1,
     ("src/driver_codegen_inputs.zig", "session.buildMirFromResolvedDecls(resolved_decls"): 1,
-    ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls)"): 2,
+    ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir)"): 2,
     ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, fallback_decls)"): 0,
     ("src/driver_codegen_inputs.zig", "fn fallbackResolvedDecls("): 0,
     ("src/driver_codegen_inputs.zig", "fn collectDeclarationArtifacts(session: *CompilationSession, module: ast.Module)"): 0,
