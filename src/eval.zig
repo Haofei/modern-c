@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const codegen_signature = @import("codegen_signature.zig");
 const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
@@ -597,26 +596,23 @@ pub const ComptimeScope = struct {
 
 pub const ComptimeFunction = struct {
     name: ast.Ident,
-    params: []const codegen_signature.FunctionParamFact,
+    params: []const ast.Param,
     return_type: ?ast.TypeExpr,
     body: ?ast.Block,
-    owns_params: bool = false,
 
     pub fn fromFnDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl) !ComptimeFunction {
-        const params = try allocator.alloc(codegen_signature.FunctionParamFact, fn_decl.params.len);
-        errdefer allocator.free(params);
-        for (fn_decl.params, 0..) |param, i| params[i] = codegen_signature.FunctionParamFact.fromParam(param, .unknown);
+        _ = allocator;
         return .{
             .name = fn_decl.name,
-            .params = params,
+            .params = fn_decl.params,
             .return_type = fn_decl.return_type,
             .body = fn_decl.body,
-            .owns_params = true,
         };
     }
 
     pub fn deinit(self: ComptimeFunction, allocator: std.mem.Allocator) void {
-        if (self.owns_params) allocator.free(self.params);
+        _ = self;
+        _ = allocator;
     }
 };
 
@@ -1006,7 +1002,7 @@ fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeVa
     return null;
 }
 
-fn isComptimeTypeParam(param: codegen_signature.FunctionParamFact) bool {
+fn isComptimeTypeParam(param: ast.Param) bool {
     if (!param.is_comptime) return false;
     return switch (param.ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, "type"),

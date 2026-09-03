@@ -1394,18 +1394,3 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     };
     try session.writeStdout(output.items);
 }
-
-test {
-    _ = diagnostics;
-    _ = eval;
-    _ = ast;
-    _ = backend;
-    _ = hir;
-    _ = ir;
-    _ = lexer;
-    _ = loader;
-    _ = lower_c;
-    _ = lower_llvm;
-    _ = mir;
-    _ = monomorphize;
-}
