@@ -65,6 +65,8 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
     for (callables, module.functions, 0..) |checked, function, index| {
         if (!checked.symbol_id.eql(function.typed_symbol_id) or !checked.source_id.eql(function.typed_source_id) or
             !checked.def_id.eql(function.typed_def_id)) return false;
+        if (checked.kind != .global_initializer and
+            !defIdMatchesSource(checked.def_id, checked.source_id, module.source_identities)) return false;
         if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
         if (checked.param_count != function.param_count or checked.param_types.len != function.param_types.len or
             checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
@@ -81,6 +83,15 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
         if (checked.kind == .global_initializer and (checked.param_count != 0 or checked.return_ty != .void or checked.c_abi or checked.is_variadic)) return false;
     }
     return true;
+}
+
+fn defIdMatchesSource(def_id: mir.DefId, source_id: mir.SourceId, sources: []const mir.SourceIdentity) bool {
+    // Hand-built/unit-test MIR may not have a source table. Production
+    // per-file programs do, and their declaration identity must agree with it.
+    if (!source_id.isValid()) return true;
+    if (!def_id.isValid() or source_id.index() >= sources.len) return false;
+    const source = sources[source_id.index()];
+    return source.id.eql(source_id) and source.file_id == def_id.file_id;
 }
 
 test "CheckedProgram rejects duplicate source declaration identities" {
@@ -111,4 +122,12 @@ test "CheckedProgram rejects duplicate source declaration identities" {
         },
     };
     try std.testing.expectError(error.DuplicateDefinitionIdentity, CheckedProgram.init(&callables, &.{}));
+}
+
+test "declaration identity must belong to the callable source file" {
+    const sources = [_]mir.SourceIdentity{
+        .{ .id = mir.SourceId.fromIndex(0), .file_id = 4 },
+    };
+    try std.testing.expect(defIdMatchesSource(.{ .file_id = 4, .ordinal = 1 }, mir.SourceId.fromIndex(0), &sources));
+    try std.testing.expect(!defIdMatchesSource(.{ .file_id = 5, .ordinal = 1 }, mir.SourceId.fromIndex(0), &sources));
 }

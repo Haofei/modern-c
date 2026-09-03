@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const semantic_ids = @import("semantic_ids.zig");
 
 fn TypedIndex(comptime name: []const u8) type {
     _ = name;
@@ -30,27 +31,7 @@ fn TypedIndex(comptime name: []const u8) type {
 }
 
 pub const SourceId = TypedIndex("SourceId");
-/// Compile-request-local declaration identity. `file_id` is the existing
-/// per-file module identity and `ordinal` is assigned after frontend source
-/// transforms have produced the final declaration stream. It deliberately
-/// makes no cross-revision or on-disk-cache promise.
-pub const DefId = struct {
-    file_id: u32,
-    ordinal: u32,
-
-    pub const invalid: DefId = .{
-        .file_id = std.math.maxInt(u32),
-        .ordinal = std.math.maxInt(u32),
-    };
-
-    pub fn isValid(self: DefId) bool {
-        return self.file_id != invalid.file_id and self.ordinal != invalid.ordinal;
-    }
-
-    pub fn eql(self: DefId, other: DefId) bool {
-        return self.file_id == other.file_id and self.ordinal == other.ordinal;
-    }
-};
+pub const DefId = semantic_ids.DefId;
 pub const NodeId = TypedIndex("NodeId");
 pub const SymbolId = TypedIndex("SymbolId");
 pub const TypeId = TypedIndex("TypeId");

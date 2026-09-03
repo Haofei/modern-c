@@ -3,9 +3,9 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const module_graph = @import("module_graph.zig");
-const mir_model = @import("mir_model.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
+const semantic_ids = @import("semantic_ids.zig");
 
 pub const ParsedSourceFile = struct {
     id: module_graph.FileId,
@@ -54,7 +54,7 @@ pub const ResolvedDecl = struct {
     /// Assigned after all declaration-producing frontend transforms. It is
     /// stable for this compilation request and is the codegen declaration
     /// join key; source spelling remains presentation/linkage only.
-    def_id: mir_model.DefId = .invalid,
+    def_id: semantic_ids.DefId = .invalid,
     file_id: module_graph.FileId,
     decl: ast.Decl,
 };

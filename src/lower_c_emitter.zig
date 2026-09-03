@@ -646,6 +646,7 @@ pub const CEmitter = struct {
                 .function => |function| function,
                 else => unreachable,
             };
+            if (!std.mem.eql(u8, function.signature.name.text, fn_mir.name)) return error.UnsupportedCEmission;
             if (function.signature.is_extern) continue;
             const render_attrs = function.render_attrs;
             const previous_source_path = self.source_path;
@@ -1319,6 +1320,7 @@ pub const CEmitter = struct {
     }
 
     fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, fn_mir: mir.Function, is_static: bool, with_asm_label: bool) !void {
+        if (!std.mem.eql(u8, sig.name.text, fn_mir.name)) return error.UnsupportedCEmission;
         if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len) return error.UnsupportedCEmission;
         const ret = mir_executable_c.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig.return_ty) catch |err| switch (err) {
             error.UnsupportedType => if (sig.transitionalReturnType()) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void",
