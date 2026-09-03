@@ -265,6 +265,7 @@ pub const CEmitter = struct {
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
+    emitted_string_backings: std.AutoHashMap(mir.StringBackingId, void),
     codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
     static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
@@ -354,6 +355,7 @@ pub const CEmitter = struct {
             .out = out,
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
+            .emitted_string_backings = std.AutoHashMap(mir.StringBackingId, void).init(allocator),
             .static_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
             .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
@@ -428,6 +430,7 @@ pub const CEmitter = struct {
     }
 
     fn deinitDeclCollections(self: *CEmitter) void {
+        self.emitted_string_backings.deinit();
         self.const_global_widths.deinit();
         self.const_global_domains.deinit();
         self.const_fns.deinit();
@@ -864,6 +867,7 @@ pub const CEmitter = struct {
         // in an imported module). Globals are simple `static` definitions, so
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
+        try self.emitCheckedStringBackings();
         for (self.mir_module.checked_globals) |global| {
             const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             switch (fact.plan) {
@@ -1017,12 +1021,11 @@ pub const CEmitter = struct {
     fn emitCheckedStringBytesGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.StringBytesInitializerPlan) !void {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
         const rendered_type = try self.cSignatureType(global.signature_type_id);
+        const backing = try self.cStringBackingName(plan.backing_id);
         try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
-        try self.out.print(self.allocator, "{s} {s} = (({s})\"", .{ rendered_type, name, rendered_type });
-        for (plan.bytes) |byte| try self.emitCStringByte(byte);
-        try self.out.appendSlice(self.allocator, "\");\n\n");
+        try self.out.print(self.allocator, "{s} {s} = (({s}){s});\n\n", .{ rendered_type, name, rendered_type, backing });
     }
 
     fn emitCheckedGlobalAddressGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.GlobalAddressInitializerPlan) !void {
@@ -1100,11 +1103,7 @@ pub const CEmitter = struct {
             },
             .string_bytes => |value| blk: {
                 const ty = try self.cSignatureType(id);
-                var text: std.ArrayList(u8) = .empty;
-                try text.print(self.scratch.allocator(), "(({s})\"", .{ty});
-                for (value.bytes) |byte| try self.emitCStringByteTo(&text, byte);
-                try text.appendSlice(self.scratch.allocator(), "\")");
-                break :blk try text.toOwnedSlice(self.scratch.allocator());
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "(({s}){s})", .{ ty, try self.cStringBackingName(value.backing_id) });
             },
             .global_address => |value| blk: {
                 const target = self.checkedGlobalSymbolId(value.target_symbol_id) orelse return error.UnsupportedCEmission;
@@ -1116,6 +1115,40 @@ pub const CEmitter = struct {
     fn structFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.StructFact {
         for (self.mir_module.structs) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
         return null;
+    }
+
+    fn emitCheckedStringBackings(self: *CEmitter) !void {
+        for (self.mir_module.checked_globals) |global| {
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
+            switch (fact.plan) {
+                .string_bytes => |plan| try self.emitStringBacking(plan),
+                .aggregate => |plan| try self.emitAggregateStringBackings(plan),
+                else => {},
+            }
+        }
+    }
+
+    fn emitAggregateStringBackings(self: *CEmitter, plan: mir.AggregateInitializerPlan) !void {
+        switch (plan) {
+            .array => |items| for (items) |item| try self.emitAggregateStringBackings(item),
+            .struct_ => |struct_plan| for (struct_plan.fields) |field| try self.emitAggregateStringBackings(field.value),
+            .string_bytes => |string_plan| try self.emitStringBacking(string_plan),
+            else => {},
+        }
+    }
+
+    fn emitStringBacking(self: *CEmitter, plan: mir.StringBytesInitializerPlan) !void {
+        if (self.emitted_string_backings.contains(plan.backing_id)) return;
+        const name = try self.cStringBackingName(plan.backing_id);
+        try self.out.print(self.allocator, "static const char {s}[] = \"", .{name});
+        for (plan.bytes) |byte| try self.emitCStringByte(byte);
+        try self.out.appendSlice(self.allocator, "\";\n");
+        try self.emitted_string_backings.put(plan.backing_id, {});
+    }
+
+    fn cStringBackingName(self: *CEmitter, id: mir.StringBackingId) ![]const u8 {
+        const owner = self.checkedGlobalSymbolId(id.owner_global_symbol_id) orelse return error.UnsupportedCEmission;
+        return std.fmt.allocPrint(self.scratch.allocator(), "mc_str_{s}_{d}", .{ owner, id.ordinal });
     }
 
     fn emitCStringByteTo(self: *CEmitter, out: *std.ArrayList(u8), byte: u8) !void {

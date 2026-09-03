@@ -2121,15 +2121,18 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
     defer module_mir.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), module_mir.global_initializer_facts.len);
+    var greeting_backing: ?mir.StringBackingId = null;
     for (module_mir.checked_globals, 0..) |global, index| {
         const fact = module_mir.checkedStringBytesGlobal(global) orelse return error.TestUnexpectedResult;
-        const bytes = switch (fact.plan) {
-            .string_bytes => |plan| plan.bytes,
+        const plan = switch (fact.plan) {
+            .string_bytes => |value| value,
             .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => return error.TestUnexpectedResult,
         };
         try std.testing.expectEqual(global.symbol_id, fact.global_symbol_id);
         try std.testing.expect(module_mir.global_initializer_facts[index].plan == .string_bytes);
-        if (index <= 1) try std.testing.expectEqualStrings("hi\n", bytes);
+        if (index == 0) greeting_backing = plan.backing_id;
+        if (index == 1) try std.testing.expect(plan.backing_id.eql(greeting_backing orelse return error.TestUnexpectedResult));
+        if (index <= 1) try std.testing.expectEqualStrings("hi\n", plan.bytes);
     }
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
@@ -2152,6 +2155,11 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
         ),
     );
     module_mir.global_initializer_facts[0] = saved;
+
+    const saved_backing = module_mir.global_initializer_facts[1];
+    module_mir.global_initializer_facts[1].plan.string_bytes.backing_id.owner_global_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved_backing;
 }
 
 test "pure aggregate global plan releases partial trees on unsupported later elements" {

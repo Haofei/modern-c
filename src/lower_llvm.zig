@@ -999,7 +999,7 @@ const LlvmEmitter = struct {
 
     fn emitCheckedStringBytesGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.StringBytesInitializerPlan) !void {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
-        const string = try self.internCanonicalStringLiteral(plan.bytes);
+        const string = try self.internPlannedStringBacking(plan);
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const kind: []const u8 = if (global.is_const) "constant" else "global";
         try self.out.print(
@@ -1091,7 +1091,7 @@ const LlvmEmitter = struct {
                 break :blk try self.llvmEnumCaseInitializer(enum_fact.cases[value.case_index]);
             },
             .string_bytes => |value| blk: {
-                const string = try self.internCanonicalStringLiteral(value.bytes);
+                const string = try self.internPlannedStringBacking(value);
                 break :blk try std.fmt.allocPrint(
                     self.scratch.allocator(),
                     "getelementptr ([{d} x i8], ptr @{s}, i64 0, i64 0)",
@@ -9467,6 +9467,23 @@ const LlvmEmitter = struct {
             .name = name,
             .escaped_bytes = bytes.escaped,
             .len = bytes.len,
+        };
+        try self.string_literals.append(self.allocator, global);
+        return global;
+    }
+
+    fn internPlannedStringBacking(self: *LlvmEmitter, plan: mir.StringBytesInitializerPlan) !StringLiteralGlobal {
+        for (self.string_literals.items) |global| {
+            const backing_id = global.backing_id orelse continue;
+            if (backing_id.eql(plan.backing_id)) return global;
+        }
+        const bytes = try llvmCanonicalStringBytes(self.scratch.allocator(), plan.bytes);
+        const name = try std.fmt.allocPrint(self.scratch.allocator(), ".str.{d}", .{self.string_literals.items.len});
+        const global: StringLiteralGlobal = .{
+            .name = name,
+            .escaped_bytes = bytes.escaped,
+            .len = bytes.len,
+            .backing_id = plan.backing_id,
         };
         try self.string_literals.append(self.allocator, global);
         return global;

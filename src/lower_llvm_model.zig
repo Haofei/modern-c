@@ -152,6 +152,9 @@ pub const StringLiteralGlobal = struct {
     name: []const u8,
     escaped_bytes: []const u8,
     len: usize,
+    /// Null for expression-local strings. Planned global strings carry the
+    /// frontend-owned backing identity so copies reuse one allocation.
+    backing_id: ?mir_model.StringBackingId = null,
 };
 
 pub const DebugFunction = struct {

@@ -4310,11 +4310,25 @@ pub const FunctionSymbolInitializerPlan = struct {
     target_symbol_id: SymbolId,
 };
 
-/// Decoded bytes for a direct string literal assigned to a string-pointer
-/// global. The plan deliberately owns bytes, not an AST token/spelling; both
-/// backends encode their target format from this single semantic payload.
+/// Stable identity for one frontend-owned string backing allocation. Copies of
+/// a string pointer retain this identity, so C and LLVM cannot accidentally
+/// materialize a second literal with a different address.
+pub const StringBackingId = struct {
+    owner_global_symbol_id: SymbolId,
+    ordinal: u32,
+
+    pub fn eql(left: StringBackingId, right: StringBackingId) bool {
+        return left.owner_global_symbol_id.eql(right.owner_global_symbol_id) and left.ordinal == right.ordinal;
+    }
+};
+
+/// Decoded bytes and stable backing identity for a direct string literal
+/// assigned to a string-pointer global. The plan deliberately owns bytes, not
+/// an AST token/spelling; both backends encode their target format from this
+/// single semantic payload and reuse `backing_id` for copies.
 pub const StringBytesInitializerPlan = struct {
     bytes: []const u8,
+    backing_id: StringBackingId,
 
     pub fn deinit(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) void {
         if (self.bytes.len != 0) allocator.free(self.bytes);
@@ -4785,7 +4799,7 @@ fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module:
         // explicit `uninit` nested in a static aggregate is rejected by sema.
         .zero => false,
         .enum_case => |enum_plan| enumInitializerPlanMatchesType(enum_plan, module, type_id),
-        .string_bytes => |string_plan| stringBytesInitializerPlanMatchesType(string_plan, module, type_id),
+        .string_bytes => |string_plan| stringBytesInitializerPlanMatchesType(string_plan, module, owner_global, type_id),
         .global_address => |address_plan| globalAddressInitializerPlanMatchesGlobalForType(address_plan, module, owner_global, type_id),
     };
 }
@@ -4839,7 +4853,8 @@ fn nullableNullInitializerPlanMatchesGlobal(module: Module, global: CheckedGloba
     };
 }
 
-fn stringBytesInitializerPlanMatchesType(_: StringBytesInitializerPlan, module: Module, type_id: SignatureTypeId) bool {
+fn stringBytesInitializerPlanMatchesType(plan: StringBytesInitializerPlan, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
+    if (!stringBackingIdMatchesModule(plan.backing_id, module, owner_global)) return false;
     const shape = transparentSignatureShape(module, type_id) orelse return false;
     return switch (shape) {
         .name => |name| std.mem.eql(u8, name, "cstr"),
@@ -4860,7 +4875,23 @@ fn stringBytesInitializerPlanMatchesGlobal(plan: StringBytesInitializerPlan, mod
         .cstr, .pointer => {},
         else => return false,
     }
-    return stringBytesInitializerPlanMatchesType(plan, module, global.signature_type_id);
+    return stringBytesInitializerPlanMatchesType(plan, module, global, global.signature_type_id);
+}
+
+fn stringBackingIdMatchesModule(backing_id: StringBackingId, module: Module, owner_global: CheckedGlobalFact) bool {
+    if (!backing_id.owner_global_symbol_id.isValid() or backing_id.owner_global_symbol_id.index() >= module.symbol_identities.len) return false;
+    const identity = module.symbol_identities[backing_id.owner_global_symbol_id.index()];
+    if (!identity.id.eql(backing_id.owner_global_symbol_id) or identity.kind != .global) return false;
+    const backing_index = for (module.checked_globals, 0..) |candidate, index| {
+        if (candidate.symbol_id.eql(backing_id.owner_global_symbol_id)) break index;
+    } else return false;
+    const owner_index = for (module.checked_globals, 0..) |candidate, index| {
+        if (candidate.symbol_id.eql(owner_global.symbol_id)) break index;
+    } else return false;
+    // A copy can only point at a source literal that has already been planned.
+    // This forbids a backend-only forward backing reference without storing a
+    // parallel source-string table.
+    return backing_index <= owner_index;
 }
 
 fn globalAddressInitializerPlanMatchesGlobal(plan: GlobalAddressInitializerPlan, module: Module, global: CheckedGlobalFact) bool {

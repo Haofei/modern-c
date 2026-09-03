@@ -449,7 +449,7 @@ test "lower-c renders named struct global literals from syntax-free plans" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_named_struct_global_plan.mc", .{}, false, null);
-    try expectContains(output.items, "config = { .retries = 3, .mode = Mode_ready, .label = ((char const *)\"cfg\"), .source = &backing };");
+    try expectContains(output.items, "config = { .retries = 3, .mode = Mode_ready, .label = ((char const *)mc_str_config_0), .source = &backing };");
 }
 
 test "lower-c renders nested array and struct function-symbol global plans" {
@@ -459,7 +459,8 @@ test "lower-c renders nested array and struct function-symbol global plans" {
         \\struct Entry { label: cstr, op: fn(u32) -> u32 }
         \\struct Config { entries: [2]Entry, source: *const u32 }
         \\global backing: u32 = 9;
-        \\global config: Config = .{ .entries = .{ .{ .label = "add", .op = add }, .{ .label = "mul", .op = mul } }, .source = &backing };
+        \\global greeting: cstr = "shared";
+        \\global config: Config = .{ .entries = .{ .{ .label = greeting, .op = add }, .{ .label = greeting, .op = mul } }, .source = &backing };
     ;
     var parsed = try test_support.parseCheckedModule("c_nested_aggregate_global_plan.mc", source);
     defer parsed.deinit();
@@ -472,7 +473,8 @@ test "lower-c renders nested array and struct function-symbol global plans" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_nested_aggregate_global_plan.mc", .{}, false, null);
-    try expectContains(output.items, "config = { .entries = { { .label = ((char const *)\"add\"), .op = add }, { .label = ((char const *)\"mul\"), .op = mul } }, .source = &backing };");
+    try expectContains(output.items, "greeting = ((char const *)mc_str_greeting_0);");
+    try expectContains(output.items, "config = { .entries = { { .label = ((char const *)mc_str_greeting_0), .op = add }, { .label = ((char const *)mc_str_greeting_0), .op = mul } }, .source = &backing };");
 }
 
 test "lower-c fails closed when a scalar const-global fact is missing" {
@@ -1256,9 +1258,11 @@ test "lower-c emits decoded string-byte global plans without AST initializer art
         false,
         null,
     );
-    try expectContains(output.items, "greeting = ((char const *)\"hi\\n\");");
-    try expectContains(output.items, "greeting_copy = ((char const *)\"hi\\n\");");
-    try expectContains(output.items, "raw = ((uint8_t const *)\"raw\");");
+    try expectContains(output.items, "static const char mc_str_greeting_0[] = \"hi\\n\";");
+    try expectContains(output.items, "greeting = ((char const *)mc_str_greeting_0);");
+    try expectContains(output.items, "greeting_copy = ((char const *)mc_str_greeting_0);");
+    try expectContains(output.items, "raw = ((uint8_t const *)mc_str_raw_1);");
+    try output.appendSlice(std.testing.allocator, "\nint main(void) { return greeting == greeting_copy ? 0 : 1; }\n");
     var temp = std.testing.tmpDir(.{});
     defer temp.cleanup();
     try temp.dir.writeFile(std.testing.io, .{ .sub_path = "string_bytes_global_plan.c", .data = output.items });
@@ -1270,6 +1274,20 @@ test "lower-c emits decoded string-byte global plans without AST initializer art
     defer std.testing.allocator.free(clang.stdout);
     defer std.testing.allocator.free(clang.stderr);
     try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+    const compile_probe = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "clang", generated_c, "-o", "string_bytes_global_plan" },
+        .cwd = .{ .dir = temp.dir },
+    });
+    defer std.testing.allocator.free(compile_probe.stdout);
+    defer std.testing.allocator.free(compile_probe.stderr);
+    try std.testing.expect(compile_probe.term == .exited and compile_probe.term.exited == 0);
+    const run_probe = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{"./string_bytes_global_plan"},
+        .cwd = .{ .dir = temp.dir },
+    });
+    defer std.testing.allocator.free(run_probe.stdout);
+    defer std.testing.allocator.free(run_probe.stderr);
+    try std.testing.expect(run_probe.term == .exited and run_probe.term.exited == 0);
 }
 
 test "lower-c emits strict nullable control plans from MIR without body fallback" {
@@ -11089,8 +11107,8 @@ test "lower-c emits cstr as immutable C string pointer" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t strlen(char const * s);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * identity(char const * s);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "global_cstr = ((char const *)\"global\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "copied_cstr = ((char const *)\"global\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "global_cstr = ((char const *)mc_str_global_cstr_0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "copied_cstr = ((char const *)mc_str_global_cstr_0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "/* canonical executable MIR */") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * s = mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_exec_tmp_") != null);

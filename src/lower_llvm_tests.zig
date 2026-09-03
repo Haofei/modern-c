@@ -5680,8 +5680,8 @@ test "LLVM emits decoded string-byte global plans without AST initializer artifa
         null,
     );
     try expectContains(output.items, "@greeting = internal global ptr getelementptr ([4 x i8], ptr @.str.0, i64 0, i64 0)");
-    try expectContains(output.items, "@greeting_copy = internal global ptr getelementptr ([4 x i8], ptr @.str.1, i64 0, i64 0)");
-    try expectContains(output.items, "@raw = internal global ptr getelementptr ([4 x i8], ptr @.str.2, i64 0, i64 0)");
+    try expectContains(output.items, "@greeting_copy = internal global ptr getelementptr ([4 x i8], ptr @.str.0, i64 0, i64 0)");
+    try expectContains(output.items, "@raw = internal global ptr getelementptr ([4 x i8], ptr @.str.1, i64 0, i64 0)");
     try expectContains(output.items, "@.str.0 = private unnamed_addr constant [4 x i8] c\"hi\\0A\\00\"");
 }
 
@@ -5724,7 +5724,8 @@ test "LLVM emits nested array and struct function-symbol global plans" {
         \\struct Entry { label: cstr, op: fn(u32) -> u32 }
         \\struct Config { entries: [2]Entry, source: *const u32 }
         \\global backing: u32 = 9;
-        \\global config: Config = .{ .entries = .{ .{ .label = "add", .op = add }, .{ .label = "mul", .op = mul } }, .source = &backing };
+        \\global greeting: cstr = "shared";
+        \\global config: Config = .{ .entries = .{ .{ .label = greeting, .op = add }, .{ .label = greeting, .op = mul } }, .source = &backing };
     ;
     var parsed = try test_support.parseCheckedModule("llvm_nested_aggregate_global_plan.mc", source);
     defer parsed.deinit();
@@ -5749,6 +5750,8 @@ test "LLVM emits nested array and struct function-symbol global plans" {
         null,
     );
     try expectContains(output.items, "@config = internal global { [2 x { ptr, ptr }], ptr }");
+    try expectContains(output.items, "@greeting = internal global ptr getelementptr ([7 x i8], ptr @.str.0, i64 0, i64 0)");
+    try expectContains(output.items, "ptr getelementptr ([7 x i8], ptr @.str.0, i64 0, i64 0)");
     try expectContains(output.items, "ptr @add");
     try expectContains(output.items, "ptr @mul");
     try expectContains(output.items, "ptr @backing");

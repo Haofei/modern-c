@@ -702,6 +702,7 @@ pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
 pub const GlobalAddressInitializerPlan = mir_model.GlobalAddressInitializerPlan;
 pub const FunctionSymbolInitializerPlan = mir_model.FunctionSymbolInitializerPlan;
+pub const StringBackingId = mir_model.StringBackingId;
 pub const StringBytesInitializerPlan = mir_model.StringBytesInitializerPlan;
 pub const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
 pub const EnumInitializerPlan = mir_model.EnumInitializerPlan;
@@ -1336,6 +1337,10 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (global_initializer_facts.items) |fact| fact.deinit(allocator);
         global_initializer_facts.deinit(allocator);
     }
+    // Every direct literal gets a stable module-local backing identity. Copies
+    // retain it, so backend rendering cannot change pointer equality by
+    // recreating a literal from duplicated bytes.
+    var next_string_backing_ordinal: u32 = 0;
 
     for (decl_items, 0..) |item, decl_ordinal| {
         const decl = declFromBuildItem(item);
@@ -1593,6 +1598,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 &const_fns,
                                 &const_globals,
                                 &reflect_env,
+                                checked_global.symbol_id,
+                                &next_string_backing_ordinal,
                                 false,
                             )) |plan| {
                                 errdefer plan.deinit(allocator);
@@ -1661,6 +1668,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 &signature_types,
                                 type_alias_facts.items,
                                 &symbol_ids,
+                                checked_global.symbol_id,
+                                &next_string_backing_ordinal,
                             )) |plan| {
                                 errdefer plan.deinit(allocator);
                                 checked_global.has_initializer_plan = true;
@@ -2212,10 +2221,12 @@ fn buildGlobalAggregateInitializerPlan(
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     reflect_env: *const MirReflectEnv,
+    owner_global_symbol_id: SymbolId,
+    next_string_backing_ordinal: *u32,
     allow_leaf: bool,
 ) !?mir_model.AggregateInitializerPlan {
     const ungrouped = switch (initializer.kind) {
-        .grouped => |inner| return buildGlobalAggregateInitializerPlan(allocator, inner.*, source_type, type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, allow_leaf),
+        .grouped => |inner| return buildGlobalAggregateInitializerPlan(allocator, inner.*, source_type, type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, allow_leaf),
         else => initializer,
     };
     if (resolveStructFactForSignatureType(type_id, signature_types, type_aliases, symbol_ids, struct_facts)) |fact| {
@@ -2245,7 +2256,7 @@ fn buildGlobalAggregateInitializerPlan(
             const source_value = for (literal_fields) |candidate| {
                 if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break candidate.value;
             } else return null;
-            const value = try buildGlobalAggregateInitializerPlan(allocator, source_value, source_field.ty, field_fact.type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, true) orelse return null;
+            const value = try buildGlobalAggregateInitializerPlan(allocator, source_value, source_field.ty, field_fact.type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true) orelse return null;
             fields[index] = .{ .field_index = @intCast(index), .value = value };
             fields_initialized += 1;
         }
@@ -2273,7 +2284,7 @@ fn buildGlobalAggregateInitializerPlan(
                 plans.deinit(allocator);
             };
             for (items) |item| {
-                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, source_array.child.*, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, true)) orelse break :blk null;
+                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, source_array.child.*, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true)) orelse break :blk null;
                 var child_transferred = false;
                 errdefer if (!child_transferred) child.deinit(allocator);
                 try plans.append(allocator, child);
@@ -2288,7 +2299,7 @@ fn buildGlobalAggregateInitializerPlan(
 
     if (!allow_leaf) return null;
     if (try directEnumGlobalInitializerPlan(ungrouped, type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals)) |plan| return .{ .enum_case = plan };
-    if (try directStringBytesAggregateInitializerPlan(allocator, ungrouped, type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids)) |plan| return .{ .string_bytes = plan };
+    if (try directStringBytesAggregateInitializerPlan(allocator, ungrouped, type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids, owner_global_symbol_id, next_string_backing_ordinal)) |plan| return .{ .string_bytes = plan };
     if (directGlobalAddressInitializerPlanForType(ungrouped, type_id, prior_globals, signature_types, type_aliases, symbol_ids)) |plan| return .{ .global_address = plan };
     if (directFunctionSymbolGlobalInitializerPlan(ungrouped, type_id, source_order, callables, signature_types, symbol_ids)) |plan| return .{ .function_symbol = plan };
     if (signatureTypeIsDirectScalarLeaf(type_id, signature_types)) {
@@ -2448,12 +2459,14 @@ fn directStringBytesGlobalInitializerPlan(
     signature_types: *const SignatureTypeTableBuilder,
     type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
+    owner_global_symbol_id: SymbolId,
+    next_string_backing_ordinal: *u32,
 ) !?mir_model.StringBytesInitializerPlan {
     switch (global.ty) {
         .cstr, .pointer => {},
         else => return null,
     }
-    return directStringBytesAggregateInitializerPlan(allocator, initializer, global.signature_type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids);
+    return directStringBytesAggregateInitializerPlan(allocator, initializer, global.signature_type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids, owner_global_symbol_id, next_string_backing_ordinal);
 }
 
 /// Reuse the one string-pointer leaf plan inside recursive aggregate
@@ -2468,9 +2481,11 @@ fn directStringBytesAggregateInitializerPlan(
     signature_types: *const SignatureTypeTableBuilder,
     type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
+    owner_global_symbol_id: SymbolId,
+    next_string_backing_ordinal: *u32,
 ) !?mir_model.StringBytesInitializerPlan {
     if (directStringLiteral(initializer) != null) {
-        return directStringBytesInitializerPlanForType(allocator, initializer, type_id, signature_types, type_aliases, symbol_ids);
+        return directStringBytesInitializerPlanForType(allocator, initializer, type_id, signature_types, type_aliases, symbol_ids, owner_global_symbol_id, next_string_backing_ordinal);
     }
     if (!signatureTypeIsStringPointer(type_id, signature_types, type_aliases, symbol_ids)) return null;
     const source_name = directGlobalIdentifierName(initializer) orelse return null;
@@ -2478,7 +2493,10 @@ fn directStringBytesAggregateInitializerPlan(
     for (prior_initializer_facts) |fact| {
         if (!fact.global_symbol_id.eql(source_symbol_id)) continue;
         return switch (fact.plan) {
-            .string_bytes => |plan| .{ .bytes = if (plan.bytes.len == 0) &.{} else try allocator.dupe(u8, plan.bytes) },
+            .string_bytes => |plan| .{
+                .bytes = if (plan.bytes.len == 0) &.{} else try allocator.dupe(u8, plan.bytes),
+                .backing_id = plan.backing_id,
+            },
             else => null,
         };
     }
@@ -2492,6 +2510,8 @@ fn directStringBytesInitializerPlanForType(
     signature_types: *const SignatureTypeTableBuilder,
     type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
+    owner_global_symbol_id: SymbolId,
+    next_string_backing_ordinal: *u32,
 ) !?mir_model.StringBytesInitializerPlan {
     const literal = directStringLiteral(initializer) orelse return null;
     if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
@@ -2502,12 +2522,17 @@ fn directStringBytesInitializerPlanForType(
         allocator.free(bytes);
         return null;
     };
+    const backing_id: mir_model.StringBackingId = .{
+        .owner_global_symbol_id = owner_global_symbol_id,
+        .ordinal = next_string_backing_ordinal.*,
+    };
+    next_string_backing_ordinal.* = std.math.add(u32, next_string_backing_ordinal.*, 1) catch return error.InvalidMirGlobalInitializerFacts;
     if (decoded.len == 0) {
         allocator.free(bytes);
-        return .{ .bytes = &.{} };
+        return .{ .bytes = &.{}, .backing_id = backing_id };
     }
     bytes = try allocator.realloc(bytes, decoded.len);
-    return .{ .bytes = bytes };
+    return .{ .bytes = bytes, .backing_id = backing_id };
 }
 
 fn directStringLiteral(initializer: ast.Expr) ?[]const u8 {
