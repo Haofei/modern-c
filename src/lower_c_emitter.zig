@@ -1287,12 +1287,27 @@ pub const CEmitter = struct {
     }
 
     fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, fn_mir: mir.Function, is_static: bool, with_asm_label: bool) !void {
-        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty)) return error.UnsupportedCEmission;
+        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len) return error.UnsupportedCEmission;
         const ret = mir_executable_c.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig.return_ty) catch |err| switch (err) {
             error.UnsupportedType => if (sig.transitionalReturnType()) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void",
             else => return err,
         };
-        try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, ret, is_static, with_asm_label);
+        const param_types = try self.scratch.allocator().alloc([]const u8, sig.params.len);
+        for (sig.params, fn_mir.param_types, 0..) |param, param_ty, index| {
+            if (!mir.ValueType.eql(param.value_ty, param_ty)) return error.UnsupportedCEmission;
+            // PointerShape intentionally carries only the immediate pointee
+            // spelling; nullable pointees and declaration-level volatile/MMIO
+            // qualifiers still need the transitional normalized-type cutover.
+            // Do not claim a canonical rendering until that information exists.
+            param_types[index] = switch (param_ty) {
+                .pointer, .nullable_pointer, .address => try self.cTypeFor(param.ty, .typedef_name),
+                else => mir_executable_c.renderType(self.scratch.allocator(), &fn_mir.executable_body, param_ty) catch |err| switch (err) {
+                    error.UnsupportedType => try self.cTypeFor(param.ty, .typedef_name),
+                    else => return err,
+                },
+            };
+        }
+        try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, ret, param_types, is_static, with_asm_label);
     }
 
     fn emitFunctionRenderAttrs(self: *CEmitter, attrs: codegen_attrs.FunctionRenderAttrs) !void {

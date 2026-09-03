@@ -126,10 +126,10 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
 }
 
-pub fn emitFunctionSignature(ctx: Context, fn_decl: anytype, ret: []const u8, is_static: bool, with_asm_label: bool) !void {
+pub fn emitFunctionSignature(ctx: Context, fn_decl: anytype, ret: []const u8, param_types: []const []const u8, is_static: bool, with_asm_label: bool) !void {
     const cname = try ctx.c_ident(ctx.emit_ctx, fn_decl.name.text);
     try emitFunctionSignaturePrefix(ctx, ret, cname, is_static);
-    try emitFunctionSignatureParams(ctx, fn_decl);
+    try emitFunctionSignatureParams(ctx, fn_decl, param_types);
     try ctx.out.appendSlice(ctx.allocator, ")");
     try emitFunctionBackendAsmLabel(ctx, fn_decl, with_asm_label);
 }
@@ -142,13 +142,15 @@ fn emitFunctionSignaturePrefix(ctx: Context, ret: []const u8, cname: []const u8,
     }
 }
 
-fn emitFunctionSignatureParams(ctx: Context, fn_decl: anytype) !void {
+fn emitFunctionSignatureParams(ctx: Context, fn_decl: anytype, param_types: []const []const u8) !void {
+    if (param_types.len != fn_decl.params.len) return error.InvalidFunctionSignature;
     if (fn_decl.params.len == 0) {
         try ctx.out.appendSlice(ctx.allocator, if (fn_decl.is_variadic) "" else "void");
     } else {
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-            try emitParamDecl(ctx, param.ty, param.name.text);
+            try emitIgnoredLocalPrefix(ctx, param.name.text);
+            try ctx.out.print(ctx.allocator, "{s} {s}", .{ param_types[i], try ctx.c_ident(ctx.emit_ctx, param.name.text) });
         }
     }
     if (fn_decl.is_variadic) {

@@ -1323,7 +1323,7 @@ const LlvmEmitter = struct {
         for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
-            try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.llvmType(param.ty), param_ext, executable_parameter.local.raw });
+            try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.executableFunctionParamType(fn_mir, param, i), param_ext, executable_parameter.local.raw });
         }
         if (fn_mir.executable_body.is_variadic) {
             if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
@@ -1570,6 +1570,24 @@ const LlvmEmitter = struct {
         return std.mem.eql(u8, left_type, right_type);
     }
 
+    fn executableFunctionParamType(self: *LlvmEmitter, function: mir.Function, param: codegen_attrs.FunctionParamFact, index: usize) ![]const u8 {
+        if (index >= function.param_types.len or !mir.ValueType.eql(param.value_ty, function.param_types[index]))
+            return error.UnsupportedLlvmEmission;
+        const executable_parameter = if (index < function.executable_body.parameters.len) function.executable_body.parameters[index] else null;
+        if (executable_parameter) |value| {
+            if (value.dyn_trait_symbol_id.isValid()) return "{ ptr, ptr }";
+            return mir_executable_llvm.renderType(self.scratch.allocator(), &function.executable_body, param.value_ty, value.callable_signature) catch |err| switch (err) {
+                error.Unsupported, error.InvalidBody => try self.llvmType(param.ty),
+                else => return err,
+            };
+        }
+        if (param.value_ty == .value) return self.llvmType(param.ty);
+        return mir_executable_llvm.renderType(self.scratch.allocator(), &function.executable_body, param.value_ty, null) catch |err| switch (err) {
+            error.Unsupported, error.InvalidBody => try self.llvmType(param.ty),
+            else => return err,
+        };
+    }
+
     fn buildExecutableDirectCallAbiPlan(self: *LlvmEmitter, fn_mir: mir.Function) !?mir_executable_llvm.CallAbiPlan {
         var direct_call_count: usize = 0;
         for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
@@ -1696,7 +1714,7 @@ const LlvmEmitter = struct {
         for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
-            try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
+            try self.out.appendSlice(self.allocator, try self.executableFunctionParamType(fn_mir, param, i));
             if (param_ext.len != 0) try self.out.print(self.allocator, " {s}", .{std.mem.trimEnd(u8, param_ext, " ")});
         }
         if (sig_facts.is_variadic) {

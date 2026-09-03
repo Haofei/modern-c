@@ -38,7 +38,8 @@ pub const EarlyDeclarationArtifacts = struct {
             const decl = item.decl;
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
-                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, false, functionReturnType(typed_mir, fn_decl.name.text, false) orelse .unknown);
+                    const function_mir = functionByName(typed_mir, fn_decl.name.text, false);
+                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, false, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -47,7 +48,8 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
-                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, true, functionReturnType(typed_mir, fn_decl.name.text, true) orelse .unknown);
+                    const function_mir = functionByName(typed_mir, fn_decl.name.text, true);
+                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, true, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -180,10 +182,10 @@ pub const FunctionArtifact = struct {
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
 
-    pub fn fromDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType) !FunctionArtifact {
+    pub fn fromDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType, param_types: []const mir.ValueType) !FunctionArtifact {
         const params = try allocator.alloc(codegen_attrs.FunctionParamFact, fn_decl.params.len);
         errdefer allocator.free(params);
-        for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param);
+        for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param, if (i < param_types.len) param_types[i] else .unknown);
         return .{
             .signature = .{
                 .name = fn_decl.name,
@@ -210,11 +212,11 @@ pub const FunctionArtifact = struct {
     }
 };
 
-fn functionReturnType(module: *const mir.Module, name: []const u8, is_extern: bool) ?mir.ValueType {
+fn functionByName(module: *const mir.Module, name: []const u8, is_extern: bool) ?mir.Function {
     for (module.functions, 0..) |function, index| {
         if (!std.mem.eql(u8, function.name, name) or function.is_extern != is_extern) continue;
         if (index < module.checked_callables.len and module.checked_callables[index].kind == .global_initializer) continue;
-        return function.return_ty;
+        return function;
     }
     return null;
 }

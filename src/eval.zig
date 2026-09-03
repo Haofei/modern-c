@@ -605,7 +605,7 @@ pub const ComptimeFunction = struct {
     pub fn fromFnDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl) !ComptimeFunction {
         const params = try allocator.alloc(codegen_signature.FunctionParamFact, fn_decl.params.len);
         errdefer allocator.free(params);
-        for (fn_decl.params, 0..) |param, i| params[i] = codegen_signature.FunctionParamFact.fromParam(param);
+        for (fn_decl.params, 0..) |param, i| params[i] = codegen_signature.FunctionParamFact.fromParam(param, .unknown);
         return .{
             .name = fn_decl.name,
             .params = params,
