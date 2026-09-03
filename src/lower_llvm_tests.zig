@@ -2726,7 +2726,7 @@ test "LLVM emits simple global stores after specialized plan retirement" {
 
     const result_ok_body = try llvmFunctionBody(output.items, "define internal void @store_result_ok");
     try expectContains(result_ok_body, "insertvalue { i1, i32, i64 } zeroinitializer, i1 true, 0");
-    try expectContains(result_ok_body, "i32 %x, 1");
+    try expectContains(result_ok_body, "i32 %mc_arg_0, 1");
     try expectContains(result_ok_body, "ptr @result");
 
     const result_err_body = try llvmFunctionBody(output.items, "define internal void @store_result_err");

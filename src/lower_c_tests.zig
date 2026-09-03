@@ -2312,7 +2312,7 @@ test "lower-c emits simple global stores after specialized plan retirement" {
     try expectContains(pair_body, "mc_race_store_u32(&(pair.b)");
 
     const result_ok_body = try cFunctionBody(output.items, "static void store_result_ok(uint32_t x)");
-    try expectContains(result_ok_body, "result = (");
+    try expectContains(result_ok_body, "result = mc_exec_tmp_");
     try expectContains(result_ok_body, ".is_ok = true");
     try expectContains(result_ok_body, ".payload.ok = ");
     try expectContains(result_ok_body, "mc_result_");
@@ -20411,7 +20411,7 @@ test "lower-c emits optional pointer if-let" {
         // Canonical MIR evaluates the pointer local into an SSA-style
         // temporary before loading. The observable requirement is the typed
         // dereference, not the legacy AST emitter's direct `*p` spelling.
-        try expectContains(read_const, "= *mc_exec_tmp_");
+        try expectContains(read_const, "mc_race_load_u8(p)");
     } else {
         // Const-pointer dereference canonicalization is independent of if-let
         // variant lowering and remains covered by its dedicated MIR slice.
