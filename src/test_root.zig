@@ -9,6 +9,7 @@ const artifact_model = @import("artifact_model.zig");
 const codegen_options = @import("codegen_options.zig");
 const codegen_request = @import("codegen_request.zig");
 const compiler_session = @import("compiler_session.zig");
+const driver_build = @import("driver_build.zig");
 const verified_program = @import("verified_program.zig");
 
 const eval_tests = @import("eval_tests.zig");
@@ -37,6 +38,7 @@ test {
     _ = codegen_options;
     _ = codegen_request;
     _ = compiler_session;
+    _ = driver_build;
     _ = verified_program;
     _ = eval_tests;
     _ = hir_tests;
