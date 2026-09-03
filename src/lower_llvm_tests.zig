@@ -5436,6 +5436,40 @@ test "LLVM renders mutable scalar globals from verified initializer plans" {
     try expectContains(output.items, "@COUNT = internal global i32 3");
 }
 
+test "LLVM emits direct scalar global copies from verified initializer plans" {
+    const source =
+        \\global SEED: u32 = 7;
+        \\global COPIED: u32 = SEED;
+        \\global GROUPED: u32 = (SEED);
+        \\global CASTED: u32 = (SEED as u32);
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_scalar_global_copy_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_scalar_global_copy_plan.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "@SEED = internal global i32 7");
+    try expectContains(output.items, "@COPIED = internal global i32 7");
+    try expectContains(output.items, "@GROUPED = internal global i32 7");
+    try expectContains(output.items, "@CASTED = internal global i32 7");
+}
+
 test "LLVM renders no-init scalar and array globals from verified zero plans" {
     const source =
         \\global COUNT: u32;

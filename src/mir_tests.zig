@@ -1722,6 +1722,51 @@ test "CheckedProgram requires an admitted mutable scalar global initializer plan
     );
 }
 
+test "CheckedProgram admits direct scalar global copies without source initializer syntax" {
+    const source =
+        \\global SEED: u32 = 7;
+        \\global COPIED: u32 = SEED;
+        \\global GROUPED: u32 = (SEED);
+        \\global CASTED: u32 = (SEED as u32);
+    ;
+    var parsed = try test_support.parseCheckedModule("scalar_global_copy_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), module_mir.global_initializer_facts.len);
+    for (module_mir.global_initializer_facts) |fact| switch (fact.plan) {
+        .scalar => |value| switch (value) {
+            .int => |integer| try std.testing.expectEqual(@as(i128, 7), integer),
+            .uint => |integer| try std.testing.expectEqual(@as(u128, 7), integer),
+            else => return error.TestUnexpectedResult,
+        },
+        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => return error.TestUnexpectedResult,
+    };
+    for (module_mir.checked_globals) |global| try std.testing.expect(global.has_initializer_plan);
+
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    const saved = module_mir.global_initializer_facts[1];
+    module_mir.global_initializer_facts[1].initializer_body_id = .invalid;
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    module_mir.global_initializer_facts[1] = saved;
+}
+
 test "CheckedProgram requires an admitted zero-global initializer plan" {
     const source = "global VALUES: [2]u32;";
     var parsed = try test_support.parseCheckedModule("zero_global_initializer_plan.mc", source);

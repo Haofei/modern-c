@@ -331,6 +331,41 @@ test "lower-c renders mutable scalar globals from verified initializer plans" {
     try expectContains(output.items, "uint32_t COUNT = 3;");
 }
 
+test "lower-c emits direct scalar global copies from verified initializer plans" {
+    const source =
+        \\global SEED: u32 = 7;
+        \\global COPIED: u32 = SEED;
+        \\global GROUPED: u32 = (SEED);
+        \\global CASTED: u32 = (SEED as u32);
+    ;
+    var parsed = try test_support.parseCheckedModule("c_scalar_global_copy_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    // Every initializer in this family is carried by the verified scalar plan;
+    // no GlobalArtifact can retain its source AST expression.
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_scalar_global_copy_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "uint32_t SEED = 7;");
+    try expectContains(output.items, "uint32_t COPIED = 7;");
+    try expectContains(output.items, "uint32_t GROUPED = 7;");
+    try expectContains(output.items, "uint32_t CASTED = 7;");
+}
+
 test "lower-c renders no-init scalar and array globals from verified zero plans" {
     const source =
         \\global COUNT: u32;

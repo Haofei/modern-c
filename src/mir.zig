@@ -1531,6 +1531,26 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             }
                         }
                         if (!checked_global.has_initializer_plan) {
+                            if (try directScalarGlobalCopyInitializer(
+                                initializer,
+                                checked_global,
+                                global_initializer_facts.items,
+                                &signature_types,
+                                type_alias_facts.items,
+                                &symbol_ids,
+                                &const_fns,
+                                &const_globals,
+                            )) |value| {
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .scalar = value },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
                             if (try buildPureArrayGlobalInitializerPlan(allocator, initializer, ty, &const_fns, &const_globals, &reflect_env)) |plan| {
                                 errdefer plan.deinit(allocator);
                                 checked_global.has_initializer_plan = true;
@@ -1976,6 +1996,66 @@ fn foldMutableScalarGlobalInitializer(
             break :blk constScalarValueFromComptime(value);
         },
         .trap, .unknown => null,
+    };
+}
+
+/// Reuse an already-admitted scalar value for the narrow static-copy family.
+/// C cannot use a mutable file-scope object as another file-scope initializer,
+/// so a direct source-level copy must be lowered as the checked value rather
+/// than retained as an AST identifier. Casts are admitted only when their
+/// canonical signature type is exactly the destination type; conversion
+/// semantics require a separate plan.
+fn directScalarGlobalCopyInitializer(
+    initializer: ast.Expr,
+    global: CheckedGlobalFact,
+    prior_initializer_facts: []const GlobalInitializerFact,
+    signature_types: *SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+) !?mir_model.ConstScalarValue {
+    if (!valueTypeRequiresScalarGlobalInitializerFact(global.ty)) return null;
+    const source_name = try directScalarGlobalCopySourceName(
+        initializer,
+        global.signature_type_id,
+        signature_types,
+        type_aliases,
+        symbol_ids,
+        const_fns,
+        const_globals,
+    ) orelse return null;
+    const source_symbol_id = symbol_ids.get(source_name) orelse return null;
+    for (prior_initializer_facts) |fact| {
+        if (!fact.global_symbol_id.eql(source_symbol_id) or !ValueType.eql(fact.value_ty, global.ty)) continue;
+        return switch (fact.plan) {
+            .scalar => |value| if (value.isCompatibleWith(global.ty)) value else null,
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn directScalarGlobalCopySourceName(
+    initializer: ast.Expr,
+    destination_type_id: SignatureTypeId,
+    signature_types: *SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+) !?[]const u8 {
+    return switch (initializer.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| directScalarGlobalCopySourceName(inner.*, destination_type_id, signature_types, type_aliases, symbol_ids, const_fns, const_globals),
+        .cast => |cast| blk: {
+            const cast_type_id = try signature_types.internTypeExpr(cast.ty.*, const_fns, const_globals);
+            const cast_canonical = transparentSignatureTypeIdForBuild(cast_type_id, signature_types, type_aliases, symbol_ids) orelse break :blk null;
+            const destination_canonical = transparentSignatureTypeIdForBuild(destination_type_id, signature_types, type_aliases, symbol_ids) orelse break :blk null;
+            if (!cast_canonical.eql(destination_canonical)) break :blk null;
+            break :blk try directScalarGlobalCopySourceName(cast.value.*, destination_type_id, signature_types, type_aliases, symbol_ids, const_fns, const_globals);
+        },
+        else => null,
     };
 }
 
