@@ -83,6 +83,10 @@ pub const DefId = mir_model.DefId;
 pub const NodeId = mir_model.NodeId;
 pub const SymbolId = mir_model.SymbolId;
 pub const TypeId = mir_model.TypeId;
+pub const SignatureTypeId = mir_model.SignatureTypeId;
+pub const TypeMutability = mir_model.TypeMutability;
+pub const TypeShape = mir_model.TypeShape;
+pub const SignatureTypeTable = mir_model.SignatureTypeTable;
 pub const ValueId = mir_model.ValueId;
 pub const BlockId = mir_model.BlockId;
 pub const SpanId = mir_model.SpanId;
@@ -922,6 +926,142 @@ pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, option
     return buildOptFromDeclItems(allocator, decls, options);
 }
 
+/// Frontend-only builder for the module-owned signature type graph.  The
+/// resulting `SignatureTypeTable` has no AST pointers or spans; this bridge is
+/// intentionally the sole place that understands `ast.TypeExpr` while the
+/// declaration-artifact migration is in progress.
+const SignatureTypeTableBuilder = struct {
+    allocator: std.mem.Allocator,
+    shapes: std.ArrayList(TypeShape) = .empty,
+
+    fn init(allocator: std.mem.Allocator) SignatureTypeTableBuilder {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *SignatureTypeTableBuilder) void {
+        for (self.shapes.items) |shape| shape.deinit(self.allocator);
+        self.shapes.deinit(self.allocator);
+    }
+
+    fn finish(self: *SignatureTypeTableBuilder) !SignatureTypeTable {
+        const shapes = try self.shapes.toOwnedSlice(self.allocator);
+        return .{ .shapes = shapes };
+    }
+
+    fn internReturnType(
+        self: *SignatureTypeTableBuilder,
+        return_type: ?ast.TypeExpr,
+        const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+        const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    ) !SignatureTypeId {
+        if (return_type) |type_expr| return self.internTypeExpr(type_expr, const_fns, const_globals);
+        return self.internShape(.{ .name = try self.allocator.dupe(u8, "void") });
+    }
+
+    fn internParams(
+        self: *SignatureTypeTableBuilder,
+        params: []const ast.Param,
+        const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+        const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    ) ![]const SignatureTypeId {
+        const ids = try self.allocator.alloc(SignatureTypeId, params.len);
+        errdefer self.allocator.free(ids);
+        for (params, 0..) |param, index| ids[index] = try self.internTypeExpr(param.ty, const_fns, const_globals);
+        return ids;
+    }
+
+    fn internTypeExpr(
+        self: *SignatureTypeTableBuilder,
+        type_expr: ast.TypeExpr,
+        const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+        const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    ) std.mem.Allocator.Error!SignatureTypeId {
+        const shape: TypeShape = switch (type_expr.kind) {
+            .name => |ident| .{ .name = try self.allocator.dupe(u8, ident.text) },
+            .enum_literal => |ident| .{ .enum_literal = try self.allocator.dupe(u8, ident.text) },
+            .member => |member| .{ .member = .{
+                .base = try self.internTypeExpr(member.base.*, const_fns, const_globals),
+                .field = try self.allocator.dupe(u8, member.field.text),
+            } },
+            .nullable => |child| .{ .nullable = try self.internTypeExpr(child.*, const_fns, const_globals) },
+            .qualified => |qualified| .{ .qualified = .{
+                .mutability = typeMutabilityFromAst(qualified.mutability),
+                .child = try self.internTypeExpr(qualified.child.*, const_fns, const_globals),
+            } },
+            .pointer => |pointer| .{ .pointer = .{
+                .mutability = typeMutabilityFromAst(pointer.mutability),
+                .child = try self.internTypeExpr(pointer.child.*, const_fns, const_globals),
+            } },
+            .raw_many_pointer => |pointer| .{ .raw_many_pointer = .{
+                .mutability = typeMutabilityFromAst(pointer.mutability),
+                .child = try self.internTypeExpr(pointer.child.*, const_fns, const_globals),
+            } },
+            .slice => |slice| .{ .slice = .{
+                .mutability = typeMutabilityFromAst(slice.mutability),
+                .child = try self.internTypeExpr(slice.child.*, const_fns, const_globals),
+            } },
+            .array => |array| .{ .array = .{
+                .length = parseArrayLen(array.len, const_fns, const_globals),
+                .child = try self.internTypeExpr(array.child.*, const_fns, const_globals),
+            } },
+            .generic => |generic| blk: {
+                const base = try self.allocator.dupe(u8, generic.base.text);
+                errdefer self.allocator.free(base);
+                const args = try self.internTypeExprSlice(generic.args, const_fns, const_globals);
+                break :blk .{ .generic = .{ .base = base, .args = args } };
+            },
+            .fn_pointer => |signature| blk: {
+                const params = try self.internTypeExprSlice(signature.params, const_fns, const_globals);
+                errdefer self.allocator.free(params);
+                const ret = try self.internTypeExpr(signature.ret.*, const_fns, const_globals);
+                break :blk .{ .fn_pointer = .{ .params = params, .ret = ret } };
+            },
+            .closure_type => |signature| blk: {
+                const params = try self.internTypeExprSlice(signature.params, const_fns, const_globals);
+                errdefer self.allocator.free(params);
+                const ret = try self.internTypeExpr(signature.ret.*, const_fns, const_globals);
+                break :blk .{ .closure_type = .{ .params = params, .ret = ret } };
+            },
+            .dyn_trait => |trait| .{ .dyn_trait = .{
+                .mutability = typeMutabilityFromAst(trait.mutability),
+                .trait_name = try self.allocator.dupe(u8, trait.trait_name.text),
+            } },
+        };
+        errdefer shape.deinit(self.allocator);
+        return self.internShape(shape);
+    }
+
+    fn internTypeExprSlice(
+        self: *SignatureTypeTableBuilder,
+        type_exprs: []const ast.TypeExpr,
+        const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+        const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    ) std.mem.Allocator.Error![]const SignatureTypeId {
+        const ids = try self.allocator.alloc(SignatureTypeId, type_exprs.len);
+        errdefer self.allocator.free(ids);
+        for (type_exprs, 0..) |type_expr, index| ids[index] = try self.internTypeExpr(type_expr, const_fns, const_globals);
+        return ids;
+    }
+
+    fn internShape(self: *SignatureTypeTableBuilder, shape: TypeShape) !SignatureTypeId {
+        for (self.shapes.items, 0..) |existing, index| {
+            if (!TypeShape.eql(existing, shape)) continue;
+            shape.deinit(self.allocator);
+            return SignatureTypeId.fromIndex(index);
+        }
+        try self.shapes.append(self.allocator, shape);
+        return SignatureTypeId.fromIndex(self.shapes.items.len - 1);
+    }
+};
+
+fn typeMutabilityFromAst(mutability: ast.Mutability) TypeMutability {
+    return switch (mutability) {
+        .none => .none,
+        .mut => .mut,
+        .@"const" => .constant,
+    };
+}
+
 fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, options: BuildOptions) !Module {
     var enums = std.StringHashMap(EnumSummary).init(allocator);
     defer enums.deinit();
@@ -1072,6 +1212,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     const type_ownership_facts = try collectTypeOwnershipFacts(allocator, decl_items, &ast_structs, &aliases, drop_glue_facts, &symbol_ids);
     errdefer allocator.free(type_ownership_facts);
 
+    // Build the module-level, recursive signature graph before lowering bodies.
+    // It owns only syntax-free type shapes; body-local executable TypeIds remain
+    // separate until the next codegen ingress cutover.
+    var signature_types = SignatureTypeTableBuilder.init(allocator);
+    errdefer signature_types.deinit();
+
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
         for (functions.items) |function| freeFunction(allocator, function);
@@ -1084,6 +1230,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer {
         for (checked_callables.items) |checked| {
             if (checked.param_types.len != 0) allocator.free(checked.param_types);
+            if (checked.signature_param_type_ids.len != 0) allocator.free(checked.signature_param_type_ids);
         }
         checked_callables.deinit(allocator);
     }
@@ -1114,6 +1261,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             .body_id = BodyId.fromIndex(checked_callables.items.len),
                             .kind = .global_initializer,
                             .return_ty = .void,
+                            .signature_return_type_id = try signature_types.internReturnType(null, &const_fns, &const_globals),
                             .param_count = 0,
                             .c_abi = false,
                             .is_variadic = false,
@@ -1130,7 +1278,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             checked.param_types = try allocator.dupe(ValueType, function.param_types);
                             var checked_param_types_unowned = true;
                             errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
-                            applyCheckedCallableFact(&function, checked);
+                            try applyCheckedCallableFact(allocator, &function, checked);
                             try checked_callables.append(allocator, checked);
                             checked_param_types_unowned = false;
                             try functions.append(allocator, function);
@@ -1148,12 +1296,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .body_id = BodyId.fromIndex(checked_callables.items.len),
                         .kind = .function,
                         .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
+                        .signature_return_type_id = try signature_types.internReturnType(fn_decl.return_type, &const_fns, &const_globals),
                         .param_count = fn_decl.params.len,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
                         .is_variadic = fn_decl.is_variadic,
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
+                    checked.signature_param_type_ids = try signature_types.internParams(fn_decl.params, &const_fns, &const_globals);
+                    var checked_signature_param_type_ids_unowned = true;
+                    errdefer if (checked_signature_param_type_ids_unowned and checked.signature_param_type_ids.len != 0) allocator.free(checked.signature_param_type_ids);
                     var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
@@ -1164,9 +1316,10 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         checked.param_types = try allocator.dupe(ValueType, function.param_types);
                         var checked_param_types_unowned = true;
                         errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
-                        applyCheckedCallableFact(&function, checked);
+                        try applyCheckedCallableFact(allocator, &function, checked);
                         try checked_callables.append(allocator, checked);
                         checked_param_types_unowned = false;
+                        checked_signature_param_type_ids_unowned = false;
                         try functions.append(allocator, function);
                     }
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
@@ -1178,12 +1331,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .body_id = .invalid,
                         .kind = .extern_function,
                         .return_ty = if (fn_decl.return_type) |ty| canonicalExecutableValueType(ty, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals) else .void,
+                        .signature_return_type_id = try signature_types.internReturnType(fn_decl.return_type, &const_fns, &const_globals),
                         .param_count = fn_decl.params.len,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasAttr(decl.attrs, "mc_abi")),
                         .is_variadic = fn_decl.is_variadic,
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                     };
+                    checked.signature_param_type_ids = try signature_types.internParams(fn_decl.params, &const_fns, &const_globals);
+                    var checked_signature_param_type_ids_unowned = true;
+                    errdefer if (checked_signature_param_type_ids_unowned and checked.signature_param_type_ids.len != 0) allocator.free(checked.signature_param_type_ids);
                     const param_types = try functionParamValueTypes(allocator, fn_decl.params, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals);
                     var param_types_unowned = true;
                     errdefer if (param_types_unowned and param_types.len != 0) allocator.free(param_types);
@@ -1195,14 +1352,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
                     try checked_callables.append(allocator, checked);
                     checked_param_types_unowned = false;
+                    checked_signature_param_type_ids_unowned = false;
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
                         .typed_def_id = checked.def_id,
                         .typed_symbol_id = checked.symbol_id,
                         .typed_source_id = checked.source_id,
                         .return_ty = checked.return_ty,
+                        .signature_return_type_id = checked.signature_return_type_id,
                         .param_count = checked.param_count,
                         .param_types = param_types,
+                        .signature_param_type_ids = try allocator.dupe(SignatureTypeId, checked.signature_param_type_ids),
                         .is_extern = true,
                         .c_abi = checked.c_abi,
                         .is_variadic = checked.is_variadic,
@@ -1249,16 +1409,20 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer {
         for (checked_callables_slice) |checked| {
             if (checked.param_types.len != 0) allocator.free(checked.param_types);
+            if (checked.signature_param_type_ids.len != 0) allocator.free(checked.signature_param_type_ids);
         }
         allocator.free(checked_callables_slice);
     }
     const checked_globals_slice = try checked_globals.toOwnedSlice(allocator);
     errdefer allocator.free(checked_globals_slice);
+    var signature_type_table = try signature_types.finish();
+    errdefer signature_type_table.deinit(allocator);
 
     var built_module: Module = .{
         .allocator = allocator,
         .symbol_identities = symbol_identities,
         .source_identities = source_identities,
+        .signature_types = signature_type_table,
         .checked_callables = checked_callables_slice,
         .checked_globals = checked_globals_slice,
         .functions = functions_slice,
@@ -1271,12 +1435,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     return built_module;
 }
 
-fn applyCheckedCallableFact(function: *Function, checked: CheckedCallableFact) void {
+fn applyCheckedCallableFact(allocator: std.mem.Allocator, function: *Function, checked: CheckedCallableFact) !void {
     function.typed_def_id = checked.def_id;
     function.typed_symbol_id = checked.symbol_id;
     function.typed_source_id = checked.source_id;
     function.return_ty = checked.return_ty;
+    function.signature_return_type_id = checked.signature_return_type_id;
     function.param_count = checked.param_count;
+    function.signature_param_type_ids = try allocator.dupe(SignatureTypeId, checked.signature_param_type_ids);
     function.c_abi = checked.c_abi;
     function.is_variadic = checked.is_variadic;
     function.no_lang_trap = checked.no_lang_trap;
@@ -20308,6 +20474,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     executable_body.deinit(allocator);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     if (function.param_types.len != 0) allocator.free(function.param_types);
+    if (function.signature_param_type_ids.len != 0) allocator.free(function.signature_param_type_ids);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);
     for (function.generated_type_expr_args) |args| allocator.free(args);

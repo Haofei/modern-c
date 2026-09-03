@@ -80,11 +80,11 @@
       "completion_evidence": [
         {
           "file": "src/checked_program.zig",
-          "needle": "pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact) !CheckedProgram"
+          "needle": "signature_types: mir.SignatureTypeTable"
         },
         {
           "file": "src/mir.zig",
-          "needle": "applyCheckedCallableFact(&function, checked)"
+          "needle": "applyCheckedCallableFact(allocator, &function, checked)"
         },
         {
           "file": "src/verified_program.zig",

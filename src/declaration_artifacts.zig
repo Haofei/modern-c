@@ -40,7 +40,7 @@ pub const EarlyDeclarationArtifacts = struct {
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
                     const function_mir = functionByDefId(typed_mir, def_id);
-                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, false, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
+                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, false, function_mir);
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -50,7 +50,7 @@ pub const EarlyDeclarationArtifacts = struct {
                 },
                 .extern_fn => |fn_decl| {
                     const function_mir = functionByDefId(typed_mir, def_id);
-                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, true, if (function_mir) |value| value.return_ty else .unknown, if (function_mir) |value| value.param_types else &.{});
+                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, true, function_mir);
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -190,16 +190,21 @@ pub const FunctionArtifact = struct {
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
 
-    pub fn fromDecl(allocator: std.mem.Allocator, def_id: mir.DefId, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType, param_types: []const mir.ValueType) !FunctionArtifact {
+    pub fn fromDecl(allocator: std.mem.Allocator, def_id: mir.DefId, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, function_mir: ?mir.Function) !FunctionArtifact {
+        const return_ty: mir.ValueType = if (function_mir) |function| function.return_ty else .unknown;
+        const return_type_id: mir.SignatureTypeId = if (function_mir) |function| function.signature_return_type_id else .invalid;
+        const param_types: []const mir.ValueType = if (function_mir) |function| function.param_types else &.{};
+        const param_type_ids: []const mir.SignatureTypeId = if (function_mir) |function| function.signature_param_type_ids else &.{};
         const params = try allocator.alloc(codegen_attrs.FunctionParamFact, fn_decl.params.len);
         errdefer allocator.free(params);
-        for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param, if (i < param_types.len) param_types[i] else .unknown);
+        for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param, if (i < param_types.len) param_types[i] else .unknown, if (i < param_type_ids.len) param_type_ids[i] else .invalid);
         return .{
             .def_id = def_id,
             .signature = .{
                 .name = fn_decl.name,
                 .params = params,
                 .return_ty = return_ty,
+                .return_type_id = return_type_id,
                 .transitional_ret_type = fn_decl.return_type,
                 .exported = fn_decl.exported,
                 .is_extern = is_extern,

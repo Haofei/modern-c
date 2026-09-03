@@ -12,8 +12,12 @@ const mir = @import("mir_model.zig");
 pub const CheckedProgram = struct {
     callables: []const mir.CheckedCallableFact,
     globals: []const mir.CheckedGlobalFact,
+    /// Borrowed module-owned signature type graph. The checked program never
+    /// owns syntax or source type expressions.
+    signature_types: mir.SignatureTypeTable,
 
-    pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact) !CheckedProgram {
+    pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact, signature_types: mir.SignatureTypeTable) !CheckedProgram {
+        if (!signature_types.validate()) return error.InvalidCheckedProgram;
         for (callables, 0..) |callable, index| {
             if (!callable.symbol_id.isValid()) return error.InvalidCheckedProgram;
             if (callable.kind == .global_initializer) {
@@ -26,6 +30,14 @@ pub const CheckedProgram = struct {
                 }
             }
             if (callable.param_types.len != callable.param_count) return error.InvalidCheckedProgram;
+            if (callable.signature_param_type_ids.len != callable.param_count) return error.InvalidCheckedProgram;
+            // Every callable must refer to a validated recursive shape. This
+            // is deliberately fail-closed: even hand-built unit fixtures must
+            // construct the same module-owned signature boundary.
+            if (!signature_types.contains(callable.signature_return_type_id)) return error.InvalidCheckedProgram;
+            for (callable.signature_param_type_ids) |type_id| {
+                if (!signature_types.contains(type_id)) return error.InvalidCheckedProgram;
+            }
             if (callable.kind == .extern_function) {
                 if (callable.body_id.isValid()) return error.InvalidCheckedProgram;
             } else if (!callable.body_id.isValid() or callable.body_id.index() != index) {
@@ -44,7 +56,7 @@ pub const CheckedProgram = struct {
                     return error.InvalidCheckedProgram;
             }
         }
-        return .{ .callables = callables, .globals = globals };
+        return .{ .callables = callables, .globals = globals, .signature_types = signature_types };
     }
 
     pub fn body(self: CheckedProgram, body_id: mir.BodyId) ?mir.CheckedCallableFact {
@@ -56,6 +68,7 @@ pub const CheckedProgram = struct {
 
     pub fn matchesMir(self: CheckedProgram, module: mir.Module) bool {
         return self.globals.ptr == module.checked_globals.ptr and self.globals.len == module.checked_globals.len and
+            self.signature_types.shapes.ptr == module.signature_types.shapes.ptr and self.signature_types.shapes.len == module.signature_types.shapes.len and
             callableFactsMatchMir(self.callables, module);
     }
 };
@@ -69,9 +82,14 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
             !defIdMatchesSource(checked.def_id, checked.source_id, module.source_identities)) return false;
         if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
         if (checked.param_count != function.param_count or checked.param_types.len != function.param_types.len or
+            checked.signature_param_type_ids.len != function.signature_param_type_ids.len or
             checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
+        if (!checked.signature_return_type_id.eql(function.signature_return_type_id)) return false;
         for (checked.param_types, function.param_types) |checked_type, mir_type| {
             if (!mir.ValueType.eql(checked_type, mir_type)) return false;
+        }
+        for (checked.signature_param_type_ids, function.signature_param_type_ids) |checked_type, mir_type| {
+            if (!checked_type.eql(mir_type)) return false;
         }
         if (checked.no_lang_trap != function.no_lang_trap or checked.irq_context != function.irq_context) return false;
 
@@ -95,6 +113,8 @@ fn defIdMatchesSource(def_id: mir.DefId, source_id: mir.SourceId, sources: []con
 }
 
 test "CheckedProgram rejects duplicate source declaration identities" {
+    const signature_shapes = [_]mir.TypeShape{.{ .name = "void" }};
+    const signature_types = mir.SignatureTypeTable{ .shapes = &signature_shapes };
     const callables = [_]mir.CheckedCallableFact{
         .{
             .def_id = .{ .file_id = 7, .ordinal = 3 },
@@ -103,6 +123,7 @@ test "CheckedProgram rejects duplicate source declaration identities" {
             .body_id = mir.BodyId.fromIndex(0),
             .kind = .function,
             .return_ty = .void,
+            .signature_return_type_id = mir.SignatureTypeId.fromIndex(0),
             .param_count = 0,
             .c_abi = false,
             .no_lang_trap = false,
@@ -115,13 +136,14 @@ test "CheckedProgram rejects duplicate source declaration identities" {
             .body_id = mir.BodyId.fromIndex(1),
             .kind = .function,
             .return_ty = .void,
+            .signature_return_type_id = mir.SignatureTypeId.fromIndex(0),
             .param_count = 0,
             .c_abi = false,
             .no_lang_trap = false,
             .irq_context = false,
         },
     };
-    try std.testing.expectError(error.DuplicateDefinitionIdentity, CheckedProgram.init(&callables, &.{}));
+    try std.testing.expectError(error.DuplicateDefinitionIdentity, CheckedProgram.init(&callables, &.{}, signature_types));
 }
 
 test "declaration identity must belong to the callable source file" {

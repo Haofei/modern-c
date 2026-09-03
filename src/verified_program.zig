@@ -91,7 +91,7 @@ pub const VerifiedProgram = struct {
         try mir.verifyBuiltMir(typed_mir.*, reporter);
         if (reporter.has_errors) return error.InvalidMir;
         if (!symbolIdentitiesMatchFunctionSpelling(typed_mir.*)) return error.InvalidMir;
-        const checked = try checked_program.CheckedProgram.init(typed_mir.checked_callables, typed_mir.checked_globals);
+        const checked = try checked_program.CheckedProgram.init(typed_mir.checked_callables, typed_mir.checked_globals, typed_mir.signature_types);
         if (!checked.matchesMir(typed_mir.*)) return error.InvalidCheckedProgram;
         return .{
             .checked = checked,
@@ -109,6 +109,10 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     const symbols = try std.testing.allocator.alloc(mir.SymbolIdentity, 2);
     symbols[0] = .{ .id = mir.SymbolId.fromIndex(0), .spelling = "add_one" };
     symbols[1] = .{ .id = mir.SymbolId.fromIndex(1), .spelling = "mc_ksan_check" };
+    const signature_shapes = try std.testing.allocator.alloc(mir.TypeShape, 1);
+    errdefer std.testing.allocator.free(signature_shapes);
+    signature_shapes[0] = .{ .name = try std.testing.allocator.dupe(u8, "void") };
+    errdefer signature_shapes[0].deinit(std.testing.allocator);
     const blocks = try std.testing.allocator.alloc(mir.Block, 1);
     blocks[0] = .{
         .id = 0,
@@ -135,6 +139,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .typed_def_id = .{ .file_id = 0, .ordinal = 0 },
         .typed_symbol_id = mir.SymbolId.fromIndex(0),
         .return_ty = .void,
+        .signature_return_type_id = mir.SignatureTypeId.fromIndex(0),
         .no_lang_trap = false,
         .irq_context = false,
         .blocks = hook_blocks,
@@ -150,6 +155,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .typed_def_id = .{ .file_id = 0, .ordinal = 1 },
         .typed_symbol_id = mir.SymbolId.fromIndex(1),
         .return_ty = .void,
+        .signature_return_type_id = mir.SignatureTypeId.fromIndex(0),
         .no_lang_trap = false,
         .irq_context = false,
         .blocks = blocks,
@@ -168,6 +174,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .body_id = mir.BodyId.fromIndex(0),
         .kind = .function,
         .return_ty = .void,
+        .signature_return_type_id = mir.SignatureTypeId.fromIndex(0),
         .param_count = 0,
         .c_abi = false,
         .no_lang_trap = false,
@@ -180,6 +187,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .body_id = mir.BodyId.fromIndex(1),
         .kind = .function,
         .return_ty = .void,
+        .signature_return_type_id = mir.SignatureTypeId.fromIndex(0),
         .param_count = 0,
         .c_abi = false,
         .no_lang_trap = false,
@@ -188,6 +196,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     var module_mir = mir.Module{
         .allocator = std.testing.allocator,
         .symbol_identities = symbols,
+        .signature_types = .{ .shapes = signature_shapes },
         .checked_callables = checked_callables,
         .functions = functions,
     };
@@ -233,5 +242,10 @@ test "VerifiedProgram rejects checked callable parameter type drift" {
     module_mir.checked_callables[forward_index].param_types = &.{};
     try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
     module_mir.checked_callables[forward_index].param_types = saved;
+
+    const saved_signature_type = module_mir.checked_callables[forward_index].signature_return_type_id;
+    module_mir.checked_callables[forward_index].signature_return_type_id = .invalid;
+    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+    module_mir.checked_callables[forward_index].signature_return_type_id = saved_signature_type;
     _ = try VerifiedProgram.init(&module_mir, &reporter);
 }

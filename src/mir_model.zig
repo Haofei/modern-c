@@ -35,6 +35,9 @@ pub const DefId = semantic_ids.DefId;
 pub const NodeId = TypedIndex("NodeId");
 pub const SymbolId = TypedIndex("SymbolId");
 pub const TypeId = TypedIndex("TypeId");
+/// Module-owned source-signature type graph identity.  This is deliberately
+/// distinct from `TypeId`, whose scope is one lowered executable body.
+pub const SignatureTypeId = TypedIndex("SignatureTypeId");
 pub const ValueId = TypedIndex("ValueId");
 pub const BlockId = TypedIndex("BlockId");
 pub const SpanId = TypedIndex("SpanId");
@@ -91,6 +94,152 @@ pub const PointerKind = enum {
     raw_many,
     slice,
 };
+
+/// Syntax-free mutability used by the module-owned signature type table.
+///
+/// Do not use `ast.Mutability` here: this model is shared by checked-program
+/// admission and must not gain a syntax dependency while declaration-shaped
+/// codegen artifacts still exist.
+pub const TypeMutability = enum {
+    none,
+    mut,
+    constant,
+};
+
+/// A recursive, source-independent representation of every `ast.TypeExpr`
+/// form that can occur in a callable signature.  It deliberately models the
+/// source type shape rather than `ValueType`: `ValueType` is the executable
+/// representation of a value and intentionally erases distinctions such as
+/// nested pointers, function pointers, closures, and generic arguments.
+///
+/// Child links always target earlier entries in `SignatureTypeTable`, which
+/// keeps validation finite and makes the table an owned, acyclic type graph.
+pub const TypeShape = union(enum) {
+    name: []const u8,
+    enum_literal: []const u8,
+    member: struct { base: SignatureTypeId, field: []const u8 },
+    nullable: SignatureTypeId,
+    qualified: struct { mutability: TypeMutability, child: SignatureTypeId },
+    pointer: struct { mutability: TypeMutability, child: SignatureTypeId },
+    raw_many_pointer: struct { mutability: TypeMutability, child: SignatureTypeId },
+    slice: struct { mutability: TypeMutability, child: SignatureTypeId },
+    array: struct { length: ?usize, child: SignatureTypeId },
+    generic: struct { base: []const u8, args: []const SignatureTypeId },
+    fn_pointer: struct { params: []const SignatureTypeId, ret: SignatureTypeId },
+    closure_type: struct { params: []const SignatureTypeId, ret: SignatureTypeId },
+    dyn_trait: struct { mutability: TypeMutability, trait_name: []const u8 },
+
+    pub fn eql(left: TypeShape, right: TypeShape) bool {
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        return switch (left) {
+            .name => |name| std.mem.eql(u8, name, right.name),
+            .enum_literal => |name| std.mem.eql(u8, name, right.enum_literal),
+            .member => |member| member.base.eql(right.member.base) and std.mem.eql(u8, member.field, right.member.field),
+            .nullable => |child| child.eql(right.nullable),
+            .qualified => |shape| shape.mutability == right.qualified.mutability and shape.child.eql(right.qualified.child),
+            .pointer => |shape| shape.mutability == right.pointer.mutability and shape.child.eql(right.pointer.child),
+            .raw_many_pointer => |shape| shape.mutability == right.raw_many_pointer.mutability and shape.child.eql(right.raw_many_pointer.child),
+            .slice => |shape| shape.mutability == right.slice.mutability and shape.child.eql(right.slice.child),
+            .array => |shape| shape.length == right.array.length and shape.child.eql(right.array.child),
+            .generic => |shape| typeIdSliceEql(shape.args, right.generic.args) and std.mem.eql(u8, shape.base, right.generic.base),
+            .fn_pointer => |shape| shape.ret.eql(right.fn_pointer.ret) and typeIdSliceEql(shape.params, right.fn_pointer.params),
+            .closure_type => |shape| shape.ret.eql(right.closure_type.ret) and typeIdSliceEql(shape.params, right.closure_type.params),
+            .dyn_trait => |shape| shape.mutability == right.dyn_trait.mutability and std.mem.eql(u8, shape.trait_name, right.dyn_trait.trait_name),
+        };
+    }
+
+    pub fn deinit(self: TypeShape, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .name => |name| allocator.free(name),
+            .enum_literal => |name| allocator.free(name),
+            .member => |member| allocator.free(member.field),
+            .generic => |shape| {
+                allocator.free(shape.base);
+                allocator.free(shape.args);
+            },
+            .fn_pointer => |shape| allocator.free(shape.params),
+            .closure_type => |shape| allocator.free(shape.params),
+            .dyn_trait => |shape| allocator.free(shape.trait_name),
+            else => {},
+        }
+    }
+};
+
+fn typeIdSliceEql(left: []const SignatureTypeId, right: []const SignatureTypeId) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |a, b| if (!a.eql(b)) return false;
+    return true;
+}
+
+/// Module-owned canonical signature type graph.  It is distinct from the
+/// per-function executable `TypeIdentity` tables and is the future syntax-free
+/// ingress for function/global declaration artifacts.
+pub const SignatureTypeTable = struct {
+    shapes: []const TypeShape = &.{},
+
+    pub const empty: SignatureTypeTable = .{};
+
+    pub fn get(self: SignatureTypeTable, id: SignatureTypeId) ?TypeShape {
+        if (!id.isValid() or id.index() >= self.shapes.len) return null;
+        return self.shapes[id.index()];
+    }
+
+    pub fn contains(self: SignatureTypeTable, id: SignatureTypeId) bool {
+        return self.get(id) != null;
+    }
+
+    pub fn validate(self: SignatureTypeTable) bool {
+        for (self.shapes, 0..) |shape, index| {
+            if (!typeShapeChildrenPrecede(shape, index)) return false;
+        }
+        return true;
+    }
+
+    pub fn deinit(self: *SignatureTypeTable, allocator: std.mem.Allocator) void {
+        for (self.shapes) |shape| shape.deinit(allocator);
+        if (self.shapes.len != 0) allocator.free(self.shapes);
+        self.* = .{};
+    }
+};
+
+fn typeShapeChildrenPrecede(shape: TypeShape, index: usize) bool {
+    const preceding = struct {
+        fn check(id: SignatureTypeId, current_index: usize) bool {
+            return id.isValid() and id.index() < current_index;
+        }
+        fn checkSlice(ids: []const SignatureTypeId, current_index: usize) bool {
+            for (ids) |id| if (!check(id, current_index)) return false;
+            return true;
+        }
+    };
+    return switch (shape) {
+        .name, .enum_literal, .dyn_trait => true,
+        .member => |value| preceding.check(value.base, index),
+        .nullable => |value| preceding.check(value, index),
+        .qualified => |value| preceding.check(value.child, index),
+        .pointer => |value| preceding.check(value.child, index),
+        .raw_many_pointer => |value| preceding.check(value.child, index),
+        .slice => |value| preceding.check(value.child, index),
+        .array => |value| preceding.check(value.child, index),
+        .generic => |value| preceding.checkSlice(value.args, index),
+        .fn_pointer => |value| preceding.check(value.ret, index) and preceding.checkSlice(value.params, index),
+        .closure_type => |value| preceding.check(value.ret, index) and preceding.checkSlice(value.params, index),
+    };
+}
+
+test "signature type table rejects invalid, self, and forward child rows" {
+    const invalid = SignatureTypeTable{ .shapes = &.{.{ .nullable = .invalid }} };
+    try std.testing.expect(!invalid.validate());
+
+    const self_referential = SignatureTypeTable{ .shapes = &.{.{ .nullable = SignatureTypeId.fromIndex(0) }} };
+    try std.testing.expect(!self_referential.validate());
+
+    const forward = SignatureTypeTable{ .shapes = &.{
+        .{ .nullable = SignatureTypeId.fromIndex(1) },
+        .{ .name = "u32" },
+    } };
+    try std.testing.expect(!forward.validate());
+}
 
 pub const PointerShape = struct {
     kind: PointerKind,
@@ -3791,6 +3940,10 @@ pub const Function = struct {
     typed_symbol_id: SymbolId = .invalid,
     typed_source_id: SourceId = .invalid,
     return_ty: ValueType,
+    /// Module-owned recursive source type shape for the callable result.
+    /// This is intentionally separate from executable-body TypeIds, which are
+    /// local to a lowered function.
+    signature_return_type_id: SignatureTypeId = .invalid,
     /// Exact callable representation for an otherwise opaque `.value`
     /// return. A closure is a two-pointer value; a plain function pointer is
     /// one pointer. Backends must not recover this distinction from syntax.
@@ -3799,6 +3952,7 @@ pub const Function = struct {
     // must not reconstruct them by rescanning source declarations.
     param_count: usize = 0,
     param_types: []ValueType = &.{},
+    signature_param_type_ids: []SignatureTypeId = &.{},
     is_extern: bool = false,
     c_abi: bool = false,
     is_variadic: bool = false,
@@ -3854,10 +4008,12 @@ pub const CheckedCallableFact = struct {
     body_id: BodyId,
     kind: CallableKind,
     return_ty: ValueType,
+    signature_return_type_id: SignatureTypeId = .invalid,
     param_count: usize,
     /// Independently owned semantic signature. Keeping this separate from the
     /// MIR function storage lets admission detect equal-arity type drift.
     param_types: []const ValueType = &.{},
+    signature_param_type_ids: []const SignatureTypeId = &.{},
     c_abi: bool,
     is_variadic: bool = false,
     no_lang_trap: bool,
@@ -3880,6 +4036,7 @@ pub const Module = struct {
     allocator: std.mem.Allocator,
     symbol_identities: []SymbolIdentity = &.{},
     source_identities: []SourceIdentity = &.{},
+    signature_types: SignatureTypeTable = .{},
     checked_callables: []CheckedCallableFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
     functions: []Function,
@@ -3922,6 +4079,7 @@ pub const Module = struct {
             executable_body.deinit(self.allocator);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             if (function.param_types.len != 0) self.allocator.free(function.param_types);
+            if (function.signature_param_type_ids.len != 0) self.allocator.free(function.signature_param_type_ids);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
             for (function.generated_type_expr_args) |args| self.allocator.free(args);
@@ -3935,9 +4093,11 @@ pub const Module = struct {
         }
         if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
         if (self.source_identities.len != 0) self.allocator.free(self.source_identities);
+        self.signature_types.deinit(self.allocator);
         if (self.checked_callables.len != 0) {
             for (self.checked_callables) |checked| {
                 if (checked.param_types.len != 0) self.allocator.free(checked.param_types);
+                if (checked.signature_param_type_ids.len != 0) self.allocator.free(checked.signature_param_type_ids);
             }
             self.allocator.free(self.checked_callables);
         }

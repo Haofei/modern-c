@@ -132,7 +132,7 @@
     },
     "src/codegen_signature.zig": {
       "pub const FunctionParamFact = struct": 1,
-      "pub fn fromParam(param: ast_bridge.Param, value_ty: mir.ValueType) FunctionParamFact": 1
+      "pub fn fromParam(param: ast_bridge.Param, value_ty: mir.ValueType, type_id: mir.SignatureTypeId) FunctionParamFact": 1
     }
   },
   "backend_artifact_consumers": {

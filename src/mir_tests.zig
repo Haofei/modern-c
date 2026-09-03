@@ -1308,7 +1308,7 @@ test "CheckedProgram is a syntax-free callable and body table" {
 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
-    const checked = try checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals);
+    const checked = try checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals, module_mir.signature_types);
     try std.testing.expect(checked.matchesMir(module_mir));
     try std.testing.expectEqual(module_mir.functions.len, checked.callables.len);
 
@@ -1361,8 +1361,100 @@ test "CheckedProgram is a syntax-free callable and body table" {
     try std.testing.expectEqual(module_mir.functions.len, std.mem.count(u8, dump.items, "checked callable "));
 
     module_mir.checked_callables[0].param_count += 1;
-    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals));
+    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals, module_mir.signature_types));
     try std.testing.expect(!checked.matchesMir(module_mir));
+}
+
+test "module signature type table preserves recursive callable shapes" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Device { value: u32 }
+        \\extern fn signature_surface(
+        \\    nested: *mut *const u32,
+        \\    mmio: MmioPtr<Device>,
+        \\    callback: fn(u32) -> u32,
+        \\    closure: closure(u32) -> u32,
+        \\    object: *dyn Shape,
+        \\    bytes: [4]u8,
+        \\    result: Result<u32, u8>,
+        \\    nominal: Device,
+        \\    member: Device.Member,
+        \\) -> ?*const [4]u8;
+    ;
+    var parsed = try test_support.parseModule("signature_type_table.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expect(module_mir.signature_types.validate());
+    const function = functionByName(module_mir, "signature_surface") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.signature_return_type_id.isValid());
+    try std.testing.expectEqual(@as(usize, 9), function.signature_param_type_ids.len);
+
+    const nested = module_mir.signature_types.get(function.signature_param_type_ids[0]) orelse return error.TestUnexpectedResult;
+    const nested_pointer = switch (nested) {
+        .pointer => |shape| shape,
+        else => return error.TestUnexpectedResult,
+    };
+    const inner = module_mir.signature_types.get(nested_pointer.child) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(inner) == .pointer);
+
+    const mmio = module_mir.signature_types.get(function.signature_param_type_ids[1]) orelse return error.TestUnexpectedResult;
+    const mmio_shape = switch (mmio) {
+        .generic => |shape| shape,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("MmioPtr", mmio_shape.base);
+    try std.testing.expectEqual(@as(usize, 1), mmio_shape.args.len);
+
+    const callback = module_mir.signature_types.get(function.signature_param_type_ids[2]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(callback) == .fn_pointer);
+    const closure = module_mir.signature_types.get(function.signature_param_type_ids[3]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(closure) == .closure_type);
+    const object = module_mir.signature_types.get(function.signature_param_type_ids[4]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(object) == .dyn_trait);
+    const bytes = module_mir.signature_types.get(function.signature_param_type_ids[5]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(bytes) == .array);
+    const result = module_mir.signature_types.get(function.signature_param_type_ids[6]) orelse return error.TestUnexpectedResult;
+    const result_shape = switch (result) {
+        .generic => |shape| shape,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Result", result_shape.base);
+
+    const nominal = module_mir.signature_types.get(function.signature_param_type_ids[7]) orelse return error.TestUnexpectedResult;
+    const nominal_name = switch (nominal) {
+        .name => |name| name,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Device", nominal_name);
+    const member = module_mir.signature_types.get(function.signature_param_type_ids[8]) orelse return error.TestUnexpectedResult;
+    const member_shape = switch (member) {
+        .member => |shape| shape,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Member", member_shape.field);
+
+    const extern_decl = switch (parsed.decls()[2].kind) {
+        .extern_fn => |decl| decl,
+        else => return error.TestUnexpectedResult,
+    };
+    const source_mmio_base = switch (extern_decl.params[1].ty.kind) {
+        .generic => |shape| shape.base.text,
+        else => return error.TestUnexpectedResult,
+    };
+    const source_member_field = switch (extern_decl.params[8].ty.kind) {
+        .member => |shape| shape.field.text,
+        else => return error.TestUnexpectedResult,
+    };
+    // The table owns these names; it cannot retain AST-owned source slices.
+    try std.testing.expect(@intFromPtr(mmio_shape.base.ptr) != @intFromPtr(source_mmio_base.ptr));
+    try std.testing.expect(@intFromPtr(member_shape.field.ptr) != @intFromPtr(source_member_field.ptr));
+
+    const return_shape = module_mir.signature_types.get(function.signature_return_type_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(return_shape) == .nullable);
+    const checked = try checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals, module_mir.signature_types);
+    try std.testing.expect(checked.matchesMir(module_mir));
 }
 
 test "MIR verifier rejects per-file source identity drift" {
