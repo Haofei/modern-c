@@ -1330,6 +1330,34 @@ const LlvmEmitter = struct {
         return if (self.isSignedIntegerType(ty)) "signext " else "zeroext ";
     }
 
+    fn cAbiExtensionForSignature(self: *LlvmEmitter, id: mir.SignatureTypeId) []const u8 {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return "";
+        return switch (shape) {
+            .qualified => |node| self.cAbiExtensionForSignature(node.child),
+            .generic => |node| if (isPayloadDomainGenericName(node.base) and node.args.len == 1)
+                self.cAbiExtensionForSignature(node.args[0])
+            else
+                "",
+            .name => |name| self.cAbiExtensionForSignatureName(name),
+            else => "",
+        };
+    }
+
+    fn cAbiExtensionForSignatureName(self: *LlvmEmitter, name: []const u8) []const u8 {
+        if (std.mem.eql(u8, name, "bool")) return if (self.target_arch == .aarch64) "" else "zeroext ";
+        if (scalar_repr.integer(name)) |integer| {
+            if (integer.bits > 32 or self.target_arch == .aarch64) return "";
+            if (integer.bits == 32) return if (self.target_arch == .riscv64) "signext " else "";
+            return if (integer.signed) "signext " else "zeroext ";
+        }
+        // A nominal alias is a type-declaration lookup, never callable
+        // signature syntax.  Keep its established ABI classification intact.
+        if (self.type_aliases.get(name)) |target| return self.cAbiExtension(target);
+        if (self.enum_types.get(name)) |decl| return self.cAbiExtension(enumReprType(decl));
+        if (self.packed_bits.get(name)) |info| return self.cAbiExtension(info.repr);
+        return "";
+    }
+
     fn promoteCVariadicArgument(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, value: []const u8) !ArgValue {
         const resolved = self.resolveAliasType(ty);
         if (typeNameEql(resolved, "f32")) {
@@ -1384,14 +1412,14 @@ const LlvmEmitter = struct {
         if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
-            try self.llvmType(ret_ty)
+            try self.llvmSignatureType(sig_facts.return_type_id)
         else
             mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
                 error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
                 else => return err,
             };
         const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
-        const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
 
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
@@ -1416,7 +1444,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
+            const param_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
             try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.executableFunctionParamType(fn_mir, param, i), param_ext, executable_parameter.local.raw });
         }
         if (fn_mir.executable_body.is_variadic) {
@@ -1459,14 +1487,14 @@ const LlvmEmitter = struct {
         if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
-            try self.llvmType(ret_ty)
+            try self.llvmSignatureType(sig_facts.return_type_id)
         else
             mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
                 error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
                 else => return err,
             };
         const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return false;
-        const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
         const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
 
         const old_scope = self.current_debug_scope;
@@ -1484,8 +1512,8 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, index| {
             if (index != 0) try self.out.appendSlice(self.allocator, ", ");
-            const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
-            try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.llvmType(param.ty), param_ext, executable_parameter.local.raw });
+            const param_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
+            try self.out.print(self.allocator, "{s} {s}%mc_arg_{d}", .{ try self.executableFunctionParamType(fn_mir, param, index), param_ext, executable_parameter.local.raw });
         }
         const entry_label = try self.functionEntryLabel();
         if (self.current_debug_scope) |scope|
@@ -1689,13 +1717,13 @@ const LlvmEmitter = struct {
         if (executable_parameter) |value| {
             if (value.dyn_trait_symbol_id.isValid()) return "{ ptr, ptr }";
             return mir_executable_llvm.renderType(self.scratch.allocator(), &function.executable_body, param.value_ty, value.callable_signature) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmType(param.ty),
+                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(param.type_id),
                 else => return err,
             };
         }
-        if (param.value_ty == .value) return self.llvmType(param.ty);
+        if (param.value_ty == .value) return self.llvmSignatureType(param.type_id);
         return mir_executable_llvm.renderType(self.scratch.allocator(), &function.executable_body, param.value_ty, null) catch |err| switch (err) {
-            error.Unsupported, error.InvalidBody => try self.llvmType(param.ty),
+            error.Unsupported, error.InvalidBody => try self.llvmSignatureType(param.type_id),
             else => return err,
         };
     }
