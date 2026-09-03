@@ -7391,7 +7391,7 @@ test "MIR verifier rejects malformed structural access facts" {
     var mutated = false;
     for (function.access_facts) |*fact| switch (fact.*) {
         .range_slice => |*access| {
-            access.end_span_id = .invalid;
+            access.typed_span_id = .invalid;
             mutated = true;
             break;
         },
@@ -7401,6 +7401,21 @@ test "MIR verifier rejects malformed structural access facts" {
     try std.testing.expectError(error.InvalidAccessFact, mir_body_plan.verify(function));
     try mir.verifyBuiltMir(typed_mir, &reporter);
     try std.testing.expect(reporter.has_errors);
+
+    var misaligned_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer misaligned_mir.deinit();
+    const misaligned = functionByNameMut(&misaligned_mir, "access_shapes") orelse return error.TestUnexpectedResult;
+    var corrupted_span_table = false;
+    for (misaligned.access_facts) |fact| switch (fact) {
+        .range_slice => |access| {
+            misaligned.span_identities[access.typed_span_id.index()].id = .invalid;
+            corrupted_span_table = true;
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(corrupted_span_table);
+    try std.testing.expectError(error.InvalidAccessFact, mir_body_plan.verify(misaligned));
 }
 
 test "MIR owns MMIO read write identities and complete types" {

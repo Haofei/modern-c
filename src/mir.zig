@@ -3771,7 +3771,7 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
     for (function.access_facts, 0..) |fact, fact_index| {
         if (!accessFactValid(function, fact)) {
             reporter.err(
-                sourcePointSpan(accessFactSource(fact)),
+                sourcePointSpan(sourcePointForSpanId(function, accessFactSpanId(fact)) orelse .{ .line = 1, .column = 1 }),
                 "E_MIR_ACCESS_FACT: MIR verifier found malformed resolved access fact",
                 .{},
             );
@@ -3780,7 +3780,7 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
         for (function.access_facts[0..fact_index]) |prior| {
             if (accessFactTag(prior) == accessFactTag(fact) and accessFactSpanId(prior).eql(accessFactSpanId(fact))) {
                 reporter.err(
-                    sourcePointSpan(accessFactSource(fact)),
+                    sourcePointSpan(sourcePointForSpanId(function, accessFactSpanId(fact)) orelse .{ .line = 1, .column = 1 }),
                     "E_MIR_ACCESS_FACT: MIR verifier found duplicate resolved access fact",
                     .{},
                 );
@@ -3810,8 +3810,7 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
 
 fn accessFactValid(function: Function, fact: AccessFact) bool {
     const primary_span = accessFactSpanId(fact);
-    const primary_source = sourcePointForSpanId(function, primary_span) orelse return false;
-    if (!sourcePointEquivalent(primary_source, accessFactSource(fact))) return false;
+    if (!spanIdValid(function, primary_span)) return false;
     switch (fact) {
         .index => |access| {
             if (!accessSpanIdsValid(function, &.{ access.base_span_id, access.index_span_id })) return false;
@@ -3844,7 +3843,7 @@ fn accessFactValid(function: Function, fact: AccessFact) bool {
 }
 
 fn accessSpanIdsValid(function: Function, span_ids: []const SpanId) bool {
-    for (span_ids) |span_id| if (sourcePointForSpanId(function, span_id) == null) return false;
+    for (span_ids) |span_id| if (!spanIdValid(function, span_id)) return false;
     return true;
 }
 
@@ -3902,12 +3901,6 @@ fn accessFactTag(fact: AccessFact) std.meta.Tag(AccessFact) {
 fn accessFactSpanId(fact: AccessFact) SpanId {
     return switch (fact) {
         inline else => |access| access.typed_span_id,
-    };
-}
-
-fn accessFactSource(fact: AccessFact) SourcePoint {
-    return switch (fact) {
-        inline else => |access| access.source,
     };
 }
 
@@ -16134,7 +16127,6 @@ const FunctionBuilder = struct {
                 try self.access_facts.append(self.allocator, .{ .address_of = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .operand_ty = try self.resolvedAccessValueType(inner.*),
-                    .source = self.sourcePoint(expr.span),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
                 } });
@@ -16180,7 +16172,6 @@ const FunctionBuilder = struct {
                 try self.access_facts.append(self.allocator, .{ .deref = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .operand_ty = try self.resolvedAccessValueType(inner.*),
-                    .source = self.sourcePoint(expr.span),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
                 } });
@@ -16827,7 +16818,6 @@ const FunctionBuilder = struct {
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
                     .index_ty = try self.resolvedAccessValueType(node.index.*),
-                    .source = self.sourcePoint(expr.span),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .base_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span)),
                     .index_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
@@ -16887,7 +16877,6 @@ const FunctionBuilder = struct {
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
                     .start_ty = try self.resolvedAccessValueType(node.start.*),
                     .end_ty = try self.resolvedAccessValueType(node.end.*),
-                    .source = self.sourcePoint(expr.span),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .base_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span)),
                     .start_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.start.*).span)),

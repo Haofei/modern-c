@@ -254,8 +254,7 @@ pub fn verify(function: *const mir.Function) !void {
 fn verifyAccessFacts(function: *const mir.Function) !void {
     for (function.access_facts, 0..) |fact, index| {
         const primary_span_id = accessFactSpanId(fact);
-        const primary_span = spanIdentity(function, primary_span_id) orelse return error.InvalidAccessFact;
-        if (!sourceEquivalent(primary_span.source, accessFactSource(fact))) return error.InvalidAccessFact;
+        _ = spanIdentity(function, primary_span_id) orelse return error.InvalidAccessFact;
         switch (fact) {
             .index => |access| {
                 try verifyRequiredAccessSpan(function, access.base_span_id);
@@ -352,12 +351,6 @@ fn rangeSliceFactForInstruction(function: *const mir.Function, instruction: mir.
 fn accessFactSpanId(fact: mir.AccessFact) mir.SpanId {
     return switch (fact) {
         inline else => |access| access.typed_span_id,
-    };
-}
-
-fn accessFactSource(fact: mir.AccessFact) mir.SourcePoint {
-    return switch (fact) {
-        inline else => |access| access.source,
     };
 }
 
