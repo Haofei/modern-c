@@ -411,6 +411,7 @@ pub const CEmitter = struct {
         self.codegen_artifacts = early_metadata;
         try self.collectTypeAliasFacts();
         try self.collectEnumFacts();
+        try self.collectPackedBitsFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedScalarGlobals();
@@ -457,6 +458,20 @@ pub const CEmitter = struct {
             );
             if (self.enums.contains(enum_decl.name.text)) return error.UnsupportedCEmission;
             try self.enums.put(enum_decl.name.text, enum_decl);
+        }
+    }
+
+    /// Packed-bits rendering views are derived from module-owned checked
+    /// facts. No declaration artifact carries a packed-bits AST payload.
+    fn collectPackedBitsFacts(self: *CEmitter) !void {
+        for (self.mir_module.packed_bits) |fact| {
+            const packed_bits = try signature_type_materializer.packedBitsDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectPackedBits(packed_bits);
         }
     }
 
@@ -522,7 +537,6 @@ pub const CEmitter = struct {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-                .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
             },
         };

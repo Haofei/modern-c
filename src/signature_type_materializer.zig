@@ -11,7 +11,7 @@ const ast = @import("ast.zig");
 const mir = @import("mir_model.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 
-pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact } || std.mem.Allocator.Error;
+pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact } || std.mem.Allocator.Error;
 
 pub fn typeExpr(
     allocator: std.mem.Allocator,
@@ -131,5 +131,33 @@ pub fn enumDecl(
         .repr = try typeExpr(allocator, types, fact.repr_type_id, span),
         .cases = cases,
         .is_open = fact.is_open,
+    };
+}
+
+/// Transitional rendering view for packed bits. All semantic decisions
+/// (integer representation, field validity, and declaration order) live in
+/// `PackedBitsFact`; this function only reconstructs the AST-shaped input
+/// consumed by legacy rendering helpers.
+pub fn packedBitsDecl(
+    allocator: std.mem.Allocator,
+    types: mir.SignatureTypeTable,
+    symbols: []const mir.SymbolIdentity,
+    fact: mir.PackedBitsFact,
+) Error!ast.PackedBitsDecl {
+    if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbols.len) return error.InvalidPackedBitsFact;
+    const identity = symbols[fact.symbol_id.index()];
+    if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidPackedBitsFact;
+    const span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+    const fields = try allocator.alloc(ast.Field, fact.fields.len);
+    for (fact.fields, 0..) |field, index| {
+        fields[index] = .{
+            .name = .{ .text = field.spelling, .span = span },
+            .ty = .{ .span = span, .kind = .{ .name = .{ .text = "bool", .span = span } } },
+        };
+    }
+    return .{
+        .name = .{ .text = identity.spelling, .span = span },
+        .repr = try typeExpr(allocator, types, fact.repr_type_id, span),
+        .fields = fields,
     };
 }

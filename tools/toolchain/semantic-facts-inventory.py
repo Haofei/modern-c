@@ -1139,7 +1139,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .struct_decl = struct_decl } })": 1,
         "try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .enum_decl = enum_decl } })": 0,
         "try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .union_decl = union_decl } })": 1,
-        "try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .packed_bits_decl = packed_bits_decl } })": 1,
+        "try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .packed_bits_decl = packed_bits_decl } })": 0,
         "try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .overlay_union_decl = overlay_union } })": 1,
         "body: ast.Block": 0,
         "opaque_decl: ast.Ident": 0,

@@ -118,6 +118,8 @@ pub const FfiParamContract = mir_model.FfiParamContract;
 pub const TypeAliasFact = mir_model.TypeAliasFact;
 pub const EnumFact = mir_model.EnumFact;
 pub const EnumCaseFact = mir_model.EnumCaseFact;
+pub const PackedBitsFact = mir_model.PackedBitsFact;
+pub const PackedBitsFieldFact = mir_model.PackedBitsFieldFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -1281,6 +1283,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (enum_facts.items) |enum_fact| if (enum_fact.cases.len != 0) allocator.free(enum_fact.cases);
         enum_facts.deinit(allocator);
     }
+    var packed_bits_facts: std.ArrayList(PackedBitsFact) = .empty;
+    errdefer {
+        for (packed_bits_facts.items) |packed_bits_fact| if (packed_bits_fact.fields.len != 0) allocator.free(packed_bits_fact.fields);
+        packed_bits_facts.deinit(allocator);
+    }
     var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
     errdefer global_initializer_facts.deinit(allocator);
 
@@ -1316,6 +1323,18 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         try signature_types.internBuiltinName("isize"),
                     .is_open = enum_decl.is_open,
                     .cases = cases,
+                });
+            },
+            .packed_bits_decl => |packed_bits_decl| {
+                const fields = try allocator.alloc(PackedBitsFieldFact, packed_bits_decl.fields.len);
+                errdefer allocator.free(fields);
+                for (packed_bits_decl.fields, 0..) |field, index| fields[index] = .{ .spelling = field.name.text };
+                try packed_bits_facts.append(allocator, .{
+                    .symbol_id = try internSymbolId(&symbol_ids, packed_bits_decl.name.text),
+                    .source_id = typed_source_id,
+                    .repr_ty = canonicalExecutableValueType(packed_bits_decl.repr, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals),
+                    .repr_type_id = try signature_types.internTypeExpr(packed_bits_decl.repr, &const_fns, &const_globals),
+                    .fields = fields,
                 });
             },
             .type_alias => |alias| {
@@ -1541,6 +1560,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirEnumFacts;
         identity.kind = .type_;
     }
+    for (packed_bits_facts.items) |packed_bits_fact| {
+        if (!packed_bits_fact.symbol_id.isValid() or packed_bits_fact.symbol_id.index() >= symbol_identities.len or
+            mir_model.ExecutableCastKind.integerInfo(packed_bits_fact.repr_ty) == null or
+            !packed_bits_fact.repr_type_id.isValid() or packed_bits_fact.repr_type_id.index() >= signature_types.shapes.items.len)
+            return error.InvalidMirPackedBitsFacts;
+        const identity = &symbol_identities[packed_bits_fact.symbol_id.index()];
+        if (!identity.id.eql(packed_bits_fact.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirPackedBitsFacts;
+        identity.kind = .type_;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1565,6 +1595,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (enum_facts_slice) |enum_fact| if (enum_fact.cases.len != 0) allocator.free(enum_fact.cases);
         allocator.free(enum_facts_slice);
     }
+    const packed_bits_facts_slice = try packed_bits_facts.toOwnedSlice(allocator);
+    errdefer {
+        for (packed_bits_facts_slice) |packed_bits_fact| if (packed_bits_fact.fields.len != 0) allocator.free(packed_bits_fact.fields);
+        allocator.free(packed_bits_facts_slice);
+    }
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
@@ -1579,6 +1614,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .checked_globals = checked_globals_slice,
         .type_aliases = type_alias_facts_slice,
         .enums = enum_facts_slice,
+        .packed_bits = packed_bits_facts_slice,
         .global_initializer_facts = global_initializer_facts_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
@@ -4054,6 +4090,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirTypeOwnershipFacts,
     InvalidMirTypeAliasFacts,
     InvalidMirEnumFacts,
+    InvalidMirPackedBitsFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4084,6 +4121,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateTypeOwnershipFactsForLowering(module);
     try validateTypeAliasFactsForLowering(module);
     try validateEnumFactsForLowering(module);
+    try validatePackedBitsFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
@@ -4133,6 +4171,28 @@ fn validateEnumFactsForLowering(module: Module) error{InvalidMirEnumFacts}!void 
     }
 }
 
+fn validatePackedBitsFactsForLowering(module: Module) error{InvalidMirPackedBitsFacts}!void {
+    for (module.packed_bits, 0..) |fact, index| {
+        const info = mir_model.ExecutableCastKind.integerInfo(fact.repr_ty) orelse return error.InvalidMirPackedBitsFacts;
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
+            !fact.repr_type_id.isValid() or !module.signature_types.contains(fact.repr_type_id) or
+            !packedBitsFactReprMatchesSignature(module, fact) or fact.fields.len > info.bits)
+            return error.InvalidMirPackedBitsFacts;
+        const identity = module.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidMirPackedBitsFacts;
+        if (fact.source_id.isValid() and (fact.source_id.index() >= module.source_identities.len or
+            !module.source_identities[fact.source_id.index()].id.eql(fact.source_id)))
+            return error.InvalidMirPackedBitsFacts;
+        for (fact.fields, 0..) |field, field_index| {
+            if (field.spelling.len == 0) return error.InvalidMirPackedBitsFacts;
+            for (fact.fields[0..field_index]) |prior| if (std.mem.eql(u8, prior.spelling, field.spelling)) return error.InvalidMirPackedBitsFacts;
+        }
+        for (module.packed_bits[0..index]) |prior| if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirPackedBitsFacts;
+        for (module.type_aliases) |alias| if (alias.symbol_id.eql(fact.symbol_id)) return error.InvalidMirPackedBitsFacts;
+        for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirPackedBitsFacts;
+    }
+}
+
 fn enumCaseFitsRepr(case: EnumCaseFact, repr_ty: ValueType) bool {
     const info = mir_model.ExecutableCastKind.integerInfo(repr_ty) orelse return false;
     if (case.negative) {
@@ -4160,6 +4220,14 @@ fn enumCaseFitsRepr(case: EnumCaseFact, repr_ty: ValueType) bool {
 /// prevents a stale fact from making C and LLVM emit a different integer width
 /// than executable MIR uses.
 fn enumFactReprMatchesSignature(module: Module, fact: EnumFact) bool {
+    const repr_name = enumReprSignatureName(module, fact.repr_type_id, 0) orelse return false;
+    return switch (fact.repr_ty) {
+        .integer => |name| std.mem.eql(u8, name, repr_name),
+        else => false,
+    };
+}
+
+fn packedBitsFactReprMatchesSignature(module: Module, fact: PackedBitsFact) bool {
     const repr_name = enumReprSignatureName(module, fact.repr_type_id, 0) orelse return false;
     return switch (fact.repr_ty) {
         .integer => |name| std.mem.eql(u8, name, repr_name),

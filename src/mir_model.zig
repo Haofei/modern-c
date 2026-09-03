@@ -4080,6 +4080,25 @@ pub const EnumFact = struct {
     cases: []const EnumCaseFact,
 };
 
+/// One checked packed-bit field. Packed-bit fields are always boolean after
+/// semantic checking; only their spelling and declaration order remain
+/// relevant to code generation.
+pub const PackedBitsFieldFact = struct {
+    spelling: []const u8,
+};
+
+/// Syntax-free packed-bits declaration ingress. The representation and field
+/// order have already been checked by the frontend. Backends may materialize
+/// a narrow rendering view from this fact, but must not retain the source
+/// declaration as an ingress payload.
+pub const PackedBitsFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    repr_ty: ValueType,
+    repr_type_id: SignatureTypeId,
+    fields: []const PackedBitsFieldFact,
+};
+
 /// Syntax-free scalar value already evaluated by the frontend for a `const`
 /// global initializer.  This deliberately excludes aggregates and enum tags:
 /// their rendering still depends on transitional aggregate/type artifacts.
@@ -4168,6 +4187,7 @@ pub const Module = struct {
     checked_globals: []CheckedGlobalFact = &.{},
     type_aliases: []TypeAliasFact = &.{},
     enums: []EnumFact = &.{},
+    packed_bits: []PackedBitsFact = &.{},
     global_initializer_facts: []GlobalInitializerFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
@@ -4258,6 +4278,8 @@ pub const Module = struct {
         if (self.type_aliases.len != 0) self.allocator.free(self.type_aliases);
         for (self.enums) |enum_fact| if (enum_fact.cases.len != 0) self.allocator.free(enum_fact.cases);
         if (self.enums.len != 0) self.allocator.free(self.enums);
+        for (self.packed_bits) |packed_bits_fact| if (packed_bits_fact.fields.len != 0) self.allocator.free(packed_bits_fact.fields);
+        if (self.packed_bits.len != 0) self.allocator.free(self.packed_bits);
         if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);

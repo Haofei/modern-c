@@ -388,6 +388,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     defer ctx.deinit();
     try ctx.collectTypeAliasFacts();
     try ctx.collectEnumFacts();
+    try ctx.collectPackedBitsFacts();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
     try ctx.collectCheckedScalarGlobals();
     var reflect_env = ctx.reflectEnv();
@@ -563,10 +564,6 @@ const LlvmEmitter = struct {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
-                .packed_bits_decl => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
-                    .repr = packed_bits.repr,
-                    .fields = packed_bits.fields,
-                }),
                 .struct_decl => |struct_decl| {
                     if (struct_decl.type_params.len != 0) continue;
                     if (struct_decl.abi) |abi| {
@@ -611,6 +608,20 @@ const LlvmEmitter = struct {
         }
     }
 
+    /// Packed-bits rendering views are derived from module-owned checked
+    /// facts. No declaration artifact carries a packed-bits AST payload.
+    fn collectPackedBitsFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.packed_bits) |fact| {
+            const packed_bits = try signature_type_materializer.packedBitsDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectPackedBits(packed_bits);
+        }
+    }
+
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
@@ -639,7 +650,6 @@ const LlvmEmitter = struct {
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .struct_decl => {},

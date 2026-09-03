@@ -79,6 +79,38 @@ test "LLVM derives enums from checked module facts" {
     try expectContains(output.items, "ret i8 -1");
 }
 
+test "LLVM derives packed bits from checked module facts" {
+    const source =
+        \\packed bits Flags: u8 { ready: bool, busy: bool }
+        \\fn flags(value: Flags) -> bool { return value.ready; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_packed_bits_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.packed_bits.len);
+
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_packed_bits_facts.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "define internal i1 @flags(i8 %value)");
+}
+
 test "LLVM canonical MIR renders scalar closure capture through a thunk" {
     const source =
         \\fn add_scalar(env: u32, x: u32) -> u32 { return env + x; }

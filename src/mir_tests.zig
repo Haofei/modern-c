@@ -3827,6 +3827,38 @@ test "MIR enum facts are syntax-free and fail closed" {
     try std.testing.expectError(error.InvalidMirEnumFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "MIR packed-bits facts are syntax-free and fail closed" {
+    const source =
+        \\packed bits Flags: u8 { ready: bool, busy: bool }
+        \\fn identity(value: Flags) -> Flags { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_packed_bits_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.packed_bits.len);
+    const fact = module_mir.packed_bits[0];
+    const identity = module_mir.symbol_identities[fact.symbol_id.index()];
+    try std.testing.expectEqualStrings("Flags", identity.spelling);
+    try std.testing.expect(module_mir.signature_types.contains(fact.repr_type_id));
+    try std.testing.expectEqual(@as(usize, 2), fact.fields.len);
+    try std.testing.expectEqualStrings("ready", fact.fields[0].spelling);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.packed_bits[0].repr_type_id;
+    module_mir.packed_bits[0].repr_type_id = .invalid;
+    defer module_mir.packed_bits[0].repr_type_id = saved;
+    try std.testing.expectError(error.InvalidMirPackedBitsFacts, mir.validateLoweringAdmission(module_mir));
+
+    module_mir.packed_bits[0].repr_type_id = saved;
+    const mutable_fields = @constCast(module_mir.packed_bits[0].fields);
+    const saved_spelling = mutable_fields[1].spelling;
+    mutable_fields[1].spelling = "ready";
+    defer mutable_fields[1].spelling = saved_spelling;
+    try std.testing.expectError(error.InvalidMirPackedBitsFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
     const source =
         \\fn const_index(a: [4]u32) -> u32 {
