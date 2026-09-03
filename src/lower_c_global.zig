@@ -22,9 +22,9 @@ const isStructLiteralExpr = lower_c_const.isStructLiteralExpr;
 const staticCInitializer = lower_c_const.staticCInitializer;
 const staticCInitializerRef = lower_c_const.staticCInitializerRef;
 // The global emitter receives this only as a backend-local materialization of
-// a SignatureTypeId. Keeping the alias tied to the existing target fact avoids
+// a SignatureTypeId. Keeping the alias tied to the legacy instruction payload avoids
 // adding another source-syntax-shaped declaration boundary here.
-const BackendLocalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
+const BackendLocalTypeExpr = std.meta.Child(@TypeOf(@as(mir.Instruction, undefined).target_ty));
 
 pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;

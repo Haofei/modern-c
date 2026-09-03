@@ -494,7 +494,7 @@ EXACT_FILE_COUNTS = {
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactById("): 1,
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtWithModuleFallback("): 0,
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtCurrentSpan("): 1,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactMatchingType("): 1,
+    ("src/mir_source_bridge.zig", "pub fn targetTypeFactMatchingType("): 0,
     ("src/mir_source_bridge.zig", "pub fn atomicInitPayloadTypeAt("): 1,
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtOwnedWithModuleFallback("): 0,
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtOwnedCurrentSpan("): 1,

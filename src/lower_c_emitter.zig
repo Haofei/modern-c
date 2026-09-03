@@ -17,7 +17,24 @@ const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
-const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
+const TransitionalTypeExpr = std.meta.Child(@TypeOf(@as(mir.Instruction, undefined).target_ty));
+
+/// Ephemeral legacy rendering view.  MIR facts retain only a
+/// `SignatureTypeId`; this view is reconstructed from the module-owned table
+/// at the C syntax boundary and is never stored in MIR or artifacts.
+const MaterializedTargetTypeFact = struct {
+    kind: mir.TargetTypeKind,
+    target_ty: TransitionalTypeExpr,
+    result_ty: mir.ValueType,
+    typed_result_ty: mir.TypeId,
+    typed_span_id: mir.SpanId,
+    typed_callee_span_id: mir.SpanId,
+    typed_operand_value_id: mir.ValueId,
+    aggregate_construction: ?mir.AggregateConstructionKind,
+    target_index: ?usize,
+    typed_target_owner_id: mir.SymbolId,
+    source: mir.SourcePoint,
+};
 
 const lower_c_type = @import("lower_c_type.zig");
 const numeric = @import("numeric.zig");
@@ -702,6 +719,7 @@ pub const CEmitter = struct {
         // than retaining AST TypeExpr payloads on MIR functions.
         for (self.mir_module.functions) |function| {
             for (function.body_signature_type_ids) |id| try self.emitSignatureTypeDefinition(id);
+            for (function.target_type_facts) |fact| try self.emitSignatureTypeDefinition(fact.target_type_id);
         }
     }
 
@@ -3046,7 +3064,7 @@ pub const CEmitter = struct {
     }
 
     fn collectMirFunctionTypes(self: *CEmitter, fn_mir: *const mir.Function) !void {
-        for (fn_mir.target_type_facts) |fact| try self.collectTypeArtifacts(fact.target_ty);
+        for (fn_mir.target_type_facts) |fact| try self.emitSignatureTypeDefinition(fact.target_type_id);
     }
 
     fn collectTypeArtifacts(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {
@@ -4381,7 +4399,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn nullableRepresentationFromTargetFact(self: *CEmitter, fact: mir.TargetTypeFact) !NullableRepresentation {
+    fn nullableRepresentationFromTargetFact(self: *CEmitter, fact: MaterializedTargetTypeFact) !NullableRepresentation {
         const from_fact: NullableRepresentation = switch (fact.result_ty) {
             .nullable_value => .value,
             .nullable_dyn_trait => .dyn_trait,
@@ -6467,25 +6485,45 @@ pub const CEmitter = struct {
 
     fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected_payload_ty = lower_c_shape.atomicPayloadOfType(self.resolveAliasType(expected_result_ty)) orelse return null;
-        return mir_source_bridge.atomicInitPayloadTypeAt(self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
+        return mir_source_bridge.atomicInitPayloadTypeAt(self.scratch.allocator(), self.currentMirFunction(), self.mir_module.signature_types, &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
-    fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span);
+    fn materializeTargetTypeFact(self: *CEmitter, fact: mir.TargetTypeFact) ?MaterializedTargetTypeFact {
+        const target_ty = self.signatureTypeExpr(fact.target_type_id, .{ .offset = 0, .len = 0, .line = 0, .column = 0 }) catch return null;
+        return .{
+            .kind = fact.kind,
+            .target_ty = target_ty,
+            .result_ty = fact.result_ty,
+            .typed_result_ty = fact.typed_result_ty,
+            .typed_span_id = fact.typed_span_id,
+            .typed_callee_span_id = fact.typed_callee_span_id,
+            .typed_operand_value_id = fact.typed_operand_value_id,
+            .aggregate_construction = fact.aggregate_construction,
+            .target_index = fact.target_index,
+            .typed_target_owner_id = fact.typed_target_owner_id,
+            .source = fact.source,
+        };
+    }
+
+    fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?MaterializedTargetTypeFact {
+        const fact = mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span) orelse return null;
+        return self.materializeTargetTypeFact(fact);
     }
 
     fn mirFloatTargetTypeAt(self: *CEmitter, span: anytype) ?mir.ValueType {
         return mir_source_bridge.floatTargetTypeAtCurrentSpan(self.currentMirFunction(), span);
     }
 
-    fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactMatchingType(self.currentMirFunction(), &self.type_aliases, kind, span, expected_ty);
+    fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?MaterializedTargetTypeFact {
+        const fact = self.mirTargetTypeFactAt(kind, span) orelse return null;
+        return if (type_bridge.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) fact else null;
     }
 
-    fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?MaterializedTargetTypeFact {
         const function = self.currentMirFunction() orelse return null;
         const owner_id = mir.targetOwnerIdBySpelling(function.*, target_owner) orelse return null;
-        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(function, kind, span, owner_id, target_index);
+        const fact = mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(function, kind, span, owner_id, target_index) orelse return null;
+        return self.materializeTargetTypeFact(fact);
     }
 
     fn mirConstGetIndexAt(self: *CEmitter, span: ast_bridge.Span) ?usize {
@@ -6504,7 +6542,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn validateMirStructLiteralConstruction(self: *CEmitter, fact: mir.TargetTypeFact) !mir.AggregateConstructionKind {
+    fn validateMirStructLiteralConstruction(self: *CEmitter, fact: MaterializedTargetTypeFact) !mir.AggregateConstructionKind {
         const construction = fact.aggregate_construction orelse return error.UnsupportedCEmission;
         const resolved = self.resolveAliasType(fact.target_ty);
         const name = typeName(resolved) orelse return error.UnsupportedCEmission;

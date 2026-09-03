@@ -389,6 +389,9 @@ pub const Instruction = struct {
     // Target-type instructions retain the complete semantic type separately
     // from their runtime representation.
     target_ty: ?ast.TypeExpr = null,
+    /// Module-owned source type shape for target-type instructions.  This is
+    /// the verifier join key for the syntax-free target-type fact.
+    target_type_id: SignatureTypeId = .invalid,
     aggregate_construction: ?AggregateConstructionKind = null,
     const_index: ?usize = null,
     target_index: ?usize = null,
@@ -3584,7 +3587,11 @@ pub const AggregateConstructionKind = enum {
 
 pub const TargetTypeFact = struct {
     kind: TargetTypeKind,
-    target_ty: ast.TypeExpr,
+    /// Module-owned, syntax-free declaration shape for this target.  The
+    /// frontend interns it while AST is available; codegen may materialize a
+    /// transient legacy view from `Module.signature_types`, but the fact never
+    /// retains an AST payload.
+    target_type_id: SignatureTypeId = .invalid,
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     typed_span_id: SpanId = .invalid,

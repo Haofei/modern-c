@@ -1359,7 +1359,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn targetTypeFactById(": 1,
         "pub fn targetTypeFactAtWithModuleFallback(": 0,
         "pub fn targetTypeFactAtCurrentSpan(": 1,
-        "pub fn targetTypeFactMatchingType(": 1,
+        "pub fn targetTypeFactMatchingType(": 0,
         "pub fn atomicInitPayloadTypeAt(": 1,
         "pub fn targetTypeFactAtOwnedWithModuleFallback(": 0,
         "pub fn targetTypeFactAtOwnedCurrentSpan(": 1,

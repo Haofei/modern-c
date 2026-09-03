@@ -20,7 +20,24 @@ const scalar_repr = @import("scalar_repr.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
-const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
+const TransitionalTypeExpr = std.meta.Child(@TypeOf(@as(mir.Instruction, undefined).target_ty));
+
+/// Ephemeral syntax view for legacy LLVM rendering.  The canonical
+/// target-type fact stores only `SignatureTypeId`; this is materialized from
+/// the verified module table at the final syntax boundary.
+const MaterializedTargetTypeFact = struct {
+    kind: mir.TargetTypeKind,
+    target_ty: TransitionalTypeExpr,
+    result_ty: mir.ValueType,
+    typed_result_ty: mir.TypeId,
+    typed_span_id: mir.SpanId,
+    typed_callee_span_id: mir.SpanId,
+    typed_operand_value_id: mir.ValueId,
+    aggregate_construction: ?mir.AggregateConstructionKind,
+    target_index: ?usize,
+    typed_target_owner_id: mir.SymbolId,
+    source: mir.SourcePoint,
+};
 
 const isIdentNamed = syntax_bridge.isIdentNamed;
 const typeName = type_bridge.typeName;
@@ -6308,11 +6325,29 @@ const LlvmEmitter = struct {
 
     fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected_payload_ty = lower_llvm_shape.atomicPayloadType(&self.type_aliases, self.resolveAliasType(expected_result_ty)) orelse return null;
-        return mir_source_bridge.atomicInitPayloadTypeAt(self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
+        return mir_source_bridge.atomicInitPayloadTypeAt(self.scratch.allocator(), self.currentMirFunction(), self.mir_module.signature_types, &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
-    fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span);
+    fn materializeTargetTypeFact(self: *LlvmEmitter, fact: mir.TargetTypeFact) ?MaterializedTargetTypeFact {
+        const target_ty = self.signatureTypeExpr(fact.target_type_id, .{ .offset = 0, .len = 0, .line = 0, .column = 0 }) catch return null;
+        return .{
+            .kind = fact.kind,
+            .target_ty = target_ty,
+            .result_ty = fact.result_ty,
+            .typed_result_ty = fact.typed_result_ty,
+            .typed_span_id = fact.typed_span_id,
+            .typed_callee_span_id = fact.typed_callee_span_id,
+            .typed_operand_value_id = fact.typed_operand_value_id,
+            .aggregate_construction = fact.aggregate_construction,
+            .target_index = fact.target_index,
+            .typed_target_owner_id = fact.typed_target_owner_id,
+            .source = fact.source,
+        };
+    }
+
+    fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?MaterializedTargetTypeFact {
+        const fact = mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span) orelse return null;
+        return self.materializeTargetTypeFact(fact);
     }
 
     fn mirFloatTargetTypeAt(self: *LlvmEmitter, span: anytype) ?mir.ValueType {
@@ -6363,10 +6398,11 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?MaterializedTargetTypeFact {
         const function = self.currentMirFunction() orelse return null;
         const owner_id = mir.targetOwnerIdBySpelling(function.*, target_owner) orelse return null;
-        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(function, kind, span, owner_id, target_index);
+        const fact = mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(function, kind, span, owner_id, target_index) orelse return null;
+        return self.materializeTargetTypeFact(fact);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast_bridge.Span) ?usize {

@@ -10,6 +10,7 @@ const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 const mir = @import("mir.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const MirFactsView = mir_facts_view.MirFactsView;
@@ -55,19 +56,7 @@ pub fn floatTargetTypeAtCurrentSpan(current: ?*const mir.Function, span: ast_bri
     return MirFactsView.init().floatTargetTypeAtCurrentSpan(current, mir.sourcePointFromSpan(span));
 }
 
-pub fn targetTypeFactMatchingType(current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
-    const function = current orelse return null;
-    const view = MirFactsView.init();
-    const query: mir_facts_view.TargetTypeFactQuery = .{ .kind = kind, .source = mir.sourcePointFromSpan(span) };
-    const resolved_expected = type_bridge.resolveAliasType(type_aliases, expected_ty);
-    for (function.target_type_facts) |fact| {
-        if (!view.targetTypeFactMatchesQuery(function, fact, query)) continue;
-        if (type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, fact.target_ty), resolved_expected)) return fact;
-    }
-    return null;
-}
-
-pub fn atomicInitPayloadTypeAt(current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr, expected_payload_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
+pub fn atomicInitPayloadTypeAt(allocator: std.mem.Allocator, current: ?*const mir.Function, signature_types: mir.SignatureTypeTable, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr, expected_payload_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     const function = current orelse return null;
     const view = MirFactsView.init();
     const source = mir.sourcePointFromSpan(span);
@@ -78,17 +67,19 @@ pub fn atomicInitPayloadTypeAt(current: ?*const mir.Function, type_aliases: *con
     var found_result = false;
     for (function.target_type_facts) |result_fact| {
         if (result_fact.target_index == null or !view.targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result, source, owner_id)) continue;
-        if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, result_fact.target_ty), resolved_result_ty)) continue;
+        const result_ty = signature_type_materializer.typeExpr(allocator, signature_types, result_fact.target_type_id, expected_result_ty.span) catch return null;
+        if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, result_ty), resolved_result_ty)) continue;
         found_result = true;
 
         var group_payload_ty: ?ast_bridge.TypeExpr = null;
         for (function.target_type_facts) |payload_fact| {
             if (payload_fact.target_index != result_fact.target_index or !view.targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload, source, owner_id)) continue;
-            if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, payload_fact.target_ty), resolved_expected_payload_ty)) return null;
+            const payload_ty = signature_type_materializer.typeExpr(allocator, signature_types, payload_fact.target_type_id, expected_payload_ty.span) catch return null;
+            if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, payload_ty), resolved_expected_payload_ty)) return null;
             if (group_payload_ty) |known| {
-                if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, known), type_bridge.resolveAliasType(type_aliases, payload_fact.target_ty))) return null;
+                if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, known), type_bridge.resolveAliasType(type_aliases, payload_ty))) return null;
             }
-            group_payload_ty = payload_fact.target_ty;
+            group_payload_ty = payload_ty;
         }
         const payload_ty = group_payload_ty orelse return null;
         if (matched_payload_ty) |known| {

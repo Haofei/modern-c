@@ -126,7 +126,7 @@
     "src/mir_model.zig": {
       "pub fn checkedGlobalInitializer": 1,
       "pub const TypeAliasFact = struct": 1,
-      "target_type_id: SignatureTypeId": 1,
+      "target_type_id: SignatureTypeId": 3,
       "pub const EnumFact = struct": 1,
       "repr_type_id: SignatureTypeId": 3,
       "pub const PackedBitsFact = struct": 1,

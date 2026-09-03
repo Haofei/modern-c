@@ -201,10 +201,10 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
         }
         for (function.target_type_facts) |fact| {
             const target_owner = mir.targetOwnerSpelling(function, fact.typed_target_owner_id) orelse "none";
-            try out.print(allocator, "target_type_fact fn={s} kind={s} target={s} result={s} typed_result={} typed_span={} aggregate={s} target_owner={s} typed_target_owner={} target_index={} ", .{
+            try out.print(allocator, "target_type_fact fn={s} kind={s} target_type_id={} result={s} typed_result={} typed_span={} aggregate={s} target_owner={s} typed_target_owner={} target_index={} ", .{
                 function.name,
                 @tagName(fact.kind),
-                mir_syntax.typeText(fact.target_ty),
+                typedIndexOrMax(fact.target_type_id),
                 fact.result_ty.name(),
                 typedIndexOrMax(fact.typed_result_ty),
                 typedIndexOrMax(fact.typed_span_id),

@@ -1484,7 +1484,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             .no_lang_trap = false,
                             .irq_context = false,
                         };
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -1605,7 +1605,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     checked.body_signature_type_ids = try body_types.finish(body);
                     var checked_body_signature_type_ids_unowned = true;
                     errdefer if (checked_body_signature_type_ids_unowned and checked.body_signature_type_ids.len != 0) allocator.free(checked.body_signature_type_ids);
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -2702,11 +2702,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             const aggregate_construction = if (fact.aggregate_construction) |kind| @tagName(kind) else "none";
             try out.print(
                 allocator,
-                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_result_ty_id={} typed_span_id={} typed_callee_span_id={} typed_operand_value_id={} typed_target_owner_id={}\n",
+                "mir target_type_fact fn={s} kind={s} target_type_id={} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_result_ty_id={} typed_span_id={} typed_callee_span_id={} typed_operand_value_id={} typed_target_owner_id={}\n",
                 .{
                     function.name,
                     @tagName(fact.kind),
-                    typeText(fact.target_ty),
+                    if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize),
                     fact.result_ty.name(),
                     aggregate_construction,
                     target_owner,
@@ -4856,7 +4856,7 @@ fn instructionRequiresKnownLoweringType(instruction: Instruction) bool {
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
     for (module.functions) |function| {
         for (function.target_type_facts) |fact| {
-            if (!targetTypeFactTypedIdentitiesValid(function, fact)) return error.InvalidMirTargetTypeFacts;
+            if (!targetTypeFactTypedIdentitiesValid(module.signature_types, function, fact)) return error.InvalidMirTargetTypeFacts;
             if (!targetTypeFactFamilyValid(fact)) return error.InvalidMirTargetTypeFacts;
         }
         for (function.blocks) |block| for (block.instructions) |instruction| {
@@ -4899,7 +4899,8 @@ fn targetTypeHasSourcePoint(line: usize, column: usize) bool {
     return line != 0 and column != 0;
 }
 
-fn targetTypeFactTypedIdentitiesValid(function: Function, fact: TargetTypeFact) bool {
+fn targetTypeFactTypedIdentitiesValid(signature_types: SignatureTypeTable, function: Function, fact: TargetTypeFact) bool {
+    if (!fact.target_type_id.isValid() or !signature_types.contains(fact.target_type_id)) return false;
     if (!fact.typed_result_ty.isValid()) return false;
     const result_index = fact.typed_result_ty.index();
     if (result_index >= function.type_identities.len) return false;
@@ -5016,8 +5017,9 @@ fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, r
 }
 
 fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool {
-    const expected = instruction.target_ty orelse return false;
-    return sema_type.sameTypeSyntax(expected, fact.target_ty) and fact.aggregate_construction == instruction.aggregate_construction;
+    return instruction.target_type_id.isValid() and
+        fact.target_type_id.eql(instruction.target_type_id) and
+        fact.aggregate_construction == instruction.aggregate_construction;
 }
 
 fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
@@ -5036,9 +5038,8 @@ fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction:
 }
 
 fn targetTypeInstructionsSyntaxMatch(left: Instruction, right: Instruction) bool {
-    const left_ty = left.target_ty orelse return false;
-    const right_ty = right.target_ty orelse return false;
-    return sema_type.sameTypeSyntax(left_ty, right_ty) and left.aggregate_construction == right.aggregate_construction;
+    return left.target_type_id.isValid() and right.target_type_id.isValid() and
+        left.target_type_id.eql(right.target_type_id) and left.aggregate_construction == right.aggregate_construction;
 }
 
 fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
@@ -5101,13 +5102,14 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
         if (!fact.typed_callee_span_id.eql(target.typed_callee_span_id)) continue;
         if (!fact.typed_operand_value_id.eql(target.typed_operand_value_id)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
+        if (!fact.target_type_id.eql(target.target_type_id)) continue;
         if (fact.source.line == target.source.line and fact.source.column == target.source.column and (target.kind != .expression_result or (fact.source.offset == target.source.offset and fact.source.len == target.source.len))) count += 1;
     }
     return count;
 }
 
 fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
-    var first: ?ast.TypeExpr = null;
+    var first: ?SignatureTypeId = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
@@ -5119,10 +5121,8 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
         if (first) |expected| {
-            if (!sema_type.sameTypeSyntax(expected, fact.target_ty)) return false;
-        } else {
-            first = fact.target_ty;
-        }
+            if (!expected.eql(fact.target_type_id)) return false;
+        } else first = fact.target_type_id;
     }
     return first != null;
 }
@@ -7428,6 +7428,7 @@ const FunctionBuilder = struct {
     traits: *const std.StringHashMap(ast.TraitDecl),
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    signature_types: *SignatureTypeTableBuilder,
     globals: *const std.StringHashMap(ValueType),
     global_type_exprs: *const std.StringHashMap(ast.TypeExpr),
     mutable_globals: *const std.StringHashMap(void),
@@ -7544,7 +7545,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -7575,6 +7576,7 @@ const FunctionBuilder = struct {
             .traits = traits,
             .const_fns = const_fns,
             .const_globals = const_globals,
+            .signature_types = signature_types,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
             .mutable_globals = mutable_globals,
@@ -7728,7 +7730,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -7755,6 +7757,7 @@ const FunctionBuilder = struct {
             .traits = traits,
             .const_fns = const_fns,
             .const_globals = const_globals,
+            .signature_types = signature_types,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
             .mutable_globals = mutable_globals,
@@ -17788,13 +17791,15 @@ const FunctionBuilder = struct {
 
     fn appendTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span) !void {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+        const target_type_id = try self.signature_types.internTypeExpr(target_ty, self.const_fns, self.const_globals);
         const instructions = &self.blocks.items[self.current].instructions;
         const typed_result_ty = instructions.items[instructions.items.len - 1].typed_result_ty;
         const typed_span_id = instructions.items[instructions.items.len - 1].typed_span_id;
         instructions.items[instructions.items.len - 1].target_ty = target_ty;
+        instructions.items[instructions.items.len - 1].target_type_id = target_type_id;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
-            .target_ty = target_ty,
+            .target_type_id = target_type_id,
             .result_ty = result_ty,
             .typed_result_ty = typed_result_ty,
             .typed_span_id = typed_span_id,
@@ -17811,16 +17816,18 @@ const FunctionBuilder = struct {
 
     fn appendOwnedTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, target_owner: []const u8, target_index: ?usize) !void {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+        const target_type_id = try self.signature_types.internTypeExpr(target_ty, self.const_fns, self.const_globals);
         const typed_target_owner_id = try self.internTargetOwnerId(target_owner);
         const instructions = &self.blocks.items[self.current].instructions;
         const typed_result_ty = instructions.items[instructions.items.len - 1].typed_result_ty;
         const typed_span_id = instructions.items[instructions.items.len - 1].typed_span_id;
         instructions.items[instructions.items.len - 1].target_ty = target_ty;
+        instructions.items[instructions.items.len - 1].target_type_id = target_type_id;
         instructions.items[instructions.items.len - 1].target_index = target_index;
         instructions.items[instructions.items.len - 1].typed_target_owner_id = typed_target_owner_id;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
-            .target_ty = target_ty,
+            .target_type_id = target_type_id,
             .result_ty = result_ty,
             .typed_result_ty = typed_result_ty,
             .typed_span_id = typed_span_id,

@@ -6044,6 +6044,31 @@ fn clearFloatFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     return error.TestUnexpectedResult;
 }
 
+fn signatureTypeIdByName(module_mir: *const mir.Module, target_name: []const u8) ?mir.SignatureTypeId {
+    for (module_mir.signature_types.shapes, 0..) |shape, index| switch (shape) {
+        .name => |name| if (std.mem.eql(u8, name, target_name)) return mir.SignatureTypeId.fromIndex(index),
+        else => {},
+    };
+    return null;
+}
+
+fn signaturePointerTypeIdWithMutability(module_mir: *const mir.Module, current: mir.SignatureTypeId, mutability: ast.Mutability) ?mir.SignatureTypeId {
+    const current_shape = module_mir.signature_types.get(current) orelse return null;
+    const current_pointer = switch (current_shape) {
+        .pointer => |pointer| pointer,
+        else => return null,
+    };
+    const expected: mir.TypeMutability = switch (mutability) {
+        .mut => .mut,
+        .@"const" => .@"const",
+    };
+    for (module_mir.signature_types.shapes, 0..) |shape, index| switch (shape) {
+        .pointer => |pointer| if (pointer.mutability == expected and pointer.child.eql(current_pointer.child)) return mir.SignatureTypeId.fromIndex(index),
+        else => {},
+    };
+    return null;
+}
+
 fn removeTargetTypeKindForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -6067,11 +6092,12 @@ fn removeTargetTypeKindForFunction(module_mir: *mir.Module, name: []const u8, ki
 }
 
 fn renameTargetTypeFactForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, target_name: []const u8) !void {
+    const target_type_id: mir.SignatureTypeId = signatureTypeIdByName(module_mir, target_name) orelse mir.SignatureTypeId.invalid;
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         for (function.target_type_facts) |*fact| {
             if (fact.kind != kind) continue;
-            fact.target_ty = .{ .span = fact.target_ty.span, .kind = .{ .name = .{ .text = target_name, .span = fact.target_ty.span } } };
+            fact.target_type_id = target_type_id;
             return;
         }
         return error.TestUnexpectedResult;
@@ -6104,11 +6130,12 @@ fn retargetTargetTypeResultForFunction(module_mir: *mir.Module, name: []const u8
 }
 
 fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, source_len: usize, target_name: []const u8) !void {
+    const target_type_id: mir.SignatureTypeId = signatureTypeIdByName(module_mir, target_name) orelse mir.SignatureTypeId.invalid;
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         for (function.target_type_facts) |*fact| {
             if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
-            fact.target_ty = .{ .span = fact.target_ty.span, .kind = .{ .name = .{ .text = target_name, .span = fact.target_ty.span } } };
+            fact.target_type_id = target_type_id;
             return;
         }
         return error.TestUnexpectedResult;
@@ -6121,11 +6148,7 @@ fn retargetPointerMutabilityFactAtOffsetForFunction(module_mir: *mir.Module, nam
         if (!std.mem.eql(u8, function.name, name)) continue;
         for (function.target_type_facts) |*fact| {
             if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
-            const pointer = switch (fact.target_ty.kind) {
-                .pointer => |node| node,
-                else => return error.TestUnexpectedResult,
-            };
-            fact.target_ty.kind = .{ .pointer = .{ .mutability = mutability, .child = pointer.child } };
+            fact.target_type_id = signaturePointerTypeIdWithMutability(module_mir, fact.target_type_id, mutability) orelse return error.TestUnexpectedResult;
             return;
         }
         return error.TestUnexpectedResult;
