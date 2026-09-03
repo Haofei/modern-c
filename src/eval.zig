@@ -630,6 +630,9 @@ pub const ComptimeDeclarations = struct {
     /// Syntax-free alias targets paired with `signature_types`. This is the
     /// complete alias declaration ingress for artifact-backed codegen.
     type_alias_facts: []const mir.TypeAliasFact = &.{},
+    /// Complete ordinary-aggregate declaration ingress for artifact-backed
+    /// codegen and const evaluation.
+    struct_facts: []const mir.StructFact = &.{},
     symbol_identities: []const mir.SymbolIdentity = &.{},
     comptime_functions: ComptimeFunctionDeclarations = .empty,
 
@@ -657,10 +660,12 @@ pub const ComptimeDeclarations = struct {
         artifacts: CgDeclArtifacts,
         signature_types: mir.SignatureTypeTable,
         type_alias_facts: []const mir.TypeAliasFact,
+        struct_facts: []const mir.StructFact,
         symbol_identities: []const mir.SymbolIdentity,
     ) ComptimeDeclarations {
         var declarations = fromCodegenArtifactsWithSignatureTypes(artifacts, signature_types);
         declarations.type_alias_facts = type_alias_facts;
+        declarations.struct_facts = struct_facts;
         declarations.symbol_identities = symbol_identities;
         return declarations;
     }
@@ -1202,14 +1207,15 @@ fn moduleStructDecl(scope: *const ComptimeScope, name: []const u8) ?ast.StructDe
         }
         return null;
     }
-    if (declarations.decl_artifacts) |decl_artifacts| {
-        for (decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl,
-            },
-            else => {},
+    for (declarations.struct_facts) |fact| {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= declarations.symbol_identities.len) continue;
+        const identity = declarations.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or !std.mem.eql(u8, identity.spelling, name)) continue;
+        const types = declarations.signature_types orelse return null;
+        return signature_type_materializer.structDecl(scope.bindings.allocator, types, declarations.symbol_identities, fact) catch |err| {
+            if (err == error.OutOfMemory) scope.recordOom();
+            return null;
         };
-        return null;
     }
     for (declarations.structs) |struct_decl| {
         if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl;

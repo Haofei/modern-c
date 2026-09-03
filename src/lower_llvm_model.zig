@@ -72,6 +72,12 @@ pub const TaggedUnionInfo = struct {
     layout: TaggedUnionLayout,
 };
 
+pub const StructInfo = struct {
+    decl: ast_bridge.StructDecl,
+    storage_size: ?usize,
+    storage_alignment: ?usize,
+};
+
 pub const MmioFieldInfo = struct {
     storage_ty: ast_bridge.TypeExpr,
     value_ty: ast_bridge.TypeExpr,

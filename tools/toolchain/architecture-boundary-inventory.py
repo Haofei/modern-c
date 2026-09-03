@@ -150,7 +150,7 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "type_decl_artifacts: []const TypeDeclArtifact"): 0,
     ("src/declaration_artifacts.zig", "pub const DeclArtifact = union(enum)"): 1,
     ("src/declaration_artifacts.zig", "pub const TypeDeclArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "pub const TransitionalTypeDeclArtifact = union(enum)"): 1,
+    ("src/declaration_artifacts.zig", "pub const TransitionalTypeDeclArtifact = union(enum)"): 0,
     ("src/declaration_artifacts.zig", "pub const FunctionArtifact = struct"): 1,
     ("src/declaration_artifacts.zig", "    fn_decl: ast.FnDecl,"): 0,
     ("src/declaration_artifacts.zig", "pub const GlobalArtifact = struct"): 1,

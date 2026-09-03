@@ -122,6 +122,8 @@ pub const OverlayUnionFact = mir_model.OverlayUnionFact;
 pub const OverlayUnionFieldFact = mir_model.OverlayUnionFieldFact;
 pub const TaggedUnionFact = mir_model.TaggedUnionFact;
 pub const TaggedUnionCaseFact = mir_model.TaggedUnionCaseFact;
+pub const StructFact = mir_model.StructFact;
+pub const StructFieldFact = mir_model.StructFieldFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -1309,6 +1311,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (tagged_union_facts.items) |tagged_union_fact| if (tagged_union_fact.cases.len != 0) allocator.free(tagged_union_fact.cases);
         tagged_union_facts.deinit(allocator);
     }
+    var struct_facts: std.ArrayList(StructFact) = .empty;
+    errdefer {
+        for (struct_facts.items) |struct_fact| {
+            if (struct_fact.type_params.len != 0) allocator.free(struct_fact.type_params);
+            if (struct_fact.fields.len != 0) allocator.free(struct_fact.fields);
+        }
+        struct_facts.deinit(allocator);
+    }
     var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
     errdefer {
         for (global_initializer_facts.items) |fact| fact.deinit(allocator);
@@ -1402,6 +1412,37 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     .source_id = typed_source_id,
                     .layout = layout,
                     .cases = cases,
+                });
+            },
+            .struct_decl => |struct_decl| {
+                const summary = structs.get(struct_decl.name.text) orelse return error.InvalidMirStructFacts;
+                const storage = mir_reflect.aggregateStorageLayout(&reflect_env, summary);
+                if (struct_decl.is_c_union and storage == null) return error.InvalidMirStructFacts;
+                const type_params = try allocator.alloc([]const u8, struct_decl.type_params.len);
+                errdefer allocator.free(type_params);
+                for (struct_decl.type_params, 0..) |param, index| type_params[index] = param.text;
+                const fields = try allocator.alloc(StructFieldFact, struct_decl.fields.len);
+                errdefer allocator.free(fields);
+                for (struct_decl.fields, 0..) |field, index| {
+                    const layout = mir_reflect.aggregateFieldLayout(&reflect_env, summary, field);
+                    fields[index] = .{
+                        .spelling = field.name.text,
+                        .type_id = try signature_types.internTypeExpr(field.ty, &const_fns, &const_globals),
+                        .explicit_offset = if (field.offset) |offset| @intCast(offset) else null,
+                        .offset = if (layout) |value| value.offset else null,
+                        .size = if (layout) |value| value.size else null,
+                        .alignment = if (layout) |value| value.alignment else null,
+                    };
+                }
+                try struct_facts.append(allocator, .{
+                    .symbol_id = try internSymbolId(&symbol_ids, struct_decl.name.text),
+                    .source_id = typed_source_id,
+                    .storage_size = if (storage) |value| value.size else null,
+                    .storage_alignment = if (storage) |value| value.alignment else null,
+                    .is_c_union = struct_decl.is_c_union,
+                    .is_mmio = if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false,
+                    .type_params = type_params,
+                    .fields = fields,
                 });
             },
             .type_alias => |alias| {
@@ -1712,6 +1753,15 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirTaggedUnionFacts;
         identity.kind = .type_;
     }
+    for (struct_facts.items) |struct_fact| {
+        if (!struct_fact.symbol_id.isValid() or struct_fact.symbol_id.index() >= symbol_identities.len or
+            (struct_fact.is_c_union and (struct_fact.storage_size == null or struct_fact.storage_alignment == null)))
+            return error.InvalidMirStructFacts;
+        const identity = &symbol_identities[struct_fact.symbol_id.index()];
+        if (!identity.id.eql(struct_fact.symbol_id) or (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirStructFacts;
+        identity.kind = .type_;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1752,6 +1802,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (tagged_union_facts_slice) |tagged_union_fact| if (tagged_union_fact.cases.len != 0) allocator.free(tagged_union_fact.cases);
         allocator.free(tagged_union_facts_slice);
     }
+    const struct_facts_slice = try struct_facts.toOwnedSlice(allocator);
+    errdefer {
+        for (struct_facts_slice) |struct_fact| {
+            if (struct_fact.type_params.len != 0) allocator.free(struct_fact.type_params);
+            if (struct_fact.fields.len != 0) allocator.free(struct_fact.fields);
+        }
+        allocator.free(struct_facts_slice);
+    }
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
@@ -1772,6 +1830,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .packed_bits = packed_bits_facts_slice,
         .overlay_unions = overlay_union_facts_slice,
         .tagged_unions = tagged_union_facts_slice,
+        .structs = struct_facts_slice,
         .global_initializer_facts = global_initializer_facts_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
@@ -4417,6 +4476,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirPackedBitsFacts,
     InvalidMirOverlayUnionFacts,
     InvalidMirTaggedUnionFacts,
+    InvalidMirStructFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4450,6 +4510,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validatePackedBitsFactsForLowering(module);
     try validateOverlayUnionFactsForLowering(module);
     try validateTaggedUnionFactsForLowering(module);
+    try validateStructFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
@@ -4578,6 +4639,40 @@ fn validateTaggedUnionFactsForLowering(module: Module) error{InvalidMirTaggedUni
         for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
         for (module.packed_bits) |packed_bits_fact| if (packed_bits_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
         for (module.overlay_unions) |overlay_union_fact| if (overlay_union_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
+    }
+}
+
+fn validateStructFactsForLowering(module: Module) error{InvalidMirStructFacts}!void {
+    for (module.structs, 0..) |fact, index| {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
+            (fact.is_c_union and (fact.storage_size == null or fact.storage_alignment == null)))
+            return error.InvalidMirStructFacts;
+        const identity = module.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidMirStructFacts;
+        if (fact.source_id.isValid() and (fact.source_id.index() >= module.source_identities.len or
+            !module.source_identities[fact.source_id.index()].id.eql(fact.source_id)))
+            return error.InvalidMirStructFacts;
+        for (fact.type_params, 0..) |param, param_index| {
+            if (param.len == 0) return error.InvalidMirStructFacts;
+            for (fact.type_params[0..param_index]) |prior| if (std.mem.eql(u8, prior, param)) return error.InvalidMirStructFacts;
+        }
+        for (fact.fields, 0..) |field, field_index| {
+            if (field.spelling.len == 0 or !field.type_id.isValid() or !module.signature_types.contains(field.type_id))
+                return error.InvalidMirStructFacts;
+            if (field.offset) |offset| if (fact.storage_size) |storage_size| if (offset > storage_size) return error.InvalidMirStructFacts;
+            if (field.size) |size| if (size == 0) return error.InvalidMirStructFacts;
+            if (field.alignment) |alignment| if (alignment == 0) return error.InvalidMirStructFacts;
+            if (field.offset) |offset| if (field.size) |size| if (fact.storage_size) |storage_size| if (size > storage_size - offset) return error.InvalidMirStructFacts;
+            if (field.explicit_offset) |explicit_offset| if (field.offset) |offset| if (!fact.is_c_union and explicit_offset != offset) return error.InvalidMirStructFacts;
+            if (fact.is_c_union and field.offset != null and field.offset.? != 0) return error.InvalidMirStructFacts;
+            for (fact.fields[0..field_index]) |prior| if (std.mem.eql(u8, prior.spelling, field.spelling)) return error.InvalidMirStructFacts;
+        }
+        for (module.structs[0..index]) |prior| if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
+        for (module.type_aliases) |alias| if (alias.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
+        for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
+        for (module.packed_bits) |packed_bits_fact| if (packed_bits_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
+        for (module.overlay_unions) |overlay_union_fact| if (overlay_union_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
+        for (module.tagged_unions) |tagged_union_fact| if (tagged_union_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
     }
 }
 

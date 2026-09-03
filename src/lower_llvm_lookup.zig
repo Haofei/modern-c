@@ -9,15 +9,16 @@ const type_bridge = @import("type_bridge.zig");
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
 const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
+const StructInfo = lower_llvm_model.StructInfo;
 
 pub fn structDeclForType(
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
-    struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
+    struct_types: *const std.StringHashMap(StructInfo),
     ty: ast_bridge.TypeExpr,
 ) ?ast_bridge.StructDecl {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
-        .name => |name| struct_types.get(name.text),
+        .name => |name| if (struct_types.get(name.text)) |info| info.decl else null,
         else => null,
     };
 }

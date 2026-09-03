@@ -186,6 +186,12 @@ const StructLayout = struct {
     field_offset: ?i128,
 };
 
+pub const AggregateFieldLayout = struct {
+    offset: usize,
+    size: usize,
+    alignment: usize,
+};
+
 pub const AggregateStorageLayout = struct {
     size: usize,
     alignment: usize,
@@ -213,6 +219,21 @@ pub fn aggregateStorageLayout(env: *const ReflectEnv, info: StructSummary) ?Aggr
     return .{
         .size = std.math.cast(usize, layout.size) orelse return null,
         .alignment = std.math.cast(usize, layout.alignment) orelse return null,
+    };
+}
+
+/// Checked field extent within a frontend aggregate summary.  This exposes
+/// the same layout computation used for the total storage fact so declaration
+/// facts never need a backend-local offset calculation.
+pub fn aggregateFieldLayout(env: *const ReflectEnv, info: StructSummary, field: ast.Field) ?AggregateFieldLayout {
+    const layout = comptimeStructLayout(env, info, 0, field.name.text) orelse return null;
+    const field_offset = layout.field_offset orelse return null;
+    const field_storage = storageLayoutForType(env, field.ty) orelse return null;
+    if (field_offset < 0) return null;
+    return .{
+        .offset = std.math.cast(usize, field_offset) orelse return null,
+        .size = field_storage.size,
+        .alignment = field_storage.alignment,
     };
 }
 

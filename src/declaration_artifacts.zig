@@ -74,8 +74,9 @@ pub const EarlyDeclarationArtifacts = struct {
                     // on the ordinary codegen ingress.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .struct_decl => |struct_decl| {
-                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .struct_decl = struct_decl } });
+                .struct_decl => {
+                    // Ordinary aggregate shape/layout is a module-owned MIR
+                    // fact; preserve only source-map metadata here.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .enum_decl => {
@@ -288,11 +289,6 @@ fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalF
 pub const DeclArtifact = union(enum) {
     function: FunctionArtifact,
     global: GlobalArtifact,
-    transitional_type_decl: TransitionalTypeDeclArtifact,
-};
-
-pub const TransitionalTypeDeclArtifact = union(enum) {
-    struct_decl: ast.StructDecl,
 };
 
 pub const SourceMapArtifact = union(enum) {
@@ -424,10 +420,9 @@ test "declaration artifacts collect from resolved declaration stream" {
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer from_resolved.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 2), from_resolved.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 1), from_resolved.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 3), from_resolved.source_map_artifacts.len);
     var saw_function = false;
-    var saw_struct = false;
     for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
         .function => |function| {
             try std.testing.expectEqualStrings("inc", function.signature.name.text);
@@ -438,13 +433,8 @@ test "declaration artifacts collect from resolved declaration stream" {
             saw_function = true;
         },
         .global => return error.TestUnexpectedResult,
-        .transitional_type_decl => |type_decl| {
-            try std.testing.expectEqualStrings("Box", type_decl.struct_decl.name.text);
-            saw_struct = true;
-        },
     };
     try std.testing.expect(saw_function);
-    try std.testing.expect(saw_struct);
 }
 
 test "declaration artifacts omit folded scalar const globals but retain source-map rows" {
@@ -473,6 +463,5 @@ test "declaration artifacts omit folded scalar const globals but retain source-m
     for (artifacts.decl_artifacts) |artifact| switch (artifact) {
         .global => return error.TestUnexpectedResult,
         .function => |function| try std.testing.expectEqualStrings("read", function.signature.name.text),
-        else => return error.TestUnexpectedResult,
     };
 }

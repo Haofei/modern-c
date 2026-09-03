@@ -4140,6 +4140,29 @@ pub const TaggedUnionFact = struct {
     cases: []const TaggedUnionCaseFact,
 };
 
+pub const StructFieldFact = struct {
+    spelling: []const u8,
+    type_id: SignatureTypeId,
+    explicit_offset: ?usize,
+    offset: ?usize = null,
+    size: ?usize = null,
+    alignment: ?usize = null,
+};
+
+/// Syntax-free ordinary-aggregate declaration ingress.  All field shapes and
+/// storage facts are frontend-owned; C/LLVM may only materialize a rendering
+/// view from these rows for remaining expression emitters.
+pub const StructFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    storage_size: ?usize = null,
+    storage_alignment: ?usize = null,
+    is_c_union: bool,
+    is_mmio: bool,
+    type_params: []const []const u8,
+    fields: []const StructFieldFact,
+};
+
 /// Syntax-free scalar value already evaluated by the frontend for a `const`
 /// global initializer.  This deliberately excludes aggregates and enum tags:
 /// their rendering still depends on transitional aggregate/type artifacts.
@@ -4325,6 +4348,7 @@ pub const Module = struct {
     packed_bits: []PackedBitsFact = &.{},
     overlay_unions: []OverlayUnionFact = &.{},
     tagged_unions: []TaggedUnionFact = &.{},
+    structs: []StructFact = &.{},
     global_initializer_facts: []GlobalInitializerFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
@@ -4469,6 +4493,11 @@ pub const Module = struct {
         if (self.overlay_unions.len != 0) self.allocator.free(self.overlay_unions);
         for (self.tagged_unions) |tagged_union_fact| if (tagged_union_fact.cases.len != 0) self.allocator.free(tagged_union_fact.cases);
         if (self.tagged_unions.len != 0) self.allocator.free(self.tagged_unions);
+        for (self.structs) |struct_fact| {
+            if (struct_fact.type_params.len != 0) self.allocator.free(struct_fact.type_params);
+            if (struct_fact.fields.len != 0) self.allocator.free(struct_fact.fields);
+        }
+        if (self.structs.len != 0) self.allocator.free(self.structs);
         for (self.global_initializer_facts) |fact| fact.deinit(self.allocator);
         if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);

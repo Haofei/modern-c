@@ -77,7 +77,7 @@ from returning.
 | P0 | Function-body fallback | complete | Both backends consume only verified executable MIR; legacy body emitters and fallback request payloads are absent. |
 | P0 | Function/body type payloads | complete | Callable signatures and body declaration-shape dependencies are `SignatureTypeId`s; no body `ast.TypeExpr` fact exists. |
 | P0 | Global declarations | active | Every admitted global has a syntax-free initializer plan; `GlobalArtifact` and `GlobalInitFacts.init` are deleted. |
-| P0 | Type declarations | active | Struct, enum, tagged union, overlay union, packed bits, and aliases use checked facts; `TransitionalTypeDeclArtifact` is deleted. |
+| P0 | Type declarations | complete | Struct, enum, tagged union, overlay union, packed bits, and aliases use checked facts; `TransitionalTypeDeclArtifact` is deleted. |
 | P1 | Trait/dynamic declaration ingress | complete | Qualified codegen rejects dynamic traits before lowering and retains no trait-method AST artifact. |
 | P1 | Backend comptime provider | blocked by globals | Comptime evaluation finishes before request construction; `ComptimeFunctionDeclarations` and backend `eval` imports are deleted. |
 | P1 | MIR compatibility projections | active | Canonical typed IDs replace AST/source/string double-writes one domain at a time; each removed field is ratcheted at zero. |
@@ -85,10 +85,9 @@ from returning.
 | P1 | Minimal CheckedProgram | complete | Syntax-free callable/global/signature facts are admitted before verified MIR without adding a second expression IR. |
 | P1 | Final backend request | blocked by globals/types/comptime | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
 
-Active work proceeds in dependency order: finish globals and type declarations,
-remove the backend comptime provider, delete remaining MIR compatibility
-projections, then close `LowerRequest`. Advanced language forms stay frozen
-during this cutover.
+Active work proceeds in dependency order: finish globals, remove the backend
+comptime provider, delete remaining MIR compatibility projections, then close
+`LowerRequest`. Advanced language forms stay frozen during this cutover.
 
 The callable-signature ingress is closed: parameter and return types are owned
 by `SignatureTypeTable`, and neither `FunctionParamFact` nor

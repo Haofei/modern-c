@@ -139,6 +139,7 @@ const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
 const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
 const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
+const StructInfo = lower_llvm_model.StructInfo;
 const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
 const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
 const MmioMapInfo = lower_llvm_model.MmioMapInfo;
@@ -312,6 +313,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         early_metadata,
         program.typed_mir.signature_types,
         program.typed_mir.type_aliases,
+        program.typed_mir.structs,
         program.typed_mir.symbol_identities,
     );
     const ksan = checks.ksan;
@@ -351,7 +353,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
         .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
         .tagged_unions = std.StringHashMap(TaggedUnionInfo).init(allocator),
-        .struct_types = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
+        .struct_types = std.StringHashMap(StructInfo).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
@@ -391,7 +393,8 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectPackedBitsFacts();
     try ctx.collectOverlayUnionFacts();
     try ctx.collectTaggedUnionFacts();
-    try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
+    try ctx.collectStructFacts();
+    try ctx.collectConstFunctions(comptime_declarations);
     try ctx.collectCheckedPlannedGlobals();
     var reflect_env = ctx.reflectEnv();
     try eval.collectConstGlobalsFromDeclarationsWithOptions(allocator, comptime_declarations, &ctx.const_fns, &ctx.const_globals, .{
@@ -399,7 +402,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .reflect_ctx = &reflect_env,
         .domains = &ctx.const_global_domains,
     });
-    try ctx.collectStructArtifacts();
     try ctx.collectFunctionGlobalArtifacts();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     try ctx.emitCollectedGlobals();
@@ -437,7 +439,7 @@ const LlvmEmitter = struct {
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
     overlay_unions: std.StringHashMap(OverlayUnionInfo) = undefined,
     tagged_unions: std.StringHashMap(TaggedUnionInfo) = undefined,
-    struct_types: std.StringHashMap(ast_bridge.StructDecl) = undefined,
+    struct_types: std.StringHashMap(StructInfo) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
     // closure's env slot is `ptr`, so the scalar is widened via `inttoptr` and the
@@ -556,24 +558,8 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn preRegisterTypeDeclsFromArtifacts(
-        self: *LlvmEmitter,
-        artifacts: CodegenDeclArtifacts,
-        comptime_facts: eval.ComptimeDeclarations,
-    ) !void {
+    fn collectConstFunctions(self: *LlvmEmitter, comptime_facts: eval.ComptimeDeclarations) !void {
         try eval.collectConstFunctionsFromDeclarations(comptime_facts, &self.const_fns);
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| {
-                    if (struct_decl.type_params.len != 0) continue;
-                    if (struct_decl.abi) |abi| {
-                        if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
-                    }
-                    try self.struct_types.put(struct_decl.name.text, struct_decl);
-                },
-            },
-            else => {},
-        };
     }
 
     /// This AST-shaped cache is derived only from the module-owned alias
@@ -649,16 +635,33 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn collectStructArtifacts(self: *LlvmEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| try self.collectStruct(struct_decl),
-            },
-            else => {},
-        };
+    fn collectStructFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.structs) |fact| {
+            const struct_decl = try signature_type_materializer.structDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            if (struct_decl.type_params.len != 0) continue;
+            try self.struct_types.put(struct_decl.name.text, .{
+                .decl = struct_decl,
+                .storage_size = fact.storage_size,
+                .storage_alignment = fact.storage_alignment,
+            });
+        }
+        for (self.mir_module.structs) |fact| {
+            const struct_decl = try signature_type_materializer.structDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectStructFact(struct_decl, fact);
+        }
     }
 
-    fn collectStruct(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) !void {
+    fn collectStructFact(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, fact: mir.StructFact) !void {
         if (struct_decl.type_params.len != 0) return;
         if (struct_decl.abi) |abi| {
             if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
@@ -670,7 +673,7 @@ const LlvmEmitter = struct {
                 _ = try self.llvmType(field.ty);
             }
         }
-        try self.struct_types.put(struct_decl.name.text, struct_decl);
+        try self.struct_types.put(struct_decl.name.text, .{ .decl = struct_decl, .storage_size = fact.storage_size, .storage_alignment = fact.storage_alignment });
     }
 
     fn collectEnum(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl) !void {
@@ -756,7 +759,6 @@ const LlvmEmitter = struct {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobal(global),
-            .transitional_type_decl => {},
         };
     }
 
@@ -9549,8 +9551,8 @@ const LlvmEmitter = struct {
                 try self.overlayLlvmType(info)
             else if (self.tagged_unions.get(name.text)) |union_info|
                 try self.taggedUnionLlvmType(union_info.decl)
-            else if (self.struct_types.get(name.text)) |struct_decl|
-                try self.structLlvmType(struct_decl)
+            else if (self.struct_types.get(name.text)) |struct_info|
+                try self.structLlvmType(struct_info.decl)
             else if (libraryScalarLlvmType(name.text)) |library_ty|
                 library_ty
             else
@@ -9643,7 +9645,7 @@ const LlvmEmitter = struct {
         if (self.packed_bits.get(name)) |info| return self.llvmType(info.repr);
         if (self.overlay_unions.get(name)) |info| return self.overlayLlvmType(info);
         if (self.tagged_unions.get(name)) |info| return self.taggedUnionLlvmType(info.decl);
-        if (self.struct_types.get(name)) |decl| return self.structLlvmType(decl);
+        if (self.struct_types.get(name)) |info| return self.structLlvmType(info.decl);
         if (scalar_repr.integer(name)) |integer| return std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{integer.bits});
         if (libraryScalarLlvmType(name)) |ty| return ty;
         return error.UnsupportedLlvmEmission;
@@ -10335,21 +10337,15 @@ const LlvmEmitter = struct {
     const CUnionStorageLayout = struct { count: usize, alignment: usize };
 
     fn cUnionStorageLayout(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) ?CUnionStorageLayout {
-        var max_size: i128 = 0;
-        var max_align: i128 = 1;
-        for (struct_decl.fields) |field| {
-            const size = self.comptimeSizeOf(field.ty, 0) orelse return null;
-            const alignment = self.comptimeAlignOf(field.ty, 0) orelse return null;
-            if (alignment <= 0) return null;
-            if (size > max_size) max_size = size;
-            if (alignment > max_align) max_align = alignment;
-        }
-        if (max_align != 1 and max_align != 2 and max_align != 4 and max_align != 8 and max_align != 16) return null;
-        const aligned_size = alignForward(max_size, max_align) orelse return null;
-        const count = @max(@as(i128, 1), @divExact(aligned_size, max_align));
+        const info = self.struct_types.get(struct_decl.name.text) orelse return null;
+        const storage_alignment = info.storage_alignment orelse return null;
+        const storage_size = info.storage_size orelse return null;
+        if (!struct_decl.is_c_union or storage_alignment == 0 or storage_size == 0) return null;
+        if (storage_alignment != 1 and storage_alignment != 2 and storage_alignment != 4 and storage_alignment != 8 and storage_alignment != 16) return null;
+        if (storage_size % storage_alignment != 0) return null;
         return .{
-            .count = std.math.cast(usize, count) orelse return null,
-            .alignment = std.math.cast(usize, max_align) orelse return null,
+            .count = @max(@as(usize, 1), storage_size / storage_alignment),
+            .alignment = storage_alignment,
         };
     }
 
@@ -10402,18 +10398,17 @@ const LlvmEmitter = struct {
     }
 
     fn mmioFieldOffset(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, field_name: []const u8) ?u64 {
-        var offset: i128 = 0;
-        for (struct_decl.fields) |field| {
-            const info = self.mmioFieldInfo(field) orelse return null;
-            const size = self.comptimeSizeOf(info.storage_ty, 0) orelse return null;
-            const alignment = self.comptimeAlignOf(info.storage_ty, 0) orelse return null;
-            if (field.offset) |explicit| {
-                offset = @intCast(explicit);
-            } else {
-                offset = alignForward(offset, alignment) orelse return null;
+        for (self.mir_module.structs) |fact| {
+            if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) continue;
+            const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+            if (!identity.id.eql(fact.symbol_id) or !std.mem.eql(u8, identity.spelling, struct_decl.name.text)) continue;
+            if (!fact.is_mmio) return null;
+            for (fact.fields) |field| {
+                if (!std.mem.eql(u8, field.spelling, field_name)) continue;
+                const offset = field.offset orelse return null;
+                return std.math.cast(u64, offset);
             }
-            if (std.mem.eql(u8, field.name.text, field_name)) return @intCast(offset);
-            offset += size;
+            return null;
         }
         return null;
     }

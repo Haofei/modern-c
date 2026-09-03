@@ -4104,6 +4104,32 @@ test "MIR tagged-union facts are syntax-free and fail closed" {
     try std.testing.expectError(error.InvalidMirTaggedUnionFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "MIR struct facts are syntax-free and fail closed" {
+    const source =
+        \\struct Pair { left: u32, right: u16 }
+        \\fn identity(value: Pair) -> Pair { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_struct_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.structs.len);
+    const fact = module_mir.structs[0];
+    const identity = module_mir.symbol_identities[fact.symbol_id.index()];
+    try std.testing.expectEqualStrings("Pair", identity.spelling);
+    try std.testing.expectEqual(@as(usize, 2), fact.fields.len);
+    try std.testing.expectEqualStrings("left", fact.fields[0].spelling);
+    try std.testing.expect(module_mir.signature_types.contains(fact.fields[0].type_id));
+    try mir.validateLoweringAdmission(module_mir);
+
+    const mutable_fields = @constCast(module_mir.structs[0].fields);
+    const saved_type = mutable_fields[1].type_id;
+    mutable_fields[1].type_id = .invalid;
+    defer mutable_fields[1].type_id = saved_type;
+    try std.testing.expectError(error.InvalidMirStructFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
     const source =
         \\fn const_index(a: [4]u32) -> u32 {

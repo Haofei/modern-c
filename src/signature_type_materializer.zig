@@ -11,7 +11,7 @@ const ast = @import("ast.zig");
 const mir = @import("mir_model.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 
-pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact, InvalidOverlayUnionFact, InvalidTaggedUnionFact } || std.mem.Allocator.Error;
+pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact, InvalidOverlayUnionFact, InvalidTaggedUnionFact, InvalidStructFact } || std.mem.Allocator.Error;
 
 pub fn typeExpr(
     allocator: std.mem.Allocator,
@@ -210,5 +210,35 @@ pub fn taggedUnionDecl(
     return .{
         .name = .{ .text = identity.spelling, .span = span },
         .cases = cases,
+    };
+}
+
+/// Transitional rendering view for an ordinary aggregate.  All field shapes,
+/// offsets, and storage facts are owned by `StructFact`; this only rebuilds
+/// the AST-shaped input still required by expression rendering and const eval.
+pub fn structDecl(
+    allocator: std.mem.Allocator,
+    types: mir.SignatureTypeTable,
+    symbols: []const mir.SymbolIdentity,
+    fact: mir.StructFact,
+) Error!ast.StructDecl {
+    if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbols.len) return error.InvalidStructFact;
+    const identity = symbols[fact.symbol_id.index()];
+    if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidStructFact;
+    const span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+    const fields = try allocator.alloc(ast.Field, fact.fields.len);
+    for (fact.fields, 0..) |field, index| fields[index] = .{
+        .name = .{ .text = field.spelling, .span = span },
+        .ty = try typeExpr(allocator, types, field.type_id, span),
+        .offset = if (field.explicit_offset) |offset| @intCast(offset) else null,
+    };
+    const type_params = try allocator.alloc(ast.Ident, fact.type_params.len);
+    for (fact.type_params, 0..) |param, index| type_params[index] = .{ .text = param, .span = span };
+    return .{
+        .name = .{ .text = identity.spelling, .span = span },
+        .abi = if (fact.is_mmio) "mmio" else null,
+        .fields = fields,
+        .type_params = type_params,
+        .is_c_union = fact.is_c_union,
     };
 }

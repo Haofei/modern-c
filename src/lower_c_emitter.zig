@@ -412,6 +412,7 @@ pub const CEmitter = struct {
         try self.collectPackedBitsFacts();
         try self.collectOverlayUnionFacts();
         try self.collectTaggedUnionFacts();
+        try self.collectStructFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedPlannedGlobals();
@@ -425,6 +426,7 @@ pub const CEmitter = struct {
             artifacts,
             self.mir_module.signature_types,
             self.mir_module.type_aliases,
+            self.mir_module.structs,
             self.mir_module.symbol_identities,
         );
     }
@@ -504,6 +506,29 @@ pub const CEmitter = struct {
         }
     }
 
+    /// Ordinary aggregates are admitted as syntax-free module facts.  The
+    /// materialized declaration is a rendering/eval bridge only.
+    fn collectStructFacts(self: *CEmitter) !void {
+        for (self.mir_module.structs) |fact| {
+            const struct_decl = try signature_type_materializer.structDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
+        }
+        for (self.mir_module.structs) |fact| {
+            const struct_decl = try signature_type_materializer.structDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectStructFact(struct_decl);
+        }
+    }
+
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
@@ -518,9 +543,6 @@ pub const CEmitter = struct {
                 const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
                 const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
                 try self.const_global_widths.put(sig.name.text, bits);
-            },
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
             },
             else => {},
         };
@@ -559,9 +581,6 @@ pub const CEmitter = struct {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobalDeclArtifact(global),
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
-            },
         };
     }
 
@@ -575,12 +594,11 @@ pub const CEmitter = struct {
         try self.collectTypeArtifacts(ty);
     }
 
-    fn collectStructDeclArtifact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
+    fn collectStructFact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
         if (isMmioStructAbi(struct_decl)) {
             try self.collectMmioStruct(struct_decl);
             return;
         }
-        try self.structs.put(struct_decl.name.text, struct_decl);
         for (struct_decl.fields) |field| try self.collectTypeArtifacts(field.ty);
     }
 
@@ -652,16 +670,16 @@ pub const CEmitter = struct {
     }
 
     fn emitMmioStructTypes(self: *CEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| {
-                    if (self.mmio_structs.contains(struct_decl.name.text)) {
-                        try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
-                    }
-                },
-            },
-            else => {},
-        };
+        for (self.mir_module.structs) |fact| {
+            if (!fact.is_mmio) continue;
+            const struct_decl = try signature_type_materializer.structDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            if (self.mmio_structs.contains(struct_decl.name.text)) try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
+        }
         for (self.mir_module.checked_globals) |global| {
             if (self.mir_module.checkedGlobalInitializer(global) != null)
                 try self.emitSignatureTypeDefinition(global.signature_type_id);
@@ -678,7 +696,6 @@ pub const CEmitter = struct {
                 for (function.signature.params) |param| try self.emitSignatureTypeDefinition(param.type_id);
             },
             .global => |global| try self.emitSignatureTypeDefinition(global.signature.type_id),
-            else => {},
         };
         // Body-local declaration shapes arrive as syntax-free IDs.  Emit
         // their required aggregate typedefs from the same module table rather
@@ -1245,20 +1262,19 @@ pub const CEmitter = struct {
     // declaration; by-value embedding still relies on definition ordering.
     fn emitAggregateForwardDeclarations(self: *CEmitter) !void {
         var emitted = false;
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |struct_decl| {
-                    if (!self.structs.contains(struct_decl.name.text)) continue;
-                    // A `#[c_union]` is a real C `union`; its forward tag must
-                    // match its definition tag (`typedef union U U;`), not the
-                    // default `struct`.
-                    const keyword: []const u8 = if (struct_decl.is_c_union) "union" else "struct";
-                    try self.out.print(self.allocator, "typedef {s} {s} {s};\n", .{ keyword, struct_decl.name.text, struct_decl.name.text });
-                    emitted = true;
-                },
-            },
-            else => {},
-        };
+        for (self.mir_module.structs) |fact| {
+            if (fact.is_mmio) continue;
+            const struct_decl = try signature_type_materializer.structDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            if (!self.structs.contains(struct_decl.name.text)) return error.UnsupportedCEmission;
+            const keyword: []const u8 = if (struct_decl.is_c_union) "union" else "struct";
+            try self.out.print(self.allocator, "typedef {s} {s} {s};\n", .{ keyword, struct_decl.name.text, struct_decl.name.text });
+            emitted = true;
+        }
         for (self.mir_module.tagged_unions) |fact| {
             if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return error.UnsupportedCEmission;
             const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
@@ -1376,12 +1392,14 @@ pub const CEmitter = struct {
         var units: std.ArrayList(AggregateEmitUnit) = .empty;
         defer units.deinit(arena);
 
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
-            },
-            else => {},
-        };
+        for (self.mir_module.structs) |fact| {
+            if (fact.is_mmio) continue;
+            if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return error.UnsupportedCEmission;
+            const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+            if (!identity.id.eql(fact.symbol_id)) return error.UnsupportedCEmission;
+            const struct_decl = self.structs.get(identity.spelling) orelse return error.UnsupportedCEmission;
+            try units.append(arena, .{ .struct_decl = struct_decl });
+        }
         for (self.mir_module.tagged_unions) |fact| {
             if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return error.UnsupportedCEmission;
             const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
