@@ -821,7 +821,7 @@ const LlvmEmitter = struct {
         for (self.mir_module.functions, 0..) |fn_mir, function_index| {
             if (fn_mir.is_extern) continue;
             // Global initializer bodies are compiler-internal checked MIR, not
-            // callable declarations. They deliberately have no FunctionArtifact.
+            // callable source entries. They deliberately have no FunctionArtifact.
             if (function_index < self.mir_module.checked_callables.len and
                 self.mir_module.checked_callables[function_index].kind == .global_initializer)
                 continue;
