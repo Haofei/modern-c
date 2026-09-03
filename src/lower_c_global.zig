@@ -7,6 +7,7 @@ const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
+const mir = @import("mir_model.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
@@ -23,7 +24,7 @@ const staticCInitializerRef = lower_c_const.staticCInitializerRef;
 
 pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
-pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, global: declaration_artifacts.GlobalArtifact) anyerror!?[]const u8;
+pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, body_id: mir.BodyId, value_ty: mir.ValueType) anyerror!?[]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
 pub const EmitExprWithTargetForOwnerFn = *const fn (ctx: *anyopaque, owner: ?[]const u8, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
@@ -91,7 +92,7 @@ pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact
     // BodyId. Their C rendering must not depend on retaining an AST
     // initializer payload in the declaration artifact.
     if (sig.is_const and init_facts.body_id.isValid()) {
-        if (try ctx.const_global_c_value(ctx.emit_ctx, global)) |text| {
+        if (try ctx.const_global_c_value(ctx.emit_ctx, init_facts.body_id, sig.value_ty)) |text| {
             try ctx.out.print(ctx.allocator, " = {s};\n\n", .{text});
             return;
         }

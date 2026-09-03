@@ -729,13 +729,13 @@ pub const CEmitter = struct {
     // Scalar const globals are rendered from a verified MIR fact. Aggregates
     // retain the transitional AST route until they receive their own
     // syntax-free const-value representation.
-    fn constGlobalCValue(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !?[]const u8 {
-        const fact = self.mir_module.constGlobalScalarInit(global.initializer.body_id) orelse {
-            if (mir.valueTypeRequiresScalarConstInitFact(global.signature.value_ty) and global.initializer.body_id.isValid())
+    fn constGlobalCValue(self: *CEmitter, body_id: mir.BodyId, value_ty: mir.ValueType) !?[]const u8 {
+        const fact = self.mir_module.constGlobalScalarInit(body_id) orelse {
+            if (mir.valueTypeRequiresScalarConstInitFact(value_ty) and body_id.isValid())
                 return error.UnsupportedCEmission;
             return null;
         };
-        if (!mir.ValueType.eql(fact.value_ty, global.signature.value_ty) or !fact.value.isCompatibleWith(fact.value_ty)) return error.UnsupportedCEmission;
+        if (!mir.ValueType.eql(fact.value_ty, value_ty) or !fact.value.isCompatibleWith(fact.value_ty)) return error.UnsupportedCEmission;
         return switch (fact.value) {
             // Values above the signed-64 range need an unsigned suffix, or C
             // reads the decimal literal as implicitly unsigned (a warning).
@@ -1538,9 +1538,9 @@ pub const CEmitter = struct {
         try self.emitDeclarator(ty, name);
     }
 
-    fn constGlobalCValueForGlobal(ctx: *anyopaque, global: declaration_artifacts.GlobalArtifact) anyerror!?[]const u8 {
+    fn constGlobalCValueForGlobal(ctx: *anyopaque, body_id: mir.BodyId, value_ty: mir.ValueType) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.constGlobalCValue(global);
+        return self.constGlobalCValue(body_id, value_ty);
     }
 
     fn emitExprForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void {
