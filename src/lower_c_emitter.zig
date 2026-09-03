@@ -680,6 +680,12 @@ pub const CEmitter = struct {
             .global => |global| try self.emitSignatureTypeDefinition(global.signature.type_id),
             else => {},
         };
+        // Body-local declaration shapes arrive as syntax-free IDs.  Emit
+        // their required aggregate typedefs from the same module table rather
+        // than retaining AST TypeExpr payloads on MIR functions.
+        for (self.mir_module.functions) |function| {
+            for (function.body_signature_type_ids) |id| try self.emitSignatureTypeDefinition(id);
+        }
     }
 
     fn emitSignatureTypeDefinition(self: *CEmitter, id: mir.SignatureTypeId) !void {
@@ -2982,11 +2988,10 @@ pub const CEmitter = struct {
         self.current_function = function.signature.name.text;
         defer self.current_function = previous_function;
         // Signature types are rendered from the module-owned type table.
-        if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionBodyTypeArtifacts(fn_mir);
+        if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionTypes(fn_mir);
     }
 
-    fn collectMirFunctionBodyTypeArtifacts(self: *CEmitter, fn_mir: *const mir.Function) !void {
-        for (fn_mir.body_type_artifact_facts) |fact| try self.collectTypeArtifacts(fact.ty);
+    fn collectMirFunctionTypes(self: *CEmitter, fn_mir: *const mir.Function) !void {
         for (fn_mir.target_type_facts) |fact| try self.collectTypeArtifacts(fact.target_ty);
     }
 

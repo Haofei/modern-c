@@ -34,6 +34,14 @@
     },
     "src/codegen_signature.zig": {
       "ty: ast_bridge.TypeExpr": 0
+    },
+    "src/mir_model.zig": {
+      "pub const BodyTypeArtifactFact": 0,
+      "body_type_artifact_facts": 0
+    },
+    "src/mir.zig": {
+      "BodyTypeArtifactFact": 0,
+      "body_type_artifact_facts": 0
     }
   },
   "normalized_fact_anchors": {

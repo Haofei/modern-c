@@ -44,6 +44,9 @@ pub const CheckedProgram = struct {
             for (callable.signature_param_type_ids) |type_id| {
                 if (!signature_types.contains(type_id)) return error.InvalidCheckedProgram;
             }
+            for (callable.body_signature_type_ids) |type_id| {
+                if (!signature_types.contains(type_id)) return error.InvalidCheckedProgram;
+            }
             if (callable.kind == .extern_function) {
                 if (callable.body_id.isValid()) return error.InvalidCheckedProgram;
             } else if (!callable.body_id.isValid() or callable.body_id.index() != index) {
@@ -152,12 +155,16 @@ fn callableFactsMatchMir(callables: []const mir.CheckedCallableFact, module: mir
         if (!std.meta.eql(checked.return_ty, function.return_ty)) return false;
         if (checked.param_count != function.param_count or checked.param_types.len != function.param_types.len or
             checked.signature_param_type_ids.len != function.signature_param_type_ids.len or
+            checked.body_signature_type_ids.len != function.body_signature_type_ids.len or
             checked.c_abi != function.c_abi or checked.is_variadic != function.is_variadic) return false;
         if (!checked.signature_return_type_id.eql(function.signature_return_type_id)) return false;
         for (checked.param_types, function.param_types) |checked_type, mir_type| {
             if (!mir.ValueType.eql(checked_type, mir_type)) return false;
         }
         for (checked.signature_param_type_ids, function.signature_param_type_ids) |checked_type, mir_type| {
+            if (!checked_type.eql(mir_type)) return false;
+        }
+        for (checked.body_signature_type_ids, function.body_signature_type_ids) |checked_type, mir_type| {
             if (!checked_type.eql(mir_type)) return false;
         }
         if (checked.no_lang_trap != function.no_lang_trap or checked.irq_context != function.irq_context) return false;

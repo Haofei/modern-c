@@ -252,5 +252,10 @@ test "VerifiedProgram rejects checked callable parameter type drift" {
     module_mir.checked_callables[forward_index].signature_return_type_id = .invalid;
     try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
     module_mir.checked_callables[forward_index].signature_return_type_id = saved_signature_type;
+
+    const saved_body_types = module_mir.checked_callables[forward_index].body_signature_type_ids;
+    module_mir.checked_callables[forward_index].body_signature_type_ids = &.{.invalid};
+    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+    module_mir.checked_callables[forward_index].body_signature_type_ids = saved_body_types;
     _ = try VerifiedProgram.init(&module_mir, &reporter);
 }

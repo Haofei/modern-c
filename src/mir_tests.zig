@@ -1473,6 +1473,54 @@ test "module signature type table preserves recursive callable shapes" {
     try std.testing.expect(checked.matchesMir(module_mir));
 }
 
+test "body declaration types use validated signature type ids" {
+    const source =
+        \\fn local_array() -> u8 {
+        \\    var bytes: [4]u8 = .{ 1, 2, 3, 4 };
+        \\    return bytes[0];
+        \\}
+    ;
+    var parsed = try test_support.parseModule("body_signature_type_ids.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const index = for (module_mir.functions, 0..) |function, function_index| {
+        if (std.mem.eql(u8, function.name, "local_array")) break function_index;
+    } else return error.TestUnexpectedResult;
+    const function = module_mir.functions[index];
+    try std.testing.expectEqual(@as(usize, 1), function.body_signature_type_ids.len);
+    const local_shape = module_mir.signature_types.get(function.body_signature_type_ids[0]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(local_shape) == .array);
+    try std.testing.expect((try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    )).matchesMir(module_mir));
+
+    const saved_checked = module_mir.checked_callables[index].body_signature_type_ids;
+    module_mir.checked_callables[index].body_signature_type_ids = &.{.invalid};
+    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    ));
+    module_mir.checked_callables[index].body_signature_type_ids = saved_checked;
+
+    const saved_mir = module_mir.functions[index].body_signature_type_ids;
+    module_mir.functions[index].body_signature_type_ids = &.{};
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(!checked.matchesMir(module_mir));
+    module_mir.functions[index].body_signature_type_ids = saved_mir;
+}
+
 test "module signature type table owns recursive global declaration shapes" {
     const source =
         \\struct Device { value: u32 }

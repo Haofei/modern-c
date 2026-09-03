@@ -3453,11 +3453,6 @@ pub const BindThunkFact = struct {
     source: SourcePoint,
 };
 
-pub const BodyTypeArtifactFact = struct {
-    ty: ast.TypeExpr,
-    source: SourcePoint,
-};
-
 pub const DropGlueFact = struct {
     resource_type: []const u8,
     typed_resource_symbol_id: SymbolId = .invalid,
@@ -3968,7 +3963,11 @@ pub const Function = struct {
     const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
     bind_thunk_facts: []BindThunkFact = &.{},
-    body_type_artifact_facts: []BodyTypeArtifactFact = &.{},
+    /// Syntax-free declaration-shape dependencies referenced from this body
+    /// (local annotations, type arguments, and casts).  C emits their
+    /// definitions directly from the module-owned type table; body MIR never
+    /// retains the original AST types.
+    body_signature_type_ids: []SignatureTypeId = &.{},
     target_type_facts: []TargetTypeFact = &.{},
     span_identities: []SpanIdentity = &.{},
     type_identities: []TypeIdentity = &.{},
@@ -4010,6 +4009,10 @@ pub const CheckedCallableFact = struct {
     /// MIR function storage lets admission detect equal-arity type drift.
     param_types: []const ValueType = &.{},
     signature_param_type_ids: []const SignatureTypeId = &.{},
+    /// Syntax-free declaration-shape dependencies used by the callable body.
+    /// Kept independently so CheckedProgram admission can detect a stale MIR
+    /// body before either backend reaches its legacy rendering mechanics.
+    body_signature_type_ids: []const SignatureTypeId = &.{},
     c_abi: bool,
     is_variadic: bool = false,
     no_lang_trap: bool,
@@ -4398,7 +4401,7 @@ pub const Module = struct {
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.bind_thunk_facts.len != 0) self.allocator.free(function.bind_thunk_facts);
-            if (function.body_type_artifact_facts.len != 0) self.allocator.free(function.body_type_artifact_facts);
+            if (function.body_signature_type_ids.len != 0) self.allocator.free(function.body_signature_type_ids);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
             if (function.span_identities.len != 0) self.allocator.free(function.span_identities);
             if (function.type_identities.len != 0) self.allocator.free(function.type_identities);
@@ -4431,6 +4434,7 @@ pub const Module = struct {
             for (self.checked_callables) |checked| {
                 if (checked.param_types.len != 0) self.allocator.free(checked.param_types);
                 if (checked.signature_param_type_ids.len != 0) self.allocator.free(checked.signature_param_type_ids);
+                if (checked.body_signature_type_ids.len != 0) self.allocator.free(checked.body_signature_type_ids);
             }
             self.allocator.free(self.checked_callables);
         }
