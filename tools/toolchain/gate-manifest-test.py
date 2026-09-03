@@ -50,9 +50,11 @@ ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
         "pub fn writeArtifactWithMetadata(self: Publisher",
         "try artifact_model.appendArtifactMetadata(self.allocator, &metadata, bundle);",
     ],
-    "src/main.zig": [
+    "src/driver_codegen.zig": [
         '.artifact_kind = "c"',
         '.artifact_kind = "llvm-ir"',
+    ],
+    "src/driver_build.zig": [
         '.artifact_kind = "host-executable"',
     ],
     "src/lower_c_map.zig": [

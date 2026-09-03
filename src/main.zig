@@ -1,25 +1,19 @@
 const std = @import("std");
 
-const artifact_model = @import("artifact_model.zig");
-const backend = @import("backend.zig");
-const backend_registry = @import("backend_registry.zig");
 const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const compiler_session = @import("compiler_session.zig");
 const diagnostics = @import("diagnostics.zig");
 const driver_build = @import("driver_build.zig");
 const driver_check = @import("driver_check.zig");
+const driver_codegen = @import("driver_codegen.zig");
 const driver_inspect = @import("driver_inspect.zig");
-const driver_codegen_inputs = @import("driver_codegen_inputs.zig");
 const loader = @import("loader.zig");
-const lower_c = @import("lower_c.zig");
 // Lowering-coverage instrumentation (hardening V3.2). Zero-cost unless the
 // `MC_LOWER_COV` env var is set; `tools/toolchain/lowering-coverage.sh` injects
 // per-function `lower_cov.hit(...)` probes into split lower_c*/lower_llvm* modules
 // in an isolated temporary checkout before building the instrumented compiler.
 const lower_cov = @import("lower_cov.zig");
-const lower_llvm = @import("lower_llvm.zig");
-const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
 
 const usage =
@@ -136,15 +130,6 @@ fn stdinLoaderRootPath(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
     var cwd_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const cwd_len = try std.Io.Dir.cwd().realPathFile(io, ".", &cwd_buffer);
     return std.fs.path.join(allocator, &.{ cwd_buffer[0..cwd_len], "-" });
-}
-
-fn artifactSourcePath(allocator: std.mem.Allocator, io: std.Io, options: cli.Options, path: []const u8) !?[]const u8 {
-    var cwd_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const cwd = if (std.Io.Dir.cwd().realPathFile(io, ".", &cwd_buffer)) |cwd_len|
-        cwd_buffer[0..cwd_len]
-    else |_|
-        null;
-    return options.artifactSourcePath(allocator, path, cwd);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -308,29 +293,29 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "inspect-ir")) {
         try driver_inspect.runLowerIr(&session);
     } else if (std.mem.eql(u8, command, "lower-c")) {
-        try runLowerC(&session, path, source);
+        try driver_codegen.runLowerC(&session, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        const artifact_source_path = try driver_codegen.artifactSourcePath(allocator, init.io, options, path);
         defer if (artifact_source_path) |p| allocator.free(p);
-        try runEmitC(&session, path, artifact_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
+        try driver_codegen.runEmitC(&session, path, artifact_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "build")) {
-        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        const artifact_source_path = try driver_codegen.artifactSourcePath(allocator, init.io, options, path);
         defer if (artifact_source_path) |p| allocator.free(p);
         try driver_build.runBuild(&session, path, artifact_source_path orelse path, source, options.targetArch(), options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
     } else if (std.mem.eql(u8, command, "emit-map")) {
-        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        const artifact_source_path = try driver_codegen.artifactSourcePath(allocator, init.io, options, path);
         defer if (artifact_source_path) |p| allocator.free(p);
-        try runEmitMap(&session, path, artifact_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
+        try driver_codegen.runEmitMap(&session, path, artifact_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        const artifact_source_path = try driver_codegen.artifactSourcePath(allocator, init.io, options, path);
         defer if (artifact_source_path) |p| allocator.free(p);
-        try runEmitLlvm(&session, path, artifact_source_path orelse path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
+        try driver_codegen.runEmitLlvm(&session, path, artifact_source_path orelse path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try driver_inspect.runListTests(&session);
     } else if (is_emit_layout) {
-        try runEmitLayout(&session, path, source, options.structs_flag.?);
+        try driver_codegen.runEmitLayout(&session, path, source, options.structs_flag.?, usage);
     } else if (is_emit_c_struct) {
-        try runEmitCStruct(&session, path, source, options.structs_flag.?);
+        try driver_codegen.runEmitCStruct(&session, path, source, options.structs_flag.?, usage);
     } else {
         return failUsage();
     }
@@ -387,293 +372,4 @@ fn commandNeedsResolvedProgram(command: []const u8) bool {
 fn failUsage() !void {
     std.debug.print("{s}", .{usage});
     return error.InvalidArgs;
-}
-
-fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.LowerCFailed);
-    const decls = try resolved.astDecls(parse_allocator);
-    defer parse_allocator.free(decls);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try lower_c.appendInspectionFromDecls(allocator, decls, &output);
-    try session.writeStdout(output.items);
-}
-
-fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
-    const allocator = session.allocator;
-    const optimize = checks.optimize;
-    const source_sha256 = session.sourceDigest(source);
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed);
-
-    var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
-    defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    const be = backend_registry.byName("c").?;
-    const lower_opts = backend.LowerOptions{
-        .profile = profile,
-        .source_path = artifact_source_path,
-        .target_arch = target_arch,
-        .checks = checks,
-        .stub_asm = stub_asm,
-        .reporter = &diag,
-        .source_sha256 = source_sha256,
-        .compiler_version = build_options.version,
-    };
-    be.lowerRequest(allocator, .{
-        .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
-        .out = &output,
-        .opts = lower_opts,
-    }) catch |err| switch (err) {
-        error.UnsupportedCEmission => {
-            if (!diag.has_errors) driver_build.reportBackendUnsupportedFallback(&diag, "C");
-            diag.render();
-            return error.EmitCFailed;
-        },
-        else => return err,
-    };
-    var bundle = artifact_model.ArtifactBundle.forArtifact(output.items, lower_opts, .{
-        .artifact_kind = "c",
-        .backend_name = "c",
-    });
-    try driver_build.attachCSourceMapDigests(allocator, be, program, early_metadata, output.items, lower_opts, &bundle);
-    try session.writeArtifactWithMetadata(output.items, output_path, bundle);
-}
-
-fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
-    const allocator = session.allocator;
-    const optimize = checks.optimize;
-    const source_sha256 = session.sourceDigest(source);
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed);
-
-    var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
-    defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
-
-    const be = backend_registry.byName("c").?;
-    var generated_c: std.ArrayList(u8) = .empty;
-    defer generated_c.deinit(allocator);
-    be.lowerRequest(allocator, .{
-        .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
-        .out = &generated_c,
-        .opts = .{
-            .profile = profile,
-            .source_path = artifact_source_path,
-            .target_arch = target_arch,
-            .checks = checks,
-            .stub_asm = stub_asm,
-            .reporter = &diag,
-            .source_sha256 = source_sha256,
-            .compiler_version = build_options.version,
-        },
-    }) catch |err| switch (err) {
-        error.UnsupportedCEmission => {
-            if (!diag.has_errors) driver_build.reportBackendUnsupportedFallback(&diag, "C");
-            diag.render();
-            return error.EmitCFailed;
-        },
-        else => return err,
-    };
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try be.emitMapRequest(allocator, .{
-        .program = program,
-        .source_map_artifacts = early_metadata.source_map_artifacts,
-        .out = &output,
-        .generated_artifact = generated_c.items,
-        .opts = .{
-            .profile = profile,
-            .source_path = artifact_source_path,
-            .target_arch = target_arch,
-            .checks = checks,
-            .stub_asm = stub_asm,
-            .reporter = &diag,
-            .source_sha256 = source_sha256,
-            .compiler_version = build_options.version,
-        },
-    });
-    try session.writeArtifact(output.items, output_path);
-}
-
-fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
-    const allocator = session.allocator;
-    const optimize = checks.optimize;
-    const source_sha256 = session.sourceDigest(source);
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitLlvmFailed);
-
-    var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
-    defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    const be = backend_registry.byName("llvm").?;
-    const lower_opts = backend.LowerOptions{
-        .profile = .kernel,
-        .source_path = artifact_source_path,
-        .target_arch = target_arch,
-        .checks = checks,
-        .stub_asm = stub_asm,
-        .reporter = &diag,
-        .linux_kernel = linux_kernel,
-        .source_sha256 = source_sha256,
-        .compiler_version = build_options.version,
-    };
-    be.lowerRequest(allocator, .{
-        .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
-        .out = &output,
-        .opts = lower_opts,
-    }) catch |err| switch (err) {
-        error.UnsupportedLlvmEmission => {
-            if (!diag.has_errors) driver_build.reportBackendUnsupportedFallback(&diag, "LLVM");
-            diag.render();
-            return error.EmitLlvmFailed;
-        },
-        else => return err,
-    };
-    const bundle = artifact_model.ArtifactBundle.forArtifact(output.items, lower_opts, .{
-        .artifact_kind = "llvm-ir",
-        .backend_name = "llvm",
-    });
-    try session.writeArtifactWithMetadata(output.items, output_path, bundle);
-}
-
-// `emit-layout`: emit a generated C header asserting MC's authoritative layout (sizeof + each
-// field offset) for the comma-separated structs in `--structs=`. A C runtime that hand-mirrors
-// one of these structs includes the header, so any MC↔C layout drift becomes a compile error.
-fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.EmitLayoutFailed);
-
-    // Split `A,B,C` into struct names (arena-allocated so they outlive the loop).
-    var names: std.ArrayList([]const u8) = .empty;
-    defer names.deinit(allocator);
-    var it = std.mem.splitScalar(u8, structs_csv, ',');
-    while (it.next()) |name| {
-        if (name.len == 0) continue;
-        try names.append(allocator, name);
-    }
-    if (names.items.len == 0) return failUsage();
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    var typed_mir: mir.Module = undefined;
-    var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
-    defer typed_mir.deinit();
-    defer artifacts.deinit(allocator);
-    lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts.codegen(), &typed_mir, &output, names.items) catch |err| switch (err) {
-        error.LayoutStructNotFound => {
-            std.debug.print("emit-layout: a struct named in --structs= was not found in {s}\n", .{path});
-            return error.EmitLayoutFailed;
-        },
-        error.LayoutUnresolved => {
-            std.debug.print("emit-layout: could not resolve a struct's layout in {s}\n", .{path});
-            return error.EmitLayoutFailed;
-        },
-        else => return err,
-    };
-    try session.writeStdout(output.items);
-}
-
-// `emit-c-struct` (hardening A2): emit a generated C header with the FULL struct *definitions* for
-// the comma-separated structs in `--structs=` — the actual `typedef struct { ... }` matching MC's
-// field order/types/layout, plus the by-value array/struct wrappers they embed, plus the A1
-// `_Static_assert`s as a cross-check. A C runtime includes this header and drops its hand-written
-// mirror, so the MC struct becomes the single source of truth and MC↔C drift is impossible (there
-// is no second declaration to diverge).
-fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
-    const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.EmitCStructFailed);
-
-    var names: std.ArrayList([]const u8) = .empty;
-    defer names.deinit(allocator);
-    var it = std.mem.splitScalar(u8, structs_csv, ',');
-    while (it.next()) |name| {
-        if (name.len == 0) continue;
-        try names.append(allocator, name);
-    }
-    if (names.items.len == 0) return failUsage();
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    var typed_mir: mir.Module = undefined;
-    var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
-    defer typed_mir.deinit();
-    defer artifacts.deinit(allocator);
-    lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts.codegen(), &typed_mir, &output, names.items) catch |err| switch (err) {
-        error.LayoutStructNotFound => {
-            std.debug.print("emit-c-struct: a struct named in --structs= was not found in {s}\n", .{path});
-            return error.EmitCStructFailed;
-        },
-        error.LayoutUnresolved => {
-            std.debug.print("emit-c-struct: could not resolve a struct's layout in {s}\n", .{path});
-            return error.EmitCStructFailed;
-        },
-        else => return err,
-    };
-    try session.writeStdout(output.items);
 }

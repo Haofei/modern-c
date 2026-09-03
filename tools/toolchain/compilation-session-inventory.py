@@ -64,7 +64,15 @@ def main() -> int:
         "session.source_db = &loaded.source_db;",
         "session.attachLoadedProjectSyntax(",
         "session.prepareResolvedProgram(",
+    )
+    require(
+        "src/driver_check.zig",
         "session.checkResolvedProgram(",
+    )
+    require(
+        "src/driver_codegen.zig",
+        "session.checkResolvedProgram(",
+        "driver_codegen_inputs.buildBackendInputs(",
     )
     require(
         "src/module_graph.zig",
