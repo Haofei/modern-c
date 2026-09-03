@@ -3394,7 +3394,8 @@ one declaration:
 - **Static dispatch (Tier 1):** a generic bounded by `where T: Trait` is monomorphized to direct
   `Owner__method` calls (section 30.3). Zero indirection; one specialized copy per instantiation.
 - **Dynamic dispatch (Tier 2):** a `*dyn Trait` value is a two-word object dispatched through a
-  read-only vtable. One shared code path; one indirect call per dispatch.
+  read-only vtable in the experimental language design. Qualified C and LLVM backend admission
+  currently rejects residual Tier 2 representations with `E_EXPERIMENTAL_DYN_CODEGEN`.
 
 Traits introduce no garbage collection, no boxing, and no hidden allocation. Like `module`/`impl`
 (section 30), they desugar to ordinary top-level declarations and calls.
@@ -3551,6 +3552,11 @@ concrete callee (`E_SLEEP_IN_ATOMIC`), not laundered past it; the dual — a non
 
 ## 32.6 Lowering
 
+Tier 2 lowering is not part of the qualified backend contract in this revision.
+The representation below is the experimental design contract used by parser,
+semantic, and MIR-verifier tests; shared backend admission rejects it before C
+or LLVM rendering. Tier 1 remains qualified and lowers as described.
+
 Traits add no runtime semantics beyond their two dispatch forms; both lower within the existing
 backend contract (Part II), and neither changes MC semantics by target (annex A).
 
@@ -3607,8 +3613,8 @@ switch dev { d => use(d), _ => absent() } // the dual; `unwrap(dev)` traps on `n
 a thin `?*T` (sections 10, 11.1); only the niche test is on the data word rather than the whole
 value. This is what a registry of optional trait-object slots uses — `[N]?*dyn Trait` initialized to
 `null` — so absence is type-checked rather than tracked by a parallel boolean. The `data == null`
-niche is observable runtime state, identical on both backends; the `zig build nulldyn-run-test`
-conformance gate (annex) runs the lowered program natively on each backend to confirm it round-trips.
+niche remains an experimental dynamic-trait representation: qualified C and LLVM codegen reject
+dynamic trait objects at admission rather than claiming a backend conformance guarantee for them.
 
 ---
 
@@ -5527,13 +5533,10 @@ The `zig build llvm-cc-test`, `zig build llvm-move-test`, and
 `zig build llvm-runtime-test` gates link and run LLVM-produced objects against C
 drivers, including a linear `move` handle roundtrip through the LLVM ABI,
 imported generic `std/stack`, `std/sync` guard, and fn-pointer runtime checks.
-The `zig build nulldyn-run-test` gate compiles a nullable-trait-object
-(`?*dyn Trait`, section 32.7) program through BOTH backends, links each into a
-native host binary (`cc` for C, `clang` for LLVM IR), and **runs** it — asserting
-a niche checksum that holds only if the `data == null` representation round-trips
-through array memory (`none` slots are skipped, `some` slots dispatch through the
-vtable) identically on both backends. This executes the nullable-trait-object niche,
-rather than only checking that it emits.
+Dynamic trait objects, including nullable `?*dyn Trait` values (section 32.7),
+are experimental. Qualified C and LLVM lowering reject them at shared backend
+admission with `E_EXPERIMENTAL_DYN_CODEGEN`; static trait uses resolved to direct,
+monomorphized calls remain in the qualified surface.
 The `zig build llvm-toolchain-test` gate links and runs LLVM-built import/std
 merge, monomorphization, and generic-struct modules, and verifies reflection
 with `check` plus LLVM object lowering.

@@ -6,7 +6,6 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const eval = @import("eval.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -246,22 +245,4 @@ pub fn isVoidLiteralExpr(expr: ast_bridge.Expr) bool {
         .grouped => |inner| isVoidLiteralExpr(inner.*),
         else => false,
     };
-}
-
-pub fn cTraitIsObjectSafe(t: declaration_artifacts.TraitDeclArtifact) bool {
-    for (t.facts.methods) |m| {
-        switch (m.self_mode) {
-            .by_ptr, .by_mut_ptr => {},
-            else => return false,
-        }
-        for (m.params) |p| if (p.is_comptime) return false;
-    }
-    return true;
-}
-
-pub fn implMethodMangled(methods: []const ast_bridge.ImplTraitMethod, name: []const u8) ?[]const u8 {
-    for (methods) |m| {
-        if (std.mem.eql(u8, m.name.text, name)) return m.mangled;
-    }
-    return null;
 }

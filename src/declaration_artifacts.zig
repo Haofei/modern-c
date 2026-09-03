@@ -89,12 +89,16 @@ pub const EarlyDeclarationArtifacts = struct {
                 .opaque_decl => {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .trait_decl => |trait_decl| {
-                    try decl_artifacts.append(allocator, .{ .trait_decl = TraitDeclArtifact.fromDecl(trait_decl) });
+                .trait_decl => {
+                    // Dynamic trait objects are an experimental frontend feature.
+                    // Static trait calls have already been monomorphized into ordinary
+                    // functions, so no trait declaration syntax belongs on the
+                    // ordinary codegen ingress.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .impl_trait => |impl_trait| {
-                    try decl_artifacts.append(allocator, .{ .impl_trait = ImplTraitArtifact.fromDecl(impl_trait) });
+                .impl_trait => {
+                    // See `.trait_decl`: implementations do not carry backend
+                    // payload unless the removed dynamic-vtable lowering is used.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
             }
@@ -267,38 +271,9 @@ fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalF
     return null;
 }
 
-pub const TraitDeclArtifact = struct {
-    facts: codegen_attrs.TraitDeclFacts,
-
-    pub fn fromDecl(trait_decl: ast.TraitDecl) TraitDeclArtifact {
-        return .{
-            .facts = .{
-                .name = trait_decl.name,
-                .methods = trait_decl.methods,
-            },
-        };
-    }
-};
-
-pub const ImplTraitArtifact = struct {
-    facts: codegen_attrs.ImplTraitFacts,
-
-    pub fn fromDecl(impl_trait: ast.ImplTrait) ImplTraitArtifact {
-        return .{
-            .facts = .{
-                .trait_name = impl_trait.trait_name,
-                .type_name = impl_trait.type_name,
-                .methods = impl_trait.methods,
-            },
-        };
-    }
-};
-
 pub const DeclArtifact = union(enum) {
     function: FunctionArtifact,
     global: GlobalArtifact,
-    trait_decl: TraitDeclArtifact,
-    impl_trait: ImplTraitArtifact,
     transitional_type_decl: TransitionalTypeDeclArtifact,
 };
 
@@ -464,7 +439,6 @@ test "declaration artifacts collect from resolved declaration stream" {
             try std.testing.expectEqualStrings("Box", type_decl.struct_decl.name.text);
             saw_struct = true;
         },
-        else => {},
     };
     try std.testing.expect(saw_function);
     try std.testing.expect(saw_global);

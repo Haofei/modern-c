@@ -14,8 +14,8 @@
       "backend_attrs: []const ast.Attr": 0,
       "ty: ?ast.TypeExpr": 0,
       "init: ?ast.Expr": 0,
-      "methods: []ast.TraitMethodSig": 0,
-      "methods: []ast.ImplTraitMethod": 0,
+      "TraitDeclArtifact": 0,
+      "ImplTraitArtifact": 0,
       "pub const TypeDeclArtifact = union(enum)": 0,
       "pub const TransitionalTypeDeclArtifact = union(enum)": 1,
       "type_alias: ast.TypeAlias": 1,
@@ -29,8 +29,8 @@
       "transitional_ret_type: ?ast_bridge.TypeExpr": 1,
       "ty: ?ast_bridge.TypeExpr": 1,
       "init: ?ast_bridge.Expr": 1,
-      "methods: []const ast_bridge.TraitMethodSig": 1,
-      "methods: []const ast_bridge.ImplTraitMethod": 1
+      "TraitDeclFacts": 0,
+      "ImplTraitFacts": 0
     },
     "src/codegen_signature.zig": {
       "ty: ast_bridge.TypeExpr": 1
@@ -133,19 +133,28 @@
     "src/codegen_signature.zig": {
       "pub const FunctionParamFact = struct": 1,
       "pub fn fromParam(param: ast_bridge.Param, value_ty: mir.ValueType, type_id: mir.SignatureTypeId) FunctionParamFact": 1
+    },
+    "src/codegen_request.zig": {
+      "program.checked.signature_types": 2,
+      "callable.signature_return_type_id": 1,
+      "callable.signature_param_type_ids": 1,
+      "fn signatureTypeContainsDynamicTrait": 1,
+      "fn signatureTypeIdsContainDynamicTrait": 1
     }
   },
   "backend_artifact_consumers": {
     "src/lower_c_emitter.zig": {
       "declaration_artifacts.FunctionArtifact": 2,
       "declaration_artifacts.GlobalArtifact": 2,
-      "declaration_artifacts.TraitDeclArtifact": 2,
+      "declaration_artifacts.TraitDeclArtifact": 0,
+      "declaration_artifacts.ImplTraitArtifact": 0,
       "declaration_artifacts.TypeDeclArtifact": 0
     },
     "src/lower_llvm.zig": {
       "declaration_artifacts.FunctionArtifact": 1,
       "declaration_artifacts.GlobalArtifact": 2,
-      "declaration_artifacts.TraitDeclArtifact": 5,
+      "declaration_artifacts.TraitDeclArtifact": 0,
+      "declaration_artifacts.ImplTraitArtifact": 0,
       "declaration_artifacts.TypeDeclArtifact": 0
     }
   },

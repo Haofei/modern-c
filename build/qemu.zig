@@ -10,8 +10,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qemu-test", "Run the LLVM-lowered typed-MMIO program under QEMU", &.{ "bash", "tools/arch/qemu-mmio-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "nulldyn-run-test", "Compile + RUN nullable trait objects (?*dyn) as native binaries on both backends (needs cc + clang)", &.{ "bash", "tools/exec/nullable-dyn-run.sh", "zig-out/bin/mcc" });
-
     _ = h.addScriptTest(ctx, "naked-run-test", "Compile + RUN a #[naked] function (no prologue/epilogue) as native binaries on both backends (needs cc + clang)", &.{ "bash", "tools/exec/naked-run.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "enum-raw-cmp-run-test", "Compile + RUN a value-producing `enum.raw() == N` comparison (typed `let bool` and `return`) as native binaries on both backends (G23; needs cc + clang)", &.{ "bash", "tools/exec/enum-raw-cmp-run.sh", "zig-out/bin/mcc" });

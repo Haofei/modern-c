@@ -3,6 +3,7 @@ const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
+const codegen_request = @import("codegen_request.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
@@ -106,16 +107,13 @@ const lower_llvm_query = @import("lower_llvm_query.zig");
 const assignmentIdent = lower_llvm_query.assignmentIdent;
 const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
-const implMethodMangledLlvm = lower_llvm_query.implMethodMangledLlvm;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
-const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
 const memberCallee = lower_llvm_query.memberCallee;
 const packedBitsClearMask = lower_llvm_query.packedBitsClearMask;
 const packedBitsMask = lower_llvm_query.packedBitsMask;
 const structFieldIndex = lower_llvm_query.structFieldIndex;
 const structLiteralField = lower_llvm_query.structLiteralField;
 const taggedUnionConstructorName = lower_llvm_query.taggedUnionConstructorName;
-const traitMethodIndex = lower_llvm_query.traitMethodIndex;
 
 // LLVM backend model records used by the emitter implementation.
 const lower_llvm_model = @import("lower_llvm_model.zig");
@@ -304,6 +302,9 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     linux_kernel: bool,
     reporter: ?*diagnostics.Reporter,
 ) !void {
+    codegen_request.rejectExperimentalDynamicTraits(program, reporter) catch |err| switch (err) {
+        error.ExperimentalDynamicTraitCodegen => return error.UnsupportedLlvmEmission,
+    };
     const comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifacts(early_metadata);
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -344,8 +345,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .tagged_unions = std.StringHashMap(ast_bridge.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
-        .trait_decls = std.StringHashMap(declaration_artifacts.TraitDeclArtifact).init(allocator),
-        .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .codegen_artifacts = early_metadata,
@@ -388,12 +387,8 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     });
     try ctx.collectNonStructTypeArtifacts();
     try ctx.collectStructArtifacts();
-    try ctx.collectFunctionGlobalAndTraitArtifacts();
+    try ctx.collectFunctionGlobalArtifacts();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
-    // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
-    // trait. Function pointers may be forward-referenced in LLVM IR, so this can run
-    // before the function bodies are emitted.
-    try ctx.emitVtables();
     try ctx.emitCollectedGlobals();
     try ctx.emitCollectedCallableDeclarations();
     // Scalar-env closure thunks discovered while emitting bodies. LLVM IR allows
@@ -431,11 +426,6 @@ const LlvmEmitter = struct {
     tagged_unions: std.StringHashMap(ast_bridge.UnionDecl) = undefined,
     struct_types: std.StringHashMap(ast_bridge.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
-    // Tier 2 trait objects (traits-design §8): every `trait` by name (vtable layout +
-    // dispatch slot resolution) and each `impl Trait for Type`'s mangled methods (the
-    // rodata vtable's function-pointer list).
-    trait_decls: std.StringHashMap(declaration_artifacts.TraitDeclArtifact) = undefined,
-    impl_methods: std.StringHashMap([]const ast_bridge.ImplTraitMethod) = undefined,
     // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
     // closure's env slot is `ptr`, so the scalar is widened via `inttoptr` and the
     // code pointer points at a generated thunk that narrows it back with `ptrtoint`
@@ -528,12 +518,6 @@ const LlvmEmitter = struct {
         self.tagged_unions.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
-        self.trait_decls.deinit();
-        {
-            var it = self.impl_methods.keyIterator();
-            while (it.next()) |k| self.allocator.free(k.*);
-        }
-        self.impl_methods.deinit();
         self.bind_thunks.deinit();
         self.backend_names.deinit();
         self.global_types.deinit();
@@ -685,15 +669,10 @@ const LlvmEmitter = struct {
         if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
     }
 
-    fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
+    fn collectFunctionGlobalArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobal(global),
-            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.facts.name.text, trait_decl),
-            .impl_trait => |impl_trait| {
-                const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.facts.trait_name.text, impl_trait.facts.type_name.text });
-                try self.impl_methods.put(key, impl_trait.facts.methods);
-            },
             .transitional_type_decl => {},
         };
     }
@@ -1023,7 +1002,7 @@ const LlvmEmitter = struct {
                 break :blk error.UnsupportedLlvmEmission;
             },
             .bool_literal => |value| if (value) "1" else "0",
-            .null_literal => if (self.targetIsValueOptional(semantic_ty) or self.targetIsDynOrNullableDyn(semantic_ty)) "zeroinitializer" else "null",
+            .null_literal => if (self.targetIsValueOptional(semantic_ty)) "zeroinitializer" else "null",
             .grouped => |inner| try self.emitGlobalInitializer(inner.*, semantic_ty),
             .ident => |ident| if (self.isFnPointerType(semantic_ty) and self.fn_sigs.contains(ident.text))
                 try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
@@ -1852,16 +1831,6 @@ const LlvmEmitter = struct {
                 return error.UnsupportedLlvmEmission
         else
             expected_ty;
-        // Tier 2 coercion: a `*T` value -> `*dyn Trait` builds the fat pointer
-        // { data = <ptr>, vtable = @__vt_T_Trait } (the only safe path to a `*dyn`).
-        // This runs UNIFORMLY wherever `expected_ty` is threaded — let-init, return,
-        // call arg, struct field, array element — not just at `&x`. The vtable is keyed
-        // on the STATIC pointee type T of the source `*T` (a `&x`, a `*Square` param, a
-        // `*T` field — all uniform). Sema has already verified conformance + forge-safety;
-        // a `*dyn` pass-through value (same trait) returns null and emits normally.
-        if (self.targetIsDynOrNullableDyn(semantic_expected_ty)) {
-            if (try self.emitDynCoercion(expr, semantic_expected_ty)) |value| return value;
-        }
         // Value optional `?T`: wrap a `null` (absent) or payload value (present) into the
         // tagged `{ i1, T }` aggregate. A source already yielding `?T` passes through.
         if (self.targetIsValueOptional(semantic_expected_ty)) {
@@ -2751,12 +2720,6 @@ const LlvmEmitter = struct {
                         },
                         else => {},
                     }
-                }
-                // A trait-object dispatch as a statement (`d.m(args);`) — including a
-                // `-> void` method, whose result is simply discarded.
-                if (self.dynDispatchTrait(call.callee.*)) |trait| {
-                    _ = try self.emitDynDispatch(call, trait);
-                    return;
                 }
                 if (try self.emitBuiltinVoidCall(call)) return;
                 // A `va.*` intrinsic as a statement (`va.end(&ap);`): route through emitCall,
@@ -4482,22 +4445,6 @@ const LlvmEmitter = struct {
         }
     }
 
-    // Tier 2: if `expected_ty` is `*dyn Trait`, build the fat pointer
-    // `{ data = <ptr>, vtable = @__vt_T_Trait }` from a `*T` source and return it. The
-    // STATIC pointee type T selects the rodata vtable, UNIFORMLY for:
-    //   - `&x` / `&mut x`     : data = address-of x,  T = typeof(x)
-    //   - a `*T` value (param, field, returned `*T`, …): data = the pointer value, T = pointee
-    // An existing `*dyn Trait` value (pass-through, same trait) returns null so it emits
-    // normally. Returns null when not applicable. Sema verified conformance + forge-safety.
-    // True when `ty` is `*dyn Trait` or `?*dyn Trait` — both route through emitDynCoercion.
-    fn targetIsDynOrNullableDyn(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
-        return switch (self.resolveAliasType(ty).kind) {
-            .dyn_trait => true,
-            .nullable => |child| self.resolveAliasType(child.*).kind == .dyn_trait,
-            else => false,
-        };
-    }
-
     // A `?T` payload T uses the tagged `{ i1, T }` repr iff T is a sized VALUE type (named
     // scalar/struct/enum/address, not a pointer, slice, fn-pointer, or `*dyn`).
     fn nullablePayloadIsValueType(self: *LlvmEmitter, child: ast_bridge.TypeExpr) bool {
@@ -4537,56 +4484,6 @@ const LlvmEmitter = struct {
         const with_value = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_value, opt_ty, with_tag, payload_ty, payload });
         return with_value;
-    }
-
-    fn emitDynCoercion(self: *LlvmEmitter, expr: ast_bridge.Expr, _: ast_bridge.TypeExpr) !?[]const u8 {
-        if (expr.kind == .null_literal) return "zeroinitializer";
-        if (self.exprType(expr)) |source_ty| {
-            if (self.targetIsDynOrNullableDyn(source_ty)) return null;
-        }
-        const fact = self.mirTargetTypeFactAt(.dyn_coercion, expr.span) orelse return error.UnsupportedLlvmEmission;
-        const resolved = self.resolveAliasType(fact.target_ty);
-        // `*dyn Trait` or `?*dyn Trait` (nullable trait object) target.
-        const trait_name = switch (resolved.kind) {
-            .dyn_trait => |d| d.trait_name.text,
-            .nullable => |child| switch (self.resolveAliasType(child.*).kind) {
-                .dyn_trait => |d| d.trait_name.text,
-                else => return null,
-            },
-            else => return null,
-        };
-        // `?*dyn Trait = null`: `none` is the zero fat pointer (data == null). The value is
-        // emitted in a typed context (store/insertvalue prefix the `{ ptr, ptr }` type).
-        var type_name: []const u8 = undefined;
-        var data_ptr: []const u8 = undefined;
-        switch (expr.kind) {
-            .grouped => |inner| return self.emitDynCoercion(inner.*, fact.target_ty),
-            .address_of => |inner| {
-                // `&x` -> data = &x, vtable keyed on typeof(x).
-                const source_ty = (self.mirTargetTypeFactAt(.dyn_coercion_source, expr.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-                type_name = typeName(self.resolveAliasType(source_ty)) orelse return null;
-                data_ptr = try self.emitAddressOf(inner.*);
-            },
-            else => {
-                // A `*T` value: data = the pointer itself, vtable keyed on the pointee T.
-                const source_ty = self.resolveAliasType((self.mirTargetTypeFactAt(.dyn_coercion_source, expr.span) orelse return error.UnsupportedLlvmEmission).target_ty);
-                // An existing `*dyn Trait` value passes through (no re-wrap).
-                if (self.targetIsDynOrNullableDyn(source_ty)) return null;
-                const pointee = switch (source_ty.kind) {
-                    .pointer => |node| node.child.*,
-                    else => return null,
-                };
-                type_name = typeName(self.resolveAliasType(pointee)) orelse return null;
-                // Emit the pointer VALUE as the data word (it already points at the T).
-                data_ptr = try self.emitExpr(expr, source_ty);
-            },
-        }
-        const dyn_llvm = try self.llvmType(resolved); // "{ ptr, ptr }"
-        const with_data = try self.nextTemp();
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_data, dyn_llvm, data_ptr });
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr @__vt_{s}_{s}, 1\n", .{ result, dyn_llvm, with_data, type_name, trait_name });
-        return result;
     }
 
     fn emitAddressOf(self: *LlvmEmitter, target: ast_bridge.Expr) ![]const u8 {
@@ -7675,10 +7572,6 @@ const LlvmEmitter = struct {
         if (self.directCallName(call.callee.*)) |callee| {
             return try self.emitDirectCall(callee, call, expected_ty);
         }
-        // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait`.
-        if (self.dynDispatchTrait(call.callee.*)) |trait| {
-            return try self.emitDynDispatch(call, trait);
-        }
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return try self.emitClosureCall(call.callee.*, call.args, closure_ty);
         const fn_ty = self.fnPointerCalleeType(call.callee.*) orelse return error.UnsupportedLlvmEmission;
         return try self.emitFnPointerCall(call.callee.*, call.args, fn_ty);
@@ -7720,44 +7613,6 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr @{s}, 0\n", .{ with_code, try self.llvmType(closure_ty), code_ptr });
         try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr {s}, 1\n", .{ result, try self.llvmType(closure_ty), with_code, env_ptr });
         return result;
-    }
-
-    // ----- Tier 2 trait objects (traits-design §8) ------------------------------
-    // The LLVM struct type of a `*dyn Trait`'s vtable: one `ptr` per trait method.
-    fn dynVtableLlvmType(self: *LlvmEmitter, trait: declaration_artifacts.TraitDeclArtifact) ![]const u8 {
-        var buf: std.ArrayList(u8) = .empty;
-        try buf.appendSlice(self.scratch.allocator(), "{ ");
-        for (trait.facts.methods, 0..) |_, i| {
-            if (i != 0) try buf.appendSlice(self.scratch.allocator(), ", ");
-            try buf.appendSlice(self.scratch.allocator(), "ptr");
-        }
-        try buf.appendSlice(self.scratch.allocator(), " }");
-        return buf.toOwnedSlice(self.scratch.allocator());
-    }
-
-    // One rodata vtable global per `impl Trait for Type` of an object-safe trait:
-    //   @__vt_Type_Trait = internal constant { ptr, ... } { ptr @Type__m1, ... }
-    // The function pointers are listed in trait-method order. This is rodata — no
-    // heap. (LLVM's opaque `ptr` makes the void*-self erasure representation-free.)
-    fn emitVtables(self: *LlvmEmitter) !void {
-        var it = self.impl_methods.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const sep = std.mem.indexOfScalar(u8, key, 0) orelse continue;
-            const trait_name = key[0..sep];
-            const type_name = key[sep + 1 ..];
-            const trait = self.trait_decls.get(trait_name) orelse continue;
-            if (!llvmTraitIsObjectSafe(trait)) continue;
-            const vt_ty = try self.dynVtableLlvmType(trait);
-            try self.out.print(self.allocator, "@__vt_{s}_{s} = internal constant {s} {{ ", .{ type_name, trait_name, vt_ty });
-            for (trait.facts.methods, 0..) |m, i| {
-                if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                const mangled = implMethodMangledLlvm(entry.value_ptr.*, m.name.text) orelse return error.UnsupportedLlvmEmission;
-                try self.out.print(self.allocator, "ptr @{s}", .{mangled});
-            }
-            try self.out.appendSlice(self.allocator, " }\n");
-        }
-        try self.out.appendSlice(self.allocator, "\n");
     }
 
     // Emit a `define` for each collected scalar-env thunk:
@@ -7908,62 +7763,6 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
-    }
-
-    // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return its TraitDecl.
-    fn dynDispatchTrait(self: *LlvmEmitter, callee: ast_bridge.Expr) ?declaration_artifacts.TraitDeclArtifact {
-        const member = memberExpr(callee) orelse return null;
-        const base_ty = self.exprType(member.base.*) orelse return null;
-        const trait_name = switch (self.resolveAliasType(base_ty).kind) {
-            .dyn_trait => |d| d.trait_name.text,
-            else => return null,
-        };
-        return self.trait_decls.get(trait_name);
-    }
-
-    // `d.method(args)` -> load the method slot from `d.vtable`, call it with `d.data`
-    // first. A genuine load-through-vtable indirect call (no devirtualization).
-    fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: declaration_artifacts.TraitDeclArtifact) ![]const u8 {
-        const member = memberCallee(call) orelse return error.UnsupportedLlvmEmission;
-        const slot = traitMethodIndex(trait, member.name.text) orelse return error.UnsupportedLlvmEmission;
-        const msig = trait.facts.methods[slot];
-        const dyn_ty = self.exprType(member.base.*) orelse return error.UnsupportedLlvmEmission;
-        const dyn_llvm = try self.llvmType(self.resolveAliasType(dyn_ty));
-        const fat = try self.emitExpr(member.base.*, self.resolveAliasType(dyn_ty));
-        const data = try self.nextTemp();
-        const vtable = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ data, dyn_llvm, fat });
-        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ vtable, dyn_llvm, fat });
-        // Load the method pointer from the vtable struct at the method's slot index.
-        const vt_ty = try self.dynVtableLlvmType(trait);
-        const slot_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ slot_ptr, vt_ty, vtable, slot });
-        const code = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}\n", .{ code, slot_ptr });
-        // Evaluate the real arguments (the trait method's params after `self`).
-        var args: std.ArrayList(ArgValue) = .empty;
-        defer args.deinit(self.allocator);
-        for (call.args, 0..) |arg, i| {
-            if (i + 1 >= msig.params.len) return error.UnsupportedLlvmEmission;
-            const declared_ty = msig.params[i + 1].ty;
-            const arg_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, arg.span, trait.facts.name.text, mir.dynDispatchArgumentFactIndex(slot, i)) orelse return error.UnsupportedLlvmEmission).target_ty;
-            if (!std.meta.eql(arg_ty, declared_ty)) return error.UnsupportedLlvmEmission;
-            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
-        }
-        const ret_ty: ast_bridge.TypeExpr = msig.return_type orelse simpleType(member.name.span, "void");
-        if (typeNameEql(ret_ty, "void")) {
-            try self.out.print(self.allocator, "  call void {s}(ptr {s}", .{ code, data });
-            for (args.items) |arg| try self.out.print(self.allocator, ", {s} {s}", .{ try self.llvmType(arg.ty), arg.value });
-            try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
-            return "0";
-        }
-        const result_fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.facts.name.text, slot) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (!std.meta.eql(result_fact_ty, ret_ty)) return error.UnsupportedLlvmEmission;
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = call {s} {s}(ptr {s}", .{ result, try self.llvmType(ret_ty), code, data });
-        for (args.items) |arg| try self.out.print(self.allocator, ", {s} {s}", .{ try self.llvmType(arg.ty), arg.value });
-        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
-        return result;
     }
 
     fn emitClosureCall(self: *LlvmEmitter, callee_expr: ast_bridge.Expr, args_expr: []const ast_bridge.Expr, closure_ty: ast_bridge.TypeExpr) ![]const u8 {
@@ -10456,18 +10255,6 @@ const LlvmEmitter = struct {
         const call_kind = self.mirCallTargetKindAt(call_span);
         if (call_kind) |kind| {
             if (self.reflectionCallInfo(call, kind)) |info| return info.result_ty;
-        }
-        // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
-        // trait method's declared return type. Without this, exprType() is null for a dispatch call,
-        // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell
-        // through to the unsupported path — the C backend handled it, the LLVM backend did not.
-        if (self.dynDispatchTrait(call.callee.*)) |trait| {
-            const member = memberCallee(call) orelse return null;
-            const slot = traitMethodIndex(trait, member.name.text) orelse return null;
-            const declared_ty = trait.facts.methods[slot].return_type orelse return simpleType(call.callee.*.span, "void");
-            const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.facts.name.text, slot) orelse return null).target_ty;
-            if (!std.meta.eql(fact_ty, declared_ty)) return null;
-            return fact_ty;
         }
         if (call_kind == .const_get) return if (self.constGetCallInfo(call, .const_get)) |info| info.element_ty else null;
         if (call_kind == .bitcast) return if (self.bitcastTypesForQuery(call, .bitcast)) |types| types.target_ty else null;

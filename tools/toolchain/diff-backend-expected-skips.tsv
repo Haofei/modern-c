@@ -10,16 +10,10 @@ time-test	current host/corpus C build gap; additional skipped fixtures remain co
 synclock-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 showcase-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fuzz-atomics-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-fuzz-task-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-fuzz-async-lowering-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-syntax-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-fuzz-async-cancel-lowering-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-fuzz-async-branch-lowering-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-fuzz-async-loop-lowering-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-ufcs-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-safe-borrow-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-await-expr-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-fuzz-dyn-ifcond-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-await-arr-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-try-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-return-inregion-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

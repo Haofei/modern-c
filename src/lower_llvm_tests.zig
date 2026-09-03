@@ -9748,7 +9748,7 @@ test "LLVM inferred local raw result calls require MIR types" {
     }
 }
 
-test "LLVM inferred local dyn dispatch calls require MIR types" {
+test "LLVM rejects experimental dynamic trait dispatch at codegen admission" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
         \\struct Square { side: u32 }
@@ -9769,20 +9769,7 @@ test "LLVM inferred local dyn dispatch calls require MIR types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null);
-    const caller_body = try llvmFunctionBody(complete_output.items, "define internal i32 @caller");
-    try expectContains(caller_body, "; canonical executable MIR");
-    try expectContains(caller_body, "getelementptr ptr, ptr");
-    try expectContains(caller_body, "call i32 %");
-    const notify_body = try llvmFunctionBody(complete_output.items, "define internal void @notify");
-    try expectContains(notify_body, "; canonical executable MIR");
-    try expectContains(notify_body, "call void %");
-    const holder_init_body = try llvmFunctionBody(complete_output.items, "define internal void @holder_init");
-    try expectContains(holder_init_body, "; canonical executable MIR");
-    try expectContains(holder_init_body, "store atomic ptr");
-    const holder_scale_body = try llvmFunctionBody(complete_output.items, "define internal i32 @holder_scale");
-    try expectContains(holder_scale_body, "; canonical executable MIR");
-    try expectContains(holder_scale_body, "getelementptr ptr, ptr");
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null));
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -9811,6 +9798,40 @@ test "LLVM inferred local dyn dispatch calls require MIR types" {
     var stale_argument_output: std.ArrayList(u8) = .empty;
     defer stale_argument_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM rejects a global dynamic trait carrier at codegen admission" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\global selected: *dyn Shape;
+        \\fn ordinary(value: u32) -> u32 { return value + 1; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_global_dyn_admission.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checked_globals[0].dyn_trait_symbol_id.isValid());
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_global_dyn_admission.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM rejects an extern dynamic trait signature at codegen admission" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\extern fn use(value: *dyn Shape) -> u32;
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_extern_dyn_admission.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const extern_function = for (module_mir.functions) |function| {
+        if (std.mem.eql(u8, function.name, "use")) break function;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(!extern_function.executable_body.complete);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_extern_dyn_admission.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM ordinary direct calls require MIR result and argument types" {

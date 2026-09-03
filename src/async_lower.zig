@@ -2,7 +2,7 @@
 //
 // Runs POST-parse, PRE-monomorphize/sema, on the whole `ast.Module`. For every `is_async`
 // fn it GENERATES ordinary MC AST matching the hand-lowered acceptance target in
-// `tests/c_emit/fuzz_async_lowering.mc`:
+// `tests/experimental/async/fuzz_async_lowering.mc`:
 //
 //   async fn f(params) -> T { let x0 = await e0; ...; <straight-line>; return expr; }
 //

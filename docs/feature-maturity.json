@@ -59,6 +59,16 @@
       ]
     },
     {
+      "id": "dynamic-trait-objects",
+      "status": "experimental",
+      "area": "traits-tier2",
+      "spec_anchor": "Dynamic dispatch (Tier 2)",
+      "evidence": [
+        "src/codegen_request.zig",
+        "tests/c_emit/bad/dynamic_trait_codegen.mc"
+      ]
+    },
+    {
       "id": "closures",
       "status": "experimental",
       "area": "language-surface",
@@ -85,7 +95,7 @@
       "spec_anchor": "Async and Await",
       "evidence": [
         "src/async_lower.zig",
-        "tests/c_emit/fuzz_async_syntax.mc"
+        "tests/experimental/async/fuzz_async_lowering.mc"
       ]
     },
     {

@@ -9592,7 +9592,8 @@ test "lower-c inferred local raw result calls require MIR types" {
     }
 }
 
-test "lower-c inferred local dyn dispatch calls require MIR types" {
+// DIAGNOSTIC_UNIT: E_EXPERIMENTAL_DYN_CODEGEN
+test "lower-c rejects experimental dynamic trait dispatch at codegen admission" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
         \\struct Square { side: u32 }
@@ -9611,13 +9612,13 @@ test "lower-c inferred local dyn dispatch calls require MIR types" {
 
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCheckedCTestWithMir("c_inferred_local_dyn_dispatch_call_types.mc", source, &complete_output);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "/* canonical executable MIR */") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t result") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->scale(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->set(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "__atomic_store_n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, ".vtable->scale(") != null);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer complete.deinit();
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_inferred_local_dyn_dispatch_call_types.mc", source);
+    defer reporter.deinit();
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, &reporter));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_EXPERIMENTAL_DYN_CODEGEN") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -9646,6 +9647,60 @@ test "lower-c inferred local dyn dispatch calls require MIR types" {
     var stale_argument_output: std.ArrayList(u8) = .empty;
     defer stale_argument_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+}
+
+test "lower-c rejects a global dynamic trait carrier at codegen admission" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\global selected: *dyn Shape;
+        \\fn ordinary(value: u32) -> u32 { return value + 1; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_global_dyn_admission.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checked_globals[0].dyn_trait_symbol_id.isValid());
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_global_dyn_admission.mc", .{}, false, null));
+}
+
+test "lower-c rejects an extern dynamic trait signature at codegen admission" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\extern fn use(value: *dyn Shape) -> u32;
+    ;
+    var parsed = try test_support.parseCheckedModule("c_extern_dyn_admission.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const extern_function = for (module_mir.functions) |function| {
+        if (std.mem.eql(u8, function.name, "use")) break function;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(!extern_function.executable_body.complete);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_extern_dyn_admission.mc", .{}, false, null));
+}
+
+test "lower-c rejects nested extern dynamic trait signature shapes at codegen admission" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\extern fn use(
+        \\    nullable: ?*dyn Shape,
+        \\    indirect: *const *dyn Shape,
+        \\    result: Result<*dyn Shape, u32>,
+        \\    callback: fn(*dyn Shape) -> *dyn Shape,
+        \\    closure_value: closure(*dyn Shape) -> *dyn Shape,
+        \\) -> ?*dyn Shape;
+    ;
+    var parsed = try test_support.parseCheckedModule("c_extern_nested_dyn_admission.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_extern_nested_dyn_admission.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct calls require MIR result and argument types" {

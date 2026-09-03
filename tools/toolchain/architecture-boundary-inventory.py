@@ -47,13 +47,13 @@ EXACT_BACKEND_COUNTS = {
     # these only when the count decreases or a deliberate migration patch
     # moves one of these edges behind verified MIR facts.
     '@import("ast_bridge.zig")': 41,
-    '@import("declaration_artifacts.zig")': 9,
+    '@import("declaration_artifacts.zig")': 5,
     '@import("eval.zig")': 7,
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
-    "ast_bridge.": 2807,
-    "declaration_artifacts.": 41,
+    "ast_bridge.": 2758,
+    "declaration_artifacts.": 20,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
     '@import("attr_syntax.zig")': 0,
@@ -151,8 +151,8 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "    fn_decl: ast.FnDecl,"): 0,
     ("src/declaration_artifacts.zig", "pub const GlobalArtifact = struct"): 1,
     ("src/declaration_artifacts.zig", "pub const TraitArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "pub const TraitDeclArtifact = struct"): 1,
-    ("src/declaration_artifacts.zig", "pub const ImplTraitArtifact = struct"): 1,
+    ("src/declaration_artifacts.zig", "pub const TraitDeclArtifact = struct"): 0,
+    ("src/declaration_artifacts.zig", "pub const ImplTraitArtifact = struct"): 0,
     ("src/declaration_artifacts.zig", "pub const TypeArtifact = union(enum)"): 0,
     ("src/declaration_artifacts.zig", "type_artifacts: []const TypeArtifact"): 0,
     ("src/declaration_artifacts.zig", "pub const CallableValueArtifact = union(enum)"): 0,

@@ -146,7 +146,6 @@ const memberCallee = syntax_bridge.memberCallee;
 const memberExpr = syntax_bridge.memberExpr;
 const isStringLiteralTarget = type_bridge.isStringLiteralTarget;
 const isMmioStructAbi = type_bridge.isMmioStructAbi;
-const dynCalleeMethodName = syntax_bridge.dynCalleeMethodName;
 
 pub fn appendLayoutAsserts(
     allocator: std.mem.Allocator,
@@ -268,12 +267,6 @@ pub const CEmitter = struct {
     // generated thunk `RET f__envthunk(void *env, P...){ return f((T)(uintptr_t)env, P...); }`
     // whose signature genuinely matches the slot. Keyed by thunk name.
     bind_thunks: std.StringHashMap(BindThunk),
-    // Tier 2 trait objects. `trait_decls`: every `trait` by name (method sigs), so a
-    // `*dyn Trait` knows its vtable layout and a dispatch resolves the slot. `impl_methods`:
-    // (Trait,Type) → the mangled `Type__m` function names, in trait-method order, so the
-    // rodata vtable initializer lists the right function pointers.
-    trait_decls: std.StringHashMap(declaration_artifacts.TraitDeclArtifact),
-    impl_methods: std.StringHashMap([]const ast_bridge.ImplTraitMethod),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
     reporter: ?*diagnostics.Reporter = null,
@@ -341,8 +334,6 @@ pub const CEmitter = struct {
             .fn_ptr_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
-            .trait_decls = std.StringHashMap(declaration_artifacts.TraitDeclArtifact).init(allocator),
-            .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
             .reporter = reporter,
@@ -369,12 +360,6 @@ pub const CEmitter = struct {
         self.fn_ptr_types.deinit();
         self.closure_types.deinit();
         self.bind_thunks.deinit();
-        self.trait_decls.deinit();
-        {
-            var it = self.impl_methods.keyIterator();
-            while (it.next()) |k| self.allocator.free(k.*);
-        }
-        self.impl_methods.deinit();
         self.functions.deinit();
         self.backend_names.deinit();
     }
@@ -466,8 +451,6 @@ pub const CEmitter = struct {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobalDeclArtifact(global),
-            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.facts.name.text, trait_decl),
-            .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
@@ -503,11 +486,6 @@ pub const CEmitter = struct {
         try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_type = sig.transitionalReturnType(), .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
         if (!function.signature.is_extern) if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
-    }
-
-    fn collectImplTraitArtifact(self: *CEmitter, impl_trait: declaration_artifacts.ImplTraitArtifact) !void {
-        const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.facts.trait_name.text, impl_trait.facts.type_name.text });
-        try self.impl_methods.put(key, impl_trait.facts.methods);
     }
 
     pub fn collectBindThunks(self: *CEmitter) anyerror!void {
@@ -560,10 +538,6 @@ pub const CEmitter = struct {
         // types, and structs/params may reference them by name.
         try self.emitFnPtrTypes();
         try self.emitClosureTypes();
-        // Tier 2 trait-object types: per object-safe trait, a `VT_Trait` vtable-struct
-        // typedef and the `mc_dyn_Trait` fat-pointer typedef. The rodata vtable
-        // INSTANCES are emitted later (after function forward declarations).
-        try self.emitDynTraitTypes();
         try self.emitMmioStructTypes();
         // Arrays, structs, Result types, and tagged unions can embed one another
         // by value (`[N]S`, `struct { [N]S }`, `Result<S, E>`), so emit them in
@@ -611,7 +585,6 @@ pub const CEmitter = struct {
         // Rodata vtable instances: one `static const VT_Trait __vt_Type_Trait = {…}`
         // per `impl Trait for Type` of an object-safe trait. Emitted after the function
         // forward declarations the initializer references.
-        try lower_c_dispatch.emitVtables(self.dispatchContext(), &self.impl_methods, &self.trait_decls);
     }
 
     pub fn emitGlobalDefinitions(self: *CEmitter) anyerror!void {
@@ -1641,11 +1614,8 @@ pub const CEmitter = struct {
             .temp_index = &self.temp_index,
             .emit_ctx = self,
             .c_type = cTypeForDefs,
-            .dyn_type_name = dynTypeNameForType,
             .emit_expr = emitExprForCall,
             .is_void_type = isVoidTypeForDispatch,
-            .require_dyn_dispatch_argument = requireDynDispatchArgumentForDispatch,
-            .require_dyn_dispatch_result = requireDynDispatchResultForDispatch,
         };
     }
 
@@ -2777,11 +2747,17 @@ pub const CEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "mc_dyn_{s}", .{trait_name});
     }
 
-    // For every object-safe trait, emit `struct VT_Trait { … };` and the fat-pointer
-    // typedef `mc_dyn_Trait`. Only traits that are actually formed as `*dyn` need this,
-    // but emitting for every declared trait is harmless (unused typedefs cost nothing).
-    fn emitDynTraitTypes(self: *CEmitter) !void {
-        try lower_c_defs.emitDynTraitTypes(self.defsContext(), &self.trait_decls);
+    /// Representation classification only.  Qualified lowering rejects these
+    /// values at admission; this remains for shared aggregate bookkeeping.
+    fn dynTraitNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
+        return switch (self.resolveAliasType(ty).kind) {
+            .dyn_trait => |dyn| dyn.trait_name.text,
+            .nullable => |child| switch (self.resolveAliasType(child.*).kind) {
+                .dyn_trait => |dyn| dyn.trait_name.text,
+                else => null,
+            },
+            else => null,
+        };
     }
 
     // Checked MIR owns the complete indirect callee signature. The legacy
@@ -2853,16 +2829,6 @@ pub const CEmitter = struct {
         };
     }
 
-    // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return the trait name;
-    // such a call dispatches through the vtable. Null otherwise.
-    fn dynCalleeTrait(self: *CEmitter, callee: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-        const member = memberExpr(callee) orelse return null;
-        const base_ty = self.memberBaseTypeForEmission(member.base.*, locals) orelse return null;
-        return self.dynDispatchTraitNameFromCandidate(base_ty);
-    }
-
-    // `d.method(args)` -> `({ mc_dyn_T t = d; t.vtable->method(t.data, args); })`.
-    // The `d` value is spilled to a temp so its `.data`/`.vtable` are read once.
     fn sliceTypeName(self: *CEmitter, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) ![]const u8 {
         return lower_c_names.sliceTypeName(self.typeNameContext(), child, mutability);
     }
@@ -4839,13 +4805,6 @@ pub const CEmitter = struct {
         }
         if (self.mirHasCallTargetKindAt(.atomic_init, node.callee.*.span)) return error.UnsupportedCEmission;
         if (try self.emitNamedSpecialCallExpr(node, locals)) return true;
-        // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait` ->
-        // `d.vtable->method(d.data, args)` (a genuine load-through-vtable call).
-        if (self.dynCalleeTrait(node.callee.*, locals)) |trait_name| {
-            const method_index = self.dynDispatchMethodIndex(node.callee.*, trait_name) orelse return error.UnsupportedCEmission;
-            try lower_c_dispatch.emitDynDispatch(self.dispatchContext(), node, trait_name, method_index, locals);
-            return true;
-        }
         // Calling a closure-typed value: `c(args)` -> `c.code(c.env, args)`.
         if (self.closureCalleeType(node.callee.*, locals)) |clos| {
             try lower_c_dispatch.emitClosureCall(self.dispatchContext(), node, clos, locals);
@@ -5115,11 +5074,7 @@ pub const CEmitter = struct {
     }
 
     fn emitAddressOfExprWithTarget(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
-        // `&x` / `&mut x` coerced to `*dyn Trait`: build the fat pointer
-        // `(mc_dyn_Trait){ .data = (void*)&x, .vtable = &__vt_Type_Trait }`.
-        if (target_ty) |ty| {
-            if (try self.emitDynCoercion(expr, locals, ty)) return;
-        }
+        _ = target_ty;
         try self.emitExpr(expr, locals);
     }
 
@@ -5157,13 +5112,6 @@ pub const CEmitter = struct {
                 return true;
             }
         };
-        // The uniform `*T -> *dyn Trait` coercion: fires at EVERY assignment context
-        // that threads a target type (let-init, return, assignment RHS, struct field,
-        // array element, call arg), from any `*T` source — not just `&x`. A `*dyn`
-        // pass-through returns false and emits normally.
-        if (self.targetIsDynOrNullableDyn(ty)) {
-            if (try self.emitDynCoercion(expr, locals, ty)) return true;
-        }
         // A `[]mut T` value coerced to a `[]const T` target (safe const-narrowing). The two
         // slice structs are layout-identical but distinct C types (const vs mut pointee), so a
         // plain assignment won't compile — reinterpret via a fresh slice literal that const-casts
@@ -5312,117 +5260,6 @@ pub const CEmitter = struct {
                 try self.out.append(self.allocator, '0' + (byte & 0x07));
             },
         }
-    }
-
-    // If `target_ty` is `*dyn Trait`, emit the checked fat-pointer coercion from a `*T`
-    // source and return true. The STATIC pointee type T selects the rodata vtable,
-    // UNIFORMLY for:
-    //   - `&x` / `&mut x`     : .data = (void*)&x,   T = typeof(x)
-    //   - a `*T` value (param, field, returned `*T`, …): .data = (void*)<ptr>, T = pointee
-    // An existing `*dyn Trait` value passes through (returns false → normal emit). Sema
-    // verified conformance + forge-safety. Returns false when not applicable.
-    // True when `ty` is `*dyn Trait` or `?*dyn Trait` — both route through emitDynCoercion.
-    fn targetIsDynOrNullableDyn(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
-        return self.dynTraitNameFromCandidate(ty) != null;
-    }
-
-    fn emitDynCoercion(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
-        if (self.dynTargetTraitName(target_ty) == null) return false;
-        // `?*dyn Trait = null`: `none` is the zero fat pointer (data == NULL).
-        if (expr.kind == .null_literal) {
-            const trait_name = self.dynTargetTraitName(target_ty) orelse return false;
-            try self.emitNullDynCoercion(trait_name);
-            return true;
-        }
-        if (self.dynSourceIsPassThrough(expr, locals)) return false;
-        const fact = self.mirTargetTypeFactAt(.dyn_coercion, expr.span) orelse return error.UnsupportedCEmission;
-        const source_fact = self.mirTargetTypeFactAt(.dyn_coercion_source, expr.span) orelse return error.UnsupportedCEmission;
-        const trait_name = self.dynTargetTraitName(fact.target_ty) orelse return error.UnsupportedCEmission;
-        const source_ty = source_fact.target_ty;
-        switch (expr.kind) {
-            .grouped => |inner| return try self.emitDynCoercionWithSource(inner.*, locals, trait_name, source_ty),
-            else => return try self.emitDynCoercionWithSource(expr, locals, trait_name, source_ty),
-        }
-    }
-
-    fn dynSourceIsPassThrough(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
-        return switch (expr.kind) {
-            .grouped => |inner| self.dynSourceIsPassThrough(inner.*, locals),
-            else => if (self.dynPassThroughTypeForEmission(expr, locals)) |source_ty|
-                self.targetIsDynOrNullableDyn(source_ty)
-            else
-                false,
-        };
-    }
-
-    fn dynTargetTraitName(self: *CEmitter, target_ty: ast_bridge.TypeExpr) ?[]const u8 {
-        return self.dynTraitNameFromCandidate(target_ty);
-    }
-
-    fn dynTraitNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
-        return switch (self.resolveAliasType(ty).kind) {
-            .dyn_trait => |d| d.trait_name.text,
-            .nullable => |child| switch (self.resolveAliasType(child.*).kind) {
-                .dyn_trait => |d| d.trait_name.text,
-                else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn dynDispatchTraitNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
-        return switch (self.resolveAliasType(ty).kind) {
-            .dyn_trait => |d| d.trait_name.text,
-            .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
-                .dyn_trait => |d| d.trait_name.text,
-                else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn emitNullDynCoercion(self: *CEmitter, trait_name: []const u8) !void {
-        try self.out.print(self.allocator, "({s}){{0}}", .{try self.dynTypeName(trait_name)});
-    }
-
-    fn emitDynCoercionWithSource(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast_bridge.TypeExpr) !bool {
-        return switch (expr.kind) {
-            .grouped => |inner| try self.emitDynCoercionWithSource(inner.*, locals, trait_name, source_ty),
-            .address_of => |inner| try self.emitAddressOfDynCoercion(inner.*, locals, trait_name, source_ty),
-            else => try self.emitPointerValueDynCoercion(expr, locals, trait_name, source_ty),
-        };
-    }
-
-    fn emitAddressOfDynCoercion(self: *CEmitter, operand: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast_bridge.TypeExpr) !bool {
-        // `&x` -> .data = (void*)&x, vtable keyed on typeof(x).
-        const type_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
-        try self.out.print(self.allocator, "({s}){{ .data = (void *)&", .{try self.dynTypeName(trait_name)});
-        try self.emitExpr(operand, locals);
-        try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
-        return true;
-    }
-
-    fn emitPointerValueDynCoercion(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast_bridge.TypeExpr) !bool {
-        // A `*T` value: .data = (void*)<the pointer>, vtable keyed on the pointee T.
-        const pointee = self.dynPointerSourcePointeeFromCandidate(source_ty) orelse return false;
-        const type_name = typeName(self.resolveAliasType(pointee)) orelse return false;
-        try self.out.print(self.allocator, "({s}){{ .data = (void *)", .{try self.dynTypeName(trait_name)});
-        try self.emitExpr(expr, locals);
-        try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
-        return true;
-    }
-
-    fn dynPointerSourcePointeeFromCandidate(self: *CEmitter, source_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
-        // An existing `*dyn Trait` value passes through (no re-wrap).
-        if (self.dynTraitNameFromCandidate(source_ty) != null) return null;
-        const pointer = self.pointerNodeFromCandidate(source_ty) orelse return null;
-        return pointer.child.*;
-    }
-
-    fn dynPassThroughTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
-        if (self.operandEmitType(expr, locals)) |ty| return ty;
-        if (self.callResultTypeForEmission(expr, locals)) |ty| return ty;
-        return self.generatedExprSourceTypeForEmission(expr, locals);
     }
 
     fn emitF32Expr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -8546,7 +8383,6 @@ pub const CEmitter = struct {
             if (self.maybeUninitResultReturnTypeForCall(call, kind)) |ty| return ty;
         }
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
-        if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCallReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.indirectCallReturnTypeForCall(call)) |ty| return ty;
         return self.directCallReturnTypeForCall(call);
@@ -8588,58 +8424,6 @@ pub const CEmitter = struct {
     // instead of leaving each fact as an inline inferred-local type shortcut.
     fn mirResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.TargetTypeKind) ?ast_bridge.TypeExpr {
         return (self.mirTargetTypeFactAt(kind, call.callee.*.span) orelse return null).target_ty;
-    }
-
-    fn dynDispatchReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
-        const trait_name = self.dynCalleeTrait(call.callee.*, locals) orelse return null;
-        const trait = self.trait_decls.get(trait_name) orelse return null;
-        const method_name = dynCalleeMethodName(call.callee.*) orelse return null;
-        for (trait.facts.methods, 0..) |method, index| {
-            if (!std.mem.eql(u8, method.name.text, method_name)) continue;
-            const declared_ty = method.return_type orelse return null;
-            const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait_name, index) orelse return null).target_ty;
-            if (!std.meta.eql(fact_ty, declared_ty)) return null;
-            return fact_ty;
-        }
-        return null;
-    }
-
-    fn dynDispatchMethodIndex(self: *CEmitter, callee: ast_bridge.Expr, trait_name: []const u8) ?usize {
-        const trait = self.trait_decls.get(trait_name) orelse return null;
-        const method_name = dynCalleeMethodName(callee) orelse return null;
-        for (trait.facts.methods, 0..) |method, index| {
-            if (std.mem.eql(u8, method.name.text, method_name)) return index;
-        }
-        return null;
-    }
-
-    fn requireDynDispatchArgument(self: *CEmitter, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) !void {
-        const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
-        if (method_index >= trait.facts.methods.len) return error.UnsupportedCEmission;
-        const method = trait.facts.methods[method_index];
-        if (argument_index + 1 >= method.params.len) return error.UnsupportedCEmission;
-        const declared_ty = method.params[argument_index + 1].ty;
-        const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, span, trait_name, mir.dynDispatchArgumentFactIndex(method_index, argument_index)) orelse return error.UnsupportedCEmission).target_ty;
-        if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;
-    }
-
-    fn requireDynDispatchArgumentForDispatch(ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.requireDynDispatchArgument(span, trait_name, method_index, argument_index);
-    }
-
-    fn requireDynDispatchResult(self: *CEmitter, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) !void {
-        const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
-        if (method_index >= trait.facts.methods.len) return error.UnsupportedCEmission;
-        const declared_ty = trait.facts.methods[method_index].return_type orelse return;
-        if (isVoidType(self.resolveAliasType(declared_ty))) return;
-        const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, span, trait_name, method_index) orelse return error.UnsupportedCEmission).target_ty;
-        if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;
-    }
-
-    fn requireDynDispatchResultForDispatch(ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.requireDynDispatchResult(span, trait_name, method_index);
     }
 
     // Atomic value-producing calls return the atomic payload type

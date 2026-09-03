@@ -31,6 +31,14 @@ consumer, migration status, and fail-closed policy, and is gated by
 `tools/toolchain/semantic-facts-inventory.py`. This closes the inventory action
 slice, not the migration of those families.
 
+**Dynamic-trait exception.** MIR continues to model `dyn_bind`, `dyn_call`, and
+their typed facts so semantic and verifier mutation tests can validate malformed
+MIR. They are not a qualified backend feature: shared C/LLVM admission rejects
+any residual dynamic-trait representation with `E_EXPERIMENTAL_DYN_CODEGEN`
+before an emitter can consume those rows. References below to dynamic-dispatch
+facts therefore describe their frontend/verifier representation, not a current
+codegen fallback or qualified lowering path.
+
 The typed MIR identity migration has started with `BlockId`: `src/mir_model.zig`
 defines the typed ID family (`SourceId`, `NodeId`, `SymbolId`, `TypeId`,
 `ValueId`, `BlockId`, and `SpanId`), built MIR blocks carry a `typed_id` plus

@@ -1,28 +1,16 @@
-//! C backend dynamic-dispatch support artifacts.
-//!
-//! This module owns generated vtable instances. Expression lowering still owns
-//! dynamic call emission and dyn value construction.
+//! C backend closure-dispatch helpers.
 
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_shape = @import("lower_c_shape.zig");
-const syntax_bridge = @import("syntax_bridge.zig");
 
 const BindThunk = lower_c_model.BindThunk;
 const FnInfo = lower_c_model.FnInfo;
-const cTraitIsObjectSafe = lower_c_shape.cTraitIsObjectSafe;
-const implMethodMangled = lower_c_shape.implMethodMangled;
-const memberCallee = syntax_bridge.memberCallee;
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
-pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const IsVoidTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool;
-pub const RequireDynDispatchArgumentFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void;
-pub const RequireDynDispatchResultFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) anyerror!void;
 
 const LocalInfo = lower_c_model.LocalInfo;
 
@@ -33,11 +21,8 @@ pub const Context = struct {
     temp_index: *usize,
     emit_ctx: *anyopaque,
     c_type: CTypeFn,
-    dyn_type_name: DynTypeNameFn,
     emit_expr: EmitExprFn,
     is_void_type: IsVoidTypeFn,
-    require_dyn_dispatch_argument: RequireDynDispatchArgumentFn,
-    require_dyn_dispatch_result: RequireDynDispatchResultFn,
 };
 
 pub const BindEmitPlan = struct {
@@ -109,22 +94,6 @@ pub fn emitPointerEnvBind(ctx: Context, node: anytype, locals: ?*std.StringHashM
     try ctx.out.appendSlice(ctx.allocator, ") }");
 }
 
-pub fn emitDynDispatch(ctx: Context, node: anytype, trait_name: []const u8, method_index: usize, locals: ?*std.StringHashMap(LocalInfo)) !void {
-    const member = memberCallee(node.callee.*) orelse return error.UnsupportedCEmission;
-    try ctx.require_dyn_dispatch_result(ctx.emit_ctx, node.callee.*.span, trait_name, method_index);
-    const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
-    ctx.temp_index.* += 1;
-    try ctx.out.print(ctx.allocator, "({{ {s} {s} = ", .{ try ctx.dyn_type_name(ctx.emit_ctx, trait_name), temp_name });
-    try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
-    try ctx.out.print(ctx.allocator, "; {s}.vtable->{s}({s}.data", .{ temp_name, member.name.text, temp_name });
-    for (node.args, 0..) |arg, index| {
-        try ctx.require_dyn_dispatch_argument(ctx.emit_ctx, arg.span, trait_name, method_index, index);
-        try ctx.out.appendSlice(ctx.allocator, ", ");
-        try ctx.emit_expr(ctx.emit_ctx, arg, locals);
-    }
-    try ctx.out.appendSlice(ctx.allocator, "); })");
-}
-
 pub fn emitClosureCall(ctx: Context, node: anytype, clos: ast_bridge.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
@@ -136,59 +105,4 @@ pub fn emitClosureCall(ctx: Context, node: anytype, clos: ast_bridge.TypeExpr, l
         try ctx.emit_expr(ctx.emit_ctx, arg, locals);
     }
     try ctx.out.appendSlice(ctx.allocator, "); })");
-}
-
-// One rodata vtable per `impl Trait for Type` of an object-safe trait:
-//   static const VT_Trait __vt_Type_Trait = { &Type__m1, &Type__m2, ... };
-// The function pointers are listed in trait-method order. Each is cast to the
-// void*-self slot type (the thunk-free erasure is compiler-privileged: the
-// concrete `*Type` self and the erased `void*` slot are ABI-identical).
-pub fn emitVtables(
-    ctx: Context,
-    impl_methods: *std.StringHashMap([]const ast_bridge.ImplTraitMethod),
-    trait_decls: *std.StringHashMap(declaration_artifacts.TraitDeclArtifact),
-) !void {
-    var it = impl_methods.iterator();
-    while (it.next()) |entry| {
-        try emitVtable(ctx, entry.key_ptr.*, entry.value_ptr.*, trait_decls);
-    }
-    try ctx.out.appendSlice(ctx.allocator, "\n");
-}
-
-fn emitVtable(
-    ctx: Context,
-    key: []const u8,
-    methods: []const ast_bridge.ImplTraitMethod,
-    trait_decls: *std.StringHashMap(declaration_artifacts.TraitDeclArtifact),
-) !void {
-    const sep = std.mem.indexOfScalar(u8, key, 0) orelse return;
-    const trait_name = key[0..sep];
-    const type_name = key[sep + 1 ..];
-    const trait = trait_decls.get(trait_name) orelse return;
-    if (!cTraitIsObjectSafe(trait)) return;
-    try ctx.out.print(ctx.allocator, "static MC_UNUSED VT_{s} const __vt_{s}_{s} = {{ ", .{ trait_name, type_name, trait_name });
-    try emitVtableSlots(ctx, trait, methods);
-    try ctx.out.appendSlice(ctx.allocator, " };\n");
-}
-
-fn emitVtableSlots(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, methods: []const ast_bridge.ImplTraitMethod) !void {
-    for (trait.facts.methods, 0..) |method, i| {
-        if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-        const mangled = implMethodMangled(methods, method.name.text) orelse return error.UnsupportedCEmission;
-        try ctx.out.appendSlice(ctx.allocator, "(");
-        try appendVtableSlotCastType(ctx, trait, method);
-        try ctx.out.print(ctx.allocator, "){s}", .{mangled});
-    }
-}
-
-// The cast type for a vtable slot: `RET (*)(void *, P...)`.
-fn appendVtableSlotCastType(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, method: ast_bridge.TraitMethodSig) !void {
-    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.facts.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.facts.name.span } } };
-    try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
-    try ctx.out.appendSlice(ctx.allocator, " (*)(void *");
-    for (method.params[1..]) |param| {
-        try ctx.out.appendSlice(ctx.allocator, ", ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, param.ty));
-    }
-    try ctx.out.appendSlice(ctx.allocator, ")");
 }

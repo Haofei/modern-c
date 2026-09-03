@@ -7,9 +7,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 
 const ArrayInfo = lower_c_model.ArrayInfo;
@@ -19,7 +17,6 @@ const ResultInfo = lower_c_model.ResultInfo;
 const OptInfo = lower_c_model.OptInfo;
 const SliceInfo = lower_c_model.SliceInfo;
 
-const cTraitIsObjectSafe = lower_c_shape.cTraitIsObjectSafe;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
@@ -273,34 +270,6 @@ pub fn emitClosureTypes(ctx: Context, closure_types: *std.StringHashMap(ast_brid
         }
         try ctx.out.print(ctx.allocator, "); void *env; }} {s};\n\n", .{entry.key_ptr.*});
     }
-}
-
-pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(declaration_artifacts.TraitDeclArtifact)) !void {
-    var it = trait_decls.iterator();
-    while (it.next()) |entry| {
-        const trait = entry.value_ptr.*;
-        if (!cTraitIsObjectSafe(trait)) continue;
-        try ctx.out.print(ctx.allocator, "typedef struct {{ ", .{});
-        for (trait.facts.methods) |method| {
-            try appendVtableSlotType(ctx, trait, method);
-            try ctx.out.appendSlice(ctx.allocator, "; ");
-        }
-        try ctx.out.print(ctx.allocator, "}} VT_{s};\n", .{trait.facts.name.text});
-        try ctx.out.print(ctx.allocator, "typedef struct {{ void *data; VT_{s} const *vtable; }} mc_dyn_{s};\n\n", .{ trait.facts.name.text, trait.facts.name.text });
-    }
-}
-
-fn appendVtableSlotType(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, method: ast_bridge.TraitMethodSig) !void {
-    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.facts.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.facts.name.span } } };
-    try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
-    try ctx.out.appendSlice(ctx.allocator, " (*");
-    try ctx.out.appendSlice(ctx.allocator, method.name.text);
-    try ctx.out.appendSlice(ctx.allocator, ")(void *");
-    for (method.params[1..]) |param| {
-        try ctx.out.appendSlice(ctx.allocator, ", ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, param.ty));
-    }
-    try ctx.out.appendSlice(ctx.allocator, ")");
 }
 
 fn emitIgnoredLocalPrefix(ctx: Context, name: []const u8) !void {

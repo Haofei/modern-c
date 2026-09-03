@@ -3,6 +3,7 @@ const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
+const codegen_request = @import("codegen_request.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
@@ -116,6 +117,9 @@ fn appendCProfileWithVerifiedProgram(
     stub_asm: bool,
     reporter: ?*diagnostics.Reporter,
 ) anyerror!void {
+    codegen_request.rejectExperimentalDynamicTraits(program, reporter) catch |err| switch (err) {
+        error.ExperimentalDynamicTraitCodegen => return error.UnsupportedCEmission,
+    };
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",

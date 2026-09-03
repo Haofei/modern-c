@@ -1,16 +1,16 @@
 # Traits / interfaces — design note (rationale)
 
-**Status: largely implemented; this is now the rationale companion to the
-normative spec.** The normative definition of traits lives in
-`docs/spec/MC_0.7_Final_Design.md` §32 — it is the contract a conforming compiler
-enforces. This note keeps the design exploration and the reasoning behind each
-decision. Where the two differ, **the spec wins**; in particular the as-built
-behavior refined two points from the original proposal: (1) the `*dyn` coercion is
-checked from the source's static pointee type at *every* assignment position
-(`let`/return/arg/field/array), with `E_DYN_FORGE` reserved for raw/untyped
-sources rather than an `&x`-only rule; (2) conformance checks the **full**
-signature (§7). The deferred frontier (§9 effect-carrying `dyn`, comptime/const
-trait methods) is the part still ahead.
+**Status: Tier 1 static traits are the implemented experimental surface; Tier 2
+dynamic trait objects are syntax/sema-only and rejected by qualified backend
+admission.** The normative definition of traits lives in
+`docs/spec/MC_0.7_Final_Design.md` §32. This note keeps the design exploration and
+the reasoning behind each decision. Where the two differ, **the spec wins**; in
+particular the as-built behavior refined two points from the original proposal:
+(1) the `*dyn` coercion is checked from the source's static pointee type at every
+assignment position (`let`/return/arg/field/array), with `E_DYN_FORGE` reserved for
+raw/untyped sources rather than an `&x`-only rule; (2) conformance checks the full
+signature (§7). Tier 2 needs a verified dispatch/effect model before it can be
+readmitted to C or LLVM codegen; it does not retain a backend-local vtable fallback.
 
 This describes how MC gains declared, checked trait/interface abstraction
 **without** weakening any existing machine-contract core guarantee (no GC / no hidden
@@ -121,6 +121,11 @@ path).
 ---
 
 ## 4. Tier 2 — trait objects (`*dyn Trait`)
+
+**Current admission:** Tier 2 is experimental. The parser and semantic checker
+retain it for negative and verifier tests, but qualified C and LLVM codegen reject
+any residual dynamic-trait representation with `E_EXPERIMENTAL_DYN_CODEGEN`.
+Tier 1 continues to lower as direct monomorphized calls.
 
 A `*dyn Trait` is a two-word fat pointer:
 

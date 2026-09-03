@@ -4026,6 +4026,10 @@ pub const CheckedGlobalFact = struct {
     symbol_id: SymbolId,
     source_id: SourceId,
     ty: ValueType,
+    /// Exact dynamic-trait representation when this otherwise opaque
+    /// `.value` global is `*dyn Trait` (or its nullable form).  This keeps
+    /// qualified-backend admission syntax-free.
+    dyn_trait_symbol_id: SymbolId = .invalid,
     initializer_body_id: BodyId = .invalid,
     is_const: bool,
     exported: bool,
