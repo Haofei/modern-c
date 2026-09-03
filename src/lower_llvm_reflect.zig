@@ -14,6 +14,7 @@ const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
 const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
+const StructInfo = lower_llvm_model.StructInfo;
 const alignForward = lower_llvm_type.alignForward;
 const exprAsType = lower_llvm_type.exprAsType;
 const isDynTraitLlvmType = lower_llvm_type.isDynTraitLlvmType;
@@ -37,7 +38,7 @@ pub const ReflectEnv = struct {
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     tagged_unions: *const std.StringHashMap(TaggedUnionInfo),
-    struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
+    struct_types: *const std.StringHashMap(StructInfo),
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     const_global_widths: *const std.StringHashMap(u16),
@@ -135,7 +136,10 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: us
             if (env.type_aliases.get(name.text)) |aliased| return comptimeSizeOf(env, aliased, depth + 1);
             if (env.overlay_unions.get(name.text)) |info| return @intCast(info.size);
             if (env.tagged_unions.get(name.text)) |info| return @intCast(info.layout.size);
-            if (env.struct_types.get(name.text)) |struct_decl| return comptimeStructSize(env, struct_decl, depth + 1);
+            if (env.struct_types.get(name.text)) |info| {
+                if (info.storage_size) |size| return @intCast(size);
+                return comptimeStructSize(env, info.decl, depth + 1);
+            }
             if (env.enum_types.get(name.text)) |enum_decl| return comptimeSizeOf(env, enumReprType(enum_decl), depth + 1);
             if (env.packed_bits.get(name.text)) |info| return comptimeSizeOf(env, info.repr, depth + 1);
             if (libraryScalarLlvmType(name.text) != null) return 1;
@@ -195,7 +199,10 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: u
             if (env.type_aliases.get(name.text)) |aliased| return comptimeAlignOf(env, aliased, depth + 1);
             if (env.overlay_unions.get(name.text)) |info| return @intCast(info.alignment);
             if (env.tagged_unions.get(name.text)) |info| return @intCast(info.layout.alignment);
-            if (env.struct_types.get(name.text)) |struct_decl| return comptimeStructAlign(env, struct_decl, depth + 1);
+            if (env.struct_types.get(name.text)) |info| {
+                if (info.storage_alignment) |alignment| return @intCast(alignment);
+                return comptimeStructAlign(env, info.decl, depth + 1);
+            }
             if (env.enum_types.get(name.text)) |enum_decl| return comptimeAlignOf(env, enumReprType(enum_decl), depth + 1);
             if (env.packed_bits.get(name.text)) |info| return comptimeAlignOf(env, info.repr, depth + 1);
             if (libraryScalarLlvmType(name.text) != null) return 1;
@@ -255,8 +262,8 @@ pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, fiel
     if (depth > 32) return null;
     const name = typeName(ty) orelse return null;
     if (env.type_aliases.get(name)) |aliased| return comptimeFieldOffset(env, aliased, field, depth + 1);
-    if (env.struct_types.get(name)) |struct_decl| {
-        const layout = comptimeStructLayout(env, struct_decl, field, depth + 1) orelse return null;
+    if (env.struct_types.get(name)) |info| {
+        const layout = comptimeStructLayout(env, info.decl, field, depth + 1) orelse return null;
         return layout.field_offset;
     }
     if (env.overlay_unions.get(name)) |info| {

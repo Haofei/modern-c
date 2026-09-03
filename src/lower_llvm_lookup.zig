@@ -82,7 +82,7 @@ pub fn memberBaseStructType(type_aliases: *const std.StringHashMap(ast_bridge.Ty
 
 pub fn memberBaseStructDecl(
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
-    struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
+    struct_types: *const std.StringHashMap(StructInfo),
     ty: ast_bridge.TypeExpr,
 ) ?ast_bridge.StructDecl {
     const struct_ty = memberBaseStructType(type_aliases, ty) orelse return null;
