@@ -3020,7 +3020,7 @@ pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}
         }
         for (function.executable_body.expressions) |expression| {
             if (!uncheckedRangeExpression(expression)) continue;
-            if (countMatchingRangeFactsForExpression(function, expression) == 0) return error.InvalidMirRangeFacts;
+            if (countMatchingRangeFactsForExpression(function, expression) != 1) return error.InvalidMirRangeFacts;
         }
     }
 }

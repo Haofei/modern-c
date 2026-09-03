@@ -9153,6 +9153,16 @@ test "MIR range fact admission rejects invalid and mismatched SpanId facts" {
     std.testing.allocator.free(mismatched_function.range_facts);
     mismatched_function.range_facts = mismatched_facts;
     try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateLoweringAdmission(mismatched));
+
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer duplicate.deinit();
+    const duplicate_function = functionByNameMut(&duplicate, "accumulate") orelse return error.TestUnexpectedResult;
+    const duplicate_facts = try std.testing.allocator.alloc(RangeFact, duplicate_function.range_facts.len + 1);
+    @memcpy(duplicate_facts[0..duplicate_function.range_facts.len], duplicate_function.range_facts);
+    duplicate_facts[duplicate_function.range_facts.len] = duplicate_facts[0];
+    std.testing.allocator.free(duplicate_function.range_facts);
+    duplicate_function.range_facts = duplicate_facts;
+    try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateLoweringAdmission(duplicate));
 }
 
 test "MIR records unchecked call identity and operand/result type facts" {
