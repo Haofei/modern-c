@@ -1373,7 +1373,7 @@ test "module signature type table preserves recursive callable shapes" {
         \\    nested: *mut *const u32,
         \\    mmio: MmioPtr<Device>,
         \\    callback: fn(u32) -> u32,
-        \\    closure: closure(u32) -> u32,
+        \\    closure_value: closure(u32) -> u32,
         \\    object: *dyn Shape,
         \\    bytes: [4]u8,
         \\    result: Result<u32, u8>,

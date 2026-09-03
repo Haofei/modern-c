@@ -1039,7 +1039,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "signature: codegen_attrs.FunctionSignatureFacts": 1,
         "body_facts: codegen_attrs.FunctionBodyFacts": 1,
         "pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact": 0,
-        "pub fn fromDecl(allocator: std.mem.Allocator, def_id: mir.DefId, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType, param_types: []const mir.ValueType) !FunctionArtifact": 1,
+        "pub fn fromDecl(allocator: std.mem.Allocator, def_id: mir.DefId, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, function_mir: ?mir.Function) !FunctionArtifact": 1,
         "pub fn toDecl(self: FunctionArtifact) ast.FnDecl": 0,
         "pub fn comptimeFnDeclFromArtifact(function: FunctionArtifact) ast.FnDecl": 0,
         "function_artifacts: []const FunctionArtifact": 0,
