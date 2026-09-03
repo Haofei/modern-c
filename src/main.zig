@@ -1,20 +1,17 @@
 const std = @import("std");
 
 const artifact_model = @import("artifact_model.zig");
-const ast = @import("ast.zig");
 const backend = @import("backend.zig");
 const backend_registry = @import("backend_registry.zig");
 const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const compiler_session = @import("compiler_session.zig");
 const diagnostics = @import("diagnostics.zig");
-const diagnostic_explain = @import("diagnostic_explain.zig");
 const driver_build = @import("driver_build.zig");
+const driver_inspect = @import("driver_inspect.zig");
 const driver_codegen_inputs = @import("driver_codegen_inputs.zig");
-const eval = @import("eval.zig");
-const fmt = @import("fmt.zig");
 const hir = @import("hir_inspection.zig");
-const ir = @import("ir_inspection.zig");
+const eval = @import("eval.zig");
 const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
@@ -186,7 +183,7 @@ fn runMain(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "explain")) {
         const code = args.next() orelse return failUsage();
         if (args.next() != null) return failUsage();
-        try runExplain(&session, code);
+        try driver_inspect.runExplain(&session, code);
         return;
     }
     const path = args.next() orelse return failUsage();
@@ -213,7 +210,7 @@ fn runMain(init: std.process.Init) !void {
     // `fmt` operates on the raw root file and is token-preserving;
     // it bypasses the parse/sema pipeline entirely.
     if (std.mem.eql(u8, command, "fmt")) {
-        try runFmt(&session, path, root_source, options.check_fmt);
+        try driver_inspect.runFmt(&session, path, root_source, options.check_fmt);
         return;
     }
 
@@ -302,7 +299,7 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "run-trap")) {
         try runTrap(&session, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
-        try runFacts(&session, path, source);
+        try driver_inspect.runFacts(&session);
     } else if (std.mem.eql(u8, command, "inspect-hir")) {
         try runLowerHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "verify-inspect-hir")) {
@@ -312,7 +309,7 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "verify")) {
         try runVerify(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "inspect-ir")) {
-        try runLowerIr(&session, path, source);
+        try driver_inspect.runLowerIr(&session);
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(&session, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
@@ -332,7 +329,7 @@ fn runMain(init: std.process.Init) !void {
         defer if (artifact_source_path) |p| allocator.free(p);
         try runEmitLlvm(&session, path, artifact_source_path orelse path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
-        try runListTests(&session, path, source);
+        try driver_inspect.runListTests(&session);
     } else if (is_emit_layout) {
         try runEmitLayout(&session, path, source, options.structs_flag.?);
     } else if (is_emit_c_struct) {
@@ -388,16 +385,6 @@ fn commandNeedsResolvedProgram(command: []const u8) bool {
         std.mem.eql(u8, command, "emit-llvm") or
         cli.Options.isEmitLayout(command) or
         cli.Options.isEmitCStruct(command);
-}
-
-fn runExplain(session: *CompilationSession, code: []const u8) !void {
-    const allocator = session.allocator;
-    const text = try diagnostic_explain.explain(allocator, code) orelse {
-        std.debug.print("error: unknown diagnostic code: {s}\n", .{code});
-        return error.ExplainFailed;
-    };
-    defer allocator.free(text);
-    try session.writeStdout(text);
 }
 
 fn runLowerHir(session: *CompilationSession, path: []const u8, source: []const u8) !void {
@@ -481,22 +468,6 @@ fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8,
 fn failUsage() !void {
     std.debug.print("{s}", .{usage});
     return error.InvalidArgs;
-}
-
-// `mcc fmt <file>` prints the canonically-formatted source to stdout. `mcc fmt --check <file>`
-// prints nothing and exits nonzero if the file is not already formatted (for CI / editors).
-fn runFmt(session: *CompilationSession, path: []const u8, source: []const u8, check: bool) !void {
-    const allocator = session.allocator;
-    const formatted = try fmt.format(allocator, source);
-    defer allocator.free(formatted);
-    if (check) {
-        if (!std.mem.eql(u8, formatted, source)) {
-            std.debug.print("{s}: not formatted (run `mcc fmt` to fix)\n", .{path});
-            return error.FmtCheckFailed;
-        }
-        return;
-    }
-    try session.writeStdout(formatted);
 }
 
 // `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for
@@ -583,82 +554,6 @@ fn emitDiagnostics(session: *CompilationSession, diag: *diagnostics.Reporter, js
     defer out.deinit(allocator);
     try diag.appendJson(&out);
     try session.writeStdout(out.items);
-}
-
-// `mcc list-tests <file>` prints, one per line, the name of every `#[test]`-attributed
-// function in the file. A test is an ordinary `fn name() -> u32 { ...; return 1; }`
-// whose `assert(...)`s trap on failure; the harness (tools/test/mc-test-runner.sh) runs
-// each in its own process (a trap => fail) and reports pass/fail per name. This is the
-// language-side discovery hook — no codegen change, so a `#[test]` function lowers like
-// any other on both backends.
-fn runListTests(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    _ = path;
-    _ = source;
-
-    if (session.resolved_sources) |resolved_sources| {
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(allocator);
-        const decls = try resolved_sources.collectDecls(allocator);
-        defer allocator.free(decls);
-        try appendResolvedTests(allocator, decls, &out);
-        try session.writeStdout(out.items);
-        return;
-    }
-    return error.MissingResolvedSources;
-}
-
-fn appendResolvedTests(allocator: std.mem.Allocator, decls: []const module_parser.ResolvedDecl, out: *std.ArrayList(u8)) !void {
-    for (decls) |entry| try appendDeclTest(allocator, entry.decl, out);
-}
-
-fn appendDeclTest(allocator: std.mem.Allocator, decl: ast.Decl, out: *std.ArrayList(u8)) !void {
-    var is_test = false;
-    for (decl.attrs) |attr| {
-        switch (attr.kind) {
-            .named => |n| if (std.mem.eql(u8, n.text, "test")) {
-                is_test = true;
-            },
-            else => {},
-        }
-    }
-    if (!is_test) return;
-    const name = switch (decl.kind) {
-        .fn_decl => |fd| fd.name.text,
-        else => return,
-    };
-    try out.appendSlice(allocator, name);
-    try out.append(allocator, '\n');
-}
-
-fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    _ = path;
-    _ = source;
-
-    if (session.resolved_sources) |resolved_sources| {
-        var facts: std.ArrayList(u8) = .empty;
-        defer facts.deinit(allocator);
-        try ir.appendFactsFromResolvedSources(allocator, resolved_sources.*, &facts);
-        try session.writeStdout(facts.items);
-        return;
-    }
-    return error.MissingResolvedSources;
-}
-
-fn runLowerIr(session: *CompilationSession, path: []const u8, source: []const u8) !void {
-    const allocator = session.allocator;
-    _ = path;
-    _ = source;
-
-    if (session.resolved_sources) |resolved_sources| {
-        var output: std.ArrayList(u8) = .empty;
-        defer output.deinit(allocator);
-        try ir.appendLowerIrFromResolvedSources(allocator, resolved_sources.*, &output);
-        try session.writeStdout(output.items);
-        return;
-    }
-    return error.MissingResolvedSources;
 }
 
 fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !void {

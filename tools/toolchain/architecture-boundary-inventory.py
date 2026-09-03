@@ -213,7 +213,10 @@ EXACT_FILE_COUNTS = {
     ("src/module_parser.zig", "parseSourceDatabase("): 4,
     ("src/module_parser.zig", "resolveParsedSourceDatabase("): 3,
     ("src/main.zig", "resolved_sources.files"): 0,
-    ("src/main.zig", "resolved_sources.collectDecls"): 1,
+    # CLI inspection owns its resolved-source traversal; the composition root
+    # must not reach into the parsed-source database itself.
+    ("src/main.zig", "resolved_sources.collectDecls"): 0,
+    ("src/driver_inspect.zig", "resolved_sources.collectDecls"): 1,
     ("src/main.zig", "symbols.emitJson(allocator, module, &diag, &output)"): 0,
     ("src/main.zig", "fn appendModuleTests("): 0,
     ("src/main.zig", "try appendModuleTests(allocator, module, &out)"): 0,
