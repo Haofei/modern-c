@@ -184,7 +184,7 @@ test "lower-c derives packed bits from checked module facts" {
         null,
     );
     try expectContains(output.items, "typedef uint8_t Flags;");
-    try expectContains(output.items, "flags(uint8_t value)");
+    try expectContains(output.items, "flags(Flags value)");
 }
 
 test "lower-c scalar const globals do not retain an AST initializer dependency" {
