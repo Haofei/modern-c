@@ -24,6 +24,7 @@ pub fn defaultInstructionValueId(kind: Instruction.Kind, detail: []const u8) ?[]
 
 pub fn producerHasDominatingCheck(block: Block, producer_index: usize, ty: ValueType) bool {
     const expected_kind = checkKind(ty) orelse return true;
+    if (producer_index >= block.instructions.len) return false;
     const expected_value_id = block.instructions[producer_index].typed_value_id;
     var i = producer_index + 1;
     while (i < block.instructions.len) : (i += 1) {
@@ -38,8 +39,10 @@ pub fn producerHasDominatingCheck(block: Block, producer_index: usize, ty: Value
 
 pub fn useHasDominatingCheck(allocator: std.mem.Allocator, function: Function, block_index: usize, instruction_index: usize, ty: ValueType) !bool {
     const expected_kind = checkKind(ty) orelse return true;
-    const expected_value_id = function.blocks[block_index].instructions[instruction_index].typed_value_id;
     if (block_index >= function.blocks.len) return false;
+    const block = function.blocks[block_index];
+    if (instruction_index >= block.instructions.len) return false;
+    const expected_value_id = block.instructions[instruction_index].typed_value_id;
     // The recursion guard must cover every block; a fixed cap would force a conservative
     // false-positive (E_REPRESENTATION_CHECK_MISSING) on large functions.
     const visiting = try allocator.alloc(bool, function.blocks.len);
@@ -118,4 +121,42 @@ fn successorListed(block: Block, target: usize) bool {
         if (successor == target) return true;
     }
     return false;
+}
+
+test "dominating representation lookup rejects invalid instruction coordinates" {
+    var instructions = [_]Instruction{
+        .{
+            .kind = .representation_use,
+            .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u8" } },
+            .detail = "p",
+            .line = 1,
+            .column = 1,
+        },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{.{
+        .id = 0,
+        .kind = "entry",
+        .instructions = instructions[0..],
+        .successors = successors[0..],
+        .terminator = .{ .return_ = .void },
+    }};
+    const function = Function{
+        .name = "invalid_coordinates",
+        .return_ty = .void,
+        .no_lang_trap = false,
+        .irq_context = false,
+        .blocks = blocks[0..],
+        .trap_edges = &.{},
+        .contract_regions = &.{},
+        .range_facts = &.{},
+        .pointer_provenance_facts = &.{},
+        .representation_facts = &.{},
+        .elided_bounds = &.{},
+    };
+    const pointer_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u8" } };
+
+    try std.testing.expect(!try useHasDominatingCheck(std.testing.allocator, function, 1, 0, pointer_ty));
+    try std.testing.expect(!try useHasDominatingCheck(std.testing.allocator, function, 0, 1, pointer_ty));
+    try std.testing.expect(!producerHasDominatingCheck(blocks[0], 1, pointer_ty));
 }
