@@ -3322,11 +3322,6 @@ pub const IntegerFact = struct {
     source: SourcePoint,
 };
 
-pub const BoolFact = struct {
-    value: bool,
-    source: SourcePoint,
-};
-
 pub const FloatFact = struct {
     literal: []const u8,
     /// The canonical type identity. Float facts deliberately do not duplicate
@@ -3971,7 +3966,6 @@ pub const Function = struct {
     bounds_facts: []BoundsFact = &.{},
     access_facts: []AccessFact = &.{},
     integer_facts: []IntegerFact = &.{},
-    bool_facts: []BoolFact = &.{},
     float_facts: []FloatFact = &.{},
     const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
@@ -4146,7 +4140,6 @@ pub const Module = struct {
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
             if (function.access_facts.len != 0) self.allocator.free(function.access_facts);
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
-            if (function.bool_facts.len != 0) self.allocator.free(function.bool_facts);
             if (function.float_facts.len != 0) self.allocator.free(function.float_facts);
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);

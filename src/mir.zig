@@ -100,7 +100,6 @@ pub const BoundsFact = mir_model.BoundsFact;
 pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const AccessFact = mir_model.AccessFact;
 pub const IntegerFact = mir_model.IntegerFact;
-pub const BoolFact = mir_model.BoolFact;
 pub const FloatFact = mir_model.FloatFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
@@ -1416,7 +1415,6 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
                         .access_facts = try allocator.alloc(AccessFact, 0),
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
-                        .bool_facts = try allocator.alloc(BoolFact, 0),
                         .float_facts = try allocator.alloc(FloatFact, 0),
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .bind_thunk_facts = try allocator.alloc(BindThunkFact, 0),
@@ -1826,8 +1824,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
     for (module_mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} symbol_id={} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} bool_facts={} float_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, if (function.typed_symbol_id.isValid()) function.typed_symbol_id.index() else std.math.maxInt(usize), function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.bool_facts.len, function.float_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} symbol_id={} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} float_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, if (function.typed_symbol_id.isValid()) function.typed_symbol_id.index() else std.math.maxInt(usize), function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.float_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.type_identities) |identity| {
             try out.print(
@@ -2086,13 +2084,6 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 allocator,
                 "mir integer_fact fn={s} literal={s} target_type={s} target_type_id={} typed_span_id={} recorded=true line={} column={}\n",
                 .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize), fact.source.line, fact.source.column },
-            );
-        }
-        for (function.bool_facts) |fact| {
-            try out.print(
-                allocator,
-                "mir bool_fact fn={s} value={} recorded=true line={} column={}\n",
-                .{ function.name, fact.value, fact.source.line, fact.source.column },
             );
         }
         for (function.float_facts) |fact| {
@@ -2970,14 +2961,6 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
                 const instruction_count = countMatchingIntegerInstructionsForInstruction(function, instruction);
                 if (fact_count == 0 or fact_count != instruction_count) return error.InvalidMirIntegerFacts;
             }
-        }
-    }
-}
-
-pub fn validateBoolFactsForLowering(module: Module) error{InvalidMirBoolFacts}!void {
-    for (module.functions) |function| {
-        for (function.bool_facts) |fact| {
-            if (!functionHasMatchingBoolInstruction(function, fact)) return error.InvalidMirBoolFacts;
         }
     }
 }
@@ -3867,7 +3850,6 @@ pub const LoweringAdmissionError = error{
     InvalidMirTypeOwnershipFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
-    InvalidMirBoolFacts,
     InvalidMirFloatFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
@@ -3885,7 +3867,6 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
-    try validateBoolFactsForLowering(module);
     try validateFloatFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateBindThunkFactsForLowering(module);
@@ -4379,19 +4360,6 @@ fn countMatchingIntegerInstructionsForInstruction(function: Function, target: In
         }
     }
     return count;
-}
-
-fn functionHasMatchingBoolInstruction(function: Function, fact: BoolFact) bool {
-    for (function.blocks) |block| {
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .expr) continue;
-            if (instruction.result_ty != .bool) continue;
-            if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
-            if (!std.mem.eql(u8, instruction.detail, "bool")) continue;
-            return true;
-        }
-    }
-    return false;
 }
 
 fn floatFactTypedIdentitiesValid(function: Function, fact: FloatFact) bool {
@@ -6579,7 +6547,6 @@ const FunctionBuilder = struct {
     bounds_facts: std.ArrayList(BoundsFact),
     access_facts: std.ArrayList(AccessFact),
     integer_facts: std.ArrayList(IntegerFact),
-    bool_facts: std.ArrayList(BoolFact),
     float_facts: std.ArrayList(FloatFact),
     const_get_facts: std.ArrayList(ConstGetFact),
     call_target_facts: std.ArrayList(CallTargetFact),
@@ -6727,7 +6694,6 @@ const FunctionBuilder = struct {
             .bounds_facts = .empty,
             .access_facts = .empty,
             .integer_facts = .empty,
-            .bool_facts = .empty,
             .float_facts = .empty,
             .const_get_facts = .empty,
             .call_target_facts = .empty,
@@ -6910,7 +6876,6 @@ const FunctionBuilder = struct {
             .bounds_facts = .empty,
             .access_facts = .empty,
             .integer_facts = .empty,
-            .bool_facts = .empty,
             .float_facts = .empty,
             .const_get_facts = .empty,
             .call_target_facts = .empty,
@@ -6994,7 +6959,6 @@ const FunctionBuilder = struct {
         self.bounds_facts.deinit(self.allocator);
         self.access_facts.deinit(self.allocator);
         self.integer_facts.deinit(self.allocator);
-        self.bool_facts.deinit(self.allocator);
         self.float_facts.deinit(self.allocator);
         self.const_get_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
@@ -7104,8 +7068,6 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(access_facts);
         const integer_facts = try self.integer_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(integer_facts);
-        const bool_facts = try self.bool_facts.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(bool_facts);
         const float_facts = try self.float_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(float_facts);
         const const_get_facts = try self.const_get_facts.toOwnedSlice(self.allocator);
@@ -7232,7 +7194,6 @@ const FunctionBuilder = struct {
             .bounds_facts = bounds_facts,
             .access_facts = access_facts,
             .integer_facts = integer_facts,
-            .bool_facts = bool_facts,
             .float_facts = float_facts,
             .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
@@ -14719,8 +14680,7 @@ const FunctionBuilder = struct {
                 const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 instruction.constant_usize_value = self.constUsizeValue(expr);
             },
-            .bool_literal => |value| {
-                try self.addBoolLiteralFact(value, expr.span);
+            .bool_literal => {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
             },
             .float_literal => {
@@ -17742,13 +17702,6 @@ const FunctionBuilder = struct {
         });
     }
 
-    fn addBoolLiteralFact(self: *FunctionBuilder, value: bool, span: ast.Span) !void {
-        try self.bool_facts.append(self.allocator, .{
-            .value = value,
-            .source = .{ .line = span.line, .column = span.column },
-        });
-    }
-
     fn addFloatLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
         const source = self.sourcePoint(span);
         try self.float_facts.append(self.allocator, .{
@@ -20611,7 +20564,6 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
     if (function.access_facts.len != 0) allocator.free(function.access_facts);
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
-    if (function.bool_facts.len != 0) allocator.free(function.bool_facts);
     if (function.float_facts.len != 0) allocator.free(function.float_facts);
     if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);

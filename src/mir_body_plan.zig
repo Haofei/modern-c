@@ -141,7 +141,6 @@ pub const BodyPlan = struct {
     symbols: []const mir.SymbolIdentity,
     access_facts: []const mir.AccessFact,
     integer_facts: []const mir.IntegerFact,
-    bool_facts: []const mir.BoolFact,
     float_facts: []const mir.FloatFact,
 
     pub fn deinit(self: *BodyPlan, allocator: std.mem.Allocator) void {
@@ -160,7 +159,6 @@ pub const BodyPlan = struct {
         allocator.free(self.symbols);
         allocator.free(self.access_facts);
         allocator.free(self.integer_facts);
-        allocator.free(self.bool_facts);
         allocator.free(self.float_facts);
         self.* = undefined;
     }
@@ -211,8 +209,6 @@ pub fn build(allocator: std.mem.Allocator, function: *const mir.Function) !BodyP
     errdefer allocator.free(access_facts);
     const integer_facts = try allocator.dupe(mir.IntegerFact, function.integer_facts);
     errdefer allocator.free(integer_facts);
-    const bool_facts = try allocator.dupe(mir.BoolFact, function.bool_facts);
-    errdefer allocator.free(bool_facts);
     const float_facts = try allocator.dupe(mir.FloatFact, function.float_facts);
     errdefer allocator.free(float_facts);
     const blocks = try buildBlocks(allocator, function);
@@ -239,7 +235,6 @@ pub fn build(allocator: std.mem.Allocator, function: *const mir.Function) !BodyP
         .symbols = symbols,
         .access_facts = access_facts,
         .integer_facts = integer_facts,
-        .bool_facts = bool_facts,
         .float_facts = float_facts,
     };
 }
