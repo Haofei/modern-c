@@ -21,7 +21,8 @@ test "LLVM derives type aliases from module signature facts" {
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), module_mir.type_aliases.len);
-    try std.testing.expectEqualStrings("Word", module_mir.type_aliases[0].name);
+    const alias_symbol = module_mir.symbol_identities[module_mir.type_aliases[0].symbol_id.index()];
+    try std.testing.expectEqualStrings("Word", alias_symbol.spelling);
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);

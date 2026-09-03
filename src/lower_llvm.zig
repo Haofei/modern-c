@@ -312,6 +312,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         early_metadata,
         program.typed_mir.signature_types,
         program.typed_mir.type_aliases,
+        program.typed_mir.symbol_identities,
     );
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -881,7 +882,7 @@ const LlvmEmitter = struct {
     fn typeAliasIdentity(self: *const LlvmEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {
         if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
-        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_ and std.mem.eql(u8, identity.spelling, fact.name)) identity else null;
+        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_) identity else null;
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
@@ -9633,7 +9634,10 @@ const LlvmEmitter = struct {
 
     /// Shared one-way bridge for remaining legacy body mechanics.
     fn signatureTypeExpr(self: *LlvmEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
-        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch return error.UnsupportedLlvmEmission;
+        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.UnsupportedLlvmEmission,
+        };
     }
 
     fn llvmSignatureNameType(self: *LlvmEmitter, name: []const u8) ![]const u8 {

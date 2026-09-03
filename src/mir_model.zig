@@ -4044,8 +4044,6 @@ pub const CheckedGlobalFact = struct {
 /// the module-owned signature graph, so codegen never needs an alias AST
 /// payload merely to resolve a nominal spelling.
 pub const TypeAliasFact = struct {
-    /// Rendering spelling. Semantic joins must use `symbol_id`.
-    name: []const u8,
     symbol_id: SymbolId,
     source_id: SourceId,
     target_type_id: SignatureTypeId,

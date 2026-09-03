@@ -1280,7 +1280,6 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         switch (decl.kind) {
             .type_alias => |alias| {
                 try type_alias_facts.append(allocator, .{
-                    .name = alias.name.text,
                     .symbol_id = try internSymbolId(&symbol_ids, alias.name.text),
                     .source_id = typed_source_id,
                     .target_type_id = try signature_types.internTypeExpr(alias.ty, &const_fns, &const_globals),
@@ -1475,11 +1474,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         identity.mutable = !checked_global.is_const;
     }
     for (type_alias_facts.items) |fact| {
-        if (fact.name.len == 0 or !fact.symbol_id.isValid() or fact.symbol_id.index() >= symbol_identities.len or
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbol_identities.len or
             !fact.target_type_id.isValid() or fact.target_type_id.index() >= signature_types.shapes.items.len)
             return error.InvalidMirSymbolIdentity;
         const identity = &symbol_identities[fact.symbol_id.index()];
-        if (!identity.id.eql(fact.symbol_id) or !std.mem.eql(u8, identity.spelling, fact.name) or
+        if (!identity.id.eql(fact.symbol_id) or
             (identity.kind != .unknown and identity.kind != .type_))
             return error.InvalidMirSymbolIdentity;
         identity.kind = .type_;
@@ -3999,11 +3998,11 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
 
 fn validateTypeAliasFactsForLowering(module: Module) error{InvalidMirTypeAliasFacts}!void {
     for (module.type_aliases, 0..) |fact, index| {
-        if (fact.name.len == 0 or !fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
             !fact.target_type_id.isValid() or !module.signature_types.contains(fact.target_type_id))
             return error.InvalidMirTypeAliasFacts;
         const identity = module.symbol_identities[fact.symbol_id.index()];
-        if (!identity.id.eql(fact.symbol_id) or !std.mem.eql(u8, identity.spelling, fact.name) or identity.kind != .type_) return error.InvalidMirTypeAliasFacts;
+        if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidMirTypeAliasFacts;
         if (fact.source_id.isValid() and (fact.source_id.index() >= module.source_identities.len or
             !module.source_identities[fact.source_id.index()].id.eql(fact.source_id)))
             return error.InvalidMirTypeAliasFacts;

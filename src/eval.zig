@@ -630,6 +630,7 @@ pub const ComptimeDeclarations = struct {
     /// Syntax-free alias targets paired with `signature_types`. This is the
     /// complete alias declaration ingress for artifact-backed codegen.
     type_alias_facts: []const mir.TypeAliasFact = &.{},
+    symbol_identities: []const mir.SymbolIdentity = &.{},
     comptime_functions: ComptimeFunctionDeclarations = .empty,
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
@@ -656,9 +657,11 @@ pub const ComptimeDeclarations = struct {
         artifacts: CgDeclArtifacts,
         signature_types: mir.SignatureTypeTable,
         type_alias_facts: []const mir.TypeAliasFact,
+        symbol_identities: []const mir.SymbolIdentity,
     ) ComptimeDeclarations {
         var declarations = fromCodegenArtifactsWithSignatureTypes(artifacts, signature_types);
         declarations.type_alias_facts = type_alias_facts;
+        declarations.symbol_identities = symbol_identities;
         return declarations;
     }
 };
@@ -1130,7 +1133,9 @@ fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr 
     if (declarations.decl_artifacts != null) {
         const types = declarations.signature_types orelse return null;
         for (declarations.type_alias_facts) |fact| {
-            if (!std.mem.eql(u8, fact.name, name)) continue;
+            if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= declarations.symbol_identities.len) return null;
+            const identity = declarations.symbol_identities[fact.symbol_id.index()];
+            if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_ or !std.mem.eql(u8, identity.spelling, name)) continue;
             return signature_type_materializer.typeExpr(scope.bindings.allocator, types, fact.target_type_id, .{ .offset = 0, .len = 0, .line = 0, .column = 0 }) catch |err| switch (err) {
                 error.OutOfMemory => {
                     scope.recordOom();

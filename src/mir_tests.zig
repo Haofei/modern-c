@@ -3745,8 +3745,9 @@ test "MIR type alias facts are syntax-free and fail closed" {
 
     try std.testing.expectEqual(@as(usize, 1), module_mir.type_aliases.len);
     const fact = module_mir.type_aliases[0];
-    try std.testing.expectEqualStrings("Word", fact.name);
     try std.testing.expect(fact.symbol_id.isValid());
+    const identity = module_mir.symbol_identities[fact.symbol_id.index()];
+    try std.testing.expectEqualStrings("Word", identity.spelling);
     try std.testing.expect(module_mir.signature_types.contains(fact.target_type_id));
     try mir.validateLoweringAdmission(module_mir);
 

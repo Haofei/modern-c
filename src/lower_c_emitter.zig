@@ -423,6 +423,7 @@ pub const CEmitter = struct {
             artifacts,
             self.mir_module.signature_types,
             self.mir_module.type_aliases,
+            self.mir_module.symbol_identities,
         );
     }
 
@@ -833,7 +834,7 @@ pub const CEmitter = struct {
     fn typeAliasIdentity(self: *const CEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {
         if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
-        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_ and std.mem.eql(u8, identity.spelling, fact.name)) identity else null;
+        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_) identity else null;
     }
 
     fn globalInitializerMir(self: *const CEmitter, body_id: mir.BodyId) ?mir.Function {
@@ -1517,7 +1518,10 @@ pub const CEmitter = struct {
 
     /// Shared one-way bridge for remaining legacy initializer/body mechanics.
     fn signatureTypeExpr(self: *CEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
-        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch return error.UnsupportedCEmission;
+        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.UnsupportedCEmission,
+        };
     }
 
     fn cSignatureGenericType(self: *CEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {
