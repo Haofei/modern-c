@@ -112,12 +112,10 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     defer reporter.deinit();
 
     const symbols = try std.testing.allocator.alloc(mir.SymbolIdentity, 2);
-    symbols[0] = .{ .id = mir.SymbolId.fromIndex(0), .spelling = "add_one" };
-    symbols[1] = .{ .id = mir.SymbolId.fromIndex(1), .spelling = "mc_ksan_check" };
+    symbols[0] = .{ .id = mir.SymbolId.fromIndex(0), .spelling = "add_one", .kind = .function };
+    symbols[1] = .{ .id = mir.SymbolId.fromIndex(1), .spelling = "mc_ksan_check", .kind = .function };
     const signature_shapes = try std.testing.allocator.alloc(mir.TypeShape, 1);
-    errdefer std.testing.allocator.free(signature_shapes);
     signature_shapes[0] = .{ .name = try std.testing.allocator.dupe(u8, "void") };
-    errdefer signature_shapes[0].deinit(std.testing.allocator);
     const blocks = try std.testing.allocator.alloc(mir.Block, 1);
     blocks[0] = .{
         .id = 0,
@@ -198,11 +196,37 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
         .no_lang_trap = false,
         .irq_context = false,
     };
+    const callable_emission_facts = try std.testing.allocator.alloc(mir.CallableEmissionFact, 2);
+    callable_emission_facts[0] = .{
+        .def_id = .{ .file_id = 0, .ordinal = 0 },
+        .symbol_id = mir.SymbolId.fromIndex(0),
+        .source_id = .invalid,
+        .declaration_source = .{ .line = 1, .column = 1 },
+        .params = &.{},
+        .exported = false,
+        .is_const = false,
+        .error_from = false,
+        .backend_name = null,
+        .render_attrs = .{},
+    };
+    callable_emission_facts[1] = .{
+        .def_id = .{ .file_id = 0, .ordinal = 1 },
+        .symbol_id = mir.SymbolId.fromIndex(1),
+        .source_id = .invalid,
+        .declaration_source = .{ .line = 1, .column = 1 },
+        .params = &.{},
+        .exported = false,
+        .is_const = false,
+        .error_from = false,
+        .backend_name = null,
+        .render_attrs = .{},
+    };
     var module_mir = mir.Module{
         .allocator = std.testing.allocator,
         .symbol_identities = symbols,
         .signature_types = .{ .shapes = signature_shapes },
         .checked_callables = checked_callables,
+        .callable_emission_facts = callable_emission_facts,
         .functions = functions,
     };
     defer module_mir.deinit();
@@ -216,7 +240,7 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     try std.testing.expect(!program.runtime_hooks.definesSanitizerHook(0));
 
     module_mir.checked_callables[0].param_count = 1;
-    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+    try std.testing.expectError(error.InvalidMirCallableEmissionFacts, VerifiedProgram.init(&module_mir, &reporter));
     module_mir.checked_callables[0].param_count = 0;
     module_mir.checked_callables[0].is_variadic = true;
     try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
@@ -245,7 +269,7 @@ test "VerifiedProgram rejects checked callable parameter type drift" {
     try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
 
     module_mir.checked_callables[forward_index].param_types = &.{};
-    try std.testing.expectError(error.InvalidCheckedProgram, VerifiedProgram.init(&module_mir, &reporter));
+    try std.testing.expectError(error.InvalidMirCallableEmissionFacts, VerifiedProgram.init(&module_mir, &reporter));
     module_mir.checked_callables[forward_index].param_types = saved;
 
     const saved_signature_type = module_mir.checked_callables[forward_index].signature_return_type_id;

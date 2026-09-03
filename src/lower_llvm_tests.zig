@@ -26,7 +26,7 @@ test "LLVM derives type aliases from module signature facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -59,7 +59,7 @@ test "LLVM derives enums from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -92,7 +92,7 @@ test "LLVM derives packed bits from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -124,7 +124,7 @@ test "LLVM derives overlay unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -156,7 +156,7 @@ test "LLVM derives tagged unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -188,7 +188,7 @@ test "LLVM derives structs from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -5368,7 +5368,7 @@ fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []a
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
-test "LLVM rejects a verified body with missing declaration facts" {
+test "LLVM emits a verified body without function declaration artifacts" {
     const source =
         \\fn value() -> u32 { return 7; }
     ;
@@ -5379,21 +5379,19 @@ test "LLVM rejects a verified body with missing declaration facts" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
-    try std.testing.expectError(
-        error.UnsupportedLlvmEmission,
-        lower_llvm.appendLlvmCheckedMirArtifacts(
-            std.testing.allocator,
-            .empty,
-            &module_mir,
-            &output,
-            "llvm_missing_declaration_facts.mc",
-            .{},
-            false,
-            .riscv64,
-            false,
-            null,
-        ),
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        .empty,
+        &module_mir,
+        &output,
+        "llvm_missing_declaration_facts.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
     );
+    try expectContains(output.items, "define internal i32 @value(");
 }
 
 test "LLVM renders scalar const globals from verified MIR facts" {
@@ -5515,10 +5513,7 @@ test "LLVM emits direct global-address plans without AST initializer artifacts" 
     try std.testing.expect(module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(

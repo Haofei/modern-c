@@ -65,7 +65,12 @@ pub const LoopJumps = struct {
 };
 
 pub const FnInfo = struct {
-    params: []const mir.CallableParameterEmissionFact,
+    /// Backend-local joined view. Parameter spelling remains in
+    /// `CallableEmissionFact`; semantic type identity remains in
+    /// `CheckedCallableFact`. The emitter assembles this transient slice so
+    /// helper modules do not force either frontend table to duplicate the
+    /// other one's data.
+    params: []const FnParamInfo,
     return_ty: mir.ValueType,
     return_type_id: mir.SignatureTypeId,
     is_extern: bool,
@@ -77,6 +82,11 @@ pub const FnInfo = struct {
     pub fn acceptsArgCount(self: FnInfo, count: usize) bool {
         return if (self.is_variadic) count >= self.params.len else count == self.params.len;
     }
+};
+
+pub const FnParamInfo = struct {
+    value_ty: mir.ValueType,
+    type_id: mir.SignatureTypeId,
 };
 
 pub const SequencedArgTemp = struct {

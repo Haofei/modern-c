@@ -41,7 +41,7 @@ fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Dec
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
-test "lower-c rejects a verified body with missing declaration facts" {
+test "lower-c emits a verified body without function declaration artifacts" {
     const source =
         \\fn value() -> u32 { return 7; }
     ;
@@ -52,20 +52,18 @@ test "lower-c rejects a verified body with missing declaration facts" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
-    try std.testing.expectError(
-        error.UnsupportedCEmission,
-        lower_c.appendCProfileWithMirArtifacts(
-            std.testing.allocator,
-            .empty,
-            &module_mir,
-            &output,
-            .kernel,
-            "c_missing_declaration_facts.mc",
-            .{},
-            false,
-            null,
-        ),
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        .empty,
+        &module_mir,
+        &output,
+        .kernel,
+        "c_missing_declaration_facts.mc",
+        .{},
+        false,
+        null,
     );
+    try expectContains(output.items, "value(void)");
 }
 
 test "lower-c renders scalar const globals from verified MIR facts" {
@@ -99,9 +97,9 @@ test "lower-c derives type aliases from module signature facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    // The scalar const global and type alias both have syntax-free fact paths;
-    // only the function requires an ordinary declaration artifact.
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    // The scalar const global, type alias, and function all have syntax-free
+    // fact paths, so no ordinary declaration artifact remains.
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -133,9 +131,9 @@ test "lower-c derives enums from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    // Enum declaration syntax is not a codegen artifact; only the function
-    // body remains transitional in this fixture.
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    // Enum declaration and callable syntax are both absent from codegen
+    // artifacts in this fixture.
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -168,7 +166,7 @@ test "lower-c derives packed bits from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -200,7 +198,7 @@ test "lower-c derives overlay unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -232,7 +230,7 @@ test "lower-c derives tagged unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -264,7 +262,7 @@ test "lower-c derives structs from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1019,10 +1017,7 @@ test "lower-c omits nullable pointer null globals from AST artifacts" {
     try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1054,10 +1049,7 @@ test "lower-c emits direct global-address plans without AST initializer artifact
     try std.testing.expect(module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(

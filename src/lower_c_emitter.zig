@@ -626,8 +626,12 @@ pub const CEmitter = struct {
             if (!std.mem.eql(u8, name, fn_mir.name) or !mir.ValueType.eql(checked.return_ty, fn_mir.return_ty) or
                 !checked.signature_return_type_id.eql(fn_mir.signature_return_type_id) or checked.kind == .global_initializer)
                 return error.UnsupportedCEmission;
+            const params = try self.scratch.allocator().alloc(lower_c_model.FnParamInfo, fact.params.len);
+            for (params, checked.param_types, checked.signature_param_type_ids) |*param, value_ty, type_id| {
+                param.* = .{ .value_ty = value_ty, .type_id = type_id };
+            }
             try self.functions.put(name, .{
-                .params = fact.params,
+                .params = params,
                 .return_ty = checked.return_ty,
                 .return_type_id = checked.signature_return_type_id,
                 .is_extern = checked.kind == .extern_function,
