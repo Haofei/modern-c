@@ -6344,6 +6344,9 @@ test "LLVM consumes enum-literal target type facts across contexts" {
         \\enum Mode: u8 { read = 1, write = 2 }
         \\extern fn sink(mode: Mode) -> Mode;
         \\global global_mode: Mode = .read;
+        \\type ModeAlias = Mode;
+        \\const DEFAULT_ALIAS: ModeAlias = (.read);
+        \\global alias_mode: ModeAlias = (.write as ModeAlias);
         \\fn make() -> Mode { return .read; }
         \\fn pass() -> Mode { return sink(.write); }
         \\fn compare(mode: Mode) -> bool { return mode == .read; }
@@ -6353,6 +6356,8 @@ test "LLVM consumes enum-literal target type facts across contexts" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmExecutableMirTest("llvm_mir_enum_target_type_facts.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@global_mode = internal global i8 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@DEFAULT_ALIAS = internal constant i8 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@alias_mode = internal global i8 2") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i8 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@sink(i8 2)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "icmp eq i8") != null);

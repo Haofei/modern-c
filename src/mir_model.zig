@@ -4484,12 +4484,7 @@ fn enumInitializerPlanMatchesGlobal(plan: EnumInitializerPlan, module: Module, g
     if (!plan.enum_symbol_id.isValid() or !module.signature_types.contains(plan.repr_type_id)) return false;
     const identity = if (plan.enum_symbol_id.index() < module.symbol_identities.len) module.symbol_identities[plan.enum_symbol_id.index()] else return false;
     if (!identity.id.eql(plan.enum_symbol_id) or identity.kind != .type_) return false;
-    const shape = module.signature_types.get(global.signature_type_id) orelse return false;
-    const global_name = switch (shape) {
-        .name => |name| name,
-        else => return false,
-    };
-    if (!std.mem.eql(u8, global_name, identity.spelling)) return false;
+    if (!signatureTypeResolvesToSymbol(module, global.signature_type_id, plan.enum_symbol_id)) return false;
     const enum_fact = for (module.enums) |candidate| {
         if (candidate.symbol_id.eql(plan.enum_symbol_id)) break candidate;
     } else return false;
@@ -4499,6 +4494,41 @@ fn enumInitializerPlanMatchesGlobal(plan: EnumInitializerPlan, module: Module, g
         .open_enum => |name| std.mem.eql(u8, name, identity.spelling),
         else => false,
     };
+}
+
+/// Transparent declaration aliases are represented by their own symbol rows;
+/// initialization plans must follow those rows by ID rather than retain the
+/// original alias spelling. A bounded walk turns a malformed cycle into a
+/// rejected plan.
+fn signatureTypeResolvesToSymbol(module: Module, initial_type_id: SignatureTypeId, expected_symbol_id: SymbolId) bool {
+    var current_type_id = initial_type_id;
+    var steps: usize = 0;
+    while (steps <= module.type_aliases.len) : (steps += 1) {
+        const nominal_name = switch (module.signature_types.get(current_type_id) orelse return false) {
+            .name => |name| name,
+            .qualified => |node| {
+                current_type_id = node.child;
+                continue;
+            },
+            else => return false,
+        };
+        const symbol_id = symbolIdForTypeSpelling(module.symbol_identities, nominal_name) orelse return false;
+        if (symbol_id.eql(expected_symbol_id)) return true;
+        for (module.type_aliases) |alias| {
+            if (!alias.symbol_id.eql(symbol_id)) continue;
+            current_type_id = alias.target_type_id;
+            break;
+        } else return false;
+    }
+    return false;
+}
+
+fn symbolIdForTypeSpelling(identities: []const SymbolIdentity, spelling: []const u8) ?SymbolId {
+    for (identities) |identity| {
+        if (identity.kind != .type_ or !std.mem.eql(u8, identity.spelling, spelling)) continue;
+        return identity.id;
+    }
+    return null;
 }
 
 // Options for the MIR build/verify pipeline. `optimize` enables the fact-gated

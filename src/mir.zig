@@ -889,6 +889,11 @@ const SignatureTypeTableBuilder = struct {
         return .{ .shapes = shapes };
     }
 
+    fn get(self: *const SignatureTypeTableBuilder, id: SignatureTypeId) ?TypeShape {
+        if (!id.isValid() or id.index() >= self.shapes.items.len) return null;
+        return self.shapes.items[id.index()];
+    }
+
     fn internReturnType(
         self: *SignatureTypeTableBuilder,
         return_type: ?ast.TypeExpr,
@@ -1486,8 +1491,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 });
                             }
                         }
-                        if (!checked_global.has_initializer_plan and !global.is_const) {
-                            if (directEnumGlobalInitializerPlan(initializer, ty, &symbol_ids, enum_facts.items)) |plan| {
+                        if (!checked_global.has_initializer_plan) {
+                            if (try directEnumGlobalInitializerPlan(
+                                initializer,
+                                checked_global.signature_type_id,
+                                &signature_types,
+                                type_alias_facts.items,
+                                &symbol_ids,
+                                enum_facts.items,
+                                &const_fns,
+                                &const_globals,
+                            )) |plan| {
                                 checked_global.has_initializer_plan = true;
                                 try global_initializer_facts.append(allocator, .{
                                     .global_symbol_id = checked_global.symbol_id,
@@ -1900,30 +1914,71 @@ fn isPureScalarArrayLeafType(ty: ast.TypeExpr) bool {
 
 fn directEnumGlobalInitializerPlan(
     initializer: ast.Expr,
-    ty: ast.TypeExpr,
+    global_type_id: SignatureTypeId,
+    signature_types: *SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
     enum_facts: []const EnumFact,
-) ?mir_model.EnumInitializerPlan {
-    const enum_name = switch (ty.kind) {
-        .name => |name| name.text,
-        else => return null,
-    };
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+) !?mir_model.EnumInitializerPlan {
     const case_name = switch (initializer.kind) {
         .enum_literal => |tag| tag.text,
-        .grouped => |inner| return directEnumGlobalInitializerPlan(inner.*, ty, symbol_ids, enum_facts),
+        .grouped => |inner| return directEnumGlobalInitializerPlan(inner.*, global_type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals),
+        .cast => |cast| blk: {
+            const target_type_id = try signature_types.internTypeExpr(cast.ty.*, const_fns, const_globals);
+            const target = resolveEnumFactForSignatureType(target_type_id, signature_types, type_aliases, symbol_ids, enum_facts) orelse return null;
+            const global = resolveEnumFactForSignatureType(global_type_id, signature_types, type_aliases, symbol_ids, enum_facts) orelse return null;
+            if (!target.symbol_id.eql(global.symbol_id)) return null;
+            break :blk directEnumLiteralSpelling(cast.value.*) orelse return null;
+        },
         else => return null,
     };
-    const symbol_id = symbol_ids.get(enum_name) orelse return null;
-    const fact = for (enum_facts) |candidate| {
-        if (candidate.symbol_id.eql(symbol_id)) break candidate;
-    } else return null;
+    const fact = resolveEnumFactForSignatureType(global_type_id, signature_types, type_aliases, symbol_ids, enum_facts) orelse return null;
     for (fact.cases, 0..) |candidate, index| {
         if (!std.mem.eql(u8, candidate.spelling, case_name)) continue;
         return .{
-            .enum_symbol_id = symbol_id,
+            .enum_symbol_id = fact.symbol_id,
             .repr_type_id = fact.repr_type_id,
             .case_index = @intCast(index),
         };
+    }
+    return null;
+}
+
+fn directEnumLiteralSpelling(expression: ast.Expr) ?[]const u8 {
+    return switch (expression.kind) {
+        .enum_literal => |tag| tag.text,
+        .grouped => |inner| directEnumLiteralSpelling(inner.*),
+        else => null,
+    };
+}
+
+fn resolveEnumFactForSignatureType(
+    initial_type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    enum_facts: []const EnumFact,
+) ?EnumFact {
+    var current_type_id = initial_type_id;
+    var steps: usize = 0;
+    while (steps <= type_aliases.len) : (steps += 1) {
+        const nominal_name = switch (signature_types.get(current_type_id) orelse return null) {
+            .name => |name| name,
+            .qualified => |node| {
+                current_type_id = node.child;
+                continue;
+            },
+            else => return null,
+        };
+        const symbol_id = symbol_ids.get(nominal_name) orelse return null;
+        for (enum_facts) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        for (type_aliases) |alias| {
+            if (!alias.symbol_id.eql(symbol_id)) continue;
+            current_type_id = alias.target_type_id;
+            break;
+        } else return null;
     }
     return null;
 }

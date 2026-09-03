@@ -1774,7 +1774,8 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
 test "CheckedProgram admits direct enum global initializer plans" {
     const source =
         \\enum Mode: u8 { idle = 1, active = 7 }
-        \\global CURRENT: Mode = .active;
+        \\type ModeAlias = Mode;
+        \\const CURRENT: ModeAlias = (.active as ModeAlias);
     ;
     var parsed = try test_support.parseCheckedModule("enum_global_initializer_plan.mc", source);
     defer parsed.deinit();

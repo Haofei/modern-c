@@ -13343,6 +13343,9 @@ test "lower-c emits target-typed enum literals" {
         \\
         \\extern fn sink(mode: Mode) -> u32;
         \\global global_mode: Mode = .read;
+        \\type ModeAlias = Mode;
+        \\const DEFAULT_ALIAS: ModeAlias = (.read);
+        \\global alias_mode: ModeAlias = (.write as ModeAlias);
         \\
         \\fn default_mode() -> Mode {
         \\    return .read;
@@ -13369,6 +13372,8 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_write = 2") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "global_mode = Mode_read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "DEFAULT_ALIAS = Mode_read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "alias_mode = Mode_write") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "= 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_exec_tmp_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "= sink(mc_exec_tmp_0);") != null);
