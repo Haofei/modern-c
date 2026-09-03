@@ -23,7 +23,7 @@
       "enum_decl: ast.EnumDecl": 0,
       "union_decl: ast.UnionDecl": 1,
       "packed_bits_decl: ast.PackedBitsDecl": 0,
-      "overlay_union_decl: ast.OverlayUnionDecl": 1
+      "overlay_union_decl: ast.OverlayUnionDecl": 0
     },
     "src/codegen_attrs.zig": {
       "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
@@ -121,7 +121,8 @@
       "target_type_id: SignatureTypeId": 1,
       "pub const EnumFact = struct": 1,
       "repr_type_id: SignatureTypeId": 2,
-      "pub const PackedBitsFact = struct": 1
+      "pub const PackedBitsFact = struct": 1,
+      "pub const OverlayUnionFact = struct": 1
     },
     "src/mir.zig": {
       "pub fn comptimeValueFromGlobalInitializerFact": 1

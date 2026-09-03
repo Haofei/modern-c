@@ -85,7 +85,6 @@ const SliceAccess = lower_c_model.SliceAccess;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 const OverlayFieldInfo = lower_c_model.OverlayFieldInfo;
-const OverlayLayout = lower_c_model.OverlayLayout;
 const ResultInfo = lower_c_model.ResultInfo;
 const NullableRepresentation = lower_c_model.NullableRepresentation;
 const ReflectEnv = lower_c_reflect.ReflectEnv;
@@ -101,7 +100,6 @@ const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpa
 
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
-const overlayFieldLayoutForType = lower_c_shape.overlayFieldLayout;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const structFieldType = lower_c_shape.structFieldType;
 const genericChildType = lower_c_shape.genericChildType;
@@ -412,6 +410,7 @@ pub const CEmitter = struct {
         try self.collectTypeAliasFacts();
         try self.collectEnumFacts();
         try self.collectPackedBitsFacts();
+        try self.collectOverlayUnionFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedPlannedGlobals();
@@ -475,6 +474,21 @@ pub const CEmitter = struct {
         }
     }
 
+    /// Overlay storage and field layouts are admitted module facts. The
+    /// materialized types below are rendering inputs only; no backend layout
+    /// calculation is permitted on this path.
+    fn collectOverlayUnionFacts(self: *CEmitter) !void {
+        for (self.mir_module.overlay_unions) |fact| {
+            const overlay_union = try signature_type_materializer.overlayUnionDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectOverlayUnionFact(overlay_union, fact);
+        }
+    }
+
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
@@ -493,7 +507,6 @@ pub const CEmitter = struct {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
-                else => {},
             },
             else => {},
         };
@@ -535,7 +548,6 @@ pub const CEmitter = struct {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-                .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
             },
         };
     }
@@ -1167,7 +1179,6 @@ pub const CEmitter = struct {
                     try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ union_decl.name.text, union_decl.name.text });
                     emitted = true;
                 },
-                else => {},
             },
             else => {},
         };
@@ -1284,7 +1295,6 @@ pub const CEmitter = struct {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
                 .union_decl => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
-                else => {},
             },
             else => {},
         };
@@ -1812,7 +1822,6 @@ pub const CEmitter = struct {
             .c_type = cTypeForOverlay,
             .emit_expr = emitExprForOverlay,
             .emit_expr_with_target = emitExprWithTargetForOverlay,
-            .overlay_field_layout_size = overlayFieldLayoutSizeForOverlay,
         };
     }
 
@@ -1903,11 +1912,6 @@ pub const CEmitter = struct {
     fn emitExprWithTargetForOverlay(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, locals, target_ty);
-    }
-
-    fn overlayFieldLayoutSizeForOverlay(ctx: *anyopaque, ty: ast_bridge.TypeExpr) usize {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.overlayFieldLayoutSize(ty);
     }
 
     fn writeIndentForAsm(ctx: *anyopaque) anyerror!void {
@@ -2879,23 +2883,24 @@ pub const CEmitter = struct {
         try lower_c_collect.collectPackedBits(self.allocator, &self.packed_bits, packed_bits, try self.cTypeFor(packed_bits.repr, .typedef_name));
     }
 
-    fn collectOverlayUnion(self: *CEmitter, overlay_union: ast_bridge.OverlayUnionDecl) !void {
-        var size: usize = 1;
-        var alignment: usize = 1;
+    fn collectOverlayUnionFact(self: *CEmitter, overlay_union: ast_bridge.OverlayUnionDecl, fact: mir.OverlayUnionFact) !void {
+        if (overlay_union.fields.len != fact.fields.len) return error.UnsupportedCEmission;
         var fields = std.StringHashMap(OverlayFieldInfo).init(self.allocator);
         errdefer fields.deinit();
-        for (overlay_union.fields) |field| {
-            const layout = self.overlayFieldLayout(field.ty) orelse return error.UnsupportedCEmission;
-            size = @max(size, layout.size);
-            alignment = @max(alignment, layout.alignment);
+        for (overlay_union.fields, fact.fields) |field, field_fact| {
+            if (!std.mem.eql(u8, field.name.text, field_fact.spelling)) return error.UnsupportedCEmission;
             try self.collectTypeArtifacts(field.ty);
             try fields.put(field.name.text, .{
                 .ty = field.ty,
-                .layout = layout,
-                .byte_array_len = try self.overlayByteArrayLen(field.ty),
+                .layout = .{ .size = field_fact.size, .alignment = field_fact.alignment },
+                .byte_array_len = if (field_fact.byte_array_length) |length|
+                    try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{length})
+                else
+                    null,
+                .array_element_size = field_fact.array_element_size,
             });
         }
-        try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment, .fields = fields });
+        try self.overlay_unions.put(overlay_union.name.text, .{ .size = fact.storage_size, .alignment = fact.storage_alignment, .fields = fields });
     }
 
     fn collectTaggedUnion(self: *CEmitter, union_decl: ast_bridge.UnionDecl) !void {
@@ -2903,23 +2908,6 @@ pub const CEmitter = struct {
             if (case.ty) |ty| try self.collectTypeArtifacts(ty);
         }
         try self.tagged_unions.put(union_decl.name.text, union_decl);
-    }
-
-    fn overlayFieldLayout(self: *CEmitter, ty: ast_bridge.TypeExpr) ?OverlayLayout {
-        var reflect_env = self.reflectEnv();
-        return overlayFieldLayoutForType(ty, &self.const_fns, &self.const_globals, &reflect_env);
-    }
-
-    fn overlayByteArrayLen(self: *CEmitter, ty: ast_bridge.TypeExpr) !?[]const u8 {
-        return switch (ty.kind) {
-            .array => |node| {
-                const child_name = typeName(node.child.*) orelse return null;
-                if (!std.mem.eql(u8, child_name, "u8")) return null;
-                return try self.arrayLenTextForExpr(node.len);
-            },
-            .qualified => |node| try self.overlayByteArrayLen(node.child.*),
-            else => null,
-        };
     }
 
     fn collectMmioStruct(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
@@ -5698,10 +5686,6 @@ pub const CEmitter = struct {
 
     fn emitOverlayIndexReadExpr(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
         return lower_c_overlay.emitOverlayIndexReadExpr(self.overlayEmitContext(), node, locals);
-    }
-
-    fn overlayFieldLayoutSize(self: *CEmitter, ty: ast_bridge.TypeExpr) usize {
-        return (self.overlayFieldLayout(ty) orelse OverlayLayout{ .size = 1, .alignment = 1 }).size;
     }
 
     fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {

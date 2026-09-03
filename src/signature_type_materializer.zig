@@ -11,7 +11,7 @@ const ast = @import("ast.zig");
 const mir = @import("mir_model.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 
-pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact } || std.mem.Allocator.Error;
+pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact, InvalidOverlayUnionFact } || std.mem.Allocator.Error;
 
 pub fn typeExpr(
     allocator: std.mem.Allocator,
@@ -158,6 +158,33 @@ pub fn packedBitsDecl(
     return .{
         .name = .{ .text = identity.spelling, .span = span },
         .repr = try typeExpr(allocator, types, fact.repr_type_id, span),
+        .fields = fields,
+    };
+}
+
+/// Transitional rendering view for an overlay union. Field layouts remain in
+/// `OverlayUnionFact`; this only reconstructs field type syntax for legacy
+/// expression renderers that still require an AST-shaped type node.
+pub fn overlayUnionDecl(
+    allocator: std.mem.Allocator,
+    types: mir.SignatureTypeTable,
+    symbols: []const mir.SymbolIdentity,
+    fact: mir.OverlayUnionFact,
+) Error!ast.OverlayUnionDecl {
+    if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbols.len) return error.InvalidOverlayUnionFact;
+    const identity = symbols[fact.symbol_id.index()];
+    if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidOverlayUnionFact;
+    const span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+    const fields = try allocator.alloc(ast.Field, fact.fields.len);
+    for (fact.fields, 0..) |field, index| {
+        fields[index] = .{
+            .name = .{ .text = field.spelling, .span = span },
+            .ty = try typeExpr(allocator, types, field.type_id, span),
+            .offset = field.offset,
+        };
+    }
+    return .{
+        .name = .{ .text = identity.spelling, .span = span },
         .fields = fields,
     };
 }

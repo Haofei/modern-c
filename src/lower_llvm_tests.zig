@@ -111,6 +111,38 @@ test "LLVM derives packed bits from checked module facts" {
     try expectContains(output.items, "define internal i1 @flags(i8 %mc_arg_0)");
 }
 
+test "LLVM derives overlay unions from checked module facts" {
+    const source =
+        \\overlay union Overlay { bytes: [4]u8, word: u32 }
+        \\fn read_word(value: Overlay) -> u32 { return value.word; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_overlay_union_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.overlay_unions.len);
+
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_overlay_union_facts.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "define internal i32 @read_word([4 x i8] %value)");
+}
+
 test "LLVM canonical MIR renders scalar closure capture through a thunk" {
     const source =
         \\fn add_scalar(env: u32, x: u32) -> u32 { return env + x; }

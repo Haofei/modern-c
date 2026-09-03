@@ -119,6 +119,8 @@ pub const EnumFact = mir_model.EnumFact;
 pub const EnumCaseFact = mir_model.EnumCaseFact;
 pub const PackedBitsFact = mir_model.PackedBitsFact;
 pub const PackedBitsFieldFact = mir_model.PackedBitsFieldFact;
+pub const OverlayUnionFact = mir_model.OverlayUnionFact;
+pub const OverlayUnionFieldFact = mir_model.OverlayUnionFieldFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -1188,6 +1190,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (packed_bits_facts.items) |packed_bits_fact| if (packed_bits_fact.fields.len != 0) allocator.free(packed_bits_fact.fields);
         packed_bits_facts.deinit(allocator);
     }
+    var overlay_union_facts: std.ArrayList(OverlayUnionFact) = .empty;
+    errdefer {
+        for (overlay_union_facts.items) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) allocator.free(overlay_union_fact.fields);
+        overlay_union_facts.deinit(allocator);
+    }
     var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
     errdefer global_initializer_facts.deinit(allocator);
 
@@ -1234,6 +1241,33 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     .source_id = typed_source_id,
                     .repr_ty = canonicalExecutableValueType(packed_bits_decl.repr, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals),
                     .repr_type_id = try signature_types.internTypeExpr(packed_bits_decl.repr, &const_fns, &const_globals),
+                    .fields = fields,
+                });
+            },
+            .overlay_union_decl => |overlay_union_decl| {
+                const fields = try allocator.alloc(OverlayUnionFieldFact, overlay_union_decl.fields.len);
+                errdefer allocator.free(fields);
+                var storage_size: usize = 1;
+                var storage_alignment: usize = 1;
+                for (overlay_union_decl.fields, 0..) |field, index| {
+                    const layout = mir_reflect.storageLayoutForType(&reflect_env, field.ty) orelse return error.InvalidMirOverlayUnionFacts;
+                    storage_size = @max(storage_size, layout.size);
+                    storage_alignment = @max(storage_alignment, layout.alignment);
+                    fields[index] = .{
+                        .spelling = field.name.text,
+                        .type_id = try signature_types.internTypeExpr(field.ty, &const_fns, &const_globals),
+                        .size = layout.size,
+                        .alignment = layout.alignment,
+                        .array_element_size = overlayArrayElementSize(&reflect_env, field.ty),
+                        .byte_array_length = overlayByteArrayLength(field.ty, &const_fns, &const_globals),
+                    };
+                }
+                const aligned_storage_size = alignOverlayStorage(storage_size, storage_alignment) orelse return error.InvalidMirOverlayUnionFacts;
+                try overlay_union_facts.append(allocator, .{
+                    .symbol_id = try internSymbolId(&symbol_ids, overlay_union_decl.name.text),
+                    .source_id = typed_source_id,
+                    .storage_size = aligned_storage_size,
+                    .storage_alignment = storage_alignment,
                     .fields = fields,
                 });
             },
@@ -1483,6 +1517,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirPackedBitsFacts;
         identity.kind = .type_;
     }
+    for (overlay_union_facts.items) |overlay_union_fact| {
+        if (!overlay_union_fact.symbol_id.isValid() or overlay_union_fact.symbol_id.index() >= symbol_identities.len or
+            overlay_union_fact.storage_size == 0 or overlay_union_fact.storage_alignment == 0)
+            return error.InvalidMirOverlayUnionFacts;
+        const identity = &symbol_identities[overlay_union_fact.symbol_id.index()];
+        if (!identity.id.eql(overlay_union_fact.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirOverlayUnionFacts;
+        identity.kind = .type_;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1512,6 +1556,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (packed_bits_facts_slice) |packed_bits_fact| if (packed_bits_fact.fields.len != 0) allocator.free(packed_bits_fact.fields);
         allocator.free(packed_bits_facts_slice);
     }
+    const overlay_union_facts_slice = try overlay_union_facts.toOwnedSlice(allocator);
+    errdefer {
+        for (overlay_union_facts_slice) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) allocator.free(overlay_union_fact.fields);
+        allocator.free(overlay_union_facts_slice);
+    }
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
@@ -1527,6 +1576,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .type_aliases = type_alias_facts_slice,
         .enums = enum_facts_slice,
         .packed_bits = packed_bits_facts_slice,
+        .overlay_unions = overlay_union_facts_slice,
         .global_initializer_facts = global_initializer_facts_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
@@ -1546,6 +1596,31 @@ fn constScalarValueFromComptime(value: eval.ComptimeValue) ?mir_model.ConstScala
         .float => |float| .{ .float = .{ .bits = float.bits, .width = float.width } },
         .void, .tag, .bytes, .array, .@"struct" => null,
     };
+}
+
+fn overlayByteArrayLength(ty: ast.TypeExpr, const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue)) ?usize {
+    return switch (ty.kind) {
+        .array => |node| switch (node.child.*.kind) {
+            .name => |name| if (std.mem.eql(u8, name.text, "u8")) parseArrayLen(node.len, const_fns, const_globals) else null,
+            else => null,
+        },
+        .qualified => |node| overlayByteArrayLength(node.child.*, const_fns, const_globals),
+        else => null,
+    };
+}
+
+fn overlayArrayElementSize(reflect_env: *const MirReflectEnv, ty: ast.TypeExpr) ?usize {
+    return switch (ty.kind) {
+        .array => |node| (mir_reflect.storageLayoutForType(reflect_env, node.child.*) orelse return null).size,
+        .qualified => |node| overlayArrayElementSize(reflect_env, node.child.*),
+        else => null,
+    };
+}
+
+fn alignOverlayStorage(size: usize, alignment: usize) ?usize {
+    if (alignment == 0) return null;
+    const remainder = size % alignment;
+    return if (remainder == 0) size else std.math.add(usize, size, alignment - remainder) catch null;
 }
 
 /// Mutable globals do not enter the const environment. A static scalar still
@@ -4003,6 +4078,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirTypeAliasFacts,
     InvalidMirEnumFacts,
     InvalidMirPackedBitsFacts,
+    InvalidMirOverlayUnionFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4034,6 +4110,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateTypeAliasFactsForLowering(module);
     try validateEnumFactsForLowering(module);
     try validatePackedBitsFactsForLowering(module);
+    try validateOverlayUnionFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
@@ -4102,6 +4179,37 @@ fn validatePackedBitsFactsForLowering(module: Module) error{InvalidMirPackedBits
         for (module.packed_bits[0..index]) |prior| if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirPackedBitsFacts;
         for (module.type_aliases) |alias| if (alias.symbol_id.eql(fact.symbol_id)) return error.InvalidMirPackedBitsFacts;
         for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirPackedBitsFacts;
+    }
+}
+
+fn validateOverlayUnionFactsForLowering(module: Module) error{InvalidMirOverlayUnionFacts}!void {
+    for (module.overlay_unions, 0..) |fact, index| {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
+            fact.storage_size == 0 or fact.storage_alignment == 0)
+            return error.InvalidMirOverlayUnionFacts;
+        const identity = module.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidMirOverlayUnionFacts;
+        if (fact.source_id.isValid() and (fact.source_id.index() >= module.source_identities.len or
+            !module.source_identities[fact.source_id.index()].id.eql(fact.source_id)))
+            return error.InvalidMirOverlayUnionFacts;
+        var max_size: usize = 1;
+        var max_alignment: usize = 1;
+        for (fact.fields, 0..) |field, field_index| {
+            if (field.spelling.len == 0 or !field.type_id.isValid() or !module.signature_types.contains(field.type_id) or
+                field.offset != 0 or field.size == 0 or field.alignment == 0)
+                return error.InvalidMirOverlayUnionFacts;
+            if (field.byte_array_length) |length| if (length == 0 or field.size != length) return error.InvalidMirOverlayUnionFacts;
+            if (field.array_element_size) |element_size| if (element_size == 0 or field.size % element_size != 0) return error.InvalidMirOverlayUnionFacts;
+            for (fact.fields[0..field_index]) |prior| if (std.mem.eql(u8, prior.spelling, field.spelling)) return error.InvalidMirOverlayUnionFacts;
+            max_size = @max(max_size, field.size);
+            max_alignment = @max(max_alignment, field.alignment);
+        }
+        if (fact.storage_alignment != max_alignment or fact.storage_size != (alignOverlayStorage(max_size, max_alignment) orelse return error.InvalidMirOverlayUnionFacts))
+            return error.InvalidMirOverlayUnionFacts;
+        for (module.overlay_unions[0..index]) |prior| if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
+        for (module.type_aliases) |alias| if (alias.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
+        for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
+        for (module.packed_bits) |packed_bits_fact| if (packed_bits_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
     }
 }
 

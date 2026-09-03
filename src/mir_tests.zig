@@ -3887,6 +3887,40 @@ test "MIR packed-bits facts are syntax-free and fail closed" {
     try std.testing.expectError(error.InvalidMirPackedBitsFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "MIR overlay-union facts are syntax-free and fail closed" {
+    const source =
+        \\overlay union Overlay { bytes: [4]u8, word: u32 }
+        \\fn identity(value: Overlay) -> Overlay { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_overlay_union_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.overlay_unions.len);
+    const fact = module_mir.overlay_unions[0];
+    const identity = module_mir.symbol_identities[fact.symbol_id.index()];
+    try std.testing.expectEqualStrings("Overlay", identity.spelling);
+    try std.testing.expectEqual(@as(usize, 4), fact.storage_size);
+    try std.testing.expectEqual(@as(usize, 4), fact.storage_alignment);
+    try std.testing.expectEqual(@as(usize, 2), fact.fields.len);
+    try std.testing.expectEqual(@as(?usize, 4), fact.fields[0].byte_array_length);
+    try std.testing.expectEqual(@as(?usize, 1), fact.fields[0].array_element_size);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.overlay_unions[0].storage_size;
+    module_mir.overlay_unions[0].storage_size = 3;
+    defer module_mir.overlay_unions[0].storage_size = saved;
+    try std.testing.expectError(error.InvalidMirOverlayUnionFacts, mir.validateLoweringAdmission(module_mir));
+
+    module_mir.overlay_unions[0].storage_size = saved;
+    const mutable_fields = @constCast(module_mir.overlay_unions[0].fields);
+    const saved_offset = mutable_fields[1].offset;
+    mutable_fields[1].offset = 1;
+    defer mutable_fields[1].offset = saved_offset;
+    try std.testing.expectError(error.InvalidMirOverlayUnionFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
     const source =
         \\fn const_index(a: [4]u32) -> u32 {

@@ -22,7 +22,6 @@ pub const WriteIndentFn = *const fn (ctx: *anyopaque) anyerror!void;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void;
-pub const OverlayFieldLayoutSizeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) usize;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -35,7 +34,6 @@ pub const EmitContext = struct {
     c_type: CTypeFn,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
-    overlay_field_layout_size: OverlayFieldLayoutSizeFn,
 };
 
 pub fn emitOverlayFieldReadReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
@@ -116,7 +114,8 @@ pub fn emitOverlayFieldWriteStmt(ctx: EmitContext, assignment: anytype, locals: 
             // Non-byte view (`[N]uW`): write one element at its byte offset in storage
             // via the same memcpy-reinterpret idiom the read path uses.
             const element_ty = overlayArrayElementType(access.field.ty) orelse return false;
-            const elem_count = access.field.layout.size / ctx.overlay_field_layout_size(ctx.emit_ctx, element_ty);
+            const element_size = access.field.array_element_size orelse return false;
+            const elem_count = access.field.layout.size / element_size;
             const element_c = try ctx.c_type(ctx.emit_ctx, element_ty);
             const val_name = try nextTempName(ctx, "mc_ov");
             const idx_name = try nextTempName(ctx, "mc_ovi");
@@ -175,7 +174,8 @@ pub fn emitOverlayIndexReadExpr(ctx: EmitContext, node: anytype, locals: *std.St
     }
 
     const element_ty = overlayArrayElementType(access.field.ty) orelse return false;
-    const elem_count = access.field.layout.size / ctx.overlay_field_layout_size(ctx.emit_ctx, element_ty);
+    const element_size = access.field.array_element_size orelse return false;
+    const elem_count = access.field.layout.size / element_size;
     const element_c = try ctx.c_type(ctx.emit_ctx, element_ty);
     const idx_name = try nextTempName(ctx, "mc_ovi");
     const temp_name = try nextTempName(ctx, "mc_ov");

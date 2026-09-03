@@ -146,6 +146,7 @@ pub const OverlayFieldInfo = struct {
     ty: ast_bridge.TypeExpr,
     layout: OverlayLayout,
     byte_array_len: ?[]const u8,
+    array_element_size: ?usize,
 };
 
 pub const OverlayFieldAccess = struct {

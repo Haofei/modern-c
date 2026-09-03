@@ -4093,6 +4093,32 @@ pub const PackedBitsFact = struct {
     fields: []const PackedBitsFieldFact,
 };
 
+/// One checked overlay-union field. Every field aliases storage at offset
+/// zero; layout is copied from the frontend so codegen never recomputes it.
+pub const OverlayUnionFieldFact = struct {
+    spelling: []const u8,
+    type_id: SignatureTypeId,
+    offset: usize = 0,
+    size: usize,
+    alignment: usize,
+    /// Checked element storage size for an array view. This prevents C
+    /// overlay lowering from recalculating element layout from syntax.
+    array_element_size: ?usize = null,
+    /// A `[N]u8` arm is emitted through direct byte storage access. This is a
+    /// checked length, not a source expression retained for codegen.
+    byte_array_length: ?usize = null,
+};
+
+/// Syntax-free overlay-union declaration ingress. The storage extent and all
+/// field layouts are frontend facts shared by C and LLVM lowering.
+pub const OverlayUnionFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    storage_size: usize,
+    storage_alignment: usize,
+    fields: []const OverlayUnionFieldFact,
+};
+
 /// Syntax-free scalar value already evaluated by the frontend for a `const`
 /// global initializer.  This deliberately excludes aggregates and enum tags:
 /// their rendering still depends on transitional aggregate/type artifacts.
@@ -4187,6 +4213,7 @@ pub const Module = struct {
     type_aliases: []TypeAliasFact = &.{},
     enums: []EnumFact = &.{},
     packed_bits: []PackedBitsFact = &.{},
+    overlay_unions: []OverlayUnionFact = &.{},
     global_initializer_facts: []GlobalInitializerFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
@@ -4312,6 +4339,8 @@ pub const Module = struct {
         if (self.enums.len != 0) self.allocator.free(self.enums);
         for (self.packed_bits) |packed_bits_fact| if (packed_bits_fact.fields.len != 0) self.allocator.free(packed_bits_fact.fields);
         if (self.packed_bits.len != 0) self.allocator.free(self.packed_bits);
+        for (self.overlay_unions) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) self.allocator.free(overlay_union_fact.fields);
+        if (self.overlay_unions.len != 0) self.allocator.free(self.overlay_unions);
         if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);

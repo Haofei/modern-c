@@ -94,8 +94,10 @@ pub const EarlyDeclarationArtifacts = struct {
                     // longer retains a packed-bits AST declaration payload.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .overlay_union_decl => |overlay_union| {
-                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .overlay_union_decl = overlay_union } });
+                .overlay_union_decl => {
+                    // Storage and field layouts are checked MIR facts. Keep
+                    // source-map metadata only; codegen owns no overlay AST
+                    // declaration payload.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .opaque_decl => {
@@ -291,7 +293,6 @@ pub const DeclArtifact = union(enum) {
 pub const TransitionalTypeDeclArtifact = union(enum) {
     struct_decl: ast.StructDecl,
     union_decl: ast.UnionDecl,
-    overlay_union_decl: ast.OverlayUnionDecl,
 };
 
 pub const SourceMapArtifact = union(enum) {

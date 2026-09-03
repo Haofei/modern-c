@@ -137,7 +137,6 @@ const FnSig = lower_llvm_model.FnSig;
 const BindThunk = lower_llvm_model.BindThunk;
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
-const OverlayLayout = lower_llvm_model.OverlayLayout;
 const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
 const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
 const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
@@ -389,6 +388,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectTypeAliasFacts();
     try ctx.collectEnumFacts();
     try ctx.collectPackedBitsFacts();
+    try ctx.collectOverlayUnionFacts();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
     try ctx.collectCheckedPlannedGlobals();
     var reflect_env = ctx.reflectEnv();
@@ -571,7 +571,6 @@ const LlvmEmitter = struct {
                     }
                     try self.struct_types.put(struct_decl.name.text, struct_decl);
                 },
-                .overlay_union_decl => {},
             },
             else => {},
         };
@@ -622,6 +621,20 @@ const LlvmEmitter = struct {
         }
     }
 
+    /// Overlay storage and field layouts are admitted module facts. The
+    /// temporary AST view is only for legacy expression rendering.
+    fn collectOverlayUnionFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.overlay_unions) |fact| {
+            const overlay_union = try signature_type_materializer.overlayUnionDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectOverlayUnionFact(overlay_union, fact);
+        }
+    }
+
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
@@ -650,7 +663,6 @@ const LlvmEmitter = struct {
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .struct_decl => {},
             },
@@ -673,18 +685,12 @@ const LlvmEmitter = struct {
         });
     }
 
-    fn collectOverlayUnion(self: *LlvmEmitter, overlay_union: ast_bridge.OverlayUnionDecl) !void {
-        var size: u64 = 1;
-        var alignment: u64 = 1;
-        for (overlay_union.fields) |field| {
-            const layout = self.overlayFieldLayout(field.ty, 0) orelse return error.UnsupportedLlvmEmission;
-            size = @max(size, layout.size);
-            alignment = @max(alignment, layout.alignment);
-        }
+    fn collectOverlayUnionFact(self: *LlvmEmitter, overlay_union: ast_bridge.OverlayUnionDecl, fact: mir.OverlayUnionFact) !void {
+        if (overlay_union.fields.len != fact.fields.len) return error.UnsupportedLlvmEmission;
         try self.overlay_unions.put(overlay_union.name.text, .{
             .fields = overlay_union.fields,
-            .size = size,
-            .alignment = alignment,
+            .size = fact.storage_size,
+            .alignment = fact.storage_alignment,
         });
     }
 
@@ -10340,23 +10346,6 @@ const LlvmEmitter = struct {
             offset += size;
         }
         return null;
-    }
-
-    fn overlayFieldLayout(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, depth: usize) ?OverlayLayout {
-        if (depth > 32) return null;
-        return switch (ty.kind) {
-            .array => |node| {
-                const child = self.overlayFieldLayout(node.child.*, depth + 1) orelse return null;
-                const len = self.arrayLenValue(node.len) orelse return null;
-                return .{ .size = child.size * len, .alignment = child.alignment };
-            },
-            .qualified => |node| self.overlayFieldLayout(node.child.*, depth + 1),
-            else => blk: {
-                const size = self.comptimeSizeOf(ty, depth + 1) orelse return null;
-                const alignment = self.comptimeAlignOf(ty, depth + 1) orelse return null;
-                break :blk .{ .size = @intCast(size), .alignment = @intCast(alignment) };
-            },
-        };
     }
 
     fn directCallName(self: *LlvmEmitter, callee: ast_bridge.Expr) ?[]const u8 {

@@ -191,6 +191,19 @@ pub const AggregateStorageLayout = struct {
     alignment: usize,
 };
 
+/// Frontend layout query used while constructing syntax-free declaration
+/// facts. Codegen must consume the resulting checked values rather than
+/// reopening source-shaped aggregate declarations.
+pub fn storageLayoutForType(env: *const ReflectEnv, ty: ast.TypeExpr) ?AggregateStorageLayout {
+    const size = comptimeSizeOf(env, ty, 0) orelse return null;
+    const alignment = comptimeAlignOf(env, ty, 0) orelse return null;
+    if (size <= 0 or alignment <= 0) return null;
+    return .{
+        .size = std.math.cast(usize, size) orelse return null,
+        .alignment = std.math.cast(usize, alignment) orelse return null,
+    };
+}
+
 /// Produce the exact storage extent owned by an aggregate summary.  This is
 /// copied into executable MIR so codegen never has to reopen declaration AST
 /// merely to recover union storage.

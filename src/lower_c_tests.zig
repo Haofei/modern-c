@@ -187,6 +187,38 @@ test "lower-c derives packed bits from checked module facts" {
     try expectContains(output.items, "flags(Flags value)");
 }
 
+test "lower-c derives overlay unions from checked module facts" {
+    const source =
+        \\overlay union Overlay { bytes: [4]u8, word: u32 }
+        \\fn read_word(value: Overlay) -> u32 { return value.word; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_overlay_union_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.overlay_unions.len);
+
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_overlay_union_facts.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "typedef struct Overlay {");
+    try expectContains(output.items, "alignas(4) unsigned char storage[4];");
+}
+
 test "lower-c scalar const globals do not retain an AST initializer dependency" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("c_scalar_const_global_no_ast_init.mc", source);
