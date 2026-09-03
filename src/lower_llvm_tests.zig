@@ -10228,7 +10228,7 @@ fn expectLlvmNoOverflowFactRejection(result: anytype) !void {
 
 fn expectLlvmNoOverflowLegacyRetarget(result: anytype) !void {
     if (result) |_| return else |err| switch (err) {
-        error.UnsupportedLlvmEmission => {},
+        error.InvalidMirRangeFacts, error.UnsupportedLlvmEmission => {},
         else => return err,
     }
 }

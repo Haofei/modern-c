@@ -3009,18 +3009,18 @@ pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}
     }
 }
 
-/// No-overflow facts are keyed solely by the executable operation's SpanId.
+/// No-overflow facts are keyed solely by the unchecked MIR operation's SpanId.
 /// They remain separately useful to C/LLVM for target-label diagnostics, but
-/// an admission candidate must still name one exact unchecked operation.
+/// an admission candidate must still name exactly one unchecked instruction.
+/// Executable-body completeness separately proves that every unchecked
+/// executable projection has a fact, because one source operation can have
+/// several such projections.
 pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}!void {
     for (module.functions) |function| {
         for (function.range_facts) |fact| {
             if (!rangeFactTypedIdentityValid(function, fact)) return error.InvalidMirRangeFacts;
-            if (countMatchingRangeExpressions(function, fact) != 1) return error.InvalidMirRangeFacts;
-        }
-        for (function.executable_body.expressions) |expression| {
-            if (!uncheckedRangeExpression(expression)) continue;
-            if (countMatchingRangeFactsForExpression(function, expression) != 1) return error.InvalidMirRangeFacts;
+            if (countMatchingRangeFactsInOwnershipGroup(function, fact) != 1) return error.InvalidMirRangeFacts;
+            if (countMatchingRangeInstructions(function, fact) != 1) return error.InvalidMirRangeFacts;
         }
     }
 }
@@ -4407,43 +4407,37 @@ fn rangeFactTypedIdentityValid(function: Function, fact: RangeFact) bool {
     return false;
 }
 
-fn uncheckedRangeExpression(expression: ExecutableExpression) bool {
-    return switch (expression.operation) {
-        .binary => |binary| binary.arithmetic == .unchecked,
-        else => false,
-    };
-}
-
-fn rangeFactMatchesExpression(fact: RangeFact, expression: ExecutableExpression) bool {
-    const binary = switch (expression.operation) {
-        .binary => |value| value,
-        else => return false,
-    };
-    if (binary.arithmetic != .unchecked or binary.contract_region_id == null) return false;
-    const op: []const u8 = switch (binary.op) {
-        .add => "add",
-        .sub => "sub",
-        .mul => "mul",
-        else => return false,
-    };
-    return fact.region_id == binary.contract_region_id.? and
-        fact.typed_span_id.eql(expression.span_id) and
+fn rangeFactMatchesInstruction(fact: RangeFact, instruction: Instruction) bool {
+    if (instruction.kind != .unchecked_assume or instruction.contract_region_id == null) return false;
+    const op = noOverflowUncheckedOp(instruction.detail) orelse return false;
+    return fact.region_id == instruction.contract_region_id.? and
+        fact.typed_span_id.eql(instruction.typed_span_id) and
         std.mem.eql(u8, fact.op, op) and
-        sameValueType(fact.result_ty, expression.result_ty);
+        sameValueType(fact.result_ty, instruction.result_ty);
 }
 
-fn countMatchingRangeExpressions(function: Function, fact: RangeFact) usize {
+fn countMatchingRangeInstructions(function: Function, fact: RangeFact) usize {
     var count: usize = 0;
-    for (function.executable_body.expressions) |expression| {
-        if (rangeFactMatchesExpression(fact, expression)) count += 1;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (rangeFactMatchesInstruction(fact, instruction)) count += 1;
+        }
     }
     return count;
 }
 
-fn countMatchingRangeFactsForExpression(function: Function, expression: ExecutableExpression) usize {
+fn rangeFactSameOwnershipGroup(left: RangeFact, right: RangeFact) bool {
+    return left.region_id == right.region_id and
+        left.typed_span_id.eql(right.typed_span_id) and
+        std.mem.eql(u8, left.target, right.target) and
+        std.mem.eql(u8, left.op, right.op) and
+        sameValueType(left.result_ty, right.result_ty);
+}
+
+fn countMatchingRangeFactsInOwnershipGroup(function: Function, target: RangeFact) usize {
     var count: usize = 0;
     for (function.range_facts) |fact| {
-        if (rangeFactMatchesExpression(fact, expression)) count += 1;
+        if (rangeFactSameOwnershipGroup(fact, target)) count += 1;
     }
     return count;
 }

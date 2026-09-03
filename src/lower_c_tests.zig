@@ -10223,7 +10223,7 @@ fn expectCNoOverflowFactRejection(result: anytype) !void {
 
 fn expectCNoOverflowLegacyRetarget(result: anytype) !void {
     if (result) |_| return else |err| switch (err) {
-        error.UnsupportedCEmission => {},
+        error.InvalidMirRangeFacts, error.UnsupportedCEmission => {},
         else => return err,
     }
 }
