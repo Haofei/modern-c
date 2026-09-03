@@ -15,11 +15,11 @@
       "requested_end_state": "FunctionArtifact/body fallback is no longer an AST body ingress for codegen; codegen is driven by VerifiedProgram/MIR typed facts.",
       "progress": {
         "measured_at": "2026-09-02",
-        "strict_c": "168/168 admitted through canonical MIR, 0 fallback, 0 specialized, 0 plan definitions",
-        "strict_llvm": "168/168 admitted through canonical MIR, 0 fallback, 0 specialized, 0 plan definitions",
-        "broad_c": "pre-cutover snapshot: 1606/1818 canonical; the 212 legacy cases now fail closed instead of entering AST codegen",
-        "broad_llvm": "pre-cutover snapshot: 1658/1872 canonical; the 214 legacy cases now fail closed instead of entering AST codegen",
-        "completion_note": "Specialized plans and the function-body AST fallback ingress are deleted. Non-canonical bodies now fail closed as unsupported."
+        "strict_c": "canonical executable MIR only; no function-body fallback ingress or legacy emitter remains",
+        "strict_llvm": "canonical executable MIR only; no function-body fallback ingress or legacy emitter remains",
+        "broad_c": "all previously reachable fallback cases are canonical or fail closed as explicitly unsupported",
+        "broad_llvm": "all previously reachable fallback cases are canonical or fail closed as explicitly unsupported",
+        "completion_note": "The AST fallback request payload, specialized plans, census scaffolding, and both legacy body emitters are deleted."
       },
       "completion_evidence": [
         {
@@ -28,11 +28,11 @@
         },
         {
           "file": "src/lower_c_emitter.zig",
-          "needle": "if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs))"
+          "needle": "fn emitVerifiedMirFunction(self: *CEmitter, function: anytype"
         },
         {
           "file": "src/lower_llvm.zig",
-          "needle": "if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs))"
+          "needle": "fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype"
         }
       ],
       "retired_evidence": [
@@ -47,6 +47,14 @@
         {
           "file": "src/lower_llvm.zig",
           "needle": "legacyFunctionBody"
+        },
+        {
+          "file": "src/lower_c_emitter.zig",
+          "needle": "SimpleMir"
+        },
+        {
+          "file": "src/lower_llvm.zig",
+          "needle": "SimpleMir"
         }
       ]
     },

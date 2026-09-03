@@ -673,7 +673,7 @@ through `rawManyOffsetResultReturnTypeForCall` before consuming
 `.raw_many_offset_result`, keeping pointer result typing tied to MIR rows
 instead of receiver spelling or alias reconstruction. Reflection, byte-view,
 bitcast, scalar/domain conversion, and physical-address inferred-local result
-typing now route through `simpleMirResultReturnTypeForCall`, so these simple
+typing now route through `mirResultReturnTypeForCall`, so these
 result facts are named as MIR result admission rather than inline call-return
 shortcuts. Ordinary direct-call inferred-local result typing now delegates to
 `directCallReturnTypeForCall`, keeping `.direct_call_result` consumption and
