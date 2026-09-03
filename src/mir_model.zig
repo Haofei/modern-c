@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const type_layout = @import("layout.zig");
 const semantic_ids = @import("semantic_ids.zig");
 
 fn TypedIndex(comptime name: []const u8) type {
@@ -4119,6 +4120,23 @@ pub const OverlayUnionFact = struct {
     fields: []const OverlayUnionFieldFact,
 };
 
+/// One checked tagged-union case.  The case spelling is emission data; the
+/// payload type is a module-owned signature shape rather than an AST node.
+pub const TaggedUnionCaseFact = struct {
+    spelling: []const u8,
+    payload_type_id: ?SignatureTypeId,
+};
+
+/// Syntax-free tagged-union ingress.  The shared layout is computed by the
+/// frontend's canonical aggregate-layout layer, so neither backend may
+/// reconstruct tag/payload storage from a materialized AST rendering view.
+pub const TaggedUnionFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    layout: type_layout.ComptimeTaggedUnionLayout,
+    cases: []const TaggedUnionCaseFact,
+};
+
 /// Syntax-free scalar value already evaluated by the frontend for a `const`
 /// global initializer.  This deliberately excludes aggregates and enum tags:
 /// their rendering still depends on transitional aggregate/type artifacts.
@@ -4293,6 +4311,7 @@ pub const Module = struct {
     enums: []EnumFact = &.{},
     packed_bits: []PackedBitsFact = &.{},
     overlay_unions: []OverlayUnionFact = &.{},
+    tagged_unions: []TaggedUnionFact = &.{},
     global_initializer_facts: []GlobalInitializerFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
@@ -4423,6 +4442,8 @@ pub const Module = struct {
         if (self.packed_bits.len != 0) self.allocator.free(self.packed_bits);
         for (self.overlay_unions) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) self.allocator.free(overlay_union_fact.fields);
         if (self.overlay_unions.len != 0) self.allocator.free(self.overlay_unions);
+        for (self.tagged_unions) |tagged_union_fact| if (tagged_union_fact.cases.len != 0) self.allocator.free(tagged_union_fact.cases);
+        if (self.tagged_unions.len != 0) self.allocator.free(self.tagged_unions);
         for (self.global_initializer_facts) |fact| fact.deinit(self.allocator);
         if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);

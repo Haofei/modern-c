@@ -67,6 +67,11 @@ pub const OverlayLayout = struct {
 
 pub const TaggedUnionLayout = type_layout.ComptimeTaggedUnionLayout;
 
+pub const TaggedUnionInfo = struct {
+    decl: ast_bridge.UnionDecl,
+    layout: TaggedUnionLayout,
+};
+
 pub const MmioFieldInfo = struct {
     storage_ty: ast_bridge.TypeExpr,
     value_ty: ast_bridge.TypeExpr,

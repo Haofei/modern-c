@@ -21,7 +21,7 @@
       "type_alias: ast.TypeAlias": 0,
       "struct_decl: ast.StructDecl": 1,
       "enum_decl: ast.EnumDecl": 0,
-      "union_decl: ast.UnionDecl": 1,
+      "union_decl: ast.UnionDecl": 0,
       "packed_bits_decl: ast.PackedBitsDecl": 0,
       "overlay_union_decl: ast.OverlayUnionDecl": 0
     },

@@ -411,6 +411,7 @@ pub const CEmitter = struct {
         try self.collectEnumFacts();
         try self.collectPackedBitsFacts();
         try self.collectOverlayUnionFacts();
+        try self.collectTaggedUnionFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedPlannedGlobals();
@@ -489,6 +490,20 @@ pub const CEmitter = struct {
         }
     }
 
+    /// Tagged-union cases and layout are admitted module facts. The AST value
+    /// below is a render-only bridge for legacy expression helpers.
+    fn collectTaggedUnionFacts(self: *CEmitter) !void {
+        for (self.mir_module.tagged_unions) |fact| {
+            const tagged_union = try signature_type_materializer.taggedUnionDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectTaggedUnion(tagged_union);
+        }
+    }
+
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
@@ -506,7 +521,6 @@ pub const CEmitter = struct {
             },
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
-                .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
             },
             else => {},
         };
@@ -547,7 +561,6 @@ pub const CEmitter = struct {
             .global => |global| try self.collectGlobalDeclArtifact(global),
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
-                .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
             },
         };
     }
@@ -646,7 +659,6 @@ pub const CEmitter = struct {
                         try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
                     }
                 },
-                else => {},
             },
             else => {},
         };
@@ -1212,14 +1224,17 @@ pub const CEmitter = struct {
                     try self.out.print(self.allocator, "typedef {s} {s} {s};\n", .{ keyword, struct_decl.name.text, struct_decl.name.text });
                     emitted = true;
                 },
-                .union_decl => |union_decl| {
-                    if (!self.tagged_unions.contains(union_decl.name.text)) continue;
-                    try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ union_decl.name.text, union_decl.name.text });
-                    emitted = true;
-                },
             },
             else => {},
         };
+        for (self.mir_module.tagged_unions) |fact| {
+            if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return error.UnsupportedCEmission;
+            const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+            if (!identity.id.eql(fact.symbol_id)) return error.UnsupportedCEmission;
+            if (!self.tagged_unions.contains(identity.spelling)) return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ identity.spelling, identity.spelling });
+            emitted = true;
+        }
         {
             var it = self.array_types.valueIterator();
             while (it.next()) |array| {
@@ -1332,10 +1347,16 @@ pub const CEmitter = struct {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
-                .union_decl => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
             },
             else => {},
         };
+        for (self.mir_module.tagged_unions) |fact| {
+            if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return error.UnsupportedCEmission;
+            const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+            if (!identity.id.eql(fact.symbol_id)) return error.UnsupportedCEmission;
+            const tagged_union = self.tagged_unions.get(identity.spelling) orelse return error.UnsupportedCEmission;
+            try units.append(arena, .{ .tagged_union = tagged_union });
+        }
         {
             var it = self.array_types.valueIterator();
             while (it.next()) |a| try units.append(arena, .{ .array = a.* });

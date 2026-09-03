@@ -8,6 +8,7 @@ const type_bridge = @import("type_bridge.zig");
 
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
+const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
 
 pub fn structDeclForType(
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
@@ -47,12 +48,12 @@ pub fn overlayInfoForType(
 
 pub fn taggedUnionForType(
     type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
-    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    tagged_unions: *const std.StringHashMap(TaggedUnionInfo),
     ty: ast_bridge.TypeExpr,
 ) ?ast_bridge.UnionDecl {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
-        .name => |name| tagged_unions.get(name.text),
+        .name => |name| if (tagged_unions.get(name.text)) |info| info.decl else null,
         else => null,
     };
 }

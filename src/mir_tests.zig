@@ -3978,6 +3978,39 @@ test "MIR overlay-union facts are syntax-free and fail closed" {
     try std.testing.expectError(error.InvalidMirOverlayUnionFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "MIR tagged-union facts are syntax-free and fail closed" {
+    const source =
+        \\union Token { number: u32, eof }
+        \\fn identity(value: Token) -> Token { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_tagged_union_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.tagged_unions.len);
+    const fact = module_mir.tagged_unions[0];
+    const identity = module_mir.symbol_identities[fact.symbol_id.index()];
+    try std.testing.expectEqualStrings("Token", identity.spelling);
+    try std.testing.expectEqual(@as(usize, 2), fact.cases.len);
+    try std.testing.expectEqualStrings("number", fact.cases[0].spelling);
+    try std.testing.expect(fact.cases[0].payload_type_id != null);
+    try std.testing.expectEqual(@as(?mir.SignatureTypeId, null), fact.cases[1].payload_type_id);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.tagged_unions[0].layout.payload_field_index;
+    module_mir.tagged_unions[0].layout.payload_field_index = 0;
+    defer module_mir.tagged_unions[0].layout.payload_field_index = saved;
+    try std.testing.expectError(error.InvalidMirTaggedUnionFacts, mir.validateLoweringAdmission(module_mir));
+
+    module_mir.tagged_unions[0].layout.payload_field_index = saved;
+    const mutable_cases = @constCast(module_mir.tagged_unions[0].cases);
+    const saved_spelling = mutable_cases[1].spelling;
+    mutable_cases[1].spelling = "number";
+    defer mutable_cases[1].spelling = saved_spelling;
+    try std.testing.expectError(error.InvalidMirTaggedUnionFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
     const source =
         \\fn const_index(a: [4]u32) -> u32 {

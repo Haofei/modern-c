@@ -1206,7 +1206,6 @@ fn moduleStructDecl(scope: *const ComptimeScope, name: []const u8) ?ast.StructDe
         for (decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl,
-                else => {},
             },
             else => {},
         };

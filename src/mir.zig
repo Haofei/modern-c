@@ -121,6 +121,8 @@ pub const PackedBitsFact = mir_model.PackedBitsFact;
 pub const PackedBitsFieldFact = mir_model.PackedBitsFieldFact;
 pub const OverlayUnionFact = mir_model.OverlayUnionFact;
 pub const OverlayUnionFieldFact = mir_model.OverlayUnionFieldFact;
+pub const TaggedUnionFact = mir_model.TaggedUnionFact;
+pub const TaggedUnionCaseFact = mir_model.TaggedUnionCaseFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -1196,6 +1198,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (overlay_union_facts.items) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) allocator.free(overlay_union_fact.fields);
         overlay_union_facts.deinit(allocator);
     }
+    var tagged_union_facts: std.ArrayList(TaggedUnionFact) = .empty;
+    errdefer {
+        for (tagged_union_facts.items) |tagged_union_fact| if (tagged_union_fact.cases.len != 0) allocator.free(tagged_union_fact.cases);
+        tagged_union_facts.deinit(allocator);
+    }
     var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
     errdefer {
         for (global_initializer_facts.items) |fact| fact.deinit(allocator);
@@ -1273,6 +1280,22 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     .storage_size = aligned_storage_size,
                     .storage_alignment = storage_alignment,
                     .fields = fields,
+                });
+            },
+            .union_decl => |union_decl| {
+                const summary = unions.get(union_decl.name.text) orelse return error.InvalidMirTaggedUnionFacts;
+                const layout = mir_reflect.taggedUnionLayout(&reflect_env, summary, 0) orelse return error.InvalidMirTaggedUnionFacts;
+                const cases = try allocator.alloc(TaggedUnionCaseFact, union_decl.cases.len);
+                errdefer allocator.free(cases);
+                for (union_decl.cases, 0..) |case, index| cases[index] = .{
+                    .spelling = case.name.text,
+                    .payload_type_id = if (case.ty) |ty| try signature_types.internTypeExpr(ty, &const_fns, &const_globals) else null,
+                };
+                try tagged_union_facts.append(allocator, .{
+                    .symbol_id = try internSymbolId(&symbol_ids, union_decl.name.text),
+                    .source_id = typed_source_id,
+                    .layout = layout,
+                    .cases = cases,
                 });
             },
             .type_alias => |alias| {
@@ -1543,6 +1566,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirOverlayUnionFacts;
         identity.kind = .type_;
     }
+    for (tagged_union_facts.items) |tagged_union_fact| {
+        if (!tagged_union_fact.symbol_id.isValid() or tagged_union_fact.symbol_id.index() >= symbol_identities.len or
+            tagged_union_fact.layout.size == 0 or tagged_union_fact.layout.alignment == 0)
+            return error.InvalidMirTaggedUnionFacts;
+        const identity = &symbol_identities[tagged_union_fact.symbol_id.index()];
+        if (!identity.id.eql(tagged_union_fact.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirTaggedUnionFacts;
+        identity.kind = .type_;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1577,6 +1610,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         for (overlay_union_facts_slice) |overlay_union_fact| if (overlay_union_fact.fields.len != 0) allocator.free(overlay_union_fact.fields);
         allocator.free(overlay_union_facts_slice);
     }
+    const tagged_union_facts_slice = try tagged_union_facts.toOwnedSlice(allocator);
+    errdefer {
+        for (tagged_union_facts_slice) |tagged_union_fact| if (tagged_union_fact.cases.len != 0) allocator.free(tagged_union_fact.cases);
+        allocator.free(tagged_union_facts_slice);
+    }
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
@@ -1596,6 +1634,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .enums = enum_facts_slice,
         .packed_bits = packed_bits_facts_slice,
         .overlay_unions = overlay_union_facts_slice,
+        .tagged_unions = tagged_union_facts_slice,
         .global_initializer_facts = global_initializer_facts_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
@@ -4165,6 +4204,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirEnumFacts,
     InvalidMirPackedBitsFacts,
     InvalidMirOverlayUnionFacts,
+    InvalidMirTaggedUnionFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4197,6 +4237,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateEnumFactsForLowering(module);
     try validatePackedBitsFactsForLowering(module);
     try validateOverlayUnionFactsForLowering(module);
+    try validateTaggedUnionFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
@@ -4296,6 +4337,35 @@ fn validateOverlayUnionFactsForLowering(module: Module) error{InvalidMirOverlayU
         for (module.type_aliases) |alias| if (alias.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
         for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
         for (module.packed_bits) |packed_bits_fact| if (packed_bits_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirOverlayUnionFacts;
+    }
+}
+
+fn validateTaggedUnionFactsForLowering(module: Module) error{InvalidMirTaggedUnionFacts}!void {
+    for (module.tagged_unions, 0..) |fact, index| {
+        const layout = fact.layout;
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
+            layout.size == 0 or layout.alignment < 4 or layout.payload_size == 0 or
+            layout.payload_alignment == 0 or layout.storage_count == 0 or
+            (layout.payload_field_index != 1 and layout.payload_field_index != 2))
+            return error.InvalidMirTaggedUnionFacts;
+        const identity = module.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidMirTaggedUnionFacts;
+        if (fact.source_id.isValid() and (fact.source_id.index() >= module.source_identities.len or
+            !module.source_identities[fact.source_id.index()].id.eql(fact.source_id)))
+            return error.InvalidMirTaggedUnionFacts;
+        for (fact.cases, 0..) |case, case_index| {
+            if (case.spelling.len == 0) return error.InvalidMirTaggedUnionFacts;
+            if (case.payload_type_id) |payload_type_id| {
+                if (!payload_type_id.isValid() or !module.signature_types.contains(payload_type_id))
+                    return error.InvalidMirTaggedUnionFacts;
+            }
+            for (fact.cases[0..case_index]) |prior| if (std.mem.eql(u8, prior.spelling, case.spelling)) return error.InvalidMirTaggedUnionFacts;
+        }
+        for (module.tagged_unions[0..index]) |prior| if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
+        for (module.type_aliases) |alias| if (alias.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
+        for (module.enums) |enum_fact| if (enum_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
+        for (module.packed_bits) |packed_bits_fact| if (packed_bits_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
+        for (module.overlay_unions) |overlay_union_fact| if (overlay_union_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTaggedUnionFacts;
     }
 }
 

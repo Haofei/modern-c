@@ -138,6 +138,7 @@ const BindThunk = lower_llvm_model.BindThunk;
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
 const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
+const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
 const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
 const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
 const MmioMapInfo = lower_llvm_model.MmioMapInfo;
@@ -349,7 +350,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .enum_types = std.StringHashMap(ast_bridge.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
         .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
-        .tagged_unions = std.StringHashMap(ast_bridge.UnionDecl).init(allocator),
+        .tagged_unions = std.StringHashMap(TaggedUnionInfo).init(allocator),
         .struct_types = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
@@ -389,6 +390,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectEnumFacts();
     try ctx.collectPackedBitsFacts();
     try ctx.collectOverlayUnionFacts();
+    try ctx.collectTaggedUnionFacts();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
     try ctx.collectCheckedPlannedGlobals();
     var reflect_env = ctx.reflectEnv();
@@ -397,7 +399,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .reflect_ctx = &reflect_env,
         .domains = &ctx.const_global_domains,
     });
-    try ctx.collectNonStructTypeArtifacts();
     try ctx.collectStructArtifacts();
     try ctx.collectFunctionGlobalArtifacts();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
@@ -435,7 +436,7 @@ const LlvmEmitter = struct {
     enum_types: std.StringHashMap(ast_bridge.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
     overlay_unions: std.StringHashMap(OverlayUnionInfo) = undefined,
-    tagged_unions: std.StringHashMap(ast_bridge.UnionDecl) = undefined,
+    tagged_unions: std.StringHashMap(TaggedUnionInfo) = undefined,
     struct_types: std.StringHashMap(ast_bridge.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
@@ -563,7 +564,6 @@ const LlvmEmitter = struct {
         try eval.collectConstFunctionsFromDeclarations(comptime_facts, &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
                 .struct_decl => |struct_decl| {
                     if (struct_decl.type_params.len != 0) continue;
                     if (struct_decl.abi) |abi| {
@@ -635,11 +635,24 @@ const LlvmEmitter = struct {
         }
     }
 
+    /// Tagged-union rendering views are derived from checked module facts;
+    /// the stored layout is the frontend's canonical aggregate-layout result.
+    fn collectTaggedUnionFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.tagged_unions) |fact| {
+            const tagged_union = try signature_type_materializer.taggedUnionDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectTaggedUnionFact(tagged_union, fact);
+        }
+    }
+
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStruct(struct_decl),
-                else => {},
             },
             else => {},
         };
@@ -658,16 +671,6 @@ const LlvmEmitter = struct {
             }
         }
         try self.struct_types.put(struct_decl.name.text, struct_decl);
-    }
-
-    fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .transitional_type_decl => |type_decl| switch (type_decl) {
-                .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-                .struct_decl => {},
-            },
-            else => {},
-        };
     }
 
     fn collectEnum(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl) !void {
@@ -694,11 +697,11 @@ const LlvmEmitter = struct {
         });
     }
 
-    fn collectTaggedUnion(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl) !void {
+    fn collectTaggedUnionFact(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl, fact: mir.TaggedUnionFact) !void {
         for (union_decl.cases) |case| {
             if (case.ty) |ty| _ = try self.llvmType(ty);
         }
-        try self.tagged_unions.put(union_decl.name.text, union_decl);
+        try self.tagged_unions.put(union_decl.name.text, .{ .decl = union_decl, .layout = fact.layout });
     }
 
     fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
@@ -8982,7 +8985,7 @@ const LlvmEmitter = struct {
         const q = syntax_bridge.qualifiedMemberCallee(call.callee.*) orelse return null;
         const union_name = typeName(self.resolveAliasType(union_ty)) orelse return null;
         if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedLlvmEmission;
-        const union_decl = self.tagged_unions.get(union_name) orelse return null;
+        const union_decl = (self.tagged_unions.get(union_name) orelse return null).decl;
         const case_index = self.taggedUnionCaseIndex(union_decl, q.member.text) orelse return null;
         const case = union_decl.cases[case_index];
         const union_llvm = try self.llvmType(union_ty);
@@ -9518,8 +9521,8 @@ const LlvmEmitter = struct {
                 try self.llvmType(info.repr)
             else if (self.overlay_unions.get(name.text)) |info|
                 try self.overlayLlvmType(info)
-            else if (self.tagged_unions.get(name.text)) |union_decl|
-                try self.taggedUnionLlvmType(union_decl)
+            else if (self.tagged_unions.get(name.text)) |union_info|
+                try self.taggedUnionLlvmType(union_info.decl)
             else if (self.struct_types.get(name.text)) |struct_decl|
                 try self.structLlvmType(struct_decl)
             else if (libraryScalarLlvmType(name.text)) |library_ty|
@@ -9613,7 +9616,7 @@ const LlvmEmitter = struct {
         if (self.enum_types.get(name)) |decl| return self.llvmType(enumReprType(decl));
         if (self.packed_bits.get(name)) |info| return self.llvmType(info.repr);
         if (self.overlay_unions.get(name)) |info| return self.overlayLlvmType(info);
-        if (self.tagged_unions.get(name)) |decl| return self.taggedUnionLlvmType(decl);
+        if (self.tagged_unions.get(name)) |info| return self.taggedUnionLlvmType(info.decl);
         if (self.struct_types.get(name)) |decl| return self.structLlvmType(decl);
         if (scalar_repr.integer(name)) |integer| return std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{integer.bits});
         if (libraryScalarLlvmType(name)) |ty| return ty;
@@ -10134,8 +10137,8 @@ const LlvmEmitter = struct {
     }
 
     fn taggedUnionLayout(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl, depth: usize) ?TaggedUnionLayout {
-        var env = self.reflectEnv();
-        return lower_llvm_reflect.taggedUnionLayout(&env, union_decl, depth);
+        _ = depth;
+        return if (self.tagged_unions.get(union_decl.name.text)) |info| info.layout else null;
     }
 
     fn taggedUnionPayloadStorageType(self: *LlvmEmitter, layout: TaggedUnionLayout) ![]const u8 {

@@ -11,7 +11,7 @@ const ast = @import("ast.zig");
 const mir = @import("mir_model.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 
-pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact, InvalidOverlayUnionFact } || std.mem.Allocator.Error;
+pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact, InvalidPackedBitsFact, InvalidOverlayUnionFact, InvalidTaggedUnionFact } || std.mem.Allocator.Error;
 
 pub fn typeExpr(
     allocator: std.mem.Allocator,
@@ -186,5 +186,29 @@ pub fn overlayUnionDecl(
     return .{
         .name = .{ .text = identity.spelling, .span = span },
         .fields = fields,
+    };
+}
+
+/// Transitional rendering view for a tagged union.  Case names and payload
+/// types come from `TaggedUnionFact`; canonical layout remains in that fact
+/// and is deliberately not recalculated from this AST-shaped view.
+pub fn taggedUnionDecl(
+    allocator: std.mem.Allocator,
+    types: mir.SignatureTypeTable,
+    symbols: []const mir.SymbolIdentity,
+    fact: mir.TaggedUnionFact,
+) Error!ast.UnionDecl {
+    if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbols.len) return error.InvalidTaggedUnionFact;
+    const identity = symbols[fact.symbol_id.index()];
+    if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidTaggedUnionFact;
+    const span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+    const cases = try allocator.alloc(ast.UnionCase, fact.cases.len);
+    for (fact.cases, 0..) |case, index| cases[index] = .{
+        .name = .{ .text = case.spelling, .span = span },
+        .ty = if (case.payload_type_id) |payload_type_id| try typeExpr(allocator, types, payload_type_id, span) else null,
+    };
+    return .{
+        .name = .{ .text = identity.spelling, .span = span },
+        .cases = cases,
     };
 }
