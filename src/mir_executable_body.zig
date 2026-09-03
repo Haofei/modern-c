@@ -47,64 +47,6 @@ pub fn explicitUnsupported(function: *const mir.Function) ?ExplicitUnsupported {
     };
 }
 
-/// Coarse, stable reason for an incomplete canonical body.  This is migration
-/// telemetry only: admission still depends on `verify` + `complete`.  Keeping
-/// the classifier beside the canonical model lets the broad census rank the
-/// producer gaps without teaching either backend about source syntax.
-pub fn incompleteReason(function: *const mir.Function) []const u8 {
-    const body = &function.executable_body;
-    if (body.complete) return "complete";
-    if (body.expressions.len == 0 and body.statements.len == 0 and body.terminators.len == 0) return "empty_body";
-    // A producer-owned reason identifies the first operation that failed to
-    // canonicalize. Prefer it over scanning otherwise valid operations: a
-    // supported member/range/array may precede the actual unsupported node.
-    if (body.incomplete_reason != .none) return @tagName(body.incomplete_reason);
-    for (body.expressions) |expression_value| switch (expression_value.operation) {
-        .unsupported => return "unsupported_expression",
-        .deref => return "unlowered_deref",
-        .range_slice => return "unlowered_range_slice",
-        .member => return "unlowered_member",
-        .array => return "unlowered_array",
-        .literal => |literal| switch (literal) {
-            .uninit => return "noncanonical_uninit_literal",
-            .enum_value => return "noncanonical_enum_literal",
-            else => {},
-        },
-        else => {},
-    };
-    for (body.statements) |statement_value| switch (statement_value.operation) {
-        .unsupported => return "unsupported_statement",
-        .defer_register, .cleanup_run => {},
-        .guard => |guard| if (guard.kind == .assert_ and
-            !assertGuardHasExactTrapEdge(body, statement_value, guard)) return "assert_guard",
-        else => {},
-    };
-    for (body.places) |place_value| {
-        if (place_value.storage == .atomic) {
-            if (!atomicPlaceSupported(body, place_value)) return "incomplete_atomic_place";
-        } else if (place_value.projection_count != 0 and !isScalarAccessPlace(body, place_value, false) and
-            !mir.executableGuardedLocalAggregateDerefPlace(body, place_value, false) and
-            !mir.executableParameterProjectedPlace(body, place_value, false) and
-            mir.executableFixedArrayIndexPlace(body, place_value) == null and
-            mir.executableSliceIndexPlace(body, place_value) == null) return "incomplete_place";
-    }
-    for (body.terminators) |terminator| switch (terminator.operation) {
-        .switch_ => return "general_switch",
-        .fallthrough => return "invalid_fallthrough",
-        else => {},
-    };
-    // When every operation has a canonical shape but the producer declined to
-    // mark the body complete, ask the verifier which invariant would fail if it
-    // did. This keeps migration telemetry actionable without duplicating the
-    // verifier's rules in the producer or either backend.
-    var claimed_function = function.*;
-    claimed_function.executable_body = body.*;
-    claimed_function.executable_body.complete = true;
-    claimed_function.executable_body.incomplete_reason = .none;
-    verify(&claimed_function) catch |err| return @errorName(err);
-    return "producer_invariant";
-}
-
 pub fn expression(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
     if (!id.isValid() or id.index() >= body.expressions.len) return null;
     const value = &body.expressions[id.index()];

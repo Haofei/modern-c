@@ -954,7 +954,7 @@ test "executable MIR owns address representation cast" {
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
 }
 
-test "executable MIR reports a stable unsupported expression reason" {
+test "executable MIR records a typed unsupported expression reason" {
     const source =
         \\fn borrow_value(value: *u32) -> u32 {
         \\    let view: *const u32 = borrow value.*;
@@ -975,7 +975,6 @@ test "executable MIR reports a stable unsupported expression reason" {
     const function = functionByName(module_mir, "borrow_value") orelse return error.TestUnexpectedResult;
     try std.testing.expect(!function.executable_body.complete);
     try std.testing.expectEqual(mir.ExecutableIncompleteReason.unsupported_borrow, function.executable_body.incomplete_reason);
-    try std.testing.expectEqualStrings("unsupported_borrow", mir_executable_body.incompleteReason(&function));
 }
 
 test "executable MIR distinguishes explicit backend rejection from migration fallback" {

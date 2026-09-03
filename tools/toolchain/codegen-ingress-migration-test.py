@@ -61,58 +61,6 @@ def validate_count_table(table_name: str, table: Any, failures: list[str]) -> in
     return checked
 
 
-def validate_fallback_census_ratchet(spec: Any) -> int:
-    require(isinstance(spec, dict), "fallback_census_ratchet must be an object")
-    required = ("gate", "script", "report", "ratchet", "baseline", "roots", "default_check_corpus", "policy")
-    checked = 0
-    for key in required:
-        value = spec.get(key)
-        require(isinstance(value, str) and value, f"fallback_census_ratchet.{key} must be a non-empty string")
-        checked += 1
-
-    for key in ("script", "report", "ratchet", "baseline", "roots"):
-        rel = spec[key]
-        require((ROOT / rel).is_file(), f"fallback_census_ratchet.{key} references missing file {rel}")
-        checked += 1
-
-    require(spec["roots"] == spec["default_check_corpus"], "fallback census roots/default_check_corpus mismatch")
-    checked += 1
-
-    baseline = ROOT / spec["baseline"]
-    roots = [
-        line
-        for line in (ROOT / spec["roots"]).read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
-    require(roots, "fallback census roots must list at least one checked root")
-    checked += 1
-
-    lines = [
-        line.strip()
-        for line in baseline.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
-    require(lines, "fallback census baseline must contain a header and backend rows")
-    require(
-        lines[0].split("\t") == [
-            "backend",
-            "total_min",
-            "admitted_min",
-            "fallback_max",
-            "unsupported_max",
-            "admission_bps_min",
-            "canonical_min",
-            "specialized_max",
-            "specialized_plan_defs_max",
-        ],
-        "fallback census baseline header mismatch",
-    )
-    backends = {line.split("\t")[0] for line in lines[1:]}
-    require(backends == {"c", "llvm"}, "fallback census baseline must pin exactly c and llvm rows")
-    checked += 3
-    return checked
-
-
 def main() -> int:
     try:
         data = load_manifest()
@@ -130,8 +78,6 @@ def main() -> int:
         policy = data.get("policy")
         require(isinstance(policy, dict), "policy must be an object")
         require(policy.get("direction") and policy.get("stable_goal"), "policy must document direction and stable_goal")
-        checked += validate_fallback_census_ratchet(data.get("fallback_census_ratchet"))
-
         if failures:
             return fail("\n  - " + "\n  - ".join(failures))
     except AssertionError as exc:

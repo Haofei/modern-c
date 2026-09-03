@@ -14,7 +14,6 @@ const mir_executable_body = @import("mir_executable_body.zig");
 const mir_executable_llvm = @import("mir_executable_llvm.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
-const fallback_census = @import("fallback_census.zig");
 const numeric = @import("numeric.zig");
 const type_bridge = @import("type_bridge.zig");
 const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
@@ -814,33 +813,15 @@ const LlvmEmitter = struct {
             const previous_source_path = self.source_path;
             self.source_path = self.sourcePathForSpan(function.signature.name.span);
             defer self.source_path = previous_source_path;
-            const canonical_status = self.canonicalCensusStatus(fn_mir);
-            const canonical_detail = switch (canonical_status) {
-                .producer_incomplete => mir_executable_body.incompleteReason(&fn_mir),
-                .renderer_unsupported => mir_executable_llvm.unsupportedReason(&fn_mir.executable_body, fn_mir.return_ty),
-                .ingress_mismatch, .ready => "",
-            };
-            var selected_path: fallback_census.SelectedPath = .unsupported;
-            if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs, &selected_path)) {
-                fallback_census.record(.llvm, .admitted, selected_path, canonical_status, canonical_detail, self.source_path, fn_mir);
+            if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
                 continue;
             } else if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
-                fallback_census.record(.llvm, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
                 return error.UnsupportedLlvmEmission;
             } else {
-                fallback_census.record(.llvm, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 return error.UnsupportedLlvmEmission;
             }
         }
-    }
-
-    fn canonicalCensusStatus(self: *LlvmEmitter, fn_mir: mir.Function) fallback_census.CanonicalStatus {
-        if (!fallback_census.isEnabled()) return .producer_incomplete;
-        if (!mir_executable_body.isComplete(&fn_mir)) return .producer_incomplete;
-        if (!mir_executable_llvm.supports(&fn_mir.executable_body, fn_mir.return_ty)) return .renderer_unsupported;
-        if (!self.mirExecutableBodySupported(fn_mir)) return .ingress_mismatch;
-        return .ready;
     }
 
     fn functionArtifactIndexByName(self: *const LlvmEmitter, name: []const u8) ?usize {
@@ -1617,13 +1598,10 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
-        // Prefer the canonical executable body before constructing any of the
-        // legacy, source-shaped recognition plans below.  Unsupported bodies
-        // still fall through to those plans, but an admitted body has exactly
-        // one semantic input: verified executable MIR.
+    fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
+        // Emit only complete, verified executable MIR within this backend's
+        // capability set.
         if (try self.emitExecutableMirFunction(function, fn_mir, render_attrs)) {
-            selected_path.* = .canonical;
             return true;
         }
         return false;

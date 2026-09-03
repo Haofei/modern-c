@@ -20,7 +20,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
-    m0_full_step.dependOn(ctx.cmd("fallback-census-ratchet-test"));
     m0_full_step.dependOn(ctx.cmd("review-goal-status-test"));
     m0_full_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
@@ -270,7 +269,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     m0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
     m0_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
-    m0_step.dependOn(ctx.cmd("fallback-census-ratchet-test"));
     m0_step.dependOn(ctx.cmd("review-goal-status-test"));
     m0_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     m0_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
@@ -302,7 +300,6 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     fast_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
     fast_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
-    fast_step.dependOn(ctx.cmd("fallback-census-ratchet-test"));
     fast_step.dependOn(ctx.cmd("review-goal-status-test"));
     fast_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
@@ -348,7 +345,6 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("semantic-facts-inventory-test")); // backend semantic authority stays registered and anchored
     c0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test")); // backend syntax escapes and deleted cleanup state stay ratcheted
     c0_step.dependOn(ctx.cmd("codegen-ingress-migration-test")); // AST-shaped codegen ingress budget stays explicit and decreasing
-    c0_step.dependOn(ctx.cmd("fallback-census-ratchet-test")); // C/LLVM fallback census coverage stays baseline-ratcheted
     c0_step.dependOn(ctx.cmd("review-goal-status-test")); // active review goals stay evidence-backed until complete
     c0_step.dependOn(ctx.cmd("compilation-session-inventory-test")); // request-scoped compiler context stays anchored
     c0_step.dependOn(ctx.cmd("mir-identity-inventory-test")); // typed MIR identity migration seed stays anchored

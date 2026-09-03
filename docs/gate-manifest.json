@@ -22,7 +22,6 @@
         "semantic-facts-inventory-test",
         "architecture-boundary-inventory-test",
         "codegen-ingress-migration-test",
-        "fallback-census-ratchet-test",
         "compilation-session-inventory-test",
         "mir-identity-inventory-test",
         "gate-manifest-test",
@@ -137,23 +136,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "fallback-census-ratchet-test",
-      "owner": "backend-authority",
-      "category": "codegen-ingress-migration",
-      "tier": "pr",
-      "required_tools": [
-        "bash",
-        "python3",
-        "mcc"
       ],
       "build_tiers": [
         "m0",

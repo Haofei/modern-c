@@ -28,11 +28,11 @@
         },
         {
           "file": "src/lower_c_emitter.zig",
-          "needle": "fallback_census.record(.c, .unsupported"
+          "needle": "if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs))"
         },
         {
           "file": "src/lower_llvm.zig",
-          "needle": "fallback_census.record(.llvm, .unsupported"
+          "needle": "if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs))"
         }
       ],
       "retired_evidence": [

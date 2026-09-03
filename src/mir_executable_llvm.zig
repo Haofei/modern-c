@@ -290,101 +290,6 @@ pub fn supports(body: *const mir.ExecutableBody, return_ty: mir.ValueType) bool 
     return true;
 }
 
-/// Coarse first-failure classification for fallback census telemetry. The
-/// renderer's admission authority remains `supports`.
-pub fn unsupportedReason(body: *const mir.ExecutableBody, return_ty: mir.ValueType) []const u8 {
-    if (supports(body, return_ty)) return "complete";
-    if (!body.isComplete()) return "incomplete_body";
-    if (body.terminators.len == 0) return "missing_terminator";
-    if (!llvmTypeSupported(body, return_ty) and !callableReturnSupported(body, return_ty) and
-        !(return_ty == .value and body.return_dyn_trait_symbol_id.isValid())) return "return_type";
-    for (body.parameters) |parameter| if (!parameter.local.isValid() or !parameterTypeSupported(body, parameter))
-        return "parameter";
-    for (body.expressions) |expression| {
-        if (!expression.id.isValid() or expression.id.index() >= body.expressions.len or
-            (!llvmTypeSupported(body, expression.result_ty) and !functionSymbolExpressionSupported(body, expression) and
-                !callableValueExpressionSupported(body, expression))) return "expression_type";
-        if (!operationSupported(body, expression)) return switch (expression.operation) {
-            .load => |load| memoryLoadUnsupportedReason(body, expression, load),
-            .atomic_load => |load| atomicLoadUnsupportedReason(body, expression, load),
-            .atomic_update => |update| atomicUpdateUnsupportedReason(body, expression, update),
-            else => @tagName(expression.operation),
-        };
-    }
-    for (body.trap_edges) |edge| switch (edge.owner) {
-        .expression => |owner_id| if (!expressionValid(body, owner_id)) return "trap_owner",
-        .statement => |owner_id| if (statementIdentity(body, owner_id) == null) return "trap_owner",
-    };
-    for (body.places) |place| {
-        if (!place.id.isValid() or place.id.index() >= body.places.len or place.projection_count > mir.max_executable_projections)
-            return "place_identity";
-        if (place.storage == .atomic) {
-            if (!atomicPlaceSupported(body, place)) return "atomic_place";
-        } else if (place.projection_count == 0) {
-            if (!placeRootValid(body, place)) return "place_root";
-        } else if (!scalarAccessPlaceSupported(body, place) and
-            mir.executableCallablePlace(body.aggregate_types, place) == null and
-            !mir.executableGuardedLocalAggregateDerefPlace(body, place, false) and
-            !mir.executableParameterProjectedPlace(body, place, false) and
-            mir.executableFixedArrayIndexPlace(body, place) == null and
-            mir.executableSliceIndexPlace(body, place) == null) return "place";
-    }
-    for (body.statements) |statement| switch (statement.operation) {
-        .local_init => |local| if (!local.local.isValid() or !(llvmTypeSupported(body, local.ty) or
-            (local.ty == .value and (callableLocalUsedAsIndirectCallee(body, local.local) or dynLocal(body, local.local))))) return "local_init",
-        .store => |store| if (!placeValid(body, store.place) or !expressionValid(body, store.value) or
-            !sameValueType(store.ty, body.expressions[store.value.index()].result_ty) or
-            !memoryStoreSupported(body, statement, store)) return "store",
-        .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store)) return "packed_field_store",
-        .eval => |value| if (!expressionValid(body, value)) return "eval",
-        .guard => {},
-        .return_ => |value| if (value) |result| if (!expressionValid(body, result)) return "return",
-        .opaque_asm, .precise_asm, .control_transfer => {},
-        .defer_register, .cleanup_run => {},
-        .unsupported => return "unsupported_statement",
-    };
-    for (body.terminators) |terminator| switch (terminator.operation) {
-        .fallthrough => return "fallthrough",
-        .jump => |target| if (!blockExists(body, target)) return "jump_terminator",
-        .branch => |branch| if (!expressionValid(body, branch.condition) or !blockExists(body, branch.true_block) or !blockExists(body, branch.false_block)) return "branch_terminator",
-        .for_each => |loop| if (!forEachSupported(body, loop)) return "for_each_terminator",
-        .for_step => |step| if (!forStepSupported(body, step)) return "for_step_terminator",
-        .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return "switch_terminator",
-        .trap_ => |kind| if (trapHelper(kind) == null) return "trap_terminator",
-        .return_ => if (!hasReturnStatement(body, terminator.block_id) and return_ty != .void) return "return_terminator",
-        .unreachable_ => {},
-    };
-    return "renderer_invariant";
-}
-
-fn memoryLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) []const u8 {
-    if (!placeValid(body, load.place)) return "load_place";
-    const composite = callableLoadTargetSupported(body, expression, load) or
-        dynLoadTargetSupported(body, expression, load) or
-        sliceLoadTargetSupported(body, expression, load);
-    if (!memoryAccessSupported(body, load.place, expression.result_ty, load.access, false, composite)) return switch (expression.result_ty) {
-        .value => "load_access_value",
-        .slice => "load_access_slice",
-        .pointer => |shape| if (shape.kind == .slice) "load_access_slice_pointer" else "load_access_pointer",
-        .nullable_value => "load_access_nullable_value",
-        else => "load_access_other",
-    };
-    const place = body.places[load.place.index()];
-    if (place.projection_count == 0) return "load_direct";
-    if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return "load_type_id";
-    if (mir.executableFixedArrayIndexPlace(body, place)) |indexed| {
-        if (indexed.parameter_pointee != (load.representation_source != null and load.representation_span_id.isValid()))
-            return "load_fixed_array_representation";
-        if (mir.executableFixedArrayCheckedProjectionCount(place) != 0 and fixedArrayLoadBoundsTrapEdge(body, expression) == null)
-            return "load_fixed_array_trap";
-        return "load_fixed_array";
-    }
-    if (mir.executableAggregateFieldPlace(body.locals, body.statements, body.aggregate_types, place, false))
-        return "load_aggregate_field";
-    if (computedRawManyDerefPlaceSupported(body, place, false)) return "load_raw_many";
-    return "load_representation";
-}
-
 fn stringLiteralTypeSupported(ty: mir.ValueType) bool {
     return switch (ty) {
         .cstr => true,
@@ -6012,17 +5917,6 @@ fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
-fn atomicLoadUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, load: anytype) []const u8 {
-    if (!load.ordering.validForLoad() or !placeValid(body, load.place)) return "atomic_load_place";
-    const place = body.places[load.place.index()];
-    if (!atomicPlaceSupported(body, place)) return "atomic_load_place_shape";
-    if (!sameValueType(place.ty, expression.result_ty) or !place.type_id.eql(expression.type_id)) return "atomic_load_type";
-    if (placeNeedsRepresentationGuard(body, place))
-        return if (load.representation_source != null and load.representation_span_id.isValid() and
-            representationTrapEdgeIsExact(body, expression)) "atomic_load_invariant" else "atomic_load_trap";
-    return "atomic_load_direct";
-}
-
 fn atomicInitSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, operand_id: mir.ExprId) bool {
     if (!expressionValid(body, operand_id)) return false;
     const operand = body.expressions[operand_id.index()];
@@ -6077,18 +5971,6 @@ fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
         update.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
     return update.representation_source == null and !update.representation_span_id.isValid() and
         ownedExpressionTrapCount(body, expression.id) == 0;
-}
-
-fn atomicUpdateUnsupportedReason(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, update: anytype) []const u8 {
-    if (!placeValid(body, update.place) or !expressionValid(body, update.value)) return "atomic_update_place";
-    const place = body.places[update.place.index()];
-    const operand = body.expressions[update.value.index()];
-    if (!atomicPlaceSupported(body, place)) return "atomic_update_place_shape";
-    if (!sameValueType(place.ty, operand.result_ty) or !place.type_id.eql(operand.type_id)) return "atomic_update_type";
-    if (placeNeedsRepresentationGuard(body, place))
-        return if (update.representation_source != null and update.representation_span_id.isValid() and
-            representationTrapEdgeIsExact(body, expression)) "atomic_update_invariant" else "atomic_update_trap";
-    return "atomic_update_direct";
 }
 
 fn mmioReadSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, read: anytype) bool {

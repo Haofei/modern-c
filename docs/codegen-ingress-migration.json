@@ -138,16 +138,6 @@
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 0
     }
   },
-  "fallback_census_ratchet": {
-    "gate": "fallback-census-ratchet-test",
-    "script": "tools/toolchain/fallback-census.sh",
-    "report": "tools/toolchain/fallback-census-report.py",
-    "ratchet": "tools/toolchain/fallback-census-ratchet.py",
-    "baseline": "tools/toolchain/fallback-census-baseline.tsv",
-    "roots": "tools/toolchain/fallback-census-roots.txt",
-    "default_check_corpus": "tools/toolchain/fallback-census-roots.txt",
-    "policy": "check mode fails on compile error/timeout/crash; total/admitted/canonical/admission_bps may not regress; fallback/unsupported/specialized admission/plan definitions may not increase"
-  },
   "backend_artifact_consumers": {
     "src/lower_c_emitter.zig": {
       "declaration_artifacts.FunctionArtifact": 2,

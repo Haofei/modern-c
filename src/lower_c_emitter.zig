@@ -15,7 +15,6 @@ const mir_executable_body = @import("mir_executable_body.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_bridge = @import("type_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
-const fallback_census = @import("fallback_census.zig");
 const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
 
 const lower_c_type = @import("lower_c_type.zig");
@@ -629,10 +628,7 @@ pub const CEmitter = struct {
     }
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
-        // Function-definition admission is driven by verified MIR.  The
-        // source-shaped body artifact is still the transitional rendering
-        // payload, but it no longer decides which functions enter body
-        // lowering.
+        // Function-definition admission is driven exclusively by verified MIR.
         for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
             const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse continue;
@@ -645,33 +641,15 @@ pub const CEmitter = struct {
             const previous_source_path = self.source_path;
             self.source_path = self.sourcePathForSpan(function.signature.name.span);
             defer self.source_path = previous_source_path;
-            const canonical_status = self.canonicalCensusStatus(&fn_mir);
-            const canonical_detail = switch (canonical_status) {
-                .producer_incomplete => mir_executable_body.incompleteReason(&fn_mir),
-                .renderer_unsupported => mir_executable_c.unsupportedReason(&fn_mir.executable_body),
-                .ingress_mismatch, .ready => "",
-            };
-            var selected_path: fallback_census.SelectedPath = .unsupported;
-            if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs, &selected_path)) {
-                fallback_census.record(.c, .admitted, selected_path, canonical_status, canonical_detail, self.source_path, fn_mir);
+            if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
                 continue;
             } else if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
-                fallback_census.record(.c, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
                 return error.UnsupportedCEmission;
             } else {
-                fallback_census.record(.c, .unsupported, .unsupported, canonical_status, canonical_detail, self.source_path, fn_mir);
                 return error.UnsupportedCEmission;
             }
         }
-    }
-
-    fn canonicalCensusStatus(self: *CEmitter, fn_mir: *const mir.Function) fallback_census.CanonicalStatus {
-        if (!fallback_census.isEnabled()) return .producer_incomplete;
-        if (!mir_executable_body.isComplete(fn_mir)) return .producer_incomplete;
-        if (!mir_executable_c.canEmitBody(&fn_mir.executable_body)) return .renderer_unsupported;
-        if (!self.mirExecutableBodySupported(fn_mir)) return .ingress_mismatch;
-        return .ready;
     }
 
     fn functionArtifactIndexByName(self: *const CEmitter, name: []const u8) ?usize {
@@ -1407,12 +1385,9 @@ pub const CEmitter = struct {
         right: SimpleMirCallArg,
     };
 
-    fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype, selected_path: *fallback_census.SelectedPath) !bool {
-        // Prefer the canonical, syntax-free executable body whenever it is
-        // complete and within this backend's capability set.  In particular,
-        // do this before constructing any of the transitional specialized
-        // plans below: once the canonical body is admitted, AST-shaped plans
-        // must not get another opportunity to decide the function semantics.
+    fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
+        // Emit only complete, verified executable MIR within this backend's
+        // capability set.
         const executable_body = if (self.mirExecutableBodySupported(&fn_mir)) body: {
             mir_executable_body.verify(&fn_mir) catch break :body null;
             break :body &fn_mir.executable_body;
@@ -1424,7 +1399,6 @@ pub const CEmitter = struct {
             } else {
                 try self.emitExecutableMirFunction(function, &fn_mir, body, render_attrs);
             }
-            selected_path.* = .canonical;
             return true;
         }
 
