@@ -126,8 +126,7 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
 }
 
-pub fn emitFunctionSignature(ctx: Context, fn_decl: anytype, is_static: bool, with_asm_label: bool) !void {
-    const ret = if (fn_decl.transitionalReturnType()) |ret_ty| try ctx.c_type(ctx.emit_ctx, ret_ty) else "void";
+pub fn emitFunctionSignature(ctx: Context, fn_decl: anytype, ret: []const u8, is_static: bool, with_asm_label: bool) !void {
     const cname = try ctx.c_ident(ctx.emit_ctx, fn_decl.name.text);
     try emitFunctionSignaturePrefix(ctx, ret, cname, is_static);
     try emitFunctionSignatureParams(ctx, fn_decl);

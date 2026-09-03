@@ -5286,6 +5286,15 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
     }
 }
 
+/// Render a verified MIR type for module-level declarations. This is the same
+/// type renderer used by executable-body locals and temporaries.
+pub fn renderType(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try appendCType(allocator, &out, body, ty);
+    return out.toOwnedSlice(allocator);
+}
+
 fn appendResultCTypeSuffix(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),

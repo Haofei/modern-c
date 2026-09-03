@@ -30,7 +30,7 @@ fn moduleWithDecls(source_module: ast.Module, decls: []ast.Decl) ast.Module {
 fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, &module_mir);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), &module_mir, out, .kernel, null, .{}, false, null);
 }
@@ -38,7 +38,7 @@ fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.A
 fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, &module_mir);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }

@@ -7,16 +7,17 @@
 const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 const codegen_signature = @import("codegen_signature.zig");
+const mir = @import("mir_model.zig");
 
 pub const FunctionParamFact = codegen_signature.FunctionParamFact;
 
 pub const FunctionSignatureFacts = struct {
     name: ast_bridge.Ident,
     params: []const FunctionParamFact,
-    /// Transitional syntax-shaped return type retained until function
-    /// signatures are keyed by typed semantic IDs. Backends should access this
-    /// through `transitionalReturnType()` so the remaining syntax ingress has a
-    /// single replacement point.
+    /// Canonical semantic return type produced by the checked MIR builder.
+    return_ty: mir.ValueType,
+    /// Compatibility payload for backend helpers that have not yet moved to
+    /// `return_ty`. Function signature emission must not use this field.
     transitional_ret_type: ?ast_bridge.TypeExpr,
     exported: bool,
     is_extern: bool,

@@ -48,7 +48,9 @@ test "const function collection uses the frontend comptime declaration provider"
     );
     defer parsed.deinit();
 
-    var early = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls());
+    var module_mir = try @import("mir.zig").buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var early = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer early.deinit(std.testing.allocator);
 
     // An empty ordinary codegen body view is irrelevant: const-function

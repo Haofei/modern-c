@@ -1166,7 +1166,8 @@ pub const CEmitter = struct {
     }
 
     fn emitFunctionPrototype(self: *CEmitter, function: anytype) !void {
-        try self.emitFunctionSignature(function.signature, false, true);
+        const fn_mir = self.mirFunctionByName(function.signature.name.text) orelse return error.UnsupportedCEmission;
+        try self.emitFunctionSignature(function.signature, fn_mir, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
 
@@ -1174,7 +1175,8 @@ pub const CEmitter = struct {
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
     fn emitFunctionForwardDecl(self: *CEmitter, function: anytype) !void {
-        try self.emitFunctionSignature(function.signature, !function.signature.exported, true);
+        const fn_mir = self.mirFunctionByName(function.signature.name.text) orelse return error.UnsupportedCEmission;
+        try self.emitFunctionSignature(function.signature, fn_mir, !function.signature.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
@@ -1205,7 +1207,7 @@ pub const CEmitter = struct {
     fn emitExecutableMirNakedFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionRenderAttrs(render_attrs);
-        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
+        try self.emitFunctionSignature(function.signature, self.mirFunctionByName(function.signature.name.text) orelse return error.UnsupportedCEmission, !function.signature.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
         try mir_executable_c.emitNakedBody(self.allocator, self.out, body, 1);
         try self.out.appendSlice(self.allocator, "}\n\n");
@@ -1214,7 +1216,7 @@ pub const CEmitter = struct {
     fn emitExecutableMirFunction(self: *CEmitter, function: anytype, fn_mir: *const mir.Function, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionRenderAttrs(render_attrs);
-        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
+        try self.emitFunctionSignature(function.signature, fn_mir.*, !function.signature.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
         const previous_function = self.current_function;
@@ -1284,8 +1286,13 @@ pub const CEmitter = struct {
         return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len };
     }
 
-    fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, is_static: bool, with_asm_label: bool) !void {
-        try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, is_static, with_asm_label);
+    fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, fn_mir: mir.Function, is_static: bool, with_asm_label: bool) !void {
+        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty)) return error.UnsupportedCEmission;
+        const ret = mir_executable_c.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig.return_ty) catch |err| switch (err) {
+            error.UnsupportedType => if (sig.transitionalReturnType()) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void",
+            else => return err,
+        };
+        try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, ret, is_static, with_asm_label);
     }
 
     fn emitFunctionRenderAttrs(self: *CEmitter, attrs: codegen_attrs.FunctionRenderAttrs) !void {

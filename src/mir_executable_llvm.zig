@@ -382,6 +382,22 @@ pub fn render(allocator: std.mem.Allocator, body: *const mir.ExecutableBody, ret
     return renderValidated(allocator, body, return_ty, null, .{});
 }
 
+/// Render a verified MIR type for a module-level declaration using the same
+/// representation table as executable-body lowering.
+pub fn renderType(
+    allocator: std.mem.Allocator,
+    body: *const mir.ExecutableBody,
+    ty: mir.ValueType,
+    callable_signature: ?mir.ExecutableCallSignature,
+) RenderError![]u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var renderer = try Renderer.init(arena.allocator(), body, .void, null, .{});
+    defer renderer.deinit();
+    const rendered = try renderer.callableStorageType(ty, callable_signature);
+    return allocator.dupe(u8, rendered);
+}
+
 pub fn supportsWithCallAbi(body: *const mir.ExecutableBody, return_ty: mir.ValueType, plan: CallAbiPlan) bool {
     if (!supports(body, return_ty) or !callAbiPlanValid(body, plan)) return false;
     // AArch64 classifies variadic payloads through the target's register-save

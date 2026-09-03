@@ -1288,8 +1288,14 @@ const LlvmEmitter = struct {
             error.Unsupported, error.InvalidBody => return false,
         };
         const sig_facts = function.signature;
+        if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
-        const ret_llvm = try self.llvmType(ret_ty);
+        const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
+            try self.llvmType(ret_ty)
+        else mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
+            error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
+            else => return err,
+        };
         const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
 
@@ -1356,8 +1362,14 @@ const LlvmEmitter = struct {
             error.Unsupported, error.InvalidBody => return false,
         };
         const sig_facts = function.signature;
+        if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
-        const ret_llvm = try self.llvmType(ret_ty);
+        const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
+            try self.llvmType(ret_ty)
+        else mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
+            error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
+            else => return err,
+        };
         const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return false;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
         const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
@@ -1669,10 +1681,18 @@ const LlvmEmitter = struct {
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
         if (isKsanHook(sig_facts.name.text)) return;
+        const fn_mir = self.mirFunctionByName(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
+        if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return error.UnsupportedLlvmEmission;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
+        const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
+            try self.llvmType(ret_ty)
+        else mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
+            error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
+            else => return err,
+        };
         const sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ty) else "";
-        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, try self.llvmType(ret_ty), sig_facts.name.text });
+        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";

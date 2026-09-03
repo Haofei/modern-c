@@ -1437,7 +1437,7 @@ test "LLVM conditional statement returns lower from MIR" {
 
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls());
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
 
     var output: std.ArrayList(u8) = .empty;
@@ -5161,13 +5161,13 @@ fn appendLlvmCheckedMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl
 }
 
 fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, module_mir);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, module_mir);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }

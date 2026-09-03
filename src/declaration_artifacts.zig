@@ -4,6 +4,7 @@
 const ast = @import("ast.zig");
 const attr_syntax = @import("attr_syntax.zig");
 const codegen_attrs = @import("codegen_attrs.zig");
+const mir = @import("mir_model.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
@@ -24,7 +25,7 @@ pub const EarlyDeclarationArtifacts = struct {
     comptime_functions: ComptimeFunctionDeclarations,
     source_map_artifacts: []const SourceMapArtifact,
 
-    fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype) !EarlyDeclarationArtifacts {
+    fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype, typed_mir: *const mir.Module) !EarlyDeclarationArtifacts {
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
         errdefer deinitDeclArtifacts(allocator, decl_artifacts.items);
         errdefer decl_artifacts.deinit(allocator);
@@ -37,7 +38,7 @@ pub const EarlyDeclarationArtifacts = struct {
             const decl = item.decl;
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
-                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, false);
+                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, false, functionReturnType(typed_mir, fn_decl.name.text, false) orelse .unknown);
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -46,7 +47,7 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
-                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, true);
+                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, true, functionReturnType(typed_mir, fn_decl.name.text, true) orelse .unknown);
                     decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
                         function.deinit(allocator);
                         return err;
@@ -114,8 +115,9 @@ pub const EarlyDeclarationArtifacts = struct {
     pub fn collectFromResolvedDecls(
         allocator: std.mem.Allocator,
         resolved_decls: []const module_parser.ResolvedDecl,
+        typed_mir: *const mir.Module,
     ) !EarlyDeclarationArtifacts {
-        return collectFromResolvedDeclItems(allocator, resolved_decls);
+        return collectFromResolvedDeclItems(allocator, resolved_decls, typed_mir);
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
@@ -178,7 +180,7 @@ pub const FunctionArtifact = struct {
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
 
-    pub fn fromDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !FunctionArtifact {
+    pub fn fromDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, return_ty: mir.ValueType) !FunctionArtifact {
         const params = try allocator.alloc(codegen_attrs.FunctionParamFact, fn_decl.params.len);
         errdefer allocator.free(params);
         for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param);
@@ -186,6 +188,7 @@ pub const FunctionArtifact = struct {
             .signature = .{
                 .name = fn_decl.name,
                 .params = params,
+                .return_ty = return_ty,
                 .transitional_ret_type = fn_decl.return_type,
                 .exported = fn_decl.exported,
                 .is_extern = is_extern,
@@ -206,6 +209,15 @@ pub const FunctionArtifact = struct {
         allocator.free(self.signature.params);
     }
 };
+
+fn functionReturnType(module: *const mir.Module, name: []const u8, is_extern: bool) ?mir.ValueType {
+    for (module.functions, 0..) |function, index| {
+        if (!std.mem.eql(u8, function.name, name) or function.is_extern != is_extern) continue;
+        if (index < module.checked_callables.len and module.checked_callables[index].kind == .global_initializer) continue;
+        return function.return_ty;
+    }
+    return null;
+}
 
 pub const GlobalArtifact = struct {
     signature: codegen_attrs.GlobalSignatureFacts,
@@ -394,7 +406,9 @@ test "declaration artifacts collect from resolved declaration stream" {
         };
     }
 
-    var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls);
+    var module_mir = try @import("mir.zig").buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer from_resolved.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 3), from_resolved.decl_artifacts.len);

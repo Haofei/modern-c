@@ -30,7 +30,7 @@ pub fn buildBackendInputs(
     defer session.allocator.free(resolved_decls);
     const program = try session.buildVerifiedProgramFromResolvedDecls(resolved_decls, diag, optimize, module_mir, failure_error);
     errdefer module_mir.deinit();
-    artifacts.* = try DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
+    artifacts.* = try DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir);
     errdefer artifacts.deinit(session.allocator);
     return program;
 }
@@ -44,7 +44,7 @@ pub fn buildCArtifactInputs(
     defer session.allocator.free(resolved_decls);
     try session.buildMirFromResolvedDecls(resolved_decls, false, module_mir);
     errdefer module_mir.deinit();
-    artifacts.* = try DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
+    artifacts.* = try DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir);
     errdefer artifacts.deinit(session.allocator);
 }
 
