@@ -6345,7 +6345,7 @@ test "LLVM consumes enum-literal target type facts across contexts" {
         \\extern fn sink(mode: Mode) -> Mode;
         \\global global_mode: Mode = .read;
         \\type ModeAlias = Mode;
-        \\const DEFAULT_ALIAS: ModeAlias = (.read);
+        \\const DEFAULT_ALIAS: ModeAlias = ((.read as ModeAlias));
         \\global alias_mode: ModeAlias = (.write as ModeAlias);
         \\fn make() -> Mode { return .read; }
         \\fn pass() -> Mode { return sink(.write); }

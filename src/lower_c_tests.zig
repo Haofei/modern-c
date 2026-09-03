@@ -13344,7 +13344,7 @@ test "lower-c emits target-typed enum literals" {
         \\extern fn sink(mode: Mode) -> u32;
         \\global global_mode: Mode = .read;
         \\type ModeAlias = Mode;
-        \\const DEFAULT_ALIAS: ModeAlias = (.read);
+        \\const DEFAULT_ALIAS: ModeAlias = ((.read as ModeAlias));
         \\global alias_mode: ModeAlias = (.write as ModeAlias);
         \\
         \\fn default_mode() -> Mode {
