@@ -1553,22 +1553,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             }
                         }
                         if (!checked_global.has_initializer_plan) {
-                            if (try buildPureArrayGlobalInitializerPlan(allocator, initializer, ty, &const_fns, &const_globals, &reflect_env)) |plan| {
-                                errdefer plan.deinit(allocator);
-                                checked_global.has_initializer_plan = true;
-                                try global_initializer_facts.append(allocator, .{
-                                    .global_symbol_id = checked_global.symbol_id,
-                                    .initializer_body_id = checked_global.initializer_body_id,
-                                    .value_ty = checked_global.ty,
-                                    .plan = .{ .aggregate = plan },
-                                });
-                            }
-                        }
-                        if (!checked_global.has_initializer_plan) {
-                            if (try buildNamedStructGlobalInitializerPlan(
+                            if (try buildGlobalAggregateInitializerPlan(
                                 allocator,
                                 initializer,
+                                ty,
                                 checked_global.signature_type_id,
+                                checked_global.initializer_body_id.index(),
                                 &signature_types,
                                 type_alias_facts.items,
                                 &symbol_ids,
@@ -1576,29 +1566,12 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 enum_facts.items,
                                 &ast_structs,
                                 checked_globals.items,
+                                global_initializer_facts.items,
+                                checked_callables.items,
                                 &const_fns,
                                 &const_globals,
                                 &reflect_env,
-                            )) |plan| {
-                                errdefer plan.deinit(allocator);
-                                checked_global.has_initializer_plan = true;
-                                try global_initializer_facts.append(allocator, .{
-                                    .global_symbol_id = checked_global.symbol_id,
-                                    .initializer_body_id = checked_global.initializer_body_id,
-                                    .value_ty = checked_global.ty,
-                                    .plan = .{ .aggregate = plan },
-                                });
-                            }
-                        }
-                        if (!checked_global.has_initializer_plan) {
-                            if (try buildFunctionSymbolArrayGlobalInitializerPlan(
-                                allocator,
-                                initializer,
-                                checked_global.signature_type_id,
-                                checked_global.initializer_body_id.index(),
-                                checked_callables.items,
-                                &signature_types,
-                                &symbol_ids,
+                                false,
                             )) |plan| {
                                 errdefer plan.deinit(allocator);
                                 checked_global.has_initializer_plan = true;
@@ -2125,80 +2098,22 @@ fn directScalarGlobalCopySourceName(
     };
 }
 
-/// Build the first recursive aggregate initializer family without retaining
-/// expression syntax: direct fixed arrays (including nested arrays) with
-/// leaves that fold to scalar values. Aliases, structs, strings, addresses,
-/// enum tags, function pointers and atomic calls intentionally return null;
-/// those declarations keep their bounded transitional AST artifact until
-/// dedicated facts exist.
-fn buildPureArrayGlobalInitializerPlan(
+/// Build one complete syntax-free global aggregate initializer tree. The
+/// module-owned signature graph chooses array/struct recursion and every leaf
+/// is admitted through an existing checked plan. Source syntax is consumed
+/// exactly here, before declaration artifacts are collected; C and LLVM only
+/// render the resulting `AggregateInitializerPlan`.
+///
+/// `allow_leaf` is false at the root so ordinary scalar, string, pointer and
+/// function globals retain their existing top-level plans. Recursive children
+/// enable leaves, which lets arrays and structs mix scalar, enum, string,
+/// global-address and function-symbol values without family-specific builders.
+fn buildGlobalAggregateInitializerPlan(
     allocator: std.mem.Allocator,
     initializer: ast.Expr,
-    ty: ast.TypeExpr,
-    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
-    const_globals: *const std.StringHashMap(eval.ComptimeValue),
-    reflect_env: *const MirReflectEnv,
-) !?mir_model.AggregateInitializerPlan {
-    const array = switch (ty.kind) {
-        .array => |value| value,
-        else => return null,
-    };
-    const items = switch (initializer.kind) {
-        .array_literal => |value| value,
-        .grouped => |inner| return buildPureArrayGlobalInitializerPlan(allocator, inner.*, ty, const_fns, const_globals, reflect_env),
-        else => return null,
-    };
-    const length = parseArrayLen(array.len, const_fns, const_globals) orelse return null;
-    if (items.len != length) return null;
-
-    var plans: std.ArrayList(mir_model.AggregateInitializerPlan) = .empty;
-    var plans_transferred = false;
-    defer {
-        if (!plans_transferred) {
-            for (plans.items) |plan| plan.deinit(allocator);
-            plans.deinit(allocator);
-        }
-    }
-    for (items) |item| {
-        const child = switch (array.child.*.kind) {
-            .array => (try buildPureArrayGlobalInitializerPlan(allocator, item, array.child.*, const_fns, const_globals, reflect_env)) orelse return null,
-            else => blk: {
-                if (!isPureScalarArrayLeafType(array.child.*)) return null;
-                const value = (try foldMutableScalarGlobalInitializer(allocator, item, array.child.*, const_fns, const_globals, reflect_env)) orelse return null;
-                break :blk mir_model.AggregateInitializerPlan{ .scalar = value };
-            },
-        };
-        var child_transferred = false;
-        errdefer if (!child_transferred) child.deinit(allocator);
-        try plans.append(allocator, child);
-        child_transferred = true;
-    }
-    const owned = try plans.toOwnedSlice(allocator);
-    plans_transferred = true;
-    return .{ .array = owned };
-}
-
-fn isPureScalarArrayLeafType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .name => |name| std.mem.eql(u8, name.text, "bool") or
-            std.mem.eql(u8, name.text, "f32") or std.mem.eql(u8, name.text, "f64") or
-            std.mem.eql(u8, name.text, "u8") or std.mem.eql(u8, name.text, "u16") or
-            std.mem.eql(u8, name.text, "u32") or std.mem.eql(u8, name.text, "u64") or
-            std.mem.eql(u8, name.text, "u128") or std.mem.eql(u8, name.text, "usize") or
-            std.mem.eql(u8, name.text, "i8") or std.mem.eql(u8, name.text, "i16") or
-            std.mem.eql(u8, name.text, "i32") or std.mem.eql(u8, name.text, "i64") or
-            std.mem.eql(u8, name.text, "i128") or std.mem.eql(u8, name.text, "isize"),
-        else => false,
-    };
-}
-
-/// Admit a complete named struct literal only after canonical StructFact has
-/// assigned every field identity and recursive signature type. The builder
-/// reads source expressions once; neither backend receives them.
-fn buildNamedStructGlobalInitializerPlan(
-    allocator: std.mem.Allocator,
-    initializer: ast.Expr,
-    global_type_id: SignatureTypeId,
+    source_type: ast.TypeExpr,
+    type_id: SignatureTypeId,
+    source_order: usize,
     signature_types: *SignatureTypeTableBuilder,
     type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
@@ -2206,110 +2121,101 @@ fn buildNamedStructGlobalInitializerPlan(
     enum_facts: []const EnumFact,
     ast_structs: *const std.StringHashMap(ast.StructDecl),
     prior_globals: []const CheckedGlobalFact,
+    prior_initializer_facts: []const GlobalInitializerFact,
+    callables: []const CheckedCallableFact,
     const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     reflect_env: *const MirReflectEnv,
+    allow_leaf: bool,
 ) !?mir_model.AggregateInitializerPlan {
-    const literal_fields = switch (initializer.kind) {
-        .struct_literal => |fields| fields,
-        .grouped => |inner| return buildNamedStructGlobalInitializerPlan(allocator, inner.*, global_type_id, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, const_fns, const_globals, reflect_env),
-        else => return null,
+    const ungrouped = switch (initializer.kind) {
+        .grouped => |inner| return buildGlobalAggregateInitializerPlan(allocator, inner.*, source_type, type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, allow_leaf),
+        else => initializer,
     };
-    const fact = resolveStructFactForSignatureType(global_type_id, signature_types, type_aliases, symbol_ids, struct_facts) orelse return null;
-    if (fact.is_c_union or fact.is_mmio or fact.type_params.len != 0 or literal_fields.len != fact.fields.len) return null;
-    const struct_decl = blk: {
-        var it = ast_structs.iterator();
-        while (it.next()) |entry| {
-            const symbol_id = symbol_ids.get(entry.key_ptr.*) orelse continue;
-            if (symbol_id.eql(fact.symbol_id)) break :blk entry.value_ptr.*;
+    if (resolveStructFactForSignatureType(type_id, signature_types, type_aliases, symbol_ids, struct_facts)) |fact| {
+        const literal_fields = switch (ungrouped.kind) {
+            .struct_literal => |fields| fields,
+            else => return null,
+        };
+        if (fact.is_c_union or fact.is_mmio or fact.type_params.len != 0 or literal_fields.len != fact.fields.len) return null;
+        const struct_decl = structDeclForFact(fact, ast_structs, symbol_ids) orelse return null;
+        if (struct_decl.fields.len != fact.fields.len) return null;
+        for (literal_fields, 0..) |candidate, candidate_index| {
+            const is_known = for (fact.fields) |field_fact| {
+                if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break true;
+            } else false;
+            if (!is_known) return null;
+            for (literal_fields[0..candidate_index]) |prior| if (std.mem.eql(u8, prior.name.text, candidate.name.text)) return null;
         }
-        return null;
-    };
-    if (struct_decl.fields.len != fact.fields.len) return null;
-    // A complete named literal must name each canonical field exactly once.
-    // Do this before selecting values so a duplicate or unknown source field
-    // cannot be silently hidden by the syntax-to-fact conversion.
-    for (literal_fields, 0..) |candidate, candidate_index| {
-        const is_known = for (fact.fields) |field_fact| {
-            if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break true;
-        } else false;
-        if (!is_known) return null;
-        for (literal_fields[0..candidate_index]) |prior| {
-            if (std.mem.eql(u8, prior.name.text, candidate.name.text)) return null;
-        }
-    }
-
-    const fields = try allocator.alloc(mir_model.StructInitializerFieldPlan, fact.fields.len);
-    var fields_initialized: usize = 0;
-    var fields_transferred = false;
-    defer {
-        if (!fields_transferred) {
+        const fields = try allocator.alloc(mir_model.StructInitializerFieldPlan, fact.fields.len);
+        var fields_initialized: usize = 0;
+        var fields_transferred = false;
+        defer if (!fields_transferred) {
             for (fields[0..fields_initialized]) |field| field.value.deinit(allocator);
             allocator.free(fields);
+        };
+        for (fact.fields, struct_decl.fields, 0..) |field_fact, source_field, index| {
+            if (!std.mem.eql(u8, field_fact.spelling, source_field.name.text)) return null;
+            const source_value = for (literal_fields) |candidate| {
+                if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break candidate.value;
+            } else return null;
+            const value = try buildGlobalAggregateInitializerPlan(allocator, source_value, source_field.ty, field_fact.type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, true) orelse return null;
+            fields[index] = .{ .field_index = @intCast(index), .value = value };
+            fields_initialized += 1;
         }
+        fields_transferred = true;
+        return .{ .struct_ = .{ .struct_symbol_id = fact.symbol_id, .fields = fields } };
     }
-    for (fact.fields, struct_decl.fields, 0..) |field_fact, source_field, index| {
-        if (!std.mem.eql(u8, field_fact.spelling, source_field.name.text)) return null;
-        const source_value = for (literal_fields) |candidate| {
-            if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break candidate.value;
-        } else return null;
-        const value = try buildStructGlobalInitializerLeaf(
-            allocator,
-            source_value,
-            source_field.ty,
-            field_fact.type_id,
-            signature_types,
-            type_aliases,
-            symbol_ids,
-            enum_facts,
-            prior_globals,
-            const_fns,
-            const_globals,
-            reflect_env,
-        ) orelse return null;
-        fields[index] = .{ .field_index = @intCast(index), .value = value };
-        fields_initialized += 1;
+
+    const canonical_id = transparentSignatureTypeIdForBuild(type_id, signature_types, type_aliases, symbol_ids) orelse return null;
+    if (switch (signature_types.get(canonical_id) orelse return null) {
+        .array => |array| blk: {
+            const items = switch (ungrouped.kind) {
+                .array_literal => |value| value,
+                else => break :blk null,
+            };
+            const source_array = switch (source_type.kind) {
+                .array => |value| value,
+                else => break :blk null,
+            };
+            const length = array.length orelse break :blk null;
+            if (items.len != length) break :blk null;
+            var plans: std.ArrayList(mir_model.AggregateInitializerPlan) = .empty;
+            var plans_transferred = false;
+            defer if (!plans_transferred) {
+                for (plans.items) |plan| plan.deinit(allocator);
+                plans.deinit(allocator);
+            };
+            for (items) |item| {
+                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, source_array.child.*, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, true)) orelse break :blk null;
+                var child_transferred = false;
+                errdefer if (!child_transferred) child.deinit(allocator);
+                try plans.append(allocator, child);
+                child_transferred = true;
+            }
+            const owned = try plans.toOwnedSlice(allocator);
+            plans_transferred = true;
+            break :blk mir_model.AggregateInitializerPlan{ .array = owned };
+        },
+        else => null,
+    }) |aggregate| return aggregate;
+
+    if (!allow_leaf) return null;
+    if (try directEnumGlobalInitializerPlan(ungrouped, type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals)) |plan| return .{ .enum_case = plan };
+    if (try directStringBytesAggregateInitializerPlan(allocator, ungrouped, type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids)) |plan| return .{ .string_bytes = plan };
+    if (directGlobalAddressInitializerPlanForType(ungrouped, type_id, prior_globals, signature_types, type_aliases, symbol_ids)) |plan| return .{ .global_address = plan };
+    if (directFunctionSymbolGlobalInitializerPlan(ungrouped, type_id, source_order, callables, signature_types, symbol_ids)) |plan| return .{ .function_symbol = plan };
+    if (signatureTypeIsDirectScalarLeaf(type_id, signature_types)) {
+        if (try foldMutableScalarGlobalInitializer(allocator, ungrouped, source_type, const_fns, const_globals, reflect_env)) |value| return .{ .scalar = value };
     }
-    fields_transferred = true;
-    return .{ .struct_ = .{ .struct_symbol_id = fact.symbol_id, .fields = fields } };
+    return null;
 }
 
-fn buildStructGlobalInitializerLeaf(
-    allocator: std.mem.Allocator,
-    expression: ast.Expr,
-    source_type: ast.TypeExpr,
-    type_id: SignatureTypeId,
-    signature_types: *SignatureTypeTableBuilder,
-    type_aliases: []const TypeAliasFact,
-    symbol_ids: *const std.StringHashMap(SymbolId),
-    enum_facts: []const EnumFact,
-    prior_globals: []const CheckedGlobalFact,
-    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
-    const_globals: *const std.StringHashMap(eval.ComptimeValue),
-    reflect_env: *const MirReflectEnv,
-) !?mir_model.AggregateInitializerPlan {
-    const ungrouped = switch (expression.kind) {
-        .grouped => |inner| return buildStructGlobalInitializerLeaf(allocator, inner.*, source_type, type_id, signature_types, type_aliases, symbol_ids, enum_facts, prior_globals, const_fns, const_globals, reflect_env),
-        else => expression,
-    };
-    if (try directEnumGlobalInitializerPlan(ungrouped, type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals)) |plan| {
-        return .{ .enum_case = plan };
-    }
-    if (try directStringBytesInitializerPlanForType(allocator, ungrouped, type_id, signature_types, type_aliases, symbol_ids)) |plan| {
-        return .{ .string_bytes = plan };
-    }
-    if (directGlobalAddressInitializerPlanForType(ungrouped, type_id, prior_globals, signature_types, type_aliases, symbol_ids)) |plan| {
-        return .{ .global_address = plan };
-    }
-    // Do not send pointer, string, or nominal aggregate fields through the
-    // scalar evaluator just to discover they are not scalar. Besides being
-    // needless work, its temporary type substitution owns syntax nodes that
-    // belong to the scalar-only path. The signature table is the authority
-    // for this dispatch.
-    if (signatureTypeIsDirectScalarLeaf(type_id, signature_types)) {
-        if (try foldMutableScalarGlobalInitializer(allocator, ungrouped, source_type, const_fns, const_globals, reflect_env)) |value| {
-            return .{ .scalar = value };
-        }
+fn structDeclForFact(fact: StructFact, ast_structs: *const std.StringHashMap(ast.StructDecl), symbol_ids: *const std.StringHashMap(SymbolId)) ?ast.StructDecl {
+    var it = ast_structs.iterator();
+    while (it.next()) |entry| {
+        const symbol_id = symbol_ids.get(entry.key_ptr.*) orelse continue;
+        if (symbol_id.eql(fact.symbol_id)) return entry.value_ptr.*;
     }
     return null;
 }
@@ -2359,59 +2265,6 @@ fn resolveStructFactForSignatureType(
         } else return null;
     }
     return null;
-}
-
-/// A separate recursive array family for first-class function symbols. It is
-/// intentionally limited to direct `fn(...) -> ...` leaves: aliases, casts,
-/// closures, structs, and relocations keep their transitional artifact until
-/// they have equally explicit facts. The emitted plan contains only SymbolId
-/// edges and already-interned signature type IDs.
-fn buildFunctionSymbolArrayGlobalInitializerPlan(
-    allocator: std.mem.Allocator,
-    initializer: ast.Expr,
-    type_id: SignatureTypeId,
-    source_order: usize,
-    callables: []const CheckedCallableFact,
-    signature_types: *const SignatureTypeTableBuilder,
-    symbol_ids: *const std.StringHashMap(SymbolId),
-) !?mir_model.AggregateInitializerPlan {
-    const array = switch (signature_types.get(type_id) orelse return null) {
-        .array => |value| value,
-        else => return null,
-    };
-    const items = switch (initializer.kind) {
-        .array_literal => |value| value,
-        .grouped => |inner| return buildFunctionSymbolArrayGlobalInitializerPlan(allocator, inner.*, type_id, source_order, callables, signature_types, symbol_ids),
-        else => return null,
-    };
-    const length = array.length orelse return null;
-    if (items.len != length) return null;
-
-    var plans: std.ArrayList(mir_model.AggregateInitializerPlan) = .empty;
-    var plans_transferred = false;
-    defer {
-        if (!plans_transferred) {
-            for (plans.items) |plan| plan.deinit(allocator);
-            plans.deinit(allocator);
-        }
-    }
-    for (items) |item| {
-        const child = switch (signature_types.get(array.child) orelse return null) {
-            .array => (try buildFunctionSymbolArrayGlobalInitializerPlan(allocator, item, array.child, source_order, callables, signature_types, symbol_ids)) orelse return null,
-            .fn_pointer => blk: {
-                const function = directFunctionSymbolGlobalInitializerPlan(item, array.child, source_order, callables, signature_types, symbol_ids) orelse return null;
-                break :blk mir_model.AggregateInitializerPlan{ .function_symbol = function };
-            },
-            else => return null,
-        };
-        var child_transferred = false;
-        errdefer if (!child_transferred) child.deinit(allocator);
-        try plans.append(allocator, child);
-        child_transferred = true;
-    }
-    const owned = try plans.toOwnedSlice(allocator);
-    plans_transferred = true;
-    return .{ .array = owned };
 }
 
 /// Admit one direct function symbol only when it refers to an already checked
@@ -2514,14 +2367,30 @@ fn directStringBytesGlobalInitializerPlan(
         .cstr, .pointer => {},
         else => return null,
     }
+    return directStringBytesAggregateInitializerPlan(allocator, initializer, global.signature_type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids);
+}
+
+/// Reuse the one string-pointer leaf plan inside recursive aggregate
+/// initializers. A copied string remains a byte-owned plan rather than a
+/// declaration artifact edge, so nested struct/array leaves preserve the
+/// same source-order discipline as top-level string globals.
+fn directStringBytesAggregateInitializerPlan(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    type_id: SignatureTypeId,
+    prior_initializer_facts: []const GlobalInitializerFact,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) !?mir_model.StringBytesInitializerPlan {
     if (directStringLiteral(initializer) != null) {
-        return directStringBytesInitializerPlanForType(allocator, initializer, global.signature_type_id, signature_types, type_aliases, symbol_ids);
+        return directStringBytesInitializerPlanForType(allocator, initializer, type_id, signature_types, type_aliases, symbol_ids);
     }
-    if (!signatureTypeIsStringPointer(global.signature_type_id, signature_types, type_aliases, symbol_ids)) return null;
+    if (!signatureTypeIsStringPointer(type_id, signature_types, type_aliases, symbol_ids)) return null;
     const source_name = directGlobalIdentifierName(initializer) orelse return null;
     const source_symbol_id = symbol_ids.get(source_name) orelse return null;
     for (prior_initializer_facts) |fact| {
-        if (!fact.global_symbol_id.eql(source_symbol_id) or !ValueType.eql(fact.value_ty, global.ty)) continue;
+        if (!fact.global_symbol_id.eql(source_symbol_id)) continue;
         return switch (fact.plan) {
             .string_bytes => |plan| .{ .bytes = if (plan.bytes.len == 0) &.{} else try allocator.dupe(u8, plan.bytes) },
             else => null,

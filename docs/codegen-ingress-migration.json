@@ -146,8 +146,11 @@
     },
     "src/mir.zig": {
       "pub fn comptimeValueFromGlobalInitializerFact": 1,
-      "fn buildNamedStructGlobalInitializerPlan": 1,
-      "fn buildStructGlobalInitializerLeaf": 1
+      "fn buildPureArrayGlobalInitializerPlan": 0,
+      "fn buildFunctionSymbolArrayGlobalInitializerPlan": 0,
+      "fn buildNamedStructGlobalInitializerPlan": 0,
+      "fn buildStructGlobalInitializerLeaf": 0,
+      "fn buildGlobalAggregateInitializerPlan": 1
     },
     "src/attr_syntax.zig": {
       "pub const FunctionRenderAttrs = struct": 0,
