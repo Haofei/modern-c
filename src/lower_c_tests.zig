@@ -354,6 +354,7 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
         .scalar => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
+        .nullable_null => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
@@ -1016,13 +1017,51 @@ test "MIR executable body admits pure logical assertion tree" {
     try mir_executable_body.verify(function);
 }
 
+test "lower-c omits nullable pointer null globals from AST artifacts" {
+    const source =
+        \\type MaybeByte = ?*mut u8;
+        \\const DEFAULT: MaybeByte = (null);
+        \\global CURRENT: MaybeByte = null;
+    ;
+    var parsed = try test_support.parseCheckedModule("c_nullable_null_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_nullable_null_global_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "DEFAULT = NULL;");
+    try expectContains(output.items, "CURRENT = NULL;");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = NULL;"));
+}
+
 test "lower-c emits strict nullable control plans from MIR without body fallback" {
     const source =
         \\extern fn maybe_ptr() -> ?*mut u8;
         \\extern fn maybe_ptr_from(seed: u32) -> ?*mut u8;
         \\extern fn next_seed() -> u32;
         \\extern fn ptr_value(p: *mut u8) -> u32;
-        \\global saved_nullable: ?*mut u8 = null;
+        \\type NullableAlias = ?*mut u8;
+        \\const DEFAULT_NULL: NullableAlias = (null);
+        \\global saved_nullable: NullableAlias = null;
         \\struct NullableBox { maybe: ?*mut u8, }
         \\
         \\fn unwrap_call_or_zero() -> u32 {
@@ -1047,6 +1086,9 @@ test "lower-c emits strict nullable control plans from MIR without body fallback
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestWithMir("c_mir_variant_control.mc", source, &output);
+
+    try expectContains(output.items, "DEFAULT_NULL = NULL;");
+    try expectContains(output.items, "saved_nullable = NULL;");
 
     const call = try cFunctionBody(output.items, "static uint32_t unwrap_call_or_zero(void)");
     try expectContains(call, "/* canonical executable MIR */");

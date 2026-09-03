@@ -572,7 +572,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case => {},
+                .zero, .aggregate, .enum_case, .nullable_null => {},
             }
         }
     }
@@ -818,6 +818,7 @@ pub const CEmitter = struct {
                 .zero => try self.emitCheckedZeroGlobal(global),
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
+                .nullable_null => try self.emitCheckedNullableNullGlobal(global),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -947,6 +948,15 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
         try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, value });
+    }
+
+    fn emitCheckedNullableNullGlobal(self: *CEmitter, global: mir.CheckedGlobalFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = NULL;\n\n", .{ rendered_type, name });
     }
 
     fn enumFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.EnumFact {

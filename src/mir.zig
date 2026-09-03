@@ -1552,6 +1552,15 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 });
                             }
                         }
+                        if (!checked_global.has_initializer_plan and directNullablePointerNullInitializerPlan(initializer, checked_global.ty)) {
+                            checked_global.has_initializer_plan = true;
+                            try global_initializer_facts.append(allocator, .{
+                                .global_symbol_id = checked_global.symbol_id,
+                                .initializer_body_id = checked_global.initializer_body_id,
+                                .value_ty = checked_global.ty,
+                                .plan = .nullable_null,
+                            });
+                        }
                     } else if (!global.is_extern) {
                         // No source initializer is an explicit frontend fact,
                         // not a backend invitation to recover `= 0` from the
@@ -2010,6 +2019,18 @@ fn directEnumLiteralSpelling(expression: ast.Expr) ?[]const u8 {
         .enum_literal => |tag| tag.text,
         .grouped => |inner| directEnumLiteralSpelling(inner.*),
         else => null,
+    };
+}
+
+/// Only the pointer-niche optional representation can use a scalar null
+/// initializer without aggregate layout facts. Sized `?T` stays outside this
+/// family until its tagged representation has a dedicated plan.
+fn directNullablePointerNullInitializerPlan(initializer: ast.Expr, global_ty: ValueType) bool {
+    if (global_ty != .nullable_pointer) return false;
+    return switch (initializer.kind) {
+        .null_literal => true,
+        .grouped => |inner| directNullablePointerNullInitializerPlan(inner.*, global_ty),
+        else => false,
     };
 }
 
@@ -4477,6 +4498,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirOverlayUnionFacts,
     InvalidMirTaggedUnionFacts,
     InvalidMirStructFacts,
+    InvalidMirGlobalInitializerFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4511,9 +4533,21 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateOverlayUnionFactsForLowering(module);
     try validateTaggedUnionFactsForLowering(module);
     try validateStructFactsForLowering(module);
+    try validateGlobalInitializerFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
+}
+
+/// A global initializer plan is authoritative only when its module-level
+/// shape checks succeed.  In particular, aliases need the module's type-alias
+/// rows to prove that a nullable `null` is pointer-niche storage.  Reject an
+/// invalid plan before declaration artifacts can retain the AST fallback.
+fn validateGlobalInitializerFactsForLowering(module: Module) error{InvalidMirGlobalInitializerFacts}!void {
+    for (module.checked_globals) |global| {
+        if (!global.has_initializer_plan) continue;
+        if (module.checkedGlobalInitializer(global) == null) return error.InvalidMirGlobalInitializerFacts;
+    }
 }
 
 fn validateTypeAliasFactsForLowering(module: Module) error{InvalidMirTypeAliasFacts}!void {

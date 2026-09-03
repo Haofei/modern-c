@@ -4472,7 +4472,9 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
         \\extern fn maybe_ptr_from(seed: u32) -> ?*mut u8;
         \\extern fn next_seed() -> u32;
         \\extern fn ptr_value(p: *mut u8) -> u32;
-        \\global saved_nullable: ?*mut u8 = null;
+        \\type NullableAlias = ?*mut u8;
+        \\const DEFAULT_NULL: NullableAlias = (null);
+        \\global saved_nullable: NullableAlias = null;
         \\struct NullableBox { maybe: ?*mut u8, }
         \\
         \\fn unwrap_call_or_zero() -> u32 {
@@ -4501,6 +4503,9 @@ test "LLVM emits strict nullable control plans from MIR without body fallback" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmExecutableMirTest("llvm_mir_variant_control.mc", source, &output);
+
+    try expectContains(output.items, "@DEFAULT_NULL = internal constant ptr null");
+    try expectContains(output.items, "@saved_nullable = internal global ptr null");
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @unwrap_call_or_zero");
     try expectContains(call_body, "call ptr @maybe_ptr()");
@@ -5451,6 +5456,7 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
         .scalar => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
+        .nullable_null => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);

@@ -777,7 +777,7 @@ const LlvmEmitter = struct {
             try self.global_is_const.put(name, global.is_const);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case => {},
+                .zero, .aggregate, .enum_case, .nullable_null => {},
             }
         }
     }
@@ -906,6 +906,7 @@ const LlvmEmitter = struct {
                 .zero => try self.emitCheckedZeroGlobal(global),
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
+                .nullable_null => try self.emitCheckedNullableNullGlobal(global),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -961,6 +962,17 @@ const LlvmEmitter = struct {
             self.allocator,
             "@{s} = {s}{s} {s} {s}\n",
             .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id), try self.llvmEnumCaseInitializer(enum_fact.cases[plan.case_index]) },
+        );
+    }
+
+    fn emitCheckedNullableNullGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(
+            self.allocator,
+            "@{s} = {s}{s} {s} null\n",
+            .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id) },
         );
     }
 

@@ -4215,18 +4215,20 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 
 /// Syntax-free global-initializer payloads admitted by the frontend. This
 /// starts with folded scalar values, zero-initialized storage, pure fixed
-/// arrays, and direct nominal enum cases. Struct literals and relocations
-/// still need their own explicit facts and remain outside this representation.
+/// arrays, direct nominal enum cases, and nullable-pointer `null`. Struct
+/// literals and relocations still need their own explicit facts and remain
+/// outside this representation.
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
     aggregate: AggregateInitializerPlan,
     enum_case: EnumInitializerPlan,
+    nullable_null,
 
     pub fn deinit(self: GlobalInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
             .aggregate => |plan| plan.deinit(allocator),
-            .scalar, .zero, .enum_case => {},
+            .scalar, .zero, .enum_case, .nullable_null => {},
         }
     }
 };
@@ -4274,6 +4276,7 @@ pub const GlobalInitializerFact = struct {
             .zero => unreachable,
             .aggregate => unreachable,
             .enum_case => unreachable,
+            .nullable_null => unreachable,
         };
     }
 
@@ -4395,6 +4398,9 @@ pub const Module = struct {
             .enum_case => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 enumInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
+            .nullable_null => if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                nullableNullInitializerPlanMatchesGlobal(self, global)) fact else null,
         };
     }
 
@@ -4408,7 +4414,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero, .aggregate, .enum_case => null,
+            .zero, .aggregate, .enum_case, .nullable_null => null,
         };
     }
 
@@ -4416,7 +4422,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar, .aggregate, .enum_case => null,
+            .scalar, .aggregate, .enum_case, .nullable_null => null,
         };
     }
 
@@ -4424,7 +4430,15 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .enum_case => fact,
-            .scalar, .zero, .aggregate => null,
+            .scalar, .zero, .aggregate, .nullable_null => null,
+        };
+    }
+
+    pub fn checkedNullableNullGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .nullable_null => fact,
+            .scalar, .zero, .aggregate, .enum_case => null,
         };
     }
 
@@ -4523,6 +4537,40 @@ fn enumInitializerPlanMatchesGlobal(plan: EnumInitializerPlan, module: Module, g
         .open_enum => |name| std.mem.eql(u8, name, identity.spelling),
         else => false,
     };
+}
+
+fn nullableNullInitializerPlanMatchesGlobal(module: Module, global: CheckedGlobalFact) bool {
+    if (global.ty != .nullable_pointer) return false;
+    const resolved = transparentSignatureShape(module, global.signature_type_id) orelse return false;
+    const child = switch (resolved) {
+        .nullable => |value| value,
+        else => return false,
+    };
+    return switch (transparentSignatureShape(module, child) orelse return false) {
+        .pointer, .raw_many_pointer => true,
+        else => false,
+    };
+}
+
+fn transparentSignatureShape(module: Module, initial_type_id: SignatureTypeId) ?TypeShape {
+    var current_type_id = initial_type_id;
+    var steps: usize = 0;
+    while (steps <= module.type_aliases.len) : (steps += 1) {
+        const shape = module.signature_types.get(current_type_id) orelse return null;
+        switch (shape) {
+            .name => |name| {
+                const symbol_id = symbolIdForTypeSpelling(module.symbol_identities, name) orelse return shape;
+                for (module.type_aliases) |alias| {
+                    if (!alias.symbol_id.eql(symbol_id)) continue;
+                    current_type_id = alias.target_type_id;
+                    break;
+                } else return shape;
+            },
+            .qualified => |node| current_type_id = node.child,
+            else => return shape,
+        }
+    }
+    return null;
 }
 
 /// Transparent declaration aliases are represented by their own symbol rows;

@@ -106,6 +106,15 @@ pub const CheckedProgram = struct {
                         !is_nominal)
                         return error.InvalidGlobalInitializerFact;
                 },
+                .nullable_null => {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len or
+                        global.ty != .nullable_pointer)
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id))
+                        return error.InvalidGlobalInitializerFact;
+                },
             }
             for (global_initializer_facts[0..index]) |prior| {
                 if (prior.global_symbol_id.eql(fact.global_symbol_id)) return error.DuplicateGlobalInitializerFact;
