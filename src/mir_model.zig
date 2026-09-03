@@ -4124,6 +4124,19 @@ pub const Module = struct {
         return found;
     }
 
+    /// Returns the one scalar const-global fact that is complete enough for
+    /// syntax-free declaration emission. This is intentionally stricter than
+    /// `constGlobalScalarInit`: callers must not turn a stale, aggregate, or
+    /// extern declaration into a codegen fast path.
+    pub fn checkedScalarConstGlobal(self: Module, global: CheckedGlobalFact) ?ConstGlobalScalarInitFact {
+        if (!global.is_const or global.is_extern or !global.initializer_body_id.isValid()) return null;
+        if (!valueTypeRequiresScalarConstInitFact(global.ty)) return null;
+        const fact = self.constGlobalScalarInit(global.initializer_body_id) orelse return null;
+        if (!global.initializer_body_id.eql(fact.initializer_body_id)) return null;
+        if (!ValueType.eql(global.ty, fact.value_ty) or !fact.value.isCompatibleWith(fact.value_ty)) return null;
+        return fact;
+    }
+
     pub fn deinit(self: *Module) void {
         for (self.functions) |function| {
             for (function.blocks) |block| {

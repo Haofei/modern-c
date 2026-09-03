@@ -35,22 +35,6 @@ const overlayArrayElementType = type_bridge.overlayArrayElementType;
 const overlayMemberFromIndexBase = syntax_bridge.overlayMemberFromIndexBase;
 const taggedUnionCase = syntax_bridge.taggedUnionCase;
 
-fn isCheckedScalarConstGlobal(global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) bool {
-    return global.is_const and !global.is_extern and global.initializer_body_id.isValid() and
-        global.initializer_body_id.eql(fact.initializer_body_id) and
-        mir.valueTypeRequiresScalarConstInitFact(global.ty) and
-        mir.ValueType.eql(global.ty, fact.value_ty) and fact.value.isCompatibleWith(fact.value_ty);
-}
-
-fn comptimeValueFromScalarFact(fact: mir.ConstGlobalScalarInitFact) eval.ComptimeValue {
-    return switch (fact.value) {
-        .int => |value| .{ .int = value },
-        .uint => |value| .{ .uint = value },
-        .boolean => |value| .{ .boolean = value },
-        .float => |value| .{ .float = .{ .bits = value.bits, .width = value.width } },
-    };
-}
-
 const backend_mod = @import("backend.zig");
 const lower_llvm_lookup = @import("lower_llvm_lookup.zig");
 const lower_llvm_shape = @import("lower_llvm_shape.zig");
@@ -699,10 +683,9 @@ const LlvmEmitter = struct {
     /// do not recreate an AST-shaped global declaration for code generation.
     fn collectCheckedScalarConstGlobals(self: *LlvmEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
-            if (!isCheckedScalarConstGlobal(global, fact)) continue;
+            const fact = self.mir_module.checkedScalarConstGlobal(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
-            try self.const_globals.put(name, comptimeValueFromScalarFact(fact));
+            try self.const_globals.put(name, mir.comptimeValueFromConstGlobalScalarFact(fact));
         }
     }
 
@@ -822,8 +805,8 @@ const LlvmEmitter = struct {
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
-            if (isCheckedScalarConstGlobal(global, fact)) try self.emitCheckedScalarConstGlobal(global, fact);
+            const fact = self.mir_module.checkedScalarConstGlobal(global) orelse continue;
+            try self.emitCheckedScalarConstGlobal(global, fact);
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),

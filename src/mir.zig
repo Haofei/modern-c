@@ -790,6 +790,18 @@ pub const valueTypeRequiresScalarConstInitFact = mir_model.valueTypeRequiresScal
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
 pub const BuildOptions = mir_model.BuildOptions;
+
+/// Converts a checked scalar-global fact to the evaluator's value domain for
+/// residual const evaluation. Codegen uses the same admitted MIR fact for its
+/// declaration renderer; it must not recreate the value from AST syntax.
+pub fn comptimeValueFromConstGlobalScalarFact(fact: ConstGlobalScalarInitFact) eval.ComptimeValue {
+    return switch (fact.value) {
+        .int => |value| .{ .int = value },
+        .uint => |value| .{ .uint = value },
+        .boolean => |value| .{ .boolean = value },
+        .float => |value| .{ .float = .{ .bits = value.bits, .width = value.width } },
+    };
+}
 const addressClassName = mir_model.addressClassName;
 
 const FunctionSummary = mir_summary.FunctionSummary;

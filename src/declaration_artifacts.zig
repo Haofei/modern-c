@@ -64,7 +64,7 @@ pub const EarlyDeclarationArtifacts = struct {
                     // and a folded initializer fact. Keep their source-map row,
                     // but do not retain an AST-shaped codegen artifact merely to
                     // repeat a declaration that C/LLVM can render from MIR.
-                    if (!usesConstGlobalScalarInitFact(typed_mir, checked)) {
+                    if (checked == null or typed_mir.checkedScalarConstGlobal(checked.?) == null) {
                         try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });
                     }
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
@@ -276,14 +276,6 @@ fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalF
         if (identity.id.eql(global.symbol_id) and std.mem.eql(u8, identity.spelling, name)) return global;
     }
     return null;
-}
-
-fn usesConstGlobalScalarInitFact(module: *const mir.Module, checked: ?mir.CheckedGlobalFact) bool {
-    const global = checked orelse return false;
-    if (!global.is_const or !global.initializer_body_id.isValid()) return false;
-    if (!mir.valueTypeRequiresScalarConstInitFact(global.ty)) return false;
-    const fact = module.constGlobalScalarInit(global.initializer_body_id) orelse return false;
-    return mir.ValueType.eql(fact.value_ty, global.ty) and fact.value.isCompatibleWith(global.ty);
 }
 
 pub const DeclArtifact = union(enum) {

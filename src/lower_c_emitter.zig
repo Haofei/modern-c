@@ -98,22 +98,6 @@ const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const isSourceSpan = mir_source_bridge.isSourceSpan;
 const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
 
-fn isCheckedScalarConstGlobal(global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) bool {
-    return global.is_const and !global.is_extern and global.initializer_body_id.isValid() and
-        global.initializer_body_id.eql(fact.initializer_body_id) and
-        mir.valueTypeRequiresScalarConstInitFact(global.ty) and
-        mir.ValueType.eql(global.ty, fact.value_ty) and fact.value.isCompatibleWith(fact.value_ty);
-}
-
-fn comptimeValueFromScalarFact(fact: mir.ConstGlobalScalarInitFact) eval.ComptimeValue {
-    return switch (fact.value) {
-        .int => |value| .{ .int = value },
-        .uint => |value| .{ .uint = value },
-        .boolean => |value| .{ .boolean = value },
-        .float => |value| .{ .float = .{ .bits = value.bits, .width = value.width } },
-    };
-}
-
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const overlayFieldLayoutForType = lower_c_shape.overlayFieldLayout;
@@ -477,8 +461,7 @@ pub const CEmitter = struct {
     /// rows deliberately have no `GlobalArtifact` payload.
     fn collectCheckedScalarConstGlobals(self: *CEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
-            if (!isCheckedScalarConstGlobal(global, fact)) continue;
+            const fact = self.mir_module.checkedScalarConstGlobal(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
             const c_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
             try self.globals.put(name, .{
@@ -490,7 +473,7 @@ pub const CEmitter = struct {
                 .pointer_like = false,
                 .is_const = true,
             });
-            try self.const_globals.put(name, comptimeValueFromScalarFact(fact));
+            try self.const_globals.put(name, mir.comptimeValueFromConstGlobalScalarFact(fact));
         }
     }
 
@@ -729,8 +712,8 @@ pub const CEmitter = struct {
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
-            if (isCheckedScalarConstGlobal(global, fact)) try self.emitCheckedScalarConstGlobal(global, fact);
+            const fact = self.mir_module.checkedScalarConstGlobal(global) orelse continue;
+            try self.emitCheckedScalarConstGlobal(global, fact);
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),

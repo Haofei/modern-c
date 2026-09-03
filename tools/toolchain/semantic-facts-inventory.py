@@ -1084,7 +1084,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         # not retain a GlobalArtifact. Aggregate/mutable/extern globals remain
         # explicitly transitional until their declaration facts are complete.
         "const checked = globalByName(typed_mir, global.name.text);": 1,
-        "if (!usesConstGlobalScalarInitFact(typed_mir, checked)) {": 1,
+        "if (checked == null or typed_mir.checkedScalarConstGlobal(checked.?) == null) {": 1,
         "try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });": 1,
         "callable_value_artifacts": 0,
         "pub const TraitArtifact = union(enum)": 0,
