@@ -2349,7 +2349,7 @@ test "MIR integer facts are the complete typed authority for integer literals" {
     defer admitted.deinit();
     try mir.validateLoweringAdmission(admitted);
     const function = functionByName(admitted, "integer_value") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(function.integer_facts.len != 0);
+    try std.testing.expectEqual(@as(usize, 1), function.integer_facts.len);
     try std.testing.expect(mir.ValueType.eql(mir.integerFactTargetType(&function, function.integer_facts[0]).?, .{ .integer = "u8" }));
     try std.testing.expect(function.integer_facts[0].target_type_id.isValid());
     try std.testing.expect(function.integer_facts[0].typed_span_id.isValid());
@@ -2366,6 +2366,11 @@ test "MIR integer facts are the complete typed authority for integer literals" {
     defer duplicate.deinit();
     try duplicateIntegerFact(functionByNameMut(&duplicate, "integer_value") orelse return error.TestUnexpectedResult, std.testing.allocator);
     try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(duplicate));
+
+    var duplicate_pair = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer duplicate_pair.deinit();
+    try duplicateIntegerFactAndInstruction(functionByNameMut(&duplicate_pair, "integer_value") orelse return error.TestUnexpectedResult, std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(duplicate_pair));
 
     var invalid = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer invalid.deinit();
@@ -2857,6 +2862,22 @@ fn duplicateIntegerFact(function: *mir.Function, allocator: std.mem.Allocator) !
     facts[function.integer_facts.len] = function.integer_facts[0];
     allocator.free(function.integer_facts);
     function.integer_facts = facts;
+}
+
+fn duplicateIntegerFactAndInstruction(function: *mir.Function, allocator: std.mem.Allocator) !void {
+    try duplicateIntegerFact(function, allocator);
+    for (function.blocks) |*block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .integer_literal_conversion) continue;
+            const instructions = try allocator.alloc(mir.Instruction, block.instructions.len + 1);
+            @memcpy(instructions[0..block.instructions.len], block.instructions);
+            instructions[block.instructions.len] = instruction;
+            allocator.free(block.instructions);
+            block.instructions = instructions;
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
 }
 
 fn simpleTypeExprForTest(name: []const u8, span: ast.Span) ast.TypeExpr {
@@ -9247,7 +9268,7 @@ test "MIR dump emits target-typed integer literal facts" {
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 target_type_id=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 target_type_id=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=7 target_type=u8 target_type_id=") != null);

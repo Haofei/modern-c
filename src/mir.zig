@@ -2952,14 +2952,12 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
             if (!integerFactTypedIdentitiesValid(function, fact)) return error.InvalidMirIntegerFacts;
             const instruction_count = countMatchingIntegerInstructions(function, fact);
             const fact_count = countMatchingIntegerFacts(function, fact);
-            if (instruction_count == 0 or instruction_count != fact_count) return error.InvalidMirIntegerFacts;
+            if (instruction_count != 1 or fact_count != 1) return error.InvalidMirIntegerFacts;
         }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
                 if (!isIntegerLiteralConversionInstruction(instruction)) continue;
-                const fact_count = countMatchingIntegerFactsForInstruction(function, instruction);
-                const instruction_count = countMatchingIntegerInstructionsForInstruction(function, instruction);
-                if (fact_count == 0 or fact_count != instruction_count) return error.InvalidMirIntegerFacts;
+                if (countMatchingIntegerFactsForInstruction(function, instruction) != 1) return error.InvalidMirIntegerFacts;
             }
         }
     }
@@ -4345,19 +4343,6 @@ fn countMatchingIntegerFactsForInstruction(function: Function, instruction: Inst
     var count: usize = 0;
     for (function.integer_facts) |fact| {
         if (integerFactMatchesInstruction(fact, instruction)) count += 1;
-    }
-    return count;
-}
-
-fn countMatchingIntegerInstructionsForInstruction(function: Function, target: Instruction) usize {
-    var count: usize = 0;
-    for (function.blocks) |block| {
-        for (block.instructions) |instruction| {
-            if (!isIntegerLiteralConversionInstruction(instruction)) continue;
-            if (!instruction.typed_result_ty.eql(target.typed_result_ty) or !instruction.typed_span_id.eql(target.typed_span_id)) continue;
-            if (!std.mem.eql(u8, instruction.detail, target.detail)) continue;
-            count += 1;
-        }
     }
     return count;
 }
@@ -17725,7 +17710,9 @@ const FunctionBuilder = struct {
             return;
         }
         if (integerLiteralFitsTarget(target_ty, expr)) {
-            try self.addIntegerLiteralFact(target_ty, expr, span);
+            // The expression walk owns accepted integer literal facts. Keep
+            // this conversion fast path, but do not append the same
+            // `(TypeId, SpanId, literal)` pair here as well.
             return;
         }
         if (self.packedBitsRawInitializerFits(target_ty, source_ty, expr)) return;
