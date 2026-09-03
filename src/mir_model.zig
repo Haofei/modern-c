@@ -4026,6 +4026,41 @@ pub const CheckedCallableFact = struct {
     irq_context: bool,
 };
 
+/// Rendering-only attributes normalized while the frontend still owns
+/// declaration syntax.  These are deliberately data-only so C/LLVM never
+/// need to recover attributes from an AST callable declaration.
+pub const FunctionRenderAttrs = struct {
+    naked: bool = false,
+    weak: bool = false,
+    noinline_attr: bool = false,
+    section: ?[]const u8 = null,
+    effective_align: ?u32 = null,
+};
+
+/// One parameter spelling needed by declaration rendering. Its type belongs
+/// exclusively to CheckedCallableFact and SignatureTypeTable.
+pub const CallableParameterEmissionFact = struct {
+    spelling: []const u8,
+};
+
+/// Syntax-free callable declaration ingress.  Executable bodies, ABI, return
+/// representation and effects remain owned by CheckedCallableFact/Function;
+/// this row contains only declaration presentation facts which cannot be
+/// reconstructed from an executable body (parameter spellings and render
+/// attributes).
+pub const CallableEmissionFact = struct {
+    def_id: DefId,
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    declaration_source: SourcePoint,
+    params: []const CallableParameterEmissionFact,
+    exported: bool,
+    is_const: bool,
+    error_from: bool,
+    backend_name: ?[]const u8,
+    render_attrs: FunctionRenderAttrs,
+};
+
 /// Syntax-free module-global declaration facts. Initializer expressions are
 /// represented by the referenced MIR body rather than copied into this table.
 pub const CheckedGlobalFact = struct {
@@ -4363,6 +4398,7 @@ pub const Module = struct {
     source_identities: []SourceIdentity = &.{},
     signature_types: SignatureTypeTable = .{},
     checked_callables: []CheckedCallableFact = &.{},
+    callable_emission_facts: []CallableEmissionFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
     type_aliases: []TypeAliasFact = &.{},
     enums: []EnumFact = &.{},
@@ -4382,6 +4418,20 @@ pub const Module = struct {
         var found: ?GlobalInitializerFact = null;
         for (self.global_initializer_facts) |fact| {
             if (!fact.initializer_body_id.eql(body_id)) continue;
+            if (found != null) return null;
+            found = fact;
+        }
+        return found;
+    }
+
+    /// The one frontend-owned rendering plan for a checked source callable.
+    /// Duplicate rows fail closed instead of making declaration emission depend
+    /// on collection order.
+    pub fn callableEmissionFact(self: Module, def_id: DefId) ?CallableEmissionFact {
+        if (!def_id.isValid()) return null;
+        var found: ?CallableEmissionFact = null;
+        for (self.callable_emission_facts) |fact| {
+            if (!fact.def_id.eql(def_id)) continue;
             if (found != null) return null;
             found = fact;
         }
@@ -4525,6 +4575,10 @@ pub const Module = struct {
                 if (checked.body_signature_type_ids.len != 0) self.allocator.free(checked.body_signature_type_ids);
             }
             self.allocator.free(self.checked_callables);
+        }
+        if (self.callable_emission_facts.len != 0) {
+            for (self.callable_emission_facts) |fact| if (fact.params.len != 0) self.allocator.free(fact.params);
+            self.allocator.free(self.callable_emission_facts);
         }
         if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
         if (self.type_aliases.len != 0) self.allocator.free(self.type_aliases);

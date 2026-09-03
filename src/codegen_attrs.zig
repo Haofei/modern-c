@@ -6,30 +6,9 @@
 
 const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
-const codegen_signature = @import("codegen_signature.zig");
 const mir = @import("mir_model.zig");
 
-pub const FunctionParamFact = codegen_signature.FunctionParamFact;
-
-pub const FunctionSignatureFacts = struct {
-    name: ast_bridge.Ident,
-    params: []const FunctionParamFact,
-    /// Canonical semantic return type produced by the checked MIR builder.
-    return_ty: mir.ValueType,
-    /// Module-owned recursive source type shape.
-    return_type_id: mir.SignatureTypeId = .invalid,
-    exported: bool,
-    is_extern: bool,
-    is_const: bool,
-    is_variadic: bool,
-    c_abi: bool,
-    error_from: bool,
-    backend_name: ?[]const u8,
-};
-
-pub const FunctionBodyFacts = struct {
-    has_definition: bool,
-};
+pub const FunctionRenderAttrs = mir.FunctionRenderAttrs;
 
 pub const GlobalSignatureFacts = struct {
     name: ast_bridge.Ident,
@@ -44,14 +23,6 @@ pub const GlobalSignatureFacts = struct {
 pub const GlobalInitFacts = struct {
     body_id: mir.BodyId = .invalid,
     init: ?ast_bridge.Expr,
-};
-
-pub const FunctionRenderAttrs = struct {
-    naked: bool = false,
-    weak: bool = false,
-    noinline_attr: bool = false,
-    section: ?[]const u8 = null,
-    effective_align: ?u32 = null,
 };
 
 pub fn emitCFunctionRenderAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: FunctionRenderAttrs) !void {

@@ -430,11 +430,12 @@ pub const CEmitter = struct {
         try self.collectOverlayUnionFacts();
         try self.collectTaggedUnionFacts();
         try self.collectStructFacts();
+        try self.collectCallableEmissionFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedPlannedGlobals();
         try self.collectConstGlobals();
-        try self.collectDeclArtifacts(early_metadata);
+        try self.collectGlobalArtifacts(early_metadata);
         try self.collectBindThunks();
     }
 
@@ -553,16 +554,13 @@ pub const CEmitter = struct {
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
         try eval.collectConstFunctionsFromDeclarations(self.comptime_declarations.?, &self.const_fns);
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| {
-                const sig = global.signature;
-                if (!sig.is_const) continue;
-                const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
-                const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-                try self.const_global_widths.put(sig.name.text, bits);
-            },
-            else => {},
-        };
+        for (artifacts.decl_artifacts) |global| {
+            const sig = global.signature;
+            if (!sig.is_const) continue;
+            const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
+            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
+            try self.const_global_widths.put(sig.name.text, bits);
+        }
     }
 
     pub fn collectConstGlobals(self: *CEmitter) !void {
@@ -594,11 +592,8 @@ pub const CEmitter = struct {
         }
     }
 
-    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) anyerror!void {
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| try self.collectFunctionArtifact(function),
-            .global => |global| try self.collectGlobalDeclArtifact(global),
-        };
+    pub fn collectGlobalArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) anyerror!void {
+        for (artifacts.decl_artifacts) |global| try self.collectGlobalDeclArtifact(global);
     }
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
@@ -619,11 +614,29 @@ pub const CEmitter = struct {
         for (struct_decl.fields) |field| try self.collectTypeArtifacts(field.ty);
     }
 
-    fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
-        const sig = function.signature;
-        try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_ty = sig.return_ty, .return_type_id = sig.return_type_id, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
-        if (!function.signature.is_extern) if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
-        try self.collectFunctionArtifactSliceTypes(function);
+    fn collectCallableEmissionFacts(self: *CEmitter) !void {
+        for (self.mir_module.callable_emission_facts) |fact| {
+            const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedCEmission;
+            const name = self.callableSymbol(fact) orelse return error.UnsupportedCEmission;
+            if (fact.params.len != checked.param_count or fact.params.len != checked.param_types.len or
+                fact.params.len != checked.signature_param_type_ids.len)
+                return error.UnsupportedCEmission;
+            for (checked.signature_param_type_ids) |type_id| if (!self.mir_module.signature_types.contains(type_id)) return error.UnsupportedCEmission;
+            const fn_mir = self.mirFunctionByDefId(fact.def_id) orelse return error.UnsupportedCEmission;
+            if (!std.mem.eql(u8, name, fn_mir.name) or !mir.ValueType.eql(checked.return_ty, fn_mir.return_ty) or
+                !checked.signature_return_type_id.eql(fn_mir.signature_return_type_id) or checked.kind == .global_initializer)
+                return error.UnsupportedCEmission;
+            try self.functions.put(name, .{
+                .params = fact.params,
+                .return_ty = checked.return_ty,
+                .return_type_id = checked.signature_return_type_id,
+                .is_extern = checked.kind == .extern_function,
+                .is_variadic = checked.is_variadic,
+                .error_from = fact.error_from,
+            });
+            if (checked.kind != .extern_function) if (fact.backend_name) |backend_name| try self.backend_names.put(name, backend_name);
+            try self.collectCallableEmissionFactSliceTypes(name, fn_mir);
+        }
     }
 
     pub fn collectBindThunks(self: *CEmitter) anyerror!void {
@@ -707,13 +720,12 @@ pub const CEmitter = struct {
     /// AST TypeExpr.  The legacy body registries remain for body lowering;
     /// signature-only declarations are owned by this one recursive walk.
     fn emitSignatureTypeDefinitions(self: *CEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                try self.emitSignatureTypeDefinition(function.signature.return_type_id);
-                for (function.signature.params) |param| try self.emitSignatureTypeDefinition(param.type_id);
-            },
-            .global => |global| try self.emitSignatureTypeDefinition(global.signature.type_id),
-        };
+        for (self.mir_module.callable_emission_facts) |fact| {
+            const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedCEmission;
+            try self.emitSignatureTypeDefinition(checked.signature_return_type_id);
+            for (checked.signature_param_type_ids) |type_id| try self.emitSignatureTypeDefinition(type_id);
+        }
+        for (self.codegen_artifacts.decl_artifacts) |global| try self.emitSignatureTypeDefinition(global.signature.type_id);
         // Body-local declaration shapes arrive as syntax-free IDs.  Emit
         // their required aggregate typedefs from the same module table rather
         // than retaining AST TypeExpr payloads on MIR functions.
@@ -800,16 +812,16 @@ pub const CEmitter = struct {
         // Forward-declare every defined function up front so a call to a function
         // declared later in the (possibly import-merged) source resolves — MC
         // resolves calls module-wide, independent of declaration order.
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| if (function.signature.is_extern) {
+        for (self.mir_module.callable_emission_facts) |fact| {
+            const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedCEmission;
+            if (checked.kind == .extern_function) {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
-                try self.emitExternFunction(function);
-            } else if (function.body_facts.has_definition) {
-                try self.emitFunctionForwardDecl(function);
-            },
-            else => {},
-        };
+                try self.emitExternFunction(fact);
+            } else if (checked.kind == .function and checked.body_id.isValid()) {
+                try self.emitFunctionForwardDecl(fact);
+            } else return error.UnsupportedCEmission;
+        }
     }
 
     pub fn emitGeneratedDispatchArtifacts(self: *CEmitter) !void {
@@ -840,10 +852,7 @@ pub const CEmitter = struct {
                 .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
             }
         }
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| try self.emitGlobal(global),
-            else => {},
-        };
+        for (self.codegen_artifacts.decl_artifacts) |global| try self.emitGlobal(global);
     }
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
@@ -851,7 +860,7 @@ pub const CEmitter = struct {
         for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
             // Global initializer bodies are compiler-internal checked MIR, not
-            // callable declarations. They deliberately have no FunctionArtifact
+            // callable declarations. They deliberately have no callable emission fact
             // and are identified by the absence of a declaration DefId, rather
             // than by positional coupling to the checked-callable table.
             if (!fn_mir.typed_def_id.isValid()) continue;
@@ -860,18 +869,15 @@ pub const CEmitter = struct {
             // silently omit it: the old AST body fallback made that kind of
             // omission easy to hide.  Codegen has one body authority now, so
             // an incomplete ingress must fail closed.
-            const artifact_index = self.functionArtifactIndexByDefId(fn_mir.typed_def_id) orelse return error.UnsupportedCEmission;
-            const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
-                .function => |function| function,
-                else => unreachable,
-            };
-            if (!std.mem.eql(u8, function.signature.name.text, fn_mir.name)) return error.UnsupportedCEmission;
-            if (function.signature.is_extern) continue;
-            const render_attrs = function.render_attrs;
+            const fact = self.mir_module.callableEmissionFact(fn_mir.typed_def_id) orelse return error.UnsupportedCEmission;
+            const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedCEmission;
+            const name = self.callableSymbol(fact) orelse return error.UnsupportedCEmission;
+            if (!std.mem.eql(u8, name, fn_mir.name) or checked.kind != .function) return error.UnsupportedCEmission;
+            const render_attrs = fact.render_attrs;
             const previous_source_path = self.source_path;
-            self.source_path = self.sourcePathForSpan(function.signature.name.span);
+            self.source_path = self.sourcePathForSpan(spanFromMirSourcePoint(fact.declaration_source));
             defer self.source_path = previous_source_path;
-            if (try self.emitVerifiedMirFunction(function, fn_mir, render_attrs)) {
+            if (try self.emitVerifiedMirFunction(fact, fn_mir, render_attrs)) {
                 continue;
             } else if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
                 self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
@@ -882,16 +888,21 @@ pub const CEmitter = struct {
         }
     }
 
-    fn functionArtifactIndexByDefId(self: *const CEmitter, def_id: mir.DefId) ?usize {
+    fn checkedCallableFact(self: *const CEmitter, def_id: mir.DefId) ?mir.CheckedCallableFact {
         if (!def_id.isValid()) return null;
-        var i: usize = 0;
-        while (i < self.codegen_artifacts.decl_artifacts.len) : (i += 1) {
-            switch (self.codegen_artifacts.decl_artifacts[i]) {
-                .function => |function| if (function.def_id.eql(def_id)) return i,
-                else => {},
-            }
+        var found: ?mir.CheckedCallableFact = null;
+        for (self.mir_module.checked_callables) |fact| {
+            if (!fact.def_id.eql(def_id)) continue;
+            if (found != null) return null;
+            found = fact;
         }
-        return null;
+        return found;
+    }
+
+    fn callableSymbol(self: *const CEmitter, fact: mir.CallableEmissionFact) ?[]const u8 {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+        return if (identity.id.eql(fact.symbol_id) and identity.kind == .function) identity.spelling else null;
     }
 
     fn emitGlobal(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
@@ -1556,26 +1567,26 @@ pub const CEmitter = struct {
         try lower_c_defs.emitArrayType(self.defsContext(), array);
     }
 
-    fn emitFunctionPrototype(self: *CEmitter, function: anytype) !void {
-        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedCEmission;
-        try self.emitFunctionSignature(function.signature, fn_mir, false, true);
+    fn emitFunctionPrototype(self: *CEmitter, fact: mir.CallableEmissionFact) !void {
+        const fn_mir = self.mirFunctionByDefId(fact.def_id) orelse return error.UnsupportedCEmission;
+        try self.emitFunctionSignature(fact, fn_mir, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
 
     // Forward declaration for a *defined* function, matching the definition's
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
-    fn emitFunctionForwardDecl(self: *CEmitter, function: anytype) !void {
-        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedCEmission;
-        try self.emitFunctionSignature(function.signature, fn_mir, !function.signature.exported, true);
+    fn emitFunctionForwardDecl(self: *CEmitter, fact: mir.CallableEmissionFact) !void {
+        const fn_mir = self.mirFunctionByDefId(fact.def_id) orelse return error.UnsupportedCEmission;
+        try self.emitFunctionSignature(fact, fn_mir, !fact.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitExternFunction(self: *CEmitter, function: anytype) !void {
-        try self.emitFunctionPrototype(function);
+    fn emitExternFunction(self: *CEmitter, fact: mir.CallableEmissionFact) !void {
+        try self.emitFunctionPrototype(fact);
     }
 
-    fn emitVerifiedMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
+    fn emitVerifiedMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: anytype) !bool {
         // Emit only complete, verified executable MIR within this backend's
         // capability set.
         const executable_body = if (self.mirExecutableBodySupported(&fn_mir)) body: {
@@ -1585,9 +1596,9 @@ pub const CEmitter = struct {
         if (executable_body) |body| {
             if (render_attrs.naked) {
                 if (!mir_executable_c.canEmitNakedBody(body)) return false;
-                try self.emitExecutableMirNakedFunction(function, body, render_attrs);
+                try self.emitExecutableMirNakedFunction(fact, body, render_attrs);
             } else {
-                try self.emitExecutableMirFunction(function, &fn_mir, body, render_attrs);
+                try self.emitExecutableMirFunction(fact, &fn_mir, body, render_attrs);
             }
             return true;
         }
@@ -1595,29 +1606,29 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitExecutableMirNakedFunction(self: *CEmitter, function: anytype, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
-        try self.writeLineDirective(function.signature.name.span);
+    fn emitExecutableMirNakedFunction(self: *CEmitter, fact: mir.CallableEmissionFact, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(fact.declaration_source));
         try self.emitFunctionRenderAttrs(render_attrs);
-        try self.emitFunctionSignature(function.signature, self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedCEmission, !function.signature.exported, false);
+        try self.emitFunctionSignature(fact, self.mirFunctionByDefId(fact.def_id) orelse return error.UnsupportedCEmission, !fact.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
         try mir_executable_c.emitNakedBody(self.allocator, self.out, body, 1);
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitExecutableMirFunction(self: *CEmitter, function: anytype, fn_mir: *const mir.Function, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
-        try self.writeLineDirective(function.signature.name.span);
+    fn emitExecutableMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: *const mir.Function, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(fact.declaration_source));
         try self.emitFunctionRenderAttrs(render_attrs);
-        try self.emitFunctionSignature(function.signature, fn_mir.*, !function.signature.exported, false);
+        try self.emitFunctionSignature(fact, fn_mir.*, !fact.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
         const previous_function = self.current_function;
-        self.current_function = function.signature.name.text;
+        self.current_function = self.callableSymbol(fact) orelse return error.UnsupportedCEmission;
         defer self.current_function = previous_function;
 
         {
             self.indent += 1;
             defer self.indent -= 1;
-            for (fn_mir.pointer_provenance_facts) |fact| try self.emitMirPointerProvenanceConsumedComment(fact);
+            for (fn_mir.pointer_provenance_facts) |provenance_fact| try self.emitMirPointerProvenanceConsumedComment(provenance_fact);
             try mir_executable_c.emitBodyWithOptions(self.allocator, self.out, body, self.indent, .{
                 .source_path = self.source_path,
                 .stub_asm = self.stub_asm,
@@ -1680,19 +1691,21 @@ pub const CEmitter = struct {
     }
 
     fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
-        return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len };
+        return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len, .file_id = source.file_id };
     }
 
-    fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, fn_mir: mir.Function, is_static: bool, with_asm_label: bool) !void {
-        if (!std.mem.eql(u8, sig.name.text, fn_mir.name)) return error.UnsupportedCEmission;
-        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len or !self.mir_module.signature_types.contains(sig.return_type_id)) return error.UnsupportedCEmission;
-        const ret = try self.cSignatureType(sig.return_type_id);
-        const param_types = try self.scratch.allocator().alloc([]const u8, sig.params.len);
-        for (sig.params, fn_mir.param_types, 0..) |param, param_ty, index| {
-            if (!mir.ValueType.eql(param.value_ty, param_ty) or !self.mir_module.signature_types.contains(param.type_id)) return error.UnsupportedCEmission;
-            param_types[index] = try self.cSignatureType(param.type_id);
+    fn emitFunctionSignature(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, is_static: bool, with_asm_label: bool) !void {
+        const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedCEmission;
+        const name = self.callableSymbol(fact) orelse return error.UnsupportedCEmission;
+        if (!std.mem.eql(u8, name, fn_mir.name) or !mir.ValueType.eql(checked.return_ty, fn_mir.return_ty) or
+            fact.params.len != fn_mir.param_types.len or !self.mir_module.signature_types.contains(checked.signature_return_type_id)) return error.UnsupportedCEmission;
+        const ret = try self.cSignatureType(checked.signature_return_type_id);
+        const param_types = try self.scratch.allocator().alloc([]const u8, fact.params.len);
+        for (fn_mir.param_types, checked.param_types, checked.signature_param_type_ids, 0..) |param_ty, checked_param_ty, type_id, index| {
+            if (!mir.ValueType.eql(param_ty, checked_param_ty) or !self.mir_module.signature_types.contains(type_id)) return error.UnsupportedCEmission;
+            param_types[index] = try self.cSignatureType(type_id);
         }
-        try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, ret, param_types, is_static, with_asm_label);
+        try lower_c_defs.emitFunctionSignature(self.defsContext(), name, fact.params, checked.is_variadic, ret, param_types, is_static, with_asm_label);
     }
 
     /// Render a callable signature type from the module-owned syntax-free
@@ -3070,11 +3083,12 @@ pub const CEmitter = struct {
         try lower_c_type.appendPointerType(self.typeEmitContext(), out, child, mutability, style);
     }
 
-    fn collectFunctionArtifactSliceTypes(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
+    fn collectCallableEmissionFactSliceTypes(self: *CEmitter, name: []const u8, fn_mir: mir.Function) !void {
         const previous_function = self.current_function;
-        self.current_function = function.signature.name.text;
+        self.current_function = name;
         defer self.current_function = previous_function;
-        if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionTypes(fn_mir);
+        // Signature types are rendered from the module-owned type table.
+        try self.collectMirFunctionTypes(&fn_mir);
     }
 
     fn collectMirFunctionTypes(self: *CEmitter, fn_mir: *const mir.Function) !void {

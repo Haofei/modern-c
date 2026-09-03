@@ -5,7 +5,6 @@ const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const ComptimeFunctionDeclarations = declaration_artifacts.ComptimeFunctionDeclarations;
-const DeclArtifact = declaration_artifacts.DeclArtifact;
 const GlobalArtifact = declaration_artifacts.GlobalArtifact;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
@@ -623,7 +622,7 @@ pub const ComptimeDeclarations = struct {
     type_aliases: []const ast.TypeAlias = &.{},
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
-    decl_artifacts: ?[]const DeclArtifact = null,
+    decl_artifacts: ?[]const GlobalArtifact = null,
     /// Borrowed module-owned signature graph. It exists only to materialize
     /// transient expected types while folding retained initializer syntax.
     signature_types: ?mir.SignatureTypeTable = null,
@@ -970,10 +969,7 @@ fn collectConstGlobalsFromDeclItemsWithScope(
         return;
     }
     if (declarations.decl_artifacts) |decl_artifacts| {
-        for (decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| try collectConstGlobalArtifact(allocator, &scope, global, out, options),
-            else => {},
-        };
+        for (decl_artifacts) |global| try collectConstGlobalArtifact(allocator, &scope, global, out, options);
         return;
     }
     for (declarations.globals) |global| try collectConstGlobal(allocator, &scope, global, out, options);
@@ -1170,8 +1166,8 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
         return null;
     }
     if (declarations.decl_artifacts) |decl_artifacts| {
-        for (decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| if (std.mem.eql(u8, global.signature.name.text, name)) {
+        for (decl_artifacts) |global| {
+            if (std.mem.eql(u8, global.signature.name.text, name)) {
                 const types = declarations.signature_types orelse return null;
                 return signature_type_materializer.typeExpr(scope.bindings.allocator, types, global.signature.type_id, global.signature.name.span) catch |err| switch (err) {
                     error.OutOfMemory => {
@@ -1184,9 +1180,8 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
                     // remains unknown rather than manufacturing a type.
                     else => return null,
                 };
-            },
-            else => {},
-        };
+            }
+        }
         return null;
     }
     for (declarations.globals) |global| {

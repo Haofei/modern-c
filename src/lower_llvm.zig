@@ -411,6 +411,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectOverlayUnionFacts();
     try ctx.collectTaggedUnionFacts();
     try ctx.collectStructFacts();
+    try ctx.collectCallableEmissionFacts();
     try ctx.collectConstFunctions(comptime_declarations);
     try ctx.collectCheckedPlannedGlobals();
     var reflect_env = ctx.reflectEnv();
@@ -419,7 +420,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .reflect_ctx = &reflect_env,
         .domains = &ctx.const_global_domains,
     });
-    try ctx.collectFunctionGlobalArtifacts();
+    try ctx.collectGlobalArtifacts();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     try ctx.emitCollectedGlobals();
     try ctx.emitCollectedCallableDeclarations();
@@ -724,59 +725,63 @@ const LlvmEmitter = struct {
         try self.tagged_unions.put(union_decl.name.text, .{ .decl = union_decl, .layout = fact.layout });
     }
 
-    fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
-        const sig = function.signature;
-        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedLlvmEmission;
-        if (!mir.ValueType.eql(sig.return_ty, fn_mir.return_ty) or sig.params.len != fn_mir.param_types.len)
+    fn collectCallableEmissionFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.callable_emission_facts) |fact| try self.collectCallableEmissionFact(fact);
+    }
+
+    fn collectCallableEmissionFact(self: *LlvmEmitter, fact: mir.CallableEmissionFact) !void {
+        const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+        const name = self.callableSymbol(fact) orelse return error.UnsupportedLlvmEmission;
+        const fn_mir = self.mirFunctionByDefId(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+        if (!std.mem.eql(u8, name, fn_mir.name) or !mir.ValueType.eql(checked.return_ty, fn_mir.return_ty) or
+            fact.params.len != fn_mir.param_types.len or fact.params.len != checked.signature_param_type_ids.len or
+            checked.kind == .global_initializer)
             return error.UnsupportedLlvmEmission;
-        const ret_ty = try self.signatureTypeExpr(sig.return_type_id, sig.name.span);
+        const declaration_span = spanFromSourcePoint(fact.declaration_source);
+        const ret_ty = try self.signatureTypeExpr(checked.signature_return_type_id, declaration_span);
         _ = try self.llvmType(ret_ty);
-        const signature_ret = try self.llvmSignatureType(sig.return_type_id);
+        const signature_ret = try self.llvmSignatureType(checked.signature_return_type_id);
         if (!std.mem.eql(u8, signature_ret, try self.llvmType(ret_ty))) return error.UnsupportedLlvmEmission;
-        const params = try self.scratch.allocator().alloc(lower_llvm_model.FnParam, sig.params.len);
-        for (sig.params, fn_mir.param_types, 0..) |param, mir_param_ty, index| {
-            if (!mir.ValueType.eql(param.value_ty, mir_param_ty)) return error.UnsupportedLlvmEmission;
-            const param_ty = try self.signatureTypeExpr(param.type_id, param.name.span);
-            const signature_param = try self.llvmSignatureType(param.type_id);
+        const params = try self.scratch.allocator().alloc(lower_llvm_model.FnParam, fact.params.len);
+        for (fact.params, fn_mir.param_types, checked.param_types, checked.signature_param_type_ids, 0..) |param, mir_param_ty, checked_param_ty, signature_type_id, index| {
+            if (!mir.ValueType.eql(checked_param_ty, mir_param_ty)) return error.UnsupportedLlvmEmission;
+            const param_ty = try self.signatureTypeExpr(signature_type_id, declaration_span);
+            const signature_param = try self.llvmSignatureType(signature_type_id);
             if (!std.mem.eql(u8, signature_param, try self.llvmType(param_ty))) return error.UnsupportedLlvmEmission;
             params[index] = .{
-                .name = param.name,
-                .value_ty = param.value_ty,
-                .type_id = param.type_id,
+                .name = param.spelling,
+                .value_ty = checked_param_ty,
+                .type_id = signature_type_id,
                 .ty = param_ty,
-                .is_comptime = param.is_comptime,
             };
         }
-        const debug_id: ?usize = if (function.body_facts.has_definition) blk: {
+        const debug_id: ?usize = if (checked.kind == .function) blk: {
             const id = self.debug_next_id;
             self.debug_next_id += 1;
             try self.debug_functions.append(self.allocator, .{
                 .id = id,
-                .name = function.signature.name.text,
-                .source_path = self.sourcePathForSpan(function.signature.name.span),
-                .line = debugLine(function.signature.name.span.line),
-                .column = debugColumn(function.signature.name.span.column),
+                .name = name,
+                .source_path = self.sourcePathForSpan(declaration_span),
+                .line = debugLine(fact.declaration_source.line),
+                .column = debugColumn(fact.declaration_source.column),
             });
             break :blk id;
         } else null;
-        try self.fn_sigs.put(function.signature.name.text, .{
-            .return_ty = sig.return_ty,
-            .return_type_id = sig.return_type_id,
+        try self.fn_sigs.put(name, .{
+            .return_ty = checked.return_ty,
+            .return_type_id = checked.signature_return_type_id,
             .ret = ret_ty,
             .params = params,
-            .c_abi = sig.c_abi,
-            .is_variadic = sig.is_variadic,
+            .c_abi = checked.c_abi,
+            .is_variadic = checked.is_variadic,
             .debug_id = debug_id,
-            .error_from = sig.error_from,
+            .error_from = fact.error_from,
         });
-        if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
+        if (checked.kind != .extern_function) if (fact.backend_name) |backend_name| try self.backend_names.put(name, backend_name);
     }
 
-    fn collectFunctionGlobalArtifacts(self: *LlvmEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| try self.collectFunctionArtifact(function),
-            .global => |global| try self.collectGlobal(global),
-        };
+    fn collectGlobalArtifacts(self: *LlvmEmitter) !void {
+        for (self.codegen_artifacts.decl_artifacts) |global| try self.collectGlobal(global);
     }
 
     /// Admitted global plans are complete semantic global rows. Seed lookup
@@ -927,10 +932,7 @@ const LlvmEmitter = struct {
                 .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
             }
         }
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| try self.emitGlobal(global),
-            else => {},
-        };
+        for (self.codegen_artifacts.decl_artifacts) |global| try self.emitGlobal(global);
     }
 
     fn emitCheckedScalarGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, fact: mir.GlobalInitializerFact) !void {
@@ -1059,38 +1061,34 @@ const LlvmEmitter = struct {
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| if (function.signature.is_extern) try self.emitExternFunction(function),
-            else => {},
-        };
+        for (self.mir_module.callable_emission_facts) |fact| {
+            const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+            if (checked.kind == .extern_function) try self.emitExternFunction(fact);
+        }
 
         // Function-definition admission is driven by verified MIR.  The
-        // source-shaped body artifact is still the transitional rendering
-        // payload, but it no longer decides which functions enter body
-        // lowering.
+        // Callable emission facts are mandatory render metadata, while MIR
+        // remains the sole body authority.
         for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
             // Global initializer bodies are compiler-internal checked MIR, not
-            // callable source entries. They deliberately have no FunctionArtifact
+            // callable source entries. They deliberately have no callable emission fact
             // and are identified by the absence of a declaration DefId, rather
             // than by positional coupling to the checked-callable table.
             if (!fn_mir.typed_def_id.isValid()) continue;
             // Declaration facts are mandatory for every executable body.  Do
             // not silently omit a verified MIR function when its matching
-            // artifact is absent: ordinary codegen has no AST body fallback
+            // fact is absent: ordinary codegen has no AST body fallback
             // that could make such an ingress failure acceptable.
-            const artifact_index = self.functionArtifactIndexByDefId(fn_mir.typed_def_id) orelse return error.UnsupportedLlvmEmission;
-            const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
-                .function => |function| function,
-                else => unreachable,
-            };
-            if (!std.mem.eql(u8, function.signature.name.text, fn_mir.name)) return error.UnsupportedLlvmEmission;
-            if (function.signature.is_extern) continue;
-            const render_attrs = function.render_attrs;
+            const fact = self.mir_module.callableEmissionFact(fn_mir.typed_def_id) orelse return error.UnsupportedLlvmEmission;
+            const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+            const name = self.callableSymbol(fact) orelse return error.UnsupportedLlvmEmission;
+            if (!std.mem.eql(u8, name, fn_mir.name) or checked.kind != .function) return error.UnsupportedLlvmEmission;
+            const render_attrs = fact.render_attrs;
             const previous_source_path = self.source_path;
-            self.source_path = self.sourcePathForSpan(function.signature.name.span);
+            self.source_path = self.sourcePathForSpan(spanFromMirSourcePoint(fact.declaration_source));
             defer self.source_path = previous_source_path;
-            if (try self.emitExecutableMirFunction(function, fn_mir, render_attrs)) {
+            if (try self.emitExecutableMirFunction(fact, fn_mir, render_attrs)) {
                 continue;
             } else if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
                 self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
@@ -1101,16 +1099,21 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn functionArtifactIndexByDefId(self: *const LlvmEmitter, def_id: mir.DefId) ?usize {
+    fn checkedCallableFact(self: *const LlvmEmitter, def_id: mir.DefId) ?mir.CheckedCallableFact {
         if (!def_id.isValid()) return null;
-        var i: usize = 0;
-        while (i < self.codegen_artifacts.decl_artifacts.len) : (i += 1) {
-            switch (self.codegen_artifacts.decl_artifacts[i]) {
-                .function => |function| if (function.def_id.eql(def_id)) return i,
-                else => {},
-            }
+        var found: ?mir.CheckedCallableFact = null;
+        for (self.mir_module.checked_callables) |fact| {
+            if (!fact.def_id.eql(def_id)) continue;
+            if (found != null) return null;
+            found = fact;
         }
-        return null;
+        return found;
+    }
+
+    fn callableSymbol(self: *const LlvmEmitter, fact: mir.CallableEmissionFact) ?[]const u8 {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+        return if (identity.id.eql(fact.symbol_id) and identity.kind == .function) identity.spelling else null;
     }
 
     fn sourcePathForSpan(self: *const LlvmEmitter, span: diagnostics.Span) []const u8 {
@@ -1593,8 +1596,8 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
-        if (render_attrs.naked) return self.emitExecutableMirNakedFunction(function, fn_mir, render_attrs);
+    fn emitExecutableMirFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
+        if (render_attrs.naked) return self.emitExecutableMirNakedFunction(fact, fn_mir, render_attrs);
         const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
             fn_mir.ownership_cleanup_plan.cancellations.len == 0;
         if (fn_mir.executable_body.cleanup_actions.len == 0) {
@@ -1622,28 +1625,29 @@ const LlvmEmitter = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported, error.InvalidBody => return false,
         };
-        const sig_facts = function.signature;
-        if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
-        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
+        const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+        const name = self.callableSymbol(fact) orelse return error.UnsupportedLlvmEmission;
+        if (!mir.ValueType.eql(checked.return_ty, fn_mir.return_ty)) return false;
+        const fn_sig = self.fn_sigs.get(name) orelse return error.UnsupportedLlvmEmission;
         const ret_ty = fn_sig.ret;
-        const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
-            try self.llvmSignatureType(sig_facts.return_type_id)
+        const ret_llvm = if (checked.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
+            try self.llvmSignatureType(checked.signature_return_type_id)
         else
-            mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
+            mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, checked.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
                 error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
                 else => return err,
             };
-        const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(checked.signature_return_type_id) else "";
 
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
         const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
         const old_params = self.current_params;
-        self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
-        self.current_debug_span = sig_facts.name.span;
+        self.current_debug_scope = if (self.fn_sigs.get(name)) |sig| sig.debug_id else null;
+        self.current_debug_span = spanFromMirSourcePoint(fact.declaration_source);
         self.current_return_ty = ret_ty;
-        self.current_function = sig_facts.name.text;
+        self.current_function = name;
         self.current_params = fn_sig.params;
         defer {
             self.current_debug_scope = old_scope;
@@ -1653,9 +1657,9 @@ const LlvmEmitter = struct {
             self.current_params = old_params;
         }
 
-        const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
+        const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, fact.exported);
 
-        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, name });
         for (fn_sig.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
@@ -1671,8 +1675,8 @@ const LlvmEmitter = struct {
         } else {
             try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ mechanics.attributes, mechanics.section, mechanics.alignment, entry_label });
         }
-        for (fn_mir.pointer_provenance_facts) |fact| {
-            try self.emitMirPointerProvenanceConsumedComment(fact);
+        for (fn_mir.pointer_provenance_facts) |provenance_fact| {
+            try self.emitMirPointerProvenanceConsumedComment(provenance_fact);
         }
         try self.emitExecutableAggregateReturnPointerFacts(&fn_mir.executable_body);
         try self.out.appendSlice(self.allocator, rendered);
@@ -1680,7 +1684,7 @@ const LlvmEmitter = struct {
         return true;
     }
 
-    fn emitExecutableMirNakedFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
+    fn emitExecutableMirNakedFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
         const cleanup_free = fn_mir.ownership_cleanup_plan.actions.len == 0 and
             fn_mir.ownership_cleanup_plan.cancellations.len == 0 and cleanup_edges: {
             for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) break :cleanup_edges false;
@@ -1697,33 +1701,34 @@ const LlvmEmitter = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported, error.InvalidBody => return false,
         };
-        const sig_facts = function.signature;
-        if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return false;
-        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return false;
+        const checked = self.checkedCallableFact(fact.def_id) orelse return false;
+        const name = self.callableSymbol(fact) orelse return false;
+        if (!mir.ValueType.eql(checked.return_ty, fn_mir.return_ty)) return false;
+        const fn_sig = self.fn_sigs.get(name) orelse return false;
         const ret_ty = fn_sig.ret;
-        const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
-            try self.llvmSignatureType(sig_facts.return_type_id)
+        const ret_llvm = if (checked.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
+            try self.llvmSignatureType(checked.signature_return_type_id)
         else
-            mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
+            mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, checked.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
                 error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
                 else => return err,
             };
-        const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
-        const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, sig_facts.exported);
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(checked.signature_return_type_id) else "";
+        const mechanics = try self.llvmFunctionRenderMechanics(render_attrs, fact.exported);
 
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
         const old_function = self.current_function;
-        self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
-        self.current_debug_span = sig_facts.name.span;
-        self.current_function = sig_facts.name.text;
+        self.current_debug_scope = if (self.fn_sigs.get(name)) |sig| sig.debug_id else null;
+        self.current_debug_span = spanFromMirSourcePoint(fact.declaration_source);
+        self.current_function = name;
         defer {
             self.current_debug_scope = old_scope;
             self.current_debug_span = old_span;
             self.current_function = old_function;
         }
 
-        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, sig_facts.name.text });
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ mechanics.linkage, ret_ext, ret_llvm, name });
         for (fn_sig.params, fn_mir.executable_body.parameters, 0..) |param, executable_parameter, index| {
             if (index != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
@@ -2045,27 +2050,28 @@ const LlvmEmitter = struct {
     }
 
     fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
-        return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len };
+        return .{ .line = source.line, .column = @intCast(source.column), .offset = source.offset, .len = source.len, .file_id = source.file_id };
     }
 
-    fn emitExternFunction(self: *LlvmEmitter, function: anytype) !void {
-        const sig_facts = function.signature;
+    fn emitExternFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact) !void {
+        const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+        const name = self.callableSymbol(fact) orelse return error.UnsupportedLlvmEmission;
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
-        if (isKsanHook(sig_facts.name.text)) return;
-        const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedLlvmEmission;
-        if (!std.mem.eql(u8, sig_facts.name.text, fn_mir.name)) return error.UnsupportedLlvmEmission;
-        if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return error.UnsupportedLlvmEmission;
-        const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
-            try self.llvmSignatureType(sig_facts.return_type_id)
+        if (isKsanHook(name)) return;
+        const fn_mir = self.mirFunctionByDefId(fact.def_id) orelse return error.UnsupportedLlvmEmission;
+        if (!std.mem.eql(u8, name, fn_mir.name) or checked.kind != .extern_function) return error.UnsupportedLlvmEmission;
+        if (!mir.ValueType.eql(checked.return_ty, fn_mir.return_ty)) return error.UnsupportedLlvmEmission;
+        const ret_llvm = if (checked.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
+            try self.llvmSignatureType(checked.signature_return_type_id)
         else
-            mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(sig_facts.return_type_id),
+            mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, checked.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
+                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(checked.signature_return_type_id),
                 else => return err,
             };
-        const sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
-        const ret_ext = if (sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
-        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, ret_llvm, sig_facts.name.text });
+        const sig = self.fn_sigs.get(name) orelse return error.UnsupportedLlvmEmission;
+        const ret_ext = if (sig.c_abi) self.cAbiExtensionForSignature(checked.signature_return_type_id) else "";
+        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, ret_llvm, name });
         for (sig.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
@@ -9780,7 +9786,7 @@ const LlvmEmitter = struct {
 
     fn currentSourceParamUsesLlvmName(self: *LlvmEmitter, name: []const u8) bool {
         const params = self.current_params orelse return false;
-        for (params) |param| if (std.mem.eql(u8, param.name.text, name)) return true;
+        for (params) |param| if (std.mem.eql(u8, param.name, name)) return true;
         return false;
     }
 

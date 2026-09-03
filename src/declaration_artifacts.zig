@@ -2,7 +2,6 @@
 //! Backends consume these through `codegen_request`, not raw declaration slices.
 
 const ast = @import("ast.zig");
-const attr_syntax = @import("attr_syntax.zig");
 const codegen_attrs = @import("codegen_attrs.zig");
 const mir = @import("mir_model.zig");
 const module_parser = @import("module_parser.zig");
@@ -21,13 +20,14 @@ pub const ComptimeFunctionDeclarations = struct {
 
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
-    decl_artifacts: []const DeclArtifact,
+    /// Residual global initializer compatibility payloads only. Callable
+    /// declarations are module-owned CallableEmissionFact rows.
+    decl_artifacts: []const GlobalArtifact,
     comptime_functions: ComptimeFunctionDeclarations,
     source_map_artifacts: []const SourceMapArtifact,
 
     fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype, typed_mir: *const mir.Module) !EarlyDeclarationArtifacts {
-        var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
-        errdefer deinitDeclArtifacts(allocator, decl_artifacts.items);
+        var decl_artifacts: std.ArrayList(GlobalArtifact) = .empty;
         errdefer decl_artifacts.deinit(allocator);
         var comptime_functions: std.ArrayList(ast.FnDecl) = .empty;
         errdefer comptime_functions.deinit(allocator);
@@ -36,25 +36,13 @@ pub const EarlyDeclarationArtifacts = struct {
 
         for (resolved_decls, 0..) |item, ordinal| {
             const decl = item.decl;
-            const def_id = declarationDefId(item, ordinal);
+            _ = ordinal;
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
-                    const function_mir = functionByDefId(typed_mir, def_id);
-                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, false, function_mir);
-                    decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
-                        function.deinit(allocator);
-                        return err;
-                    };
                     if (fn_decl.is_const) try comptime_functions.append(allocator, fn_decl);
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
-                    const function_mir = functionByDefId(typed_mir, def_id);
-                    const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, true, function_mir);
-                    decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
-                        function.deinit(allocator);
-                        return err;
-                    };
                     if (fn_decl.is_const) try comptime_functions.append(allocator, fn_decl);
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
@@ -64,7 +52,7 @@ pub const EarlyDeclarationArtifacts = struct {
                     // Keep the source-map row, but never retain an AST-shaped
                     // global merely to emit a scalar fact or zeroed storage.
                     if (checked == null or typed_mir.checkedGlobalInitializer(checked.?) == null) {
-                        try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });
+                        try decl_artifacts.append(allocator, GlobalArtifact.fromDecl(global, checked));
                     }
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
@@ -144,7 +132,6 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
-        deinitDeclArtifacts(allocator, self.decl_artifacts);
         allocator.free(self.decl_artifacts);
         allocator.free(self.comptime_functions.functions);
         allocator.free(self.source_map_artifacts);
@@ -165,19 +152,6 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 };
 
-fn declarationDefId(item: anytype, ordinal: usize) mir.DefId {
-    if (@hasField(@TypeOf(item), "def_id") and item.def_id.isValid()) return item.def_id;
-    const file_id: u32 = if (@hasField(@TypeOf(item), "file_id")) @intFromEnum(item.file_id) else 0;
-    return .{ .file_id = file_id, .ordinal = @intCast(ordinal) };
-}
-
-fn deinitDeclArtifacts(allocator: std.mem.Allocator, artifacts: []const DeclArtifact) void {
-    for (artifacts) |artifact| switch (artifact) {
-        .function => |function| function.deinit(allocator),
-        else => {},
-    };
-}
-
 /// Transitional ordinary-codegen artifact view.
 ///
 /// Source-map row mechanics are deliberately excluded from `LowerRequest`; only
@@ -185,7 +159,7 @@ fn deinitDeclArtifacts(allocator: std.mem.Allocator, artifacts: []const DeclArti
 /// C/LLVM lowering from growing accidental source-map syntax ingress while the
 /// remaining declaration-shaped payload is migrated into verified MIR facts.
 pub const CodegenDeclarationArtifacts = struct {
-    decl_artifacts: []const DeclArtifact,
+    decl_artifacts: []const GlobalArtifact,
     // Borrowed frontend comptime provider.  It crosses the compatibility
     // request only so existing backend setup can initialize eval.
     comptime_functions: ComptimeFunctionDeclarations = .empty,
@@ -202,57 +176,6 @@ fn declOrigin(decl: ast.Decl) []const u8 {
         else => {},
     };
     return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
-}
-
-pub const FunctionArtifact = struct {
-    def_id: mir.DefId,
-    signature: codegen_attrs.FunctionSignatureFacts,
-    body_facts: codegen_attrs.FunctionBodyFacts,
-    render_attrs: codegen_attrs.FunctionRenderAttrs,
-
-    pub fn fromDecl(allocator: std.mem.Allocator, def_id: mir.DefId, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool, function_mir: ?mir.Function) !FunctionArtifact {
-        const return_ty: mir.ValueType = if (function_mir) |function| function.return_ty else .unknown;
-        const return_type_id: mir.SignatureTypeId = if (function_mir) |function| function.signature_return_type_id else .invalid;
-        const param_types: []const mir.ValueType = if (function_mir) |function| function.param_types else &.{};
-        const param_type_ids: []const mir.SignatureTypeId = if (function_mir) |function| function.signature_param_type_ids else &.{};
-        const params = try allocator.alloc(codegen_attrs.FunctionParamFact, fn_decl.params.len);
-        errdefer allocator.free(params);
-        for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param, if (i < param_types.len) param_types[i] else .unknown, if (i < param_type_ids.len) param_type_ids[i] else .invalid);
-        return .{
-            .def_id = def_id,
-            .signature = .{
-                .name = fn_decl.name,
-                .params = params,
-                .return_ty = return_ty,
-                .return_type_id = return_type_id,
-                .exported = fn_decl.exported,
-                .is_extern = is_extern,
-                .is_const = fn_decl.is_const,
-                .is_variadic = fn_decl.is_variadic,
-                .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi")),
-                .error_from = hasNamedAttr(attrs, "error_from"),
-                .backend_name = backendNameOverride(attrs),
-            },
-            .body_facts = .{
-                .has_definition = fn_decl.body != null,
-            },
-            .render_attrs = attr_syntax.functionRenderAttrs(attrs),
-        };
-    }
-
-    pub fn deinit(self: FunctionArtifact, allocator: std.mem.Allocator) void {
-        allocator.free(self.signature.params);
-    }
-};
-
-fn functionByDefId(module: *const mir.Module, def_id: mir.DefId) ?mir.Function {
-    if (!def_id.isValid()) return null;
-    for (module.functions, 0..) |function, index| {
-        if (!function.typed_def_id.eql(def_id)) continue;
-        if (index < module.checked_callables.len and module.checked_callables[index].kind == .global_initializer) continue;
-        return function;
-    }
-    return null;
 }
 
 pub const GlobalArtifact = struct {
@@ -285,11 +208,6 @@ fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalF
     }
     return null;
 }
-
-pub const DeclArtifact = union(enum) {
-    function: FunctionArtifact,
-    global: GlobalArtifact,
-};
 
 pub const SourceMapArtifact = union(enum) {
     global: Global,
@@ -420,21 +338,8 @@ test "declaration artifacts collect from resolved declaration stream" {
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer from_resolved.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), from_resolved.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), from_resolved.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 3), from_resolved.source_map_artifacts.len);
-    var saw_function = false;
-    for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
-        .function => |function| {
-            try std.testing.expectEqualStrings("inc", function.signature.name.text);
-            try std.testing.expect(function.def_id.eql(.{ .file_id = 0, .ordinal = 2 }));
-            try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.return_ty));
-            try std.testing.expectEqual(@as(usize, 1), function.signature.params.len);
-            try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.params[0].value_ty));
-            saw_function = true;
-        },
-        .global => return error.TestUnexpectedResult,
-    };
-    try std.testing.expect(saw_function);
 }
 
 test "declaration artifacts omit folded scalar const globals but retain source-map rows" {
@@ -458,10 +363,6 @@ test "declaration artifacts omit folded scalar const globals but retain source-m
     var artifacts = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer artifacts.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 2), artifacts.source_map_artifacts.len);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        .function => |function| try std.testing.expectEqualStrings("read", function.signature.name.text),
-    };
 }

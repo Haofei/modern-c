@@ -5420,10 +5420,7 @@ test "LLVM renders mutable scalar globals from verified initializer plans" {
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5461,10 +5458,7 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5491,10 +5485,7 @@ test "LLVM renders pure array literals from syntax-free aggregate plans" {
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-        .global => return error.TestUnexpectedResult,
-        else => {},
-    };
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(

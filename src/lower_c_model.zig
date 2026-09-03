@@ -7,7 +7,6 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const codegen_signature = @import("codegen_signature.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const mir = @import("mir.zig");
@@ -66,7 +65,7 @@ pub const LoopJumps = struct {
 };
 
 pub const FnInfo = struct {
-    params: []const codegen_signature.FunctionParamFact,
+    params: []const mir.CallableParameterEmissionFact,
     return_ty: mir.ValueType,
     return_type_id: mir.SignatureTypeId,
     is_extern: bool,

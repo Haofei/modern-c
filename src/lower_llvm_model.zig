@@ -34,7 +34,7 @@ pub const FnSig = struct {
 /// from the module-owned signature table solely for legacy expression-body
 /// rendering; declaration artifacts never carry it.
 pub const FnParam = struct {
-    name: ast_bridge.Ident,
+    name: []const u8,
     value_ty: mir_model.ValueType,
     type_id: mir_model.SignatureTypeId,
     ty: ast_bridge.TypeExpr,

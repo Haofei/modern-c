@@ -3,6 +3,7 @@ const std = @import("std");
 const array_len = @import("array_len.zig");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const attr_syntax = @import("attr_syntax.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const expr_syntax = @import("expr_syntax.zig");
@@ -693,6 +694,8 @@ pub const ExecutableBody = mir_model.ExecutableBody;
 pub const executableCheckedBinaryTrapRequirements = mir_model.executableCheckedBinaryTrapRequirements;
 pub const CallableKind = mir_model.CallableKind;
 pub const CheckedCallableFact = mir_model.CheckedCallableFact;
+pub const CallableEmissionFact = mir_model.CallableEmissionFact;
+pub const CallableParameterEmissionFact = mir_model.CallableParameterEmissionFact;
 pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
@@ -1288,6 +1291,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         }
         checked_callables.deinit(allocator);
     }
+    var callable_emission_facts: std.ArrayList(CallableEmissionFact) = .empty;
+    errdefer {
+        for (callable_emission_facts.items) |fact| if (fact.params.len != 0) allocator.free(fact.params);
+        callable_emission_facts.deinit(allocator);
+    }
     var checked_globals: std.ArrayList(CheckedGlobalFact) = .empty;
     errdefer checked_globals.deinit(allocator);
     var type_alias_facts: std.ArrayList(TypeAliasFact) = .empty;
@@ -1635,6 +1643,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         var checked_param_types_unowned = true;
                         errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
                         try applyCheckedCallableFact(allocator, &function, checked);
+                        try callable_emission_facts.append(allocator, try buildCallableEmissionFact(allocator, typed_def_id, typed_source_id, fn_decl, decl.attrs, checked));
                         try checked_callables.append(allocator, checked);
                         checked_param_types_unowned = false;
                         checked_signature_param_type_ids_unowned = false;
@@ -1669,6 +1678,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     checked.param_types = try allocator.dupe(ValueType, param_types);
                     var checked_param_types_unowned = true;
                     errdefer if (checked_param_types_unowned and checked.param_types.len != 0) allocator.free(checked.param_types);
+                    try callable_emission_facts.append(allocator, try buildCallableEmissionFact(allocator, typed_def_id, typed_source_id, fn_decl, decl.attrs, checked));
                     try checked_callables.append(allocator, checked);
                     checked_param_types_unowned = false;
                     checked_signature_param_type_ids_unowned = false;
@@ -1728,6 +1738,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirSymbolIdentity;
         identity.kind = .global;
         identity.mutable = !checked_global.is_const;
+    }
+    for (checked_callables.items) |checked| {
+        if (checked.kind != .function and checked.kind != .extern_function) continue;
+        if (!checked.symbol_id.isValid() or checked.symbol_id.index() >= symbol_identities.len)
+            return error.InvalidMirSymbolIdentity;
+        const identity = &symbol_identities[checked.symbol_id.index()];
+        if (!identity.id.eql(checked.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .function))
+            return error.InvalidMirSymbolIdentity;
+        identity.kind = .function;
     }
     for (type_alias_facts.items) |fact| {
         if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbol_identities.len or
@@ -1806,6 +1826,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         }
         allocator.free(checked_callables_slice);
     }
+    const callable_emission_facts_slice = try callable_emission_facts.toOwnedSlice(allocator);
+    errdefer {
+        for (callable_emission_facts_slice) |fact| if (fact.params.len != 0) allocator.free(fact.params);
+        allocator.free(callable_emission_facts_slice);
+    }
     const checked_globals_slice = try checked_globals.toOwnedSlice(allocator);
     errdefer allocator.free(checked_globals_slice);
     const type_alias_facts_slice = try type_alias_facts.toOwnedSlice(allocator);
@@ -1852,6 +1877,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .source_identities = source_identities,
         .signature_types = signature_type_table,
         .checked_callables = checked_callables_slice,
+        .callable_emission_facts = callable_emission_facts_slice,
         .checked_globals = checked_globals_slice,
         .type_aliases = type_alias_facts_slice,
         .enums = enum_facts_slice,
@@ -2154,6 +2180,34 @@ fn resolveEnumFactForSignatureType(
         } else return null;
     }
     return null;
+}
+
+fn buildCallableEmissionFact(
+    allocator: std.mem.Allocator,
+    def_id: DefId,
+    source_id: SourceId,
+    fn_decl: ast.FnDecl,
+    attrs: []const ast.Attr,
+    checked: CheckedCallableFact,
+) !CallableEmissionFact {
+    if (!def_id.isValid() or !checked.def_id.eql(def_id) or !checked.symbol_id.isValid() or
+        checked.param_types.len != fn_decl.params.len or checked.signature_param_type_ids.len != fn_decl.params.len)
+        return error.InvalidMirCallableEmissionFacts;
+    const params = try allocator.alloc(CallableParameterEmissionFact, fn_decl.params.len);
+    errdefer allocator.free(params);
+    for (fn_decl.params, 0..) |param, index| params[index] = .{ .spelling = param.name.text };
+    return .{
+        .def_id = def_id,
+        .symbol_id = checked.symbol_id,
+        .source_id = source_id,
+        .declaration_source = sourcePointFromSpan(fn_decl.name.span),
+        .params = params,
+        .exported = fn_decl.exported,
+        .is_const = fn_decl.is_const,
+        .error_from = hasAttr(attrs, "error_from"),
+        .backend_name = attr_syntax.backendNameOverride(attrs),
+        .render_attrs = attr_syntax.functionRenderAttrs(attrs),
+    };
 }
 
 fn applyCheckedCallableFact(allocator: std.mem.Allocator, function: *Function, checked: CheckedCallableFact) !void {
@@ -4592,6 +4646,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirTaggedUnionFacts,
     InvalidMirStructFacts,
     InvalidMirGlobalInitializerFacts,
+    InvalidMirCallableEmissionFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4627,6 +4682,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateTaggedUnionFactsForLowering(module);
     try validateStructFactsForLowering(module);
     try validateGlobalInitializerFactsForLowering(module);
+    try validateCallableEmissionFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
@@ -4800,6 +4856,48 @@ fn validateStructFactsForLowering(module: Module) error{InvalidMirStructFacts}!v
         for (module.packed_bits) |packed_bits_fact| if (packed_bits_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
         for (module.overlay_unions) |overlay_union_fact| if (overlay_union_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
         for (module.tagged_unions) |tagged_union_fact| if (tagged_union_fact.symbol_id.eql(fact.symbol_id)) return error.InvalidMirStructFacts;
+    }
+}
+
+fn validateCallableEmissionFactsForLowering(module: Module) error{InvalidMirCallableEmissionFacts}!void {
+    for (module.callable_emission_facts, 0..) |fact, index| {
+        if (!fact.def_id.isValid() or !fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len)
+            return error.InvalidMirCallableEmissionFacts;
+        const identity = module.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or identity.kind != .function) return error.InvalidMirCallableEmissionFacts;
+        if (fact.source_id.isValid()) {
+            if (fact.source_id.index() >= module.source_identities.len or !module.source_identities[fact.source_id.index()].id.eql(fact.source_id))
+                return error.InvalidMirCallableEmissionFacts;
+            if (fact.declaration_source.file_id != diagnostics.invalid_file_id and
+                fact.declaration_source.file_id != module.source_identities[fact.source_id.index()].file_id)
+                return error.InvalidMirCallableEmissionFacts;
+        }
+        if (fact.backend_name) |name| if (name.len == 0) return error.InvalidMirCallableEmissionFacts;
+        if (fact.render_attrs.effective_align) |alignment| if (alignment == 0) return error.InvalidMirCallableEmissionFacts;
+        var checked_count: usize = 0;
+        var checked: ?CheckedCallableFact = null;
+        for (module.checked_callables) |candidate| {
+            if (!candidate.def_id.eql(fact.def_id)) continue;
+            checked_count += 1;
+            checked = candidate;
+        }
+        if (checked_count != 1) return error.InvalidMirCallableEmissionFacts;
+        const callable = checked.?;
+        if (!callable.symbol_id.eql(fact.symbol_id) or !callable.source_id.eql(fact.source_id) or
+            (callable.kind != .function and callable.kind != .extern_function) or
+            fact.params.len != callable.param_count or fact.params.len != callable.param_types.len or
+            fact.params.len != callable.signature_param_type_ids.len)
+            return error.InvalidMirCallableEmissionFacts;
+        for (fact.params, 0..) |param, param_index| {
+            if (param.spelling.len == 0)
+                return error.InvalidMirCallableEmissionFacts;
+            for (fact.params[0..param_index]) |prior| if (std.mem.eql(u8, prior.spelling, param.spelling)) return error.InvalidMirCallableEmissionFacts;
+        }
+        for (module.callable_emission_facts[0..index]) |prior| if (prior.def_id.eql(fact.def_id) or prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirCallableEmissionFacts;
+    }
+    for (module.checked_callables) |callable| {
+        if (callable.kind != .function and callable.kind != .extern_function) continue;
+        if (module.callableEmissionFact(callable.def_id) == null) return error.InvalidMirCallableEmissionFacts;
     }
 }
 

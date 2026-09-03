@@ -4119,6 +4119,30 @@ test "MIR type alias facts are syntax-free and fail closed" {
     try std.testing.expectError(error.InvalidMirTypeAliasFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "MIR callable emission facts are syntax-free and fail closed" {
+    const source =
+        \\#[backend_name("checked_increment")]
+        \\fn increment(value: u32) -> u32 { return value + 1; }
+        \\extern fn sink(value: u32) -> void;
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_callable_emission_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), module_mir.callable_emission_facts.len);
+    const increment = module_mir.callableEmissionFact(functionByName(module_mir, "increment").?.typed_def_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", increment.params[0].spelling);
+    try std.testing.expectEqualStrings("checked_increment", increment.backend_name.?);
+    try std.testing.expect(increment.symbol_id.isValid());
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.callable_emission_facts[0].params;
+    module_mir.callable_emission_facts[0].params = &.{};
+    defer module_mir.callable_emission_facts[0].params = saved;
+    try std.testing.expectError(error.InvalidMirCallableEmissionFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "MIR enum facts are syntax-free and fail closed" {
     const source =
         \\open enum Status: i8 { negative = -1, ready = 'R' }

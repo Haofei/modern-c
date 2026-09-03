@@ -9,6 +9,7 @@ const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const ArrayInfo = lower_c_model.ArrayInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
@@ -123,12 +124,12 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
 }
 
-pub fn emitFunctionSignature(ctx: Context, fn_decl: anytype, ret: []const u8, param_types: []const []const u8, is_static: bool, with_asm_label: bool) !void {
-    const cname = try ctx.c_ident(ctx.emit_ctx, fn_decl.name.text);
+pub fn emitFunctionSignature(ctx: Context, name: []const u8, params: []const mir.CallableParameterEmissionFact, is_variadic: bool, ret: []const u8, param_types: []const []const u8, is_static: bool, with_asm_label: bool) !void {
+    const cname = try ctx.c_ident(ctx.emit_ctx, name);
     try emitFunctionSignaturePrefix(ctx, ret, cname, is_static);
-    try emitFunctionSignatureParams(ctx, fn_decl, param_types);
+    try emitFunctionSignatureParams(ctx, params, is_variadic, param_types);
     try ctx.out.appendSlice(ctx.allocator, ")");
-    try emitFunctionBackendAsmLabel(ctx, fn_decl, with_asm_label);
+    try emitFunctionBackendAsmLabel(ctx, name, with_asm_label);
 }
 
 fn emitFunctionSignaturePrefix(ctx: Context, ret: []const u8, cname: []const u8, is_static: bool) !void {
@@ -139,25 +140,25 @@ fn emitFunctionSignaturePrefix(ctx: Context, ret: []const u8, cname: []const u8,
     }
 }
 
-fn emitFunctionSignatureParams(ctx: Context, fn_decl: anytype, param_types: []const []const u8) !void {
-    if (param_types.len != fn_decl.params.len) return error.InvalidFunctionSignature;
-    if (fn_decl.params.len == 0) {
-        try ctx.out.appendSlice(ctx.allocator, if (fn_decl.is_variadic) "" else "void");
+fn emitFunctionSignatureParams(ctx: Context, params: []const mir.CallableParameterEmissionFact, is_variadic: bool, param_types: []const []const u8) !void {
+    if (param_types.len != params.len) return error.InvalidFunctionSignature;
+    if (params.len == 0) {
+        try ctx.out.appendSlice(ctx.allocator, if (is_variadic) "" else "void");
     } else {
-        for (fn_decl.params, 0..) |param, i| {
+        for (params, 0..) |param, i| {
             if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-            try emitIgnoredLocalPrefix(ctx, param.name.text);
-            try ctx.out.print(ctx.allocator, "{s} {s}", .{ param_types[i], try ctx.c_ident(ctx.emit_ctx, param.name.text) });
+            try emitIgnoredLocalPrefix(ctx, param.spelling);
+            try ctx.out.print(ctx.allocator, "{s} {s}", .{ param_types[i], try ctx.c_ident(ctx.emit_ctx, param.spelling) });
         }
     }
-    if (fn_decl.is_variadic) {
+    if (is_variadic) {
         try ctx.out.appendSlice(ctx.allocator, ", ...");
     }
 }
 
-fn emitFunctionBackendAsmLabel(ctx: Context, fn_decl: anytype, with_asm_label: bool) !void {
+fn emitFunctionBackendAsmLabel(ctx: Context, name: []const u8, with_asm_label: bool) !void {
     if (!with_asm_label) return;
-    const backend = ctx.backend_names.get(fn_decl.name.text) orelse return;
+    const backend = ctx.backend_names.get(name) orelse return;
     try ctx.out.appendSlice(ctx.allocator, " __asm__(\"");
     try ctx.out.appendSlice(ctx.allocator, backend);
     try ctx.out.appendSlice(ctx.allocator, "\")");

@@ -89,9 +89,12 @@ Active work proceeds in dependency order: finish globals, remove the backend
 comptime provider, delete remaining MIR compatibility projections, then close
 `LowerRequest`. Advanced language forms stay frozen during this cutover.
 
-The callable-signature ingress is closed: parameter and return types are owned
-by `SignatureTypeTable`, and neither `FunctionParamFact` nor
-`FunctionSignatureFacts` retains a source `TypeExpr`.
+The callable ingress is closed: `CallableEmissionFact` owns render-only
+callable details while `CheckedCallableFact` and `SignatureTypeTable` own its
+signature. `FunctionArtifact`, `FunctionSignatureFacts`, and the callable arm
+of `DeclArtifact` are deleted. The only remaining callable AST compatibility
+provider is `ComptimeFunctionDeclarations`, which is restricted to const
+evaluation and is tracked by the separate backend-comptime cutover.
 
 ## Patch rules
 
