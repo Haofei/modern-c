@@ -3059,12 +3059,14 @@ pub const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = function.signature.name.text;
         defer self.current_function = previous_function;
-        // Signature types are rendered from the module-owned type table.
         if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionTypes(fn_mir);
     }
 
     fn collectMirFunctionTypes(self: *CEmitter, fn_mir: *const mir.Function) !void {
-        for (fn_mir.target_type_facts) |fact| try self.emitSignatureTypeDefinition(fact.target_type_id);
+        for (fn_mir.target_type_facts) |fact| {
+            const ty = try self.signatureTypeExpr(fact.target_type_id, spanFromSourcePoint(fact.source));
+            try self.collectTypeArtifacts(ty);
+        }
     }
 
     fn collectTypeArtifacts(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {

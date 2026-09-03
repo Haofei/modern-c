@@ -5787,7 +5787,7 @@ test "LLVM target-typed char literals require MIR facts" {
         try renameTargetTypeFactForFunction(&module_mir, "char_value", .char_literal, "u8");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_char_literal_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_char_literal_facts.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -8081,7 +8081,7 @@ test "LLVM atomic init requires MIR identity and complete types" {
         try renameTargetTypeFactForFunction(&stale_payload, name, .atomic_init_payload, "bool");
         var stale_payload_output: std.ArrayList(u8) = .empty;
         defer stale_payload_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_payload, &stale_payload_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_payload, &stale_payload_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null));
 
         var stale_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale_result.deinit();
@@ -8304,7 +8304,7 @@ test "LLVM raw-many offset consumes MIR identity and complete types" {
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
@@ -8320,7 +8320,7 @@ test "LLVM raw-many offset consumes MIR identity and complete types" {
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_deref_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -8354,7 +8354,7 @@ test "LLVM inferred local try payloads require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "result_local", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_try_payloads.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_try_payloads.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM grouped expressions consume their own MIR result facts" {
@@ -8619,7 +8619,7 @@ test "LLVM nested array member and index results require MIR expression facts" {
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_array_member_expression_result_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_array_member_expression_result_facts.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -8724,7 +8724,7 @@ test "LLVM MMIO calls consume MIR identities and complete types" {
         try renameTargetTypeFactForFunction(&module_mir, "mmio_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_mmio_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_mmio_facts.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -9065,7 +9065,7 @@ test "LLVM runtime asserts require MIR bool condition types" {
     try renameTargetTypeFactForFunction(&stale, "require_flag", .assert_condition, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_assert_condition_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_assert_condition_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM emits runtime assert from MIR without body fallback" {
@@ -9108,7 +9108,7 @@ test "LLVM while loops require MIR bool condition types" {
     try renameTargetTypeFactForFunction(&stale, "wait_for_flag", .loop_condition, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_loop_condition_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_loop_condition_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM emits void-returning while loop from MIR without body fallback" {
@@ -9311,7 +9311,7 @@ test "LLVM try expressions require MIR operand and result types" {
         try renameTargetTypeFactForFunction(&stale_result, name, .expression_result, "u64");
         var stale_result_output: std.ArrayList(u8) = .empty;
         defer stale_result_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -9347,7 +9347,7 @@ test "LLVM for loops require MIR iterable and element types" {
         try renameTargetTypeFactForFunction(&stale, "array_loop", kind, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_for_loop_type_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_for_loop_type_facts.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -9384,7 +9384,7 @@ test "LLVM inferred local copies require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "copies", .inferred_local, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_copy_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_copy_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local casts require MIR types" {
@@ -9528,14 +9528,14 @@ test "LLVM inferred local literals require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "literals", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_literal_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_literal_types.mc", .{}, false, .riscv64, null));
 
     var stale_literal_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_literal_result.deinit();
     try renameTargetTypeFactForFunction(&stale_literal_result, "literals", .expression_result, "u64");
     var stale_literal_result_output: std.ArrayList(u8) = .empty;
     defer stale_literal_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_literal_result, &stale_literal_result_output, "llvm_inferred_local_literal_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_literal_result, &stale_literal_result_output, "llvm_inferred_local_literal_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM sequenced comparison literals require MIR result types" {
@@ -9662,7 +9662,7 @@ test "LLVM inferred local unary expressions require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "unary", .inferred_local, "i32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_unary_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_unary_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local direct calls require MIR types" {
@@ -9748,7 +9748,7 @@ test "LLVM inferred local Result direct calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_result_call_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_result_call_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local indirect calls require MIR types" {
@@ -9782,7 +9782,7 @@ test "LLVM inferred local indirect calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_indirect_call_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_indirect_call_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local atomic and MaybeUninit calls require MIR types" {
@@ -9830,7 +9830,7 @@ test "LLVM inferred local atomic and MaybeUninit calls require MIR types" {
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_builtin_inferred_local_types.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_builtin_inferred_local_types.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -9864,7 +9864,7 @@ test "LLVM inferred local phys calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_phys", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_phys_local_type.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_phys_local_type.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local bitcast calls require MIR types" {
@@ -9896,7 +9896,7 @@ test "LLVM inferred local bitcast calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_bitcast", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_bitcast_local_type.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_bitcast_local_type.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local byte-view calls require MIR types" {
@@ -9937,7 +9937,7 @@ test "LLVM inferred local byte-view calls require MIR types" {
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_byte_view_local_types.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_byte_view_local_types.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -9971,7 +9971,7 @@ test "LLVM inferred local enum raw calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_enum_raw", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_enum_raw_local_type.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_enum_raw_local_type.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local conversion calls require MIR types" {
@@ -10036,7 +10036,7 @@ test "LLVM inferred local reflection calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_reflection", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_reflection_local_type.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_reflection_local_type.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local semantic escape calls require MIR types" {
@@ -10072,7 +10072,7 @@ test "LLVM inferred local semantic escape calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_noalias", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_semantic_escape_local_type.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_semantic_escape_local_type.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local raw result calls require MIR types" {
@@ -10120,7 +10120,7 @@ test "LLVM inferred local raw result calls require MIR types" {
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_raw_local_types.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_raw_local_types.mc", .{}, false, .riscv64, null));
     }
 }
 
@@ -10166,14 +10166,14 @@ test "LLVM rejects experimental dynamic trait dispatch at codegen admission" {
     try renameTargetTypeFactForFunction(&stale, "caller", .dyn_dispatch_result, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null));
 
     var stale_argument = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_argument.deinit();
     try renameTargetTypeFactForFunction(&stale_argument, "caller", .dyn_dispatch_argument, "u64");
     var stale_argument_output: std.ArrayList(u8) = .empty;
     defer stale_argument_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, "llvm_inferred_local_dyn_dispatch_call_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM rejects a global dynamic trait carrier at codegen admission" {
@@ -10242,7 +10242,7 @@ test "LLVM ordinary direct calls require MIR result and argument types" {
     try renameTargetTypeFactForFunction(&stale, "caller", .direct_call_result, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_direct_call_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_direct_call_type_facts.mc", .{}, false, .riscv64, null));
 
     var stale_signature = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_signature.deinit();

@@ -6113,7 +6113,7 @@ test "lower-c target-typed char literals require MIR facts" {
         try renameTargetTypeFactForFunction(&module_mir, "char_value", .char_literal, "u8");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null));
     }
 }
 
@@ -6766,7 +6766,7 @@ test "lower-c cast deref pointee requires MIR expression result" {
     try renameTargetTypeFactAtOffsetForFunction(&stale, "read", .expression_result, cast_offset, cast_text.len, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
 }
 
 test "lower-c member deref pointee requires MIR expression result" {
@@ -6799,7 +6799,7 @@ test "lower-c member deref pointee requires MIR expression result" {
     try renameTargetTypeFactAtOffsetForFunction(&stale, "read", .expression_result, member_offset, member_text.len, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null));
 }
 
 test "lower-c implicit view const narrowing requires MIR source and target type facts" {
@@ -7526,7 +7526,7 @@ test "lower-c atomic init requires MIR identity and complete types" {
         try renameTargetTypeFactForFunction(&stale_payload, name, .atomic_init_payload, "bool");
         var stale_payload_output: std.ArrayList(u8) = .empty;
         defer stale_payload_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_payload, &stale_payload_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_payload, &stale_payload_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
 
         var stale_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale_result.deinit();
@@ -7771,7 +7771,7 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
@@ -7787,7 +7787,7 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_deref_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
 }
 
@@ -7821,7 +7821,7 @@ test "lower-c inferred local try payloads require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "result_local", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null));
 }
 
 test "lower-c grouped expressions consume their own MIR result facts" {
@@ -8356,7 +8356,7 @@ test "lower-c MMIO calls consume MIR identities and complete types" {
         try renameTargetTypeFactForFunction(&module_mir, "mmio_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
 }
 
@@ -8711,7 +8711,7 @@ test "lower-c runtime asserts require MIR bool condition types" {
     try renameTargetTypeFactForFunction(&stale, "require_flag", .assert_condition, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c emits runtime assert from MIR without body fallback" {
@@ -8755,7 +8755,7 @@ test "lower-c while loops require MIR bool condition types" {
     try renameTargetTypeFactForFunction(&stale, "wait_for_flag", .loop_condition, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c emits void-returning while loop from MIR without body fallback" {
@@ -8965,7 +8965,7 @@ test "lower-c try expressions require MIR operand and result types" {
         try renameTargetTypeFactForFunction(&stale_result, name, .expression_result, "u64");
         var stale_result_output: std.ArrayList(u8) = .empty;
         defer stale_result_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -9001,7 +9001,7 @@ test "lower-c for loops require MIR iterable and element types" {
         try renameTargetTypeFactForFunction(&stale, "array_loop", kind, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -9036,7 +9036,7 @@ test "lower-c inferred local copies require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "copies", .inferred_local, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local casts require MIR types" {
@@ -9118,7 +9118,7 @@ test "lower-c float cast operands require MIR result type" {
     try renameTargetTypeFactAtOffsetForFunction(&stale_cast_result, "cast_float", .expression_result, cast_offset, "value as f32".len, "u32");
     var stale_cast_result_output: std.ArrayList(u8) = .empty;
     defer stale_cast_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_cast_result, &stale_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_cast_result, &stale_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local binary expressions require MIR types" {
@@ -9218,14 +9218,14 @@ test "lower-c inferred local literals require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "literals", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 
     var stale_literal_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_literal_result.deinit();
     try renameTargetTypeFactForFunction(&stale_literal_result, "literals", .expression_result, "u64");
     var stale_literal_result_output: std.ArrayList(u8) = .empty;
     defer stale_literal_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_literal_result, &stale_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_literal_result, &stale_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 }
 
 test "lower-c sequenced comparison literals require MIR result types" {
@@ -9353,7 +9353,7 @@ test "lower-c inferred local unary expressions require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "unary", .inferred_local, "i32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local direct calls require MIR types" {
@@ -9494,14 +9494,14 @@ test "lower-c inferred local array and slice calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale_array, "array_caller", .inferred_local, "u64");
     var stale_array_output: std.ArrayList(u8) = .empty;
     defer stale_array_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_array, &stale_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_array, &stale_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
     var stale_array_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_array_result.deinit();
     try renameTargetTypeFactForFunction(&stale_array_result, "array_caller", .direct_call_result, "u64");
     var stale_array_result_output: std.ArrayList(u8) = .empty;
     defer stale_array_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_array_result, &stale_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_array_result, &stale_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
     var missing_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_slice_result.deinit();
@@ -9515,14 +9515,14 @@ test "lower-c inferred local array and slice calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale_slice, "slice_caller", .inferred_local, "u64");
     var stale_slice_output: std.ArrayList(u8) = .empty;
     defer stale_slice_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_slice, &stale_slice_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_slice, &stale_slice_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
     var stale_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_slice_result.deinit();
     try renameTargetTypeFactForFunction(&stale_slice_result, "slice_caller", .direct_call_result, "u64");
     var stale_slice_result_output: std.ArrayList(u8) = .empty;
     defer stale_slice_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
     var missing_direct_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_direct_slice_result.deinit();
@@ -9536,7 +9536,7 @@ test "lower-c inferred local array and slice calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale_direct_slice_result, "direct_slice_index", .direct_call_result, "u64");
     var stale_direct_slice_result_output: std.ArrayList(u8) = .empty;
     defer stale_direct_slice_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_direct_slice_result, &stale_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_direct_slice_result, &stale_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local enum and tagged-union calls require MIR types" {
@@ -9578,7 +9578,7 @@ test "lower-c inferred local enum and tagged-union calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale_enum_result, "enum_caller", .direct_call_result, "u64");
     var stale_enum_result_output: std.ArrayList(u8) = .empty;
     defer stale_enum_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_enum_result, &stale_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_enum_result, &stale_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
 
     var missing_union_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_union_result.deinit();
@@ -9592,7 +9592,7 @@ test "lower-c inferred local enum and tagged-union calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale_union_result, "union_caller", .direct_call_result, "u64");
     var stale_union_result_output: std.ArrayList(u8) = .empty;
     defer stale_union_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_union_result, &stale_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_union_result, &stale_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local Result direct calls require MIR types" {
@@ -9631,7 +9631,7 @@ test "lower-c inferred local Result direct calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local indirect calls require MIR types" {
@@ -9663,7 +9663,7 @@ test "lower-c inferred local indirect calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local atomic and MaybeUninit calls require MIR types" {
@@ -9709,7 +9709,7 @@ test "lower-c inferred local atomic and MaybeUninit calls require MIR types" {
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null));
     }
 }
 
@@ -9743,7 +9743,7 @@ test "lower-c inferred local phys calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_phys", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local bitcast calls require MIR types" {
@@ -9775,7 +9775,7 @@ test "lower-c inferred local bitcast calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_bitcast", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local byte-view calls require MIR types" {
@@ -9816,7 +9816,7 @@ test "lower-c inferred local byte-view calls require MIR types" {
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null));
     }
 }
 
@@ -9850,7 +9850,7 @@ test "lower-c inferred local enum raw calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_enum_raw", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local conversion calls require MIR types" {
@@ -9913,7 +9913,7 @@ test "lower-c inferred local reflection calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_reflection", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local semantic escape calls require MIR types" {
@@ -9948,7 +9948,7 @@ test "lower-c inferred local semantic escape calls require MIR types" {
     try renameTargetTypeFactForFunction(&stale, "inferred_noalias", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local raw result calls require MIR types" {
@@ -9991,7 +9991,7 @@ test "lower-c inferred local raw result calls require MIR types" {
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
     }
 }
 
@@ -10042,14 +10042,14 @@ test "lower-c rejects experimental dynamic trait dispatch at codegen admission" 
     try renameTargetTypeFactForFunction(&stale, "caller", .dyn_dispatch_result, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 
     var stale_argument = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_argument.deinit();
     try renameTargetTypeFactForFunction(&stale_argument, "caller", .dyn_dispatch_argument, "u64");
     var stale_argument_output: std.ArrayList(u8) = .empty;
     defer stale_argument_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 }
 
 test "lower-c rejects a global dynamic trait carrier at codegen admission" {
@@ -10138,7 +10138,7 @@ test "lower-c ordinary direct calls require MIR result and argument types" {
     try renameTargetTypeFactForFunction(&stale, "caller", .direct_call_argument, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c indirect calls require MIR callee signature facts" {
