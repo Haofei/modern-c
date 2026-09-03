@@ -307,7 +307,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     codegen_request.rejectExperimentalDynamicTraits(program, reporter) catch |err| switch (err) {
         error.ExperimentalDynamicTraitCodegen => return error.UnsupportedLlvmEmission,
     };
-    const comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifacts(early_metadata);
+    const comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(early_metadata, program.typed_mir.signature_types);
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -547,7 +547,7 @@ const LlvmEmitter = struct {
     }
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: CodegenDeclArtifacts) !void {
-        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromCodegenArtifacts(artifacts), &self.const_fns);
+        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(artifacts, self.mir_module.signature_types), &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -720,8 +720,9 @@ const LlvmEmitter = struct {
 
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const sig = global.signature;
-        const ty = sig.ty orelse return error.UnsupportedLlvmEmission;
+        const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
         _ = try self.llvmType(ty);
+        if (!std.mem.eql(u8, try self.llvmSignatureType(sig.type_id), try self.llvmType(ty))) return error.UnsupportedLlvmEmission;
         try self.global_types.put(sig.name.text, ty);
         try self.global_is_const.put(sig.name.text, sig.is_const);
         if (sig.is_const) {
@@ -787,16 +788,17 @@ const LlvmEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = sig.name.text;
         defer self.current_function = previous_function;
-        const ty = sig.ty orelse return error.UnsupportedLlvmEmission;
+        const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
         const initializer_mir = self.globalInitializerMir(init_facts.body_id);
         const body = if (initializer_mir) |function| &function.executable_body else &mir.ExecutableBody{};
         const llvm_ty = if (sig.value_ty == .value)
-            try self.llvmType(ty)
+            try self.llvmSignatureType(sig.type_id)
         else
             mir_executable_llvm.renderType(self.scratch.allocator(), body, sig.value_ty, null) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmType(ty),
+                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(sig.type_id),
                 else => return err,
             };
+        if (!std.mem.eql(u8, llvm_ty, try self.llvmSignatureType(sig.type_id))) return error.UnsupportedLlvmEmission;
         // `extern global NAME: T;` — a declaration only; storage lives in another unit.
         if (sig.is_extern) {
             try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ sig.name.text, llvm_ty });
@@ -9617,45 +9619,64 @@ const LlvmEmitter = struct {
                 return value;
             }
         }.make;
-        return .{ .span = span, .kind = switch (shape) {
-            .name => |name| .{ .name = .{ .text = name, .span = span } },
-            .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
-            .member => |node| .{ .member = .{
-                .base = try child(self, node.base, span),
-                .field = .{ .text = node.field, .span = span },
-            } },
-            .nullable => |node| .{ .nullable = try child(self, node, span) },
-            .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
-            .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
-            .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
-            .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) { .none => .none, .mut => .mut, .constant => .@"const" }, .child = try child(self, node.child, span) } },
-            .array => |node| blk: {
-                const length = node.length orelse return error.UnsupportedLlvmEmission;
-                const text = try std.fmt.allocPrint(alloc, "{d}", .{length});
-                break :blk .{ .array = .{
-                    .len = .{ .span = span, .kind = .{ .int_literal = text } },
-                    .child = try child(self, node.child, span),
-                } };
+        return .{
+            .span = span,
+            .kind = switch (shape) {
+                .name => |name| .{ .name = .{ .text = name, .span = span } },
+                .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
+                .member => |node| .{ .member = .{
+                    .base = try child(self, node.base, span),
+                    .field = .{ .text = node.field, .span = span },
+                } },
+                .nullable => |node| .{ .nullable = try child(self, node, span) },
+                .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) {
+                    .none => .none,
+                    .mut => .mut,
+                    .constant => .@"const",
+                }, .child = try child(self, node.child, span) } },
+                .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) {
+                    .none => .none,
+                    .mut => .mut,
+                    .constant => .@"const",
+                }, .child = try child(self, node.child, span) } },
+                .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) {
+                    .none => .none,
+                    .mut => .mut,
+                    .constant => .@"const",
+                }, .child = try child(self, node.child, span) } },
+                .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) {
+                    .none => .none,
+                    .mut => .mut,
+                    .constant => .@"const",
+                }, .child = try child(self, node.child, span) } },
+                .array => |node| blk: {
+                    const length = node.length orelse return error.UnsupportedLlvmEmission;
+                    const text = try std.fmt.allocPrint(alloc, "{d}", .{length});
+                    break :blk .{ .array = .{
+                        .len = .{ .span = span, .kind = .{ .int_literal = text } },
+                        .child = try child(self, node.child, span),
+                    } };
+                },
+                .generic => |node| blk: {
+                    const args = try alloc.alloc(TransitionalTypeExpr, node.args.len);
+                    for (node.args, 0..) |arg, index| args[index] = try self.signatureTypeExpr(arg, span);
+                    break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
+                },
+                .fn_pointer => |node| blk: {
+                    const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
+                    for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
+                    break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(self, node.ret, span) } };
+                },
+                .closure_type => |node| blk: {
+                    const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
+                    for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
+                    break :blk .{ .closure_type = .{ .params = params, .ret = try child(self, node.ret, span) } };
+                },
+                // Dynamic trait codegen is explicitly not qualified.  Do not
+                // invent a source-shaped fallback while materializing signatures.
+                .dyn_trait => return error.UnsupportedLlvmEmission,
             },
-            .generic => |node| blk: {
-                const args = try alloc.alloc(TransitionalTypeExpr, node.args.len);
-                for (node.args, 0..) |arg, index| args[index] = try self.signatureTypeExpr(arg, span);
-                break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
-            },
-            .fn_pointer => |node| blk: {
-                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
-                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
-                break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(self, node.ret, span) } };
-            },
-            .closure_type => |node| blk: {
-                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
-                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
-                break :blk .{ .closure_type = .{ .params = params, .ret = try child(self, node.ret, span) } };
-            },
-            // Dynamic trait codegen is explicitly not qualified.  Do not
-            // invent a source-shaped fallback while materializing signatures.
-            .dyn_trait => return error.UnsupportedLlvmEmission,
-        } };
+        };
     }
 
     fn llvmSignatureNameType(self: *LlvmEmitter, name: []const u8) ![]const u8 {

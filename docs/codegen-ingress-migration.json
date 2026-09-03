@@ -27,7 +27,7 @@
     },
     "src/codegen_attrs.zig": {
       "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
-      "ty: ?ast_bridge.TypeExpr": 1,
+      "ty: ?ast_bridge.TypeExpr": 0,
       "init: ?ast_bridge.Expr": 1,
       "TraitDeclFacts": 0,
       "ImplTraitFacts": 0
@@ -138,6 +138,8 @@
       "return_type: ?ast_bridge.TypeExpr": 0,
       "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
       "pub fn transitionalReturnType(self: FunctionSignatureFacts) ?ast_bridge.TypeExpr": 0,
+      "return_type_id: mir.SignatureTypeId = .invalid": 1,
+      "type_id: mir.SignatureTypeId = .invalid": 2,
       "has_definition: bool": 1,
       "backend_name: ?[]const u8": 1,
       "c_abi: bool": 1,
@@ -148,7 +150,7 @@
       "pub fn fromParam(param: ast_bridge.Param, value_ty: mir.ValueType, type_id: mir.SignatureTypeId) FunctionParamFact": 1
     },
     "src/codegen_request.zig": {
-      "program.checked.signature_types": 2,
+      "program.checked.signature_types": 3,
       "callable.signature_return_type_id": 1,
       "callable.signature_param_type_ids": 1,
       "fn signatureTypeContainsDynamicTrait": 1,

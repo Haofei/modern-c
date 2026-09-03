@@ -4024,6 +4024,9 @@ pub const CheckedGlobalFact = struct {
     symbol_id: SymbolId,
     source_id: SourceId,
     ty: ValueType,
+    /// Module-owned recursive declaration shape.  Global codegen must use
+    /// this instead of retaining an AST TypeExpr in declaration artifacts.
+    signature_type_id: SignatureTypeId = .invalid,
     /// Exact dynamic-trait representation when this otherwise opaque
     /// `.value` global is `*dyn Trait` (or its nullable form).  This keeps
     /// qualified-backend admission syntax-free.

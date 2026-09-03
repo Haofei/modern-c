@@ -9,6 +9,8 @@ const DeclArtifact = declaration_artifacts.DeclArtifact;
 const GlobalArtifact = declaration_artifacts.GlobalArtifact;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
+const mir = @import("mir_model.zig");
+const signature_type_mechanics = @import("signature_type_mechanics.zig");
 
 pub const Trap = enum {
     IntegerOverflow,
@@ -622,6 +624,9 @@ pub const ComptimeDeclarations = struct {
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
     decl_artifacts: ?[]const DeclArtifact = null,
+    /// Borrowed module-owned signature graph. It exists only to materialize
+    /// transient expected types while folding retained initializer syntax.
+    signature_types: ?mir.SignatureTypeTable = null,
     comptime_functions: ComptimeFunctionDeclarations = .empty,
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
@@ -636,6 +641,12 @@ pub const ComptimeDeclarations = struct {
             .decl_artifacts = artifacts.decl_artifacts,
             .comptime_functions = artifacts.comptime_functions,
         };
+    }
+
+    pub fn fromCodegenArtifactsWithSignatureTypes(artifacts: CgDeclArtifacts, signature_types: mir.SignatureTypeTable) ComptimeDeclarations {
+        var declarations = fromCodegenArtifacts(artifacts);
+        declarations.signature_types = signature_types;
+        return declarations;
     }
 };
 
@@ -986,14 +997,79 @@ fn collectConstGlobalArtifact(
 ) !void {
     const sig = global.signature;
     const init_facts = global.initializer;
+    const types = scope.declarations.?.signature_types orelse return error.InvalidSignatureType;
+    const ty = try signatureTypeExpr(scope.bindings.allocator, types, sig.type_id, sig.name.span);
     return collectConstGlobal(allocator, scope, .{
         .name = sig.name,
-        .ty = sig.ty,
+        .ty = ty,
         .init = init_facts.init,
         .is_const = sig.is_const,
         .exported = sig.exported,
         .is_extern = sig.is_extern,
     }, out, options);
+}
+
+/// Const-evaluation retains initializer expressions, but not declaration type
+/// syntax. Rebuild a short-lived expected type from the same module-owned
+/// SignatureTypeTable used by codegen.
+fn signatureTypeExpr(allocator: std.mem.Allocator, types: mir.SignatureTypeTable, id: mir.SignatureTypeId, span: ast.Span) anyerror!ast.TypeExpr {
+    const shape = try signature_type_mechanics.shape(types, id);
+    const child = struct {
+        fn make(alloc: std.mem.Allocator, table: mir.SignatureTypeTable, child_id: mir.SignatureTypeId, source_span: ast.Span) anyerror!*ast.TypeExpr {
+            const value = try alloc.create(ast.TypeExpr);
+            value.* = try signatureTypeExpr(alloc, table, child_id, source_span);
+            return value;
+        }
+    }.make;
+    return .{ .span = span, .kind = switch (shape) {
+        .name => |name| .{ .name = .{ .text = name, .span = span } },
+        .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
+        .member => |node| .{ .member = .{ .base = try child(allocator, types, node.base, span), .field = .{ .text = node.field, .span = span } } },
+        .nullable => |node| .{ .nullable = try child(allocator, types, node, span) },
+        .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) {
+            .none => .none,
+            .mut => .mut,
+            .constant => .@"const",
+        }, .child = try child(allocator, types, node.child, span) } },
+        .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) {
+            .none => .none,
+            .mut => .mut,
+            .constant => .@"const",
+        }, .child = try child(allocator, types, node.child, span) } },
+        .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) {
+            .none => .none,
+            .mut => .mut,
+            .constant => .@"const",
+        }, .child = try child(allocator, types, node.child, span) } },
+        .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) {
+            .none => .none,
+            .mut => .mut,
+            .constant => .@"const",
+        }, .child = try child(allocator, types, node.child, span) } },
+        .array => |node| blk: {
+            const length = node.length orelse return error.InvalidSignatureType;
+            break :blk .{ .array = .{
+                .len = .{ .span = span, .kind = .{ .int_literal = try std.fmt.allocPrint(allocator, "{d}", .{length}) } },
+                .child = try child(allocator, types, node.child, span),
+            } };
+        },
+        .generic => |node| blk: {
+            const args = try allocator.alloc(ast.TypeExpr, node.args.len);
+            for (node.args, 0..) |arg, index| args[index] = try signatureTypeExpr(allocator, types, arg, span);
+            break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
+        },
+        .fn_pointer => |node| blk: {
+            const params = try allocator.alloc(ast.TypeExpr, node.params.len);
+            for (node.params, 0..) |param, index| params[index] = try signatureTypeExpr(allocator, types, param, span);
+            break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(allocator, types, node.ret, span) } };
+        },
+        .closure_type => |node| blk: {
+            const params = try allocator.alloc(ast.TypeExpr, node.params.len);
+            for (node.params, 0..) |param, index| params[index] = try signatureTypeExpr(allocator, types, param, span);
+            break :blk .{ .closure_type = .{ .params = params, .ret = try child(allocator, types, node.ret, span) } };
+        },
+        .dyn_trait => return error.InvalidSignatureType,
+    } };
 }
 
 fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeValue {
@@ -1131,7 +1207,10 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
     }
     if (declarations.decl_artifacts) |decl_artifacts| {
         for (decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| if (std.mem.eql(u8, global.signature.name.text, name)) return global.signature.ty,
+            .global => |global| if (std.mem.eql(u8, global.signature.name.text, name)) {
+                const types = declarations.signature_types orelse return null;
+                return signatureTypeExpr(scope.bindings.allocator, types, global.signature.type_id, global.signature.name.span) catch null;
+            },
             else => {},
         };
         return null;

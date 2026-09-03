@@ -65,7 +65,9 @@ pub fn rejectExperimentalDynamicTraits(
         }
     }
     for (program.checked.globals) |global| {
-        if (global.dyn_trait_symbol_id.isValid() or global.ty == .nullable_dyn_trait) {
+        if (global.dyn_trait_symbol_id.isValid() or global.ty == .nullable_dyn_trait or
+            signatureTypeContainsDynamicTrait(program.checked.signature_types, global.signature_type_id))
+        {
             reportExperimentalDynamicTrait(reporter);
             return error.ExperimentalDynamicTraitCodegen;
         }

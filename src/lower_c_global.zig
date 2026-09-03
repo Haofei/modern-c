@@ -21,6 +21,10 @@ const isArrayLiteralExpr = lower_c_const.isArrayLiteralExpr;
 const isStructLiteralExpr = lower_c_const.isStructLiteralExpr;
 const staticCInitializer = lower_c_const.staticCInitializer;
 const staticCInitializerRef = lower_c_const.staticCInitializerRef;
+// The global emitter receives this only as a backend-local materialization of
+// a SignatureTypeId. Keeping the alias tied to the existing target fact avoids
+// adding another source-syntax-shaped declaration boundary here.
+const BackendLocalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
 
 pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
@@ -65,7 +69,9 @@ pub const AccessContext = struct {
     global_info_from_type: GlobalInfoFromTypeFn,
 };
 
-pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact, rendered_type: []const u8) !void {
+/// `global_ty` is a backend-local transient materialized from the module-owned
+/// SignatureTypeTable. It is never stored in the declaration artifact.
+pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact, rendered_type: []const u8, global_ty: BackendLocalTypeExpr) !void {
     const sig = global.signature;
     const init_facts = global.initializer;
     try ctx.write_line_directive(ctx.emit_ctx, sig.name.span);
@@ -105,36 +111,29 @@ pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact
             try ctx.out.appendSlice(ctx.allocator, " = ");
             if (try emitStaticCInitializer(ctx.allocator, ctx.out, static_initializer.expr)) {
                 // Emitted directly.
-            } else if (sig.ty) |global_ty| {
-                try ctx.emit_expr_with_target_for_owner(ctx.emit_ctx, static_initializer.owner, static_initializer.expr, global_ty);
             } else {
-                try ctx.emit_expr(ctx.emit_ctx, static_initializer.expr);
+                try ctx.emit_expr_with_target_for_owner(ctx.emit_ctx, static_initializer.owner, static_initializer.expr, global_ty);
             }
             try ctx.static_initializers.put(sig.name.text, static_initializer.expr);
-        } else if (sig.ty != null and isArrayLiteralExpr(initializer)) {
+        } else if (isArrayLiteralExpr(initializer)) {
             try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, sig.ty.?);
+            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global_ty);
             try ctx.static_initializers.put(sig.name.text, initializer);
-        } else if (sig.ty != null and isStructLiteralExpr(initializer)) {
+        } else if (isStructLiteralExpr(initializer)) {
             try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, sig.ty.?);
+            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global_ty);
             try ctx.static_initializers.put(sig.name.text, initializer);
-        } else if (sig.ty) |global_ty| {
-            if (try ctx.emit_const_global_initializer(ctx.emit_ctx, global_ty, initializer)) {
-                try ctx.out.appendSlice(ctx.allocator, ";\n\n");
-                return;
-            }
-            if (global_ty.kind == .array) {
-                try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global array initializer */");
-                return error.UnsupportedCEmission;
-            }
-            try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global initializer */");
+        } else if (try ctx.emit_const_global_initializer(ctx.emit_ctx, global_ty, initializer)) {
+            try ctx.out.appendSlice(ctx.allocator, ";\n\n");
+            return;
+        } else if (global_ty.kind == .array) {
+            try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global array initializer */");
             return error.UnsupportedCEmission;
         } else {
             try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global initializer */");
             return error.UnsupportedCEmission;
         }
-    } else if (sig.ty != null and ctx.is_aggregate_global_type(ctx.emit_ctx, sig.ty.?)) {
+    } else if (ctx.is_aggregate_global_type(ctx.emit_ctx, global_ty)) {
         try ctx.out.appendSlice(ctx.allocator, " = {0}");
     } else {
         try ctx.out.appendSlice(ctx.allocator, " = 0");

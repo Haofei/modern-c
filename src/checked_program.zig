@@ -54,6 +54,7 @@ pub const CheckedProgram = struct {
         }
         for (globals) |global| {
             if (!global.symbol_id.isValid() or global.ty == .unknown) return error.InvalidCheckedProgram;
+            if (!signature_types.contains(global.signature_type_id)) return error.InvalidCheckedProgram;
             if (global.is_extern and global.initializer_body_id.isValid()) return error.InvalidCheckedProgram;
             if (global.initializer_body_id.isValid()) {
                 if (global.initializer_body_id.index() >= callables.len) return error.InvalidCheckedProgram;

@@ -1281,6 +1281,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .symbol_id = try internSymbolId(&symbol_ids, global.name.text),
                         .source_id = typed_source_id,
                         .ty = globals.get(global.name.text) orelse .unknown,
+                        .signature_type_id = try signature_types.internReturnType(global.ty, &const_fns, &const_globals),
                         .dyn_trait_symbol_id = if (dynTraitNameFromTypeAlias(ty, &aliases)) |trait_name|
                             try internSymbolId(&symbol_ids, trait_name)
                         else

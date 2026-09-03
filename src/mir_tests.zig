@@ -1473,6 +1473,64 @@ test "module signature type table preserves recursive callable shapes" {
     try std.testing.expect(checked.matchesMir(module_mir));
 }
 
+test "module signature type table owns recursive global declaration shapes" {
+    const source =
+        \\struct Device { value: u32 }
+        \\extern global scalar: u32;
+        \\extern global nested: *mut *const u32;
+        \\extern global mmio: MmioPtr<Device>;
+        \\extern global callback: fn(u32) -> u32;
+        \\extern global bytes: [4]u8;
+        \\extern global nominal: Device;
+    ;
+    var parsed = try test_support.parseModule("global_signature_type_table.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expect(module_mir.signature_types.validate());
+    try std.testing.expectEqual(@as(usize, 6), module_mir.checked_globals.len);
+    for (module_mir.checked_globals) |global| {
+        try std.testing.expect(global.is_extern);
+        try std.testing.expect(global.signature_type_id.isValid());
+        try std.testing.expect(module_mir.signature_types.contains(global.signature_type_id));
+    }
+
+    const nested = module_mir.signature_types.get(module_mir.checked_globals[1].signature_type_id) orelse return error.TestUnexpectedResult;
+    const nested_pointer = switch (nested) {
+        .pointer => |shape| shape,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(std.meta.activeTag(module_mir.signature_types.get(nested_pointer.child) orelse return error.TestUnexpectedResult) == .pointer);
+
+    const mmio = module_mir.signature_types.get(module_mir.checked_globals[2].signature_type_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(mmio) == .generic);
+    const callback = module_mir.signature_types.get(module_mir.checked_globals[3].signature_type_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(callback) == .fn_pointer);
+    const bytes = module_mir.signature_types.get(module_mir.checked_globals[4].signature_type_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(bytes) == .array);
+    const nominal = module_mir.signature_types.get(module_mir.checked_globals[5].signature_type_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.activeTag(nominal) == .name);
+
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.const_global_scalar_inits,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    const saved_id = module_mir.checked_globals[0].signature_type_id;
+    module_mir.checked_globals[0].signature_type_id = .invalid;
+    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.const_global_scalar_inits,
+    ));
+    module_mir.checked_globals[0].signature_type_id = saved_id;
+}
+
 test "CheckedProgram admits only complete scalar const-global initializer facts" {
     const source =
         \\const COUNT: u32 = 1 + 2;

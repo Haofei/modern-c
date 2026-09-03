@@ -417,7 +417,7 @@ pub const CEmitter = struct {
     }
 
     pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) void {
-        self.comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifacts(artifacts);
+        self.comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(artifacts, self.mir_module.signature_types);
     }
 
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
@@ -426,12 +426,12 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromCodegenArtifacts(artifacts), &self.const_fns);
+        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(artifacts, self.mir_module.signature_types), &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| {
                 const sig = global.signature;
                 if (!sig.is_const) continue;
-                const ty = sig.ty orelse continue;
+                const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
                 const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
                 try self.const_global_widths.put(sig.name.text, bits);
             },
@@ -494,12 +494,12 @@ pub const CEmitter = struct {
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const sig = global.signature;
-        if (sig.ty) |ty| {
-            var info = try self.globalInfoFromType(ty);
-            info.is_const = sig.is_const;
-            try self.globals.put(sig.name.text, info);
-        }
-        if (sig.ty) |ty| try self.collectTypeArtifacts(ty);
+        const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
+        if (!std.mem.eql(u8, try self.cSignatureType(sig.type_id), try self.cTypeFor(ty, .typedef_name))) return error.UnsupportedCEmission;
+        var info = try self.globalInfoFromType(ty);
+        info.is_const = sig.is_const;
+        try self.globals.put(sig.name.text, info);
+        try self.collectTypeArtifacts(ty);
     }
 
     fn collectStructDeclArtifact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
@@ -601,6 +601,7 @@ pub const CEmitter = struct {
                 try self.emitSignatureTypeDefinition(function.signature.return_type_id);
                 for (function.signature.params) |param| try self.emitSignatureTypeDefinition(param.type_id);
             },
+            .global => |global| try self.emitSignatureTypeDefinition(global.signature.type_id),
             else => {},
         };
     }
@@ -779,11 +780,19 @@ pub const CEmitter = struct {
             self.source_path = previous_source_path;
         }
         const body = if (self.globalInitializerMir(global.initializer.body_id)) |function| &function.executable_body else &mir.ExecutableBody{};
-        const rendered_type = mir_executable_c.renderType(self.scratch.allocator(), body, global.signature.value_ty) catch |err| switch (err) {
-            error.UnsupportedType => if (global.signature.ty) |ty| try self.cTypeFor(ty, .typedef_name) else return error.UnsupportedCEmission,
-            else => return err,
-        };
-        try emitGlobalDecl(self.globalEmitContext(), global, rendered_type);
+        const signature_ty = try self.signatureTypeExpr(global.signature.type_id, global.signature.name.span);
+        const rendered_type = try self.cSignatureType(global.signature.type_id);
+        if (global.signature.value_ty != .value) {
+            const executable_type = mir_executable_c.renderType(self.scratch.allocator(), body, global.signature.value_ty) catch |err| switch (err) {
+                // Nominal and aggregate values intentionally have no body
+                // representation without their type declaration. Their
+                // validated signature shape is the declaration authority.
+                error.UnsupportedType => null,
+                else => return err,
+            };
+            if (executable_type) |value| if (!std.mem.eql(u8, rendered_type, value)) return error.UnsupportedCEmission;
+        }
+        try emitGlobalDecl(self.globalEmitContext(), global, rendered_type, signature_ty);
     }
 
     fn emitCheckedScalarConstGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) !void {
@@ -1481,6 +1490,70 @@ pub const CEmitter = struct {
         };
     }
 
+    /// One-way backend-local bridge for legacy global-initializer mechanics.
+    /// Declaration artifacts retain only `SignatureTypeId`; this transient is
+    /// synthesized from the module-owned table and is never source payload.
+    fn signatureTypeExpr(self: *CEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+        const alloc = self.scratch.allocator();
+        const child = struct {
+            fn make(emitter: *CEmitter, child_id: mir.SignatureTypeId, source_span: diagnostics.Span) anyerror!*TransitionalTypeExpr {
+                const value = try emitter.scratch.allocator().create(TransitionalTypeExpr);
+                value.* = try emitter.signatureTypeExpr(child_id, source_span);
+                return value;
+            }
+        }.make;
+        return .{ .span = span, .kind = switch (shape) {
+            .name => |name| .{ .name = .{ .text = name, .span = span } },
+            .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
+            .member => |node| .{ .member = .{ .base = try child(self, node.base, span), .field = .{ .text = node.field, .span = span } } },
+            .nullable => |node| .{ .nullable = try child(self, node, span) },
+            .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) {
+                .none => .none,
+                .mut => .mut,
+                .constant => .@"const",
+            }, .child = try child(self, node.child, span) } },
+            .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) {
+                .none => .none,
+                .mut => .mut,
+                .constant => .@"const",
+            }, .child = try child(self, node.child, span) } },
+            .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) {
+                .none => .none,
+                .mut => .mut,
+                .constant => .@"const",
+            }, .child = try child(self, node.child, span) } },
+            .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) {
+                .none => .none,
+                .mut => .mut,
+                .constant => .@"const",
+            }, .child = try child(self, node.child, span) } },
+            .array => |node| blk: {
+                const length = node.length orelse return error.UnsupportedCEmission;
+                break :blk .{ .array = .{
+                    .len = .{ .span = span, .kind = .{ .int_literal = try std.fmt.allocPrint(alloc, "{d}", .{length}) } },
+                    .child = try child(self, node.child, span),
+                } };
+            },
+            .generic => |node| blk: {
+                const args = try alloc.alloc(TransitionalTypeExpr, node.args.len);
+                for (node.args, 0..) |arg, index| args[index] = try self.signatureTypeExpr(arg, span);
+                break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
+            },
+            .fn_pointer => |node| blk: {
+                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
+                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
+                break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(self, node.ret, span) } };
+            },
+            .closure_type => |node| blk: {
+                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
+                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
+                break :blk .{ .closure_type = .{ .params = params, .ret = try child(self, node.ret, span) } };
+            },
+            .dyn_trait => return error.UnsupportedCEmission,
+        } };
+    }
+
     fn cSignatureGenericType(self: *CEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {
         if (std.mem.eql(u8, base, "Result") and args.len == 2)
             return std.fmt.allocPrint(self.scratch.allocator(), "mc_result_{s}_{s}", .{ try self.cSignatureSuffix(args[0]), try self.cSignatureSuffix(args[1]) });
@@ -1543,7 +1616,11 @@ pub const CEmitter = struct {
 
     fn cSignatureFramedUnary(self: *CEmitter, prefix: []const u8, mutability: mir.TypeMutability, child: mir.SignatureTypeId) anyerror![]const u8 {
         const suffix = try self.cSignatureSuffix(child);
-        const code: []const u8 = switch (mutability) { .none => "n", .mut => "m", .constant => "c" };
+        const code: []const u8 = switch (mutability) {
+            .none => "n",
+            .mut => "m",
+            .constant => "c",
+        };
         return std.fmt.allocPrint(self.scratch.allocator(), "{s}_{s}_{d}_{s}", .{ prefix, code, suffix.len, suffix });
     }
 

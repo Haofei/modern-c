@@ -25,7 +25,6 @@ pub const FunctionSignatureFacts = struct {
     c_abi: bool,
     error_from: bool,
     backend_name: ?[]const u8,
-
 };
 
 pub const FunctionBodyFacts = struct {
@@ -35,7 +34,8 @@ pub const FunctionBodyFacts = struct {
 pub const GlobalSignatureFacts = struct {
     name: ast_bridge.Ident,
     value_ty: mir.ValueType,
-    ty: ?ast_bridge.TypeExpr,
+    /// Module-owned recursive declaration shape; never source syntax.
+    type_id: mir.SignatureTypeId = .invalid,
     is_const: bool,
     exported: bool,
     is_extern: bool,
