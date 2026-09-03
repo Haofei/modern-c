@@ -11,7 +11,7 @@ const ast = @import("ast.zig");
 const mir = @import("mir_model.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
 
-pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType } || std.mem.Allocator.Error;
+pub const Error = error{ InvalidSignatureType, UnsupportedSignatureType, InvalidEnumFact } || std.mem.Allocator.Error;
 
 pub fn typeExpr(
     allocator: std.mem.Allocator,
@@ -97,5 +97,39 @@ fn astMutability(mutability: mir.TypeMutability) ast.Mutability {
         .none => .none,
         .mut => .mut,
         .@"const" => .@"const",
+    };
+}
+
+/// Transitional materialization for enum-aware legacy body helpers. The
+/// declaration ingress itself remains the syntax-free `EnumFact`; this only
+/// reconstructs the narrow AST view those helpers still require.
+pub fn enumDecl(
+    allocator: std.mem.Allocator,
+    types: mir.SignatureTypeTable,
+    symbols: []const mir.SymbolIdentity,
+    fact: mir.EnumFact,
+) Error!ast.EnumDecl {
+    if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbols.len) return error.InvalidEnumFact;
+    const identity = symbols[fact.symbol_id.index()];
+    if (!identity.id.eql(fact.symbol_id) or identity.kind != .type_) return error.InvalidEnumFact;
+    const span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+    const cases = try allocator.alloc(ast.EnumCase, fact.cases.len);
+    for (fact.cases, 0..) |case, index| {
+        const literal = try std.fmt.allocPrint(allocator, "{d}", .{case.magnitude});
+        const value = if (case.negative) blk: {
+            const inner = try allocator.create(ast.Expr);
+            inner.* = .{ .span = span, .kind = .{ .int_literal = literal } };
+            break :blk ast.Expr{ .span = span, .kind = .{ .unary = .{ .op = .neg, .expr = inner } } };
+        } else ast.Expr{ .span = span, .kind = .{ .int_literal = literal } };
+        cases[index] = .{
+            .name = .{ .text = case.spelling, .span = span },
+            .value = value,
+        };
+    }
+    return .{
+        .name = .{ .text = identity.spelling, .span = span },
+        .repr = try typeExpr(allocator, types, fact.repr_type_id, span),
+        .cases = cases,
+        .is_open = fact.is_open,
     };
 }

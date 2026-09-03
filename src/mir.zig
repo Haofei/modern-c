@@ -116,6 +116,8 @@ pub const IntegerDomainKind = mir_model.IntegerDomainKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
 pub const FfiParamContract = mir_model.FfiParamContract;
 pub const TypeAliasFact = mir_model.TypeAliasFact;
+pub const EnumFact = mir_model.EnumFact;
+pub const EnumCaseFact = mir_model.EnumCaseFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -990,6 +992,10 @@ const SignatureTypeTableBuilder = struct {
         return self.internShape(.{ .name = try self.allocator.dupe(u8, "void") });
     }
 
+    fn internBuiltinName(self: *SignatureTypeTableBuilder, name: []const u8) !SignatureTypeId {
+        return self.internShape(.{ .name = try self.allocator.dupe(u8, name) });
+    }
+
     fn internParams(
         self: *SignatureTypeTableBuilder,
         params: []const ast.Param,
@@ -1270,6 +1276,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer checked_globals.deinit(allocator);
     var type_alias_facts: std.ArrayList(TypeAliasFact) = .empty;
     errdefer type_alias_facts.deinit(allocator);
+    var enum_facts: std.ArrayList(EnumFact) = .empty;
+    errdefer {
+        for (enum_facts.items) |enum_fact| if (enum_fact.cases.len != 0) allocator.free(enum_fact.cases);
+        enum_facts.deinit(allocator);
+    }
     var global_initializer_facts: std.ArrayList(mir_model.GlobalInitializerFact) = .empty;
     errdefer global_initializer_facts.deinit(allocator);
 
@@ -1278,6 +1289,35 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         const typed_source_id = if (fileIdFromBuildItem(item)) |file_id| try internSourceId(&source_ids, file_id) else SourceId.invalid;
         const typed_def_id = defIdFromBuildItem(item, decl_ordinal);
         switch (decl.kind) {
+            .enum_decl => |enum_decl| {
+                const cases = try allocator.alloc(EnumCaseFact, enum_decl.cases.len);
+                errdefer allocator.free(cases);
+                for (enum_decl.cases, 0..) |case, index| {
+                    const value = if (case.value) |explicit|
+                        numeric.integerLiteralValue(explicit) orelse return error.InvalidMirEnumFacts
+                    else
+                        numeric.LiteralValue{ .negative = false, .magnitude = index };
+                    cases[index] = .{
+                        .spelling = case.name.text,
+                        .negative = value.negative,
+                        .magnitude = value.magnitude,
+                    };
+                }
+                try enum_facts.append(allocator, .{
+                    .symbol_id = try internSymbolId(&symbol_ids, enum_decl.name.text),
+                    .source_id = typed_source_id,
+                    .repr_ty = if (enum_decl.repr) |repr|
+                        canonicalExecutableValueType(repr, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals)
+                    else
+                        .{ .integer = "isize" },
+                    .repr_type_id = if (enum_decl.repr) |repr|
+                        try signature_types.internTypeExpr(repr, &const_fns, &const_globals)
+                    else
+                        try signature_types.internBuiltinName("isize"),
+                    .is_open = enum_decl.is_open,
+                    .cases = cases,
+                });
+            },
             .type_alias => |alias| {
                 try type_alias_facts.append(allocator, .{
                     .symbol_id = try internSymbolId(&symbol_ids, alias.name.text),
@@ -1490,6 +1530,17 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirSymbolIdentity;
         identity.kind = .type_;
     }
+    for (enum_facts.items) |enum_fact| {
+        if (!enum_fact.symbol_id.isValid() or enum_fact.symbol_id.index() >= symbol_identities.len or
+            mir_model.ExecutableCastKind.integerInfo(enum_fact.repr_ty) == null or
+            !enum_fact.repr_type_id.isValid() or enum_fact.repr_type_id.index() >= signature_types.shapes.items.len)
+            return error.InvalidMirEnumFacts;
+        const identity = &symbol_identities[enum_fact.symbol_id.index()];
+        if (!identity.id.eql(enum_fact.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirEnumFacts;
+        identity.kind = .type_;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1509,6 +1560,11 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     errdefer allocator.free(checked_globals_slice);
     const type_alias_facts_slice = try type_alias_facts.toOwnedSlice(allocator);
     errdefer allocator.free(type_alias_facts_slice);
+    const enum_facts_slice = try enum_facts.toOwnedSlice(allocator);
+    errdefer {
+        for (enum_facts_slice) |enum_fact| if (enum_fact.cases.len != 0) allocator.free(enum_fact.cases);
+        allocator.free(enum_facts_slice);
+    }
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const global_initializer_facts_slice = try global_initializer_facts.toOwnedSlice(allocator);
@@ -1522,6 +1578,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .checked_callables = checked_callables_slice,
         .checked_globals = checked_globals_slice,
         .type_aliases = type_alias_facts_slice,
+        .enums = enum_facts_slice,
         .global_initializer_facts = global_initializer_facts_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
@@ -3996,6 +4053,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirDropGlueFacts,
     InvalidMirTypeOwnershipFacts,
     InvalidMirTypeAliasFacts,
+    InvalidMirEnumFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -4025,6 +4083,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateDropGlueFactsForLowering(module);
     try validateTypeOwnershipFactsForLowering(module);
     try validateTypeAliasFactsForLowering(module);
+    try validateEnumFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
@@ -4044,6 +4103,83 @@ fn validateTypeAliasFactsForLowering(module: Module) error{InvalidMirTypeAliasFa
             if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTypeAliasFacts;
         }
     }
+}
+
+fn validateEnumFactsForLowering(module: Module) error{InvalidMirEnumFacts}!void {
+    for (module.enums, 0..) |enum_fact, index| {
+        if (!enum_fact.symbol_id.isValid() or enum_fact.symbol_id.index() >= module.symbol_identities.len or
+            mir_model.ExecutableCastKind.integerInfo(enum_fact.repr_ty) == null or
+            !enum_fact.repr_type_id.isValid() or !module.signature_types.contains(enum_fact.repr_type_id) or
+            !enumFactReprMatchesSignature(module, enum_fact))
+            return error.InvalidMirEnumFacts;
+        const identity = module.symbol_identities[enum_fact.symbol_id.index()];
+        if (!identity.id.eql(enum_fact.symbol_id) or identity.kind != .type_) return error.InvalidMirEnumFacts;
+        if (enum_fact.source_id.isValid() and (enum_fact.source_id.index() >= module.source_identities.len or
+            !module.source_identities[enum_fact.source_id.index()].id.eql(enum_fact.source_id)))
+            return error.InvalidMirEnumFacts;
+        for (enum_fact.cases, 0..) |case, case_index| {
+            if (case.spelling.len == 0 or !enumCaseFitsRepr(case, enum_fact.repr_ty)) return error.InvalidMirEnumFacts;
+            for (enum_fact.cases[0..case_index]) |prior| {
+                if (std.mem.eql(u8, prior.spelling, case.spelling)) return error.InvalidMirEnumFacts;
+            }
+        }
+        for (module.enums[0..index]) |prior| {
+            if (prior.symbol_id.eql(enum_fact.symbol_id)) return error.InvalidMirEnumFacts;
+        }
+        for (module.type_aliases) |alias| {
+            if (alias.symbol_id.eql(enum_fact.symbol_id)) return error.InvalidMirEnumFacts;
+        }
+    }
+}
+
+fn enumCaseFitsRepr(case: EnumCaseFact, repr_ty: ValueType) bool {
+    const info = mir_model.ExecutableCastKind.integerInfo(repr_ty) orelse return false;
+    if (case.negative) {
+        if (!info.signed) return false;
+        const minimum_magnitude: u128 = if (info.bits == 128)
+            @as(u128, 1) << 127
+        else
+            @as(u128, 1) << @as(u7, @intCast(info.bits - 1));
+        return case.magnitude <= minimum_magnitude;
+    }
+    const maximum: u128 = if (info.signed)
+        if (info.bits == 128)
+            @as(u128, @intCast(std.math.maxInt(i128)))
+        else
+            (@as(u128, 1) << @as(u7, @intCast(info.bits - 1))) - 1
+    else if (info.bits == 128)
+        std.math.maxInt(u128)
+    else
+        (@as(u128, 1) << @as(u7, @intCast(info.bits))) - 1;
+    return case.magnitude <= maximum;
+}
+
+/// A type alias may name an enum representation, but the checked executable
+/// representation must still agree with the syntax-free signature graph. This
+/// prevents a stale fact from making C and LLVM emit a different integer width
+/// than executable MIR uses.
+fn enumFactReprMatchesSignature(module: Module, fact: EnumFact) bool {
+    const repr_name = enumReprSignatureName(module, fact.repr_type_id, 0) orelse return false;
+    return switch (fact.repr_ty) {
+        .integer => |name| std.mem.eql(u8, name, repr_name),
+        else => false,
+    };
+}
+
+fn enumReprSignatureName(module: Module, id: SignatureTypeId, depth: usize) ?[]const u8 {
+    if (depth > 16) return null;
+    const shape = module.signature_types.get(id) orelse return null;
+    const name = switch (shape) {
+        .name => |value| value,
+        else => return null,
+    };
+    for (module.type_aliases) |alias| {
+        if (!alias.symbol_id.isValid() or alias.symbol_id.index() >= module.symbol_identities.len) return null;
+        const identity = module.symbol_identities[alias.symbol_id.index()];
+        if (!identity.id.eql(alias.symbol_id) or identity.kind != .type_) return null;
+        if (std.mem.eql(u8, identity.spelling, name)) return enumReprSignatureName(module, alias.target_type_id, depth + 1);
+    }
+    return name;
 }
 
 pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLoweringType}!void {

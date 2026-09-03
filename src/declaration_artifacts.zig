@@ -79,8 +79,10 @@ pub const EarlyDeclarationArtifacts = struct {
                     try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .struct_decl = struct_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .enum_decl => |enum_decl| {
-                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .enum_decl = enum_decl } });
+                .enum_decl => {
+                    // Enum representation and checked discriminants are
+                    // module-owned MIR facts. Keep only source-map metadata;
+                    // ordinary codegen must not retain an enum AST payload.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .union_decl => |union_decl| {
@@ -287,7 +289,6 @@ pub const DeclArtifact = union(enum) {
 
 pub const TransitionalTypeDeclArtifact = union(enum) {
     struct_decl: ast.StructDecl,
-    enum_decl: ast.EnumDecl,
     union_decl: ast.UnionDecl,
     packed_bits_decl: ast.PackedBitsDecl,
     overlay_union_decl: ast.OverlayUnionDecl,

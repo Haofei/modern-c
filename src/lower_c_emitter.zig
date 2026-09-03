@@ -410,6 +410,7 @@ pub const CEmitter = struct {
     fn collectModule(self: *CEmitter, early_metadata: CodegenDeclArtifacts) anyerror!void {
         self.codegen_artifacts = early_metadata;
         try self.collectTypeAliasFacts();
+        try self.collectEnumFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedScalarGlobals();
@@ -443,6 +444,22 @@ pub const CEmitter = struct {
         }
     }
 
+    /// Enum AST views are derived solely from checked module facts for the
+    /// remaining legacy expression helpers. No declaration artifact carries
+    /// an enum AST ingress.
+    fn collectEnumFacts(self: *CEmitter) !void {
+        for (self.mir_module.enums) |fact| {
+            const enum_decl = try signature_type_materializer.enumDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            if (self.enums.contains(enum_decl.name.text)) return error.UnsupportedCEmission;
+            try self.enums.put(enum_decl.name.text, enum_decl);
+        }
+    }
+
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
@@ -460,7 +477,6 @@ pub const CEmitter = struct {
             },
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
-                .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
                 else => {},
             },
@@ -505,7 +521,6 @@ pub const CEmitter = struct {
             .global => |global| try self.collectGlobalDeclArtifact(global),
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
-                .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),

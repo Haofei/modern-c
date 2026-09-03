@@ -3782,6 +3782,46 @@ test "MIR type alias facts are syntax-free and fail closed" {
     try std.testing.expectError(error.InvalidMirTypeAliasFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "MIR enum facts are syntax-free and fail closed" {
+    const source =
+        \\open enum Status: i8 { negative = -1, ready = 'R' }
+        \\fn identity(value: Status) -> Status { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_enum_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.enums.len);
+    const fact = module_mir.enums[0];
+    const identity = module_mir.symbol_identities[fact.symbol_id.index()];
+    try std.testing.expectEqualStrings("Status", identity.spelling);
+    try std.testing.expect(module_mir.signature_types.contains(fact.repr_type_id));
+    try std.testing.expectEqual(@as(usize, 2), fact.cases.len);
+    try std.testing.expect(fact.cases[0].negative);
+    try std.testing.expectEqual(@as(u128, 1), fact.cases[0].magnitude);
+    try std.testing.expectEqual(@as(u128, 'R'), fact.cases[1].magnitude);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.enums[0].repr_type_id;
+    module_mir.enums[0].repr_type_id = .invalid;
+    defer module_mir.enums[0].repr_type_id = saved;
+    try std.testing.expectError(error.InvalidMirEnumFacts, mir.validateLoweringAdmission(module_mir));
+
+    module_mir.enums[0].repr_type_id = saved;
+    const saved_ty = module_mir.enums[0].repr_ty;
+    module_mir.enums[0].repr_ty = .{ .integer = "u16" };
+    defer module_mir.enums[0].repr_ty = saved_ty;
+    try std.testing.expectError(error.InvalidMirEnumFacts, mir.validateLoweringAdmission(module_mir));
+
+    module_mir.enums[0].repr_ty = saved_ty;
+    const mutable_cases = @constCast(module_mir.enums[0].cases);
+    const saved_magnitude = mutable_cases[1].magnitude;
+    mutable_cases[1].magnitude = 128;
+    defer mutable_cases[1].magnitude = saved_magnitude;
+    try std.testing.expectError(error.InvalidMirEnumFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
     const source =
         \\fn const_index(a: [4]u32) -> u32 {

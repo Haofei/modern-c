@@ -4055,6 +4055,31 @@ pub const TypeAliasFact = struct {
     target_type_id: SignatureTypeId,
 };
 
+/// One checked enum discriminant.  The spelling is presentation data for the
+/// generated enumerator; identity of the enclosing enum always flows through
+/// `EnumFact.symbol_id`.
+pub const EnumCaseFact = struct {
+    spelling: []const u8,
+    negative: bool,
+    magnitude: u128,
+};
+
+/// Syntax-free enum declaration ingress.  The enum name is resolved through
+/// `symbol_id`, its representation through the module-owned signature graph,
+/// and each case is already reduced to its checked integer value.  This keeps
+/// C/LLVM from retaining an `ast.EnumDecl` merely to emit a nominal scalar.
+pub const EnumFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    /// Checked runtime representation. The recursive signature shape remains
+    /// the rendering source; this field lets admission reject a stale
+    /// non-integer enum representation without reopening syntax.
+    repr_ty: ValueType,
+    repr_type_id: SignatureTypeId,
+    is_open: bool,
+    cases: []const EnumCaseFact,
+};
+
 /// Syntax-free scalar value already evaluated by the frontend for a `const`
 /// global initializer.  This deliberately excludes aggregates and enum tags:
 /// their rendering still depends on transitional aggregate/type artifacts.
@@ -4142,6 +4167,7 @@ pub const Module = struct {
     checked_callables: []CheckedCallableFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
     type_aliases: []TypeAliasFact = &.{},
+    enums: []EnumFact = &.{},
     global_initializer_facts: []GlobalInitializerFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
@@ -4230,6 +4256,8 @@ pub const Module = struct {
         }
         if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
         if (self.type_aliases.len != 0) self.allocator.free(self.type_aliases);
+        for (self.enums) |enum_fact| if (enum_fact.cases.len != 0) self.allocator.free(enum_fact.cases);
+        if (self.enums.len != 0) self.allocator.free(self.enums);
         if (self.global_initializer_facts.len != 0) self.allocator.free(self.global_initializer_facts);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);

@@ -120,6 +120,41 @@ test "lower-c derives type aliases from module signature facts" {
     try expectContains(output.items, "next(uint32_t value)");
 }
 
+test "lower-c derives enums from checked module facts" {
+    const source =
+        \\enum Status: i8 { negative = -1, ready = 'R' }
+        \\fn status() -> Status { return .negative; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_enum_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.enums.len);
+
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    // Enum declaration syntax is not a codegen artifact; only the function
+    // body remains transitional in this fixture.
+    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_enum_facts.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "typedef int8_t Status;");
+    try expectContains(output.items, "Status_negative = -1");
+    try expectContains(output.items, "Status_ready = 82");
+}
+
 test "lower-c scalar const globals do not retain an AST initializer dependency" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("c_scalar_const_global_no_ast_init.mc", source);

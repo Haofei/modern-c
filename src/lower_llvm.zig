@@ -387,6 +387,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     };
     defer ctx.deinit();
     try ctx.collectTypeAliasFacts();
+    try ctx.collectEnumFacts();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
     try ctx.collectCheckedScalarGlobals();
     var reflect_env = ctx.reflectEnv();
@@ -561,7 +562,6 @@ const LlvmEmitter = struct {
         try eval.collectConstFunctionsFromDeclarations(comptime_facts, &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
                 .packed_bits_decl => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
                     .repr = packed_bits.repr,
@@ -596,6 +596,21 @@ const LlvmEmitter = struct {
         }
     }
 
+    /// Enum AST views are derived solely from checked module facts for the
+    /// remaining legacy expression helpers. No declaration artifact carries
+    /// an enum AST ingress.
+    fn collectEnumFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.enums) |fact| {
+            const enum_decl = try signature_type_materializer.enumDecl(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                self.mir_module.symbol_identities,
+                fact,
+            );
+            try self.collectEnum(enum_decl);
+        }
+    }
+
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
@@ -627,7 +642,6 @@ const LlvmEmitter = struct {
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-                .enum_decl => |enum_decl| try self.collectEnum(enum_decl),
                 .struct_decl => {},
             },
             else => {},
