@@ -17,6 +17,7 @@ const test_support = @import("test_support.zig");
 
 const Block = mir.Block;
 const BlockId = mir.BlockId;
+const BoundsFact = mir.BoundsFact;
 const ContractRegion = mir.ContractRegion;
 const Function = mir.Function;
 const Instruction = mir.Instruction;
@@ -9163,6 +9164,42 @@ test "MIR range fact admission rejects invalid and mismatched SpanId facts" {
     std.testing.allocator.free(duplicate_function.range_facts);
     duplicate_function.range_facts = duplicate_facts;
     try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateLoweringAdmission(duplicate));
+}
+
+test "MIR bounds fact admission rejects invalid stale and duplicate SpanId facts" {
+    const source =
+        \\fn read_at(values: [2]u32, index: usize) -> u32 {
+        \\    return values[index];
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_bounds_fact_admission.mc", source);
+    defer parsed.deinit();
+
+    var admitted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer admitted.deinit();
+    try mir.validateLoweringAdmission(admitted);
+
+    var invalid = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid.deinit();
+    const invalid_function = functionByNameMut(&invalid, "read_at") orelse return error.TestUnexpectedResult;
+    invalid_function.bounds_facts[0].typed_span_id = SpanId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(invalid));
+
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer stale.deinit();
+    const stale_function = functionByNameMut(&stale, "read_at") orelse return error.TestUnexpectedResult;
+    stale_function.bounds_facts[0].kind = .slice;
+    try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(stale));
+
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer duplicate.deinit();
+    const duplicate_function = functionByNameMut(&duplicate, "read_at") orelse return error.TestUnexpectedResult;
+    const facts = try std.testing.allocator.alloc(BoundsFact, duplicate_function.bounds_facts.len + 1);
+    @memcpy(facts[0..duplicate_function.bounds_facts.len], duplicate_function.bounds_facts);
+    facts[duplicate_function.bounds_facts.len] = facts[0];
+    std.testing.allocator.free(duplicate_function.bounds_facts);
+    duplicate_function.bounds_facts = facts;
+    try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(duplicate));
 }
 
 test "MIR records unchecked call identity and operand/result type facts" {

@@ -180,8 +180,9 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try out.print(allocator, "range_fact fn={s} region={} target={s} op={s} left={s} right={s} result={s} line={} column={} typed_span_id={}\n", .{ function.name, fact.region_id, fact.target, fact.op, fact.left, fact.right, fact.result_ty.name(), source.line, source.column, typedIndexOrMax(fact.typed_span_id) });
         }
         for (function.bounds_facts) |fact| {
+            const source = mir.sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirBoundsFacts;
             try out.print(allocator, "bounds_fact fn={s} kind={s} ", .{ function.name, @tagName(fact.kind) });
-            try appendSourcePointForDigest(allocator, out, fact.source);
+            try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.integer_facts) |fact| {
             const target_name = if (mir.integerFactTargetType(&function, fact)) |target_ty| target_ty.name() else "invalid";

@@ -2099,10 +2099,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.bounds_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirBoundsFacts;
             try out.print(
                 allocator,
                 "mir bounds_fact fn={s} kind={s} recorded=true line={} column={} typed_span_id={}\n",
-                .{ function.name, @tagName(fact.kind), fact.source.line, fact.source.column, if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize) },
+                .{ function.name, @tagName(fact.kind), source.line, source.column, fact.typed_span_id.index() },
             );
         }
         for (function.integer_facts) |fact| {
@@ -3025,6 +3026,46 @@ pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}
     }
 }
 
+/// Bounds facts are keyed by the access operation's canonical SpanId. The
+/// executable body already owns complete trap-edge validation, so a missing
+/// legacy fact does not block canonical lowering; when a fact is present,
+/// admission requires it to name exactly one resolved access fact.
+pub fn validateBoundsFactsForLowering(module: Module) error{InvalidMirBoundsFacts}!void {
+    for (module.functions) |function| {
+        for (function.bounds_facts) |fact| {
+            if (!boundsFactTypedIdentityValid(function, fact)) return error.InvalidMirBoundsFacts;
+            if (countMatchingBoundsFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
+            if (countMatchingBoundsAccessFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
+        }
+    }
+}
+
+fn boundsFactTypedIdentityValid(function: Function, fact: BoundsFact) bool {
+    return spanIdValid(function, fact.typed_span_id);
+}
+
+fn countMatchingBoundsFacts(function: Function, target: BoundsFact) usize {
+    var count: usize = 0;
+    for (function.bounds_facts) |fact| {
+        if (fact.kind == target.kind and fact.typed_span_id.eql(target.typed_span_id)) count += 1;
+    }
+    return count;
+}
+
+fn countMatchingBoundsAccessFacts(function: Function, fact: BoundsFact) usize {
+    var count: usize = 0;
+    for (function.access_facts) |access| switch (access) {
+        .index => |index| {
+            if (fact.kind == .index and index.index_span_id.eql(fact.typed_span_id)) count += 1;
+        },
+        .range_slice => |slice| {
+            if (fact.kind == .slice and slice.typed_span_id.eql(fact.typed_span_id)) count += 1;
+        },
+        else => {},
+    };
+    return count;
+}
+
 /// Resolves the sole type authority carried by a float literal fact. A
 /// spelling-only identity is deliberately insufficient: it would make the
 /// backend recover type semantics from source-shaped data again.
@@ -3896,6 +3937,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
     InvalidMirRangeFacts,
+    InvalidMirBoundsFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
     InvalidMirExecutableBody,
@@ -3914,6 +3956,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateIntegerFactsForLowering(module);
     try validateFloatFactsForLowering(module);
     try validateRangeFactsForLowering(module);
+    try validateBoundsFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateBindThunkFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
@@ -15551,7 +15594,6 @@ const FunctionBuilder = struct {
                     try self.attachExecutableTrapEdge(expr.span, .Bounds, .bounds_check);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .index,
-                        .source = self.sourcePoint(canonicalOperatorOperand(node.index.*).span),
                         .typed_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
                     });
                 }
@@ -15611,7 +15653,6 @@ const FunctionBuilder = struct {
                     try self.attachExecutableTrapEdge(expr.span, .Bounds, .bounds_check);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .slice,
-                        .source = self.sourcePoint(expr.span),
                         .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     });
                 }

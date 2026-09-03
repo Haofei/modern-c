@@ -3266,7 +3266,8 @@ pub const BoundsFactKind = enum { index, slice };
 
 pub const BoundsFact = struct {
     kind: BoundsFactKind,
-    source: SourcePoint,
+    /// Sole source identity for the checked access. Display coordinates are
+    /// recovered from the owning function's span table.
     typed_span_id: SpanId = .invalid,
 };
 

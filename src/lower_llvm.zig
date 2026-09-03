@@ -7439,8 +7439,9 @@ const LlvmEmitter = struct {
 
     fn requireMirBoundsFact(self: *LlvmEmitter, kind: mir.BoundsFactKind, span: ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        const span_id = mir.spanIdAtSource(function.*, mir.sourcePointFromSpan(span)) orelse return error.UnsupportedLlvmEmission;
         for (function.bounds_facts) |fact| {
-            if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return;
+            if (fact.kind == kind and fact.typed_span_id.eql(span_id)) return;
         }
         return error.UnsupportedLlvmEmission;
     }

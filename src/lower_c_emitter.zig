@@ -6386,8 +6386,9 @@ pub const CEmitter = struct {
 
     fn requireMirBoundsFact(self: *CEmitter, kind: mir.BoundsFactKind, span: ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        const span_id = mir.spanIdAtSource(function.*, mir.sourcePointFromSpan(span)) orelse return error.UnsupportedCEmission;
         for (function.bounds_facts) |fact| {
-            if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return;
+            if (fact.kind == kind and fact.typed_span_id.eql(span_id)) return;
         }
         return error.UnsupportedCEmission;
     }
