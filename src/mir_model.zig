@@ -1337,7 +1337,6 @@ pub const ExecutableExpression = struct {
         },
         direct_call: struct {
             callee: SymbolId,
-            callee_source: SourcePoint,
             callee_span_id: SpanId = .invalid,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
@@ -1362,7 +1361,6 @@ pub const ExecutableExpression = struct {
             /// Source-level unsafe authority carried by operations whose
             /// contract requires a lexical unsafe boundary.
             unsafe_authorized: bool = false,
-            callee_source: SourcePoint,
             callee_span_id: SpanId = .invalid,
             /// Exact source location of a constrained builtin result
             /// representation check. `raw.ptr<T>` uses this to own its

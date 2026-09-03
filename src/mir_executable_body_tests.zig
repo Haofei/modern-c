@@ -744,16 +744,25 @@ test "builtin call is explicit and mechanically complete" {
     const function = &module.functions[0];
     try executable.verify(function);
     try std.testing.expect(executable.isComplete(function));
-    var saw_builtin = false;
-    for (function.executable_body.expressions) |value| switch (value.operation) {
+    var builtin_index: ?usize = null;
+    for (function.executable_body.expressions, 0..) |value, index| switch (value.operation) {
         .builtin_call => |call| {
-            saw_builtin = true;
+            builtin_index = index;
             try std.testing.expectEqual(mir.CallTargetKind.phys, call.kind);
             try std.testing.expect(call.callee_span_id.isValid());
         },
         else => {},
     };
-    try std.testing.expect(saw_builtin);
+    const index = builtin_index orelse return error.TestUnexpectedResult;
+    const saved_span_id = function.executable_body.expressions[index].operation.builtin_call.callee_span_id;
+    function.executable_body.expressions[index].operation.builtin_call.callee_span_id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    function.executable_body.expressions[index].operation.builtin_call.callee_span_id = saved_span_id;
+
+    const saved_identity_id = function.span_identities[saved_span_id.index()].id;
+    function.span_identities[saved_span_id.index()].id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    function.span_identities[saved_span_id.index()].id = saved_identity_id;
 }
 
 test "scalar bitcast builtin is complete only for an equal-width bit pattern" {

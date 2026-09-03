@@ -5718,9 +5718,9 @@ test "executable C renderer stages call arguments left to right" {
         .{ .id = next_symbol, .spelling = "next" },
         .{ .id = combine_symbol, .spelling = "combine" },
     };
-    const first_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = next_symbol, .callee_source = source_first };
-    const second_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = next_symbol, .callee_source = source_second };
-    var combine_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = combine_symbol, .callee_source = source_combined, .argument_count = 2 };
+    const first_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = next_symbol };
+    const second_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = next_symbol };
+    var combine_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = combine_symbol, .argument_count = 2 };
     combine_call.arguments[0] = first;
     combine_call.arguments[1] = second;
     var expressions = [_]mir.ExecutableExpression{
@@ -5763,8 +5763,8 @@ test "executable C renderer snapshots reads before a later effect" {
         .{ .id = mutate_symbol, .spelling = "mutate_x" },
         .{ .id = combine_symbol, .spelling = "combine" },
     };
-    const mutate_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = mutate_symbol, .callee_source = source };
-    var combine_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = combine_symbol, .callee_source = source, .argument_count = 2 };
+    const mutate_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = mutate_symbol };
+    var combine_call: @FieldType(mir.ExecutableExpression.Operation, "direct_call") = .{ .callee = combine_symbol, .argument_count = 2 };
     combine_call.arguments[0] = read_x;
     combine_call.arguments[1] = mutate;
     var expressions = [_]mir.ExecutableExpression{
@@ -6234,12 +6234,12 @@ test "executable C renderer emits selected typed builtins in operand order" {
         .{ .id = wrap_right_local, .spelling = "wrap_right" },
         .{ .id = conversion_local, .spelling = "small" },
     };
-    var phys_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .phys, .callee_source = source, .argument_count = 1 };
+    var phys_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .phys, .argument_count = 1 };
     phys_call.arguments[0] = phys_operand;
-    var wrapping_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .wrapping_add, .callee_source = source, .argument_count = 2 };
+    var wrapping_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .wrapping_add, .argument_count = 2 };
     wrapping_call.arguments[0] = wrap_left;
     wrapping_call.arguments[1] = wrap_right;
-    var conversion_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .callee_source = source, .argument_count = 1 };
+    var conversion_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .argument_count = 1 };
     conversion_call.arguments[0] = conversion_operand;
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = phys_operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u64_ty, .operation = .{ .local = phys_local } },
@@ -6286,7 +6286,7 @@ test "executable C renderer emits scalar bitcast as a bit preserving builtin" {
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty, .source = source }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
-    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .callee_source = source, .argument_count = 1 };
+    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .argument_count = 1 };
     call.arguments[0] = operand;
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
@@ -6326,7 +6326,7 @@ test "executable C renderer rejects scalar bitcast fact mutations" {
     const u64_ty: mir.ValueType = .{ .integer = "u64" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty, .source = source }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
-    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .callee_source = source, .argument_count = 1 };
+    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .argument_count = 1 };
     call.arguments[0] = operand;
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
@@ -6374,7 +6374,7 @@ test "executable C renderer rejects selected builtin fact mutations" {
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty, .source = source }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
-    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .callee_source = source, .argument_count = 1 };
+    var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .argument_count = 1 };
     call.arguments[0] = operand;
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },

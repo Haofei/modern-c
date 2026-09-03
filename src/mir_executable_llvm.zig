@@ -6978,7 +6978,7 @@ test "mechanical renderer resolves direct calls by SymbolId" {
     const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "next_value" }};
     const locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "renaming_does_not_select_semantics" }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = .{ .callee = mir.SymbolId.fromIndex(0), .callee_source = source } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = .{ .callee = mir.SymbolId.fromIndex(0) } } },
         .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
     };
     const statements = [_]mir.ExecutableStatement{
@@ -7006,7 +7006,6 @@ test "mechanical renderer applies normalized C ABI direct-call extensions" {
         .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
         .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .direct_call = .{
             .callee = mir.SymbolId.fromIndex(0),
-            .callee_source = source,
             .arguments = .{ mir.ExprId.fromIndex(0), mir.ExprId.fromIndex(1) } ++ [_]mir.ExprId{.invalid} ** (mir.max_executable_operands - 2),
             .argument_count = 2,
         } } },
@@ -7711,7 +7710,6 @@ fn renderBuiltinForTest(allocator: std.mem.Allocator, kind: mir.CallTargetKind, 
         .operation = .{ .builtin_call = .{
             .kind = kind,
             .unsafe_authorized = mir.executableBuiltinRequiresUnsafe(kind),
-            .callee_source = source,
             .arguments = arguments,
             .argument_count = operand_types.len,
         } },

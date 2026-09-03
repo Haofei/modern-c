@@ -95,6 +95,11 @@ def main() -> int:
         if field in model[instruction_start:instruction_end]:
             fail(f"src/mir_model.zig Instruction duplicates {field[:-1]} beside SpanId")
 
+    executable_expression_start = model.index("pub const ExecutableExpression = struct {")
+    executable_expression_end = model.index("pub const ExecutablePlace = struct {", executable_expression_start)
+    if "callee_source:" in model[executable_expression_start:executable_expression_end]:
+        fail("src/mir_model.zig executable call operations duplicate callee source beside SpanId")
+
     start = model.index("pub const TrapEdge = struct {")
     end = model.index("\n};", start)
     trap_edge = model[start:end]

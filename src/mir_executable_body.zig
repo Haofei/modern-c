@@ -631,7 +631,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
         .direct_call => |call| {
             try verifySymbol(body, call.callee);
             if (body.complete and body.symbols[call.callee.index()].kind != .function) return error.InvalidCalleeSymbol;
-            try verifySpan(function, call.callee_span_id, call.callee_source);
+            try verifySpanId(function, call.callee_span_id);
             try verifyArguments(body, value, call.arguments, call.argument_count);
         },
         .closure_bind => |bind| {
@@ -655,7 +655,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             }
         },
         .builtin_call => |call| {
-            try verifySpan(function, call.callee_span_id, call.callee_source);
+            try verifySpanId(function, call.callee_span_id);
             if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return error.InvalidUnsafeAuthorization;
             try verifyArguments(body, value, call.arguments, call.argument_count);
             var operand_types: [mir.max_executable_operands]mir.ValueType = undefined;

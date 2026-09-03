@@ -8926,12 +8926,9 @@ const FunctionBuilder = struct {
                     if (!address.representation_span_id.isValid()) complete = false;
                 },
                 .direct_call => |call| {
-                    const callee_span_id: SpanId = self.span_ids.get(call.callee_source) orelse SpanId.invalid;
-                    expression.operation.direct_call.callee_span_id = callee_span_id;
-                    if (!callee_span_id.isValid()) complete = false;
+                    if (!call.callee_span_id.isValid()) complete = false;
                 },
                 .builtin_call => |*call| {
-                    call.callee_span_id = self.span_ids.get(call.callee_source) orelse SpanId.invalid;
                     if (!call.callee_span_id.isValid()) complete = false;
                     if (call.representation_source) |source| {
                         call.representation_span_id = self.span_ids.get(source) orelse .invalid;
@@ -9313,7 +9310,7 @@ const FunctionBuilder = struct {
             else
                 !binary.eager_safe,
             .direct_call => |call| direct: {
-                if (!call.callee.isValid() or call.callee.index() >= self.executable_symbols.items.len) break :direct false;
+                if (!call.callee.isValid() or call.callee.index() >= self.executable_symbols.items.len or !call.callee_span_id.isValid()) break :direct false;
                 const spelling = self.executable_symbols.items[call.callee.index()].spelling;
                 const summary = self.summaries.get(spelling) orelse break :direct false;
                 break :direct !summary.is_variadic;
@@ -10341,7 +10338,7 @@ const FunctionBuilder = struct {
         expression: ExecutableExpression,
         call: @FieldType(ExecutableExpression.Operation, "builtin_call"),
     ) bool {
-        if (call.argument_count > mir_model.max_executable_operands) return false;
+        if (!call.callee_span_id.isValid() or call.argument_count > mir_model.max_executable_operands) return false;
         var operand_types: [mir_model.max_executable_operands]ValueType = undefined;
         for (call.arguments[0..call.argument_count], 0..) |argument, index| {
             if (!argument.isValid() or argument.index() >= self.executable_expressions.items.len) return false;
@@ -12190,7 +12187,6 @@ const FunctionBuilder = struct {
                     } else if (raw_target) |target| {
                         if (target.kind == .raw_load or target.kind == .raw_ptr or target.kind == .raw_store) result_ty = target.result_ty;
                     }
-                    const callee_source = self.sourcePoint(node.callee.*.span);
                     const receiver, const receiver_ty = switch (kind) {
                         .const_get => .{
                             (const_get_target orelse
@@ -12231,8 +12227,7 @@ const FunctionBuilder = struct {
                     var call_value: @FieldType(ExecutableExpression.Operation, "builtin_call") = .{
                         .kind = kind,
                         .unsafe_authorized = mir_model.executableBuiltinRequiresUnsafe(kind) and self.active_unsafe,
-                        .callee_source = callee_source,
-                        .callee_span_id = try self.internSpanId(callee_source),
+                        .callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span)),
                         .representation_source = if (kind == .raw_ptr) source else null,
                         .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
                         .const_index = if (const_get_target) |target| target.index else null,
@@ -12376,11 +12371,9 @@ const FunctionBuilder = struct {
                     break :call .{ .dyn_call = call_value };
                 }
                 if (directCalleeName(node.callee.*)) |callee_name| if (self.isKnownDirectCall(node.callee.*, callee_name)) {
-                    const callee_source = self.sourcePoint(node.callee.*.span);
                     var call_value: @FieldType(ExecutableExpression.Operation, "direct_call") = .{
                         .callee = try self.internExecutableFunctionSymbol(callee_name),
-                        .callee_source = callee_source,
-                        .callee_span_id = try self.internSpanId(callee_source),
+                        .callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span)),
                         .argument_count = node.args.len,
                     };
                     const summary = self.summaries.get(callee_name);
