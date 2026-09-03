@@ -391,7 +391,6 @@ pub const Instruction = struct {
     aggregate_construction: ?AggregateConstructionKind = null,
     const_index: ?usize = null,
     target_index: ?usize = null,
-    target_owner: ?[]const u8 = null,
     typed_target_owner_id: ?SymbolId = null,
     contract_region_id: ?usize = null,
     typed_value_id: ?ValueId = null,
@@ -3602,7 +3601,6 @@ pub const TargetTypeFact = struct {
     typed_operand_value_id: ValueId = .invalid,
     aggregate_construction: ?AggregateConstructionKind = null,
     target_index: ?usize = null,
-    target_owner: ?[]const u8 = null,
     typed_target_owner_id: SymbolId = .invalid,
     source: SourcePoint,
 };

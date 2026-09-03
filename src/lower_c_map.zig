@@ -142,6 +142,10 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
+                const target_owner = if (instruction.typed_target_owner_id) |owner_id|
+                    mir.targetOwnerSpelling(function, owner_id) orelse "<invalid>"
+                else
+                    "none";
                 try out.print(allocator, "instr fn={s} block={} kind={s} result={s} typed_result={} detail={s} target_type={s} aggregate={s} const_index={} target_owner={s} typed_target_owner={} target_index={} value_id={s} typed_value={} typed_span={} line={} column={} offset={} len={}\n", .{
                     function.name,
                     block.id,
@@ -152,7 +156,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                     if (instruction.target_ty) |target_ty| mir_syntax.typeText(target_ty) else "none",
                     if (instruction.aggregate_construction) |kind| @tagName(kind) else "none",
                     optionalUsizeOrMax(instruction.const_index),
-                    instruction.target_owner orelse "none",
+                    target_owner,
                     optionalTypedIndexOrMax(instruction.typed_target_owner_id),
                     optionalUsizeOrMax(instruction.target_index),
                     if (instruction.typed_value_id) |id| valueSpelling(function, id) else "none",
@@ -191,6 +195,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try appendSourcePointForDigest(allocator, out, fact.source);
         }
         for (function.target_type_facts) |fact| {
+            const target_owner = mir.targetOwnerSpelling(function, fact.typed_target_owner_id) orelse "none";
             try out.print(allocator, "target_type_fact fn={s} kind={s} target={s} result={s} typed_result={} typed_span={} aggregate={s} target_owner={s} typed_target_owner={} target_index={} ", .{
                 function.name,
                 @tagName(fact.kind),
@@ -199,7 +204,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                 typedIndexOrMax(fact.typed_result_ty),
                 typedIndexOrMax(fact.typed_span_id),
                 if (fact.aggregate_construction) |kind| @tagName(kind) else "none",
-                fact.target_owner orelse "none",
+                target_owner,
                 typedIndexOrMax(fact.typed_target_owner_id),
                 optionalUsizeOrMax(fact.target_index),
             });

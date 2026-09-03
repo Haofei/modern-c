@@ -24,7 +24,7 @@ pub const CallTargetLookupKey = struct {
 pub const TargetTypeFactQuery = struct {
     kind: mir.TargetTypeKind,
     source: mir.SourcePoint,
-    owner: ?[]const u8 = null,
+    typed_target_owner_id: ?mir.SymbolId = null,
     index: ?usize = null,
 };
 
@@ -67,17 +67,18 @@ pub const MirFactsView = struct {
 
     /// Same local query for fact families whose target belongs to a typed owner
     /// and optional target index (for example atomic-init payload/result pairs).
-    pub fn targetTypeFactAtOwned(self: MirFactsView, current: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAtOwned(self: MirFactsView, current: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner_id: mir.SymbolId, index: ?usize) ?mir.TargetTypeFact {
         _ = self;
-        return targetTypeFactInFunction(current, kind, source, owner, index);
+        if (!owner_id.isValid()) return null;
+        return targetTypeFactInFunction(current, kind, source, owner_id, index);
     }
 
     /// Current-function owner source-span compatibility entrypoint. It does not
     /// scan other functions; new code should prefer `targetTypeFactById`.
     pub fn targetTypeFactAtOwnedCurrentSpan(self: MirFactsView, query: TargetTypeCurrentQuery) ?mir.TargetTypeFact {
-        if (query.fact.owner == null) return null;
+        const owner_id = query.fact.typed_target_owner_id orelse return null;
         if (query.current) |function| {
-            if (self.targetTypeFactAtOwned(function, query.fact.kind, query.fact.source, query.fact.owner.?, query.fact.index)) |fact| return fact;
+            if (self.targetTypeFactAtOwned(function, query.fact.kind, query.fact.source, owner_id, query.fact.index)) |fact| return fact;
         }
         return null;
     }
@@ -91,6 +92,13 @@ pub const MirFactsView = struct {
     pub fn targetTypeFactById(self: MirFactsView, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
         _ = self;
         return targetTypeFactInFunctionById(current, key);
+    }
+
+    /// Resolves a source spelling only at the syntax-to-MIR compatibility
+    /// boundary. Facts themselves retain only the function-local SymbolId.
+    pub fn targetOwnerIdBySpelling(self: MirFactsView, current: *const mir.Function, spelling: []const u8) ?mir.SymbolId {
+        _ = self;
+        return mir.targetOwnerIdBySpelling(current.*, spelling);
     }
 
     /// Returns a call-target fact by verified typed span identity in `current`.
@@ -160,10 +168,10 @@ pub const MirFactsView = struct {
         return targetTypeFactMatches(current, fact, query);
     }
 
-    pub fn targetTypeFactMatchesFamily(self: MirFactsView, current: *const mir.Function, fact: mir.TargetTypeFact, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8) bool {
+    pub fn targetTypeFactMatchesFamily(self: MirFactsView, current: *const mir.Function, fact: mir.TargetTypeFact, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner_id: ?mir.SymbolId) bool {
         _ = self;
         if (fact.kind != kind) return false;
-        if (!ownerMatches(fact.target_owner, owner)) return false;
+        if (!typedOwnerIdMatches(fact.typed_target_owner_id, owner_id)) return false;
         if (!sourceMatches(kind, source, fact.source)) return false;
         return typedIdentityIsValid(current, fact);
     }
@@ -171,7 +179,7 @@ pub const MirFactsView = struct {
     pub fn pointerFactMatchesQuery(self: MirFactsView, fact: mir.PointerProvenanceFact, query: PointerFactQuery) bool {
         _ = self;
         if (!std.mem.eql(u8, fact.subject, query.subject)) return false;
-        if (!ownerMatches(fact.field_path, query.field_path)) return false;
+        if (!optionalTextEql(fact.field_path, query.field_path)) return false;
         if (fact.element_index != query.element_index) return false;
         return sourcePointLineColumnMatches(query.source, fact.source);
     }
@@ -193,9 +201,9 @@ pub const MirFactsView = struct {
     }
 };
 
-fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
+fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner_id: ?mir.SymbolId, index: ?usize) ?mir.TargetTypeFact {
     for (function.target_type_facts) |fact| {
-        if (!targetTypeFactMatches(function, fact, .{ .kind = kind, .source = source, .owner = owner, .index = index })) continue;
+        if (!targetTypeFactMatches(function, fact, .{ .kind = kind, .source = source, .typed_target_owner_id = owner_id, .index = index })) continue;
         return fact;
     }
     return null;
@@ -203,7 +211,7 @@ fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeK
 
 fn targetTypeFactMatches(function: *const mir.Function, fact: mir.TargetTypeFact, query: TargetTypeFactQuery) bool {
     if (fact.kind != query.kind or fact.target_index != query.index) return false;
-    if (!ownerMatches(fact.target_owner, query.owner)) return false;
+    if (!typedOwnerIdMatches(fact.typed_target_owner_id, query.typed_target_owner_id)) return false;
     if (!sourceMatches(query.kind, query.source, fact.source)) return false;
     return typedIdentityIsValid(function, fact);
 }
@@ -253,12 +261,10 @@ fn typedIdentityIsValid(function: *const mir.Function, fact: mir.TargetTypeFact)
     if (!std.mem.eql(u8, function.type_identities[type_index].spelling, fact.result_ty.name())) return false;
     const source = function.span_identities[span_index].source;
     if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
-    if (fact.target_owner) |owner| {
-        if (!fact.typed_target_owner_id.isValid()) return false;
-        const owner_index = fact.typed_target_owner_id.index();
-        return owner_index < function.target_owner_identities.len and std.mem.eql(u8, function.target_owner_identities[owner_index].spelling, owner);
-    }
-    return !fact.typed_target_owner_id.isValid();
+    if (!fact.typed_target_owner_id.isValid()) return true;
+    const owner_index = fact.typed_target_owner_id.index();
+    return owner_index < function.target_owner_identities.len and
+        function.target_owner_identities[owner_index].id.eql(fact.typed_target_owner_id);
 }
 
 fn typedOwnerIdMatches(actual: mir.SymbolId, expected: ?mir.SymbolId) bool {
@@ -266,9 +272,9 @@ fn typedOwnerIdMatches(actual: mir.SymbolId, expected: ?mir.SymbolId) bool {
     return !actual.isValid();
 }
 
-fn ownerMatches(actual: ?[]const u8, expected: ?[]const u8) bool {
-    if (actual == null or expected == null) return actual == null and expected == null;
-    return std.mem.eql(u8, actual.?, expected.?);
+fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left == null or right == null) return left == null and right == null;
+    return std.mem.eql(u8, left.?, right.?);
 }
 
 fn sourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint, source: mir.SourcePoint) bool {

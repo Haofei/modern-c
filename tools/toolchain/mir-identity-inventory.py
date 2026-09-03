@@ -181,6 +181,7 @@ def main() -> int:
 
     require_not_contains("src/mir_model.zig", "pub const TypeKey = union(enum)")
     require_not_contains("src/mir.zig", "TypeKey.fromValueType")
+    require_not_contains("src/mir_model.zig", "target_owner: ?[]const u8")
 
     for needle in (
         "const BlockId = mir.BlockId;",

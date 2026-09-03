@@ -48,8 +48,8 @@ backed by a module-owned `SymbolIdentity` table, representation-sensitive instru
 also double-writes typed `TypeId` result identities for representation-sensitive
 instructions/facts and typed `SpanId` source identities for those rows, each
 function owns `ValueIdentity`, `TypeIdentity`, and `SpanIdentity` tables for
-those typed ids, target-type owner rows now double-write a typed `SymbolId`
-mirror backed by a function-owned `target_owner_identity` table, target-type
+those typed ids, target-type owner rows carry only a typed `SymbolId` backed
+by a function-owned `target_owner_identity` table, target-type
 facts now double-write typed `TypeId` result identities and typed `SpanId`
 source identities alongside their metadata instructions, and
 `mir-identity-inventory-test` gates those seeds. This is a migration anchor only;

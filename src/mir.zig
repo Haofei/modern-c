@@ -665,10 +665,11 @@ fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, f
 }
 
 fn directCallResultFactAtSource(function: Function, fn_name: []const u8, callee_source: SourcePoint) bool {
+    const owner_id = targetOwnerIdBySpelling(function, fn_name) orelse return false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .direct_call_result) continue;
         if (fact.target_index != null) continue;
-        if (!optionalTextEql(fact.target_owner, fn_name)) continue;
+        if (!fact.typed_target_owner_id.eql(owner_id)) continue;
         if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
         if (fact.source.offset != callee_source.offset or fact.source.len != callee_source.len) continue;
         return true;
@@ -677,15 +678,31 @@ fn directCallResultFactAtSource(function: Function, fn_name: []const u8, callee_
 }
 
 fn directCallArgumentFactAtSource(function: Function, fn_name: []const u8, arg_index: usize, arg_source: SourcePoint) bool {
+    const owner_id = targetOwnerIdBySpelling(function, fn_name) orelse return false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .direct_call_argument) continue;
         if (fact.target_index != arg_index) continue;
-        if (!optionalTextEql(fact.target_owner, fn_name)) continue;
+        if (!fact.typed_target_owner_id.eql(owner_id)) continue;
         if (fact.source.line != arg_source.line or fact.source.column != arg_source.column) continue;
         if (fact.source.offset != arg_source.offset or fact.source.len != arg_source.len) continue;
         return true;
     }
     return false;
+}
+
+pub fn targetOwnerIdBySpelling(function: Function, spelling: []const u8) ?SymbolId {
+    for (function.target_owner_identities) |identity| {
+        if (!identity.id.isValid()) continue;
+        if (std.mem.eql(u8, identity.spelling, spelling)) return identity.id;
+    }
+    return null;
+}
+
+pub fn targetOwnerSpelling(function: Function, owner_id: SymbolId) ?[]const u8 {
+    if (!owner_id.isValid() or owner_id.index() >= function.target_owner_identities.len) return null;
+    const identity = function.target_owner_identities[owner_id.index()];
+    if (!identity.id.eql(owner_id)) return null;
+    return identity.spelling;
 }
 
 fn targetTypeFactAtSource(function: Function, kind: TargetTypeKind, source: SourcePoint) bool {
@@ -1901,13 +1918,14 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             for (block.instructions) |instruction| {
                 const value_id = if (instruction.typed_value_id) |id| valueSpelling(function, id) orelse "none" else "none";
                 if (instruction.target_index) |index| {
-                    const target_owner = instruction.target_owner orelse "none";
+                    const target_owner = if (instruction.typed_target_owner_id) |owner_id| targetOwnerSpelling(function, owner_id) orelse "<invalid>" else "none";
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index={} value_id={s} contract_region_id=none line={} column={}\n",
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), target_owner, index, value_id, instruction.line, instruction.column },
                     );
-                } else if (instruction.target_owner) |owner| {
+                } else if (instruction.typed_target_owner_id) |owner_id| {
+                    const owner = targetOwnerSpelling(function, owner_id) orelse "<invalid>";
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index=none value_id={s} contract_region_id=none line={} column={}\n",
@@ -2100,7 +2118,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         for (function.target_type_facts) |fact| {
             const target_index = if (fact.target_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
             defer if (fact.target_index != null) allocator.free(target_index);
-            const target_owner = fact.target_owner orelse "none";
+            const target_owner = targetOwnerSpelling(function, fact.typed_target_owner_id) orelse "none";
             const aggregate_construction = if (fact.aggregate_construction) |kind| @tagName(kind) else "none";
             try out.print(
                 allocator,
@@ -2891,7 +2909,7 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         if (!instruction.typed_callee_root_span_id.isValid()) return false;
         if (instruction.typed_callee_root_value_id.index() >= function.value_identities.len) return false;
         if (instruction.typed_callee_root_span_id.index() >= function.span_identities.len) return false;
-        if (instruction.target_owner == null or instruction.typed_target_owner_id == null) return false;
+        if (instruction.typed_target_owner_id == null) return false;
     } else if (instruction.typed_callee_root_value_id.isValid() or instruction.typed_callee_root_span_id.isValid() or instruction.callee_field_index != null) {
         return false;
     }
@@ -2900,10 +2918,7 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         if (!owner_id.isValid()) return false;
         const index = owner_id.index();
         if (index >= function.target_owner_identities.len) return false;
-        const spelling = instruction.target_owner orelse return false;
-        if (!std.mem.eql(u8, function.target_owner_identities[index].spelling, spelling)) return false;
-    } else if (instruction.target_owner != null) {
-        return false;
+        if (!function.target_owner_identities[index].id.eql(owner_id)) return false;
     }
     return true;
 }
@@ -3956,8 +3971,8 @@ fn targetTypeFactFamilyValid(fact: TargetTypeFact) bool {
     return switch (fact.kind) {
         .if_let_subject => isResultOrNullableTargetType(fact.result_ty),
         .try_operand => isResultOrNullableTargetType(fact.result_ty),
-        .direct_call_argument => fact.target_index != null and fact.target_owner != null and fact.typed_callee_span_id.isValid(),
-        .indirect_call_argument => fact.target_index != null and fact.target_owner != null and fact.typed_callee_span_id.isValid(),
+        .direct_call_argument => fact.target_index != null and fact.typed_target_owner_id.isValid() and fact.typed_callee_span_id.isValid(),
+        .indirect_call_argument => fact.target_index != null and fact.typed_target_owner_id.isValid() and fact.typed_callee_span_id.isValid(),
         .for_element => fact.typed_operand_value_id.isValid(),
         else => true,
     };
@@ -4000,13 +4015,10 @@ fn targetTypeFactTypedIdentitiesValid(function: Function, fact: TargetTypeFact) 
         return false;
     }
 
-    if (fact.target_owner) |owner| {
-        if (!fact.typed_target_owner_id.isValid()) return false;
+    if (fact.typed_target_owner_id.isValid()) {
         const owner_index = fact.typed_target_owner_id.index();
         if (owner_index >= function.target_owner_identities.len) return false;
-        if (!std.mem.eql(u8, function.target_owner_identities[owner_index].spelling, owner)) return false;
-    } else if (fact.typed_target_owner_id.isValid()) {
-        return false;
+        if (!function.target_owner_identities[owner_index].id.eql(fact.typed_target_owner_id)) return false;
     }
 
     return true;
@@ -4015,11 +4027,6 @@ fn targetTypeFactTypedIdentitiesValid(function: Function, fact: TargetTypeFact) 
 fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
     if (instruction.kind != .target_type) return null;
     return std.meta.stringToEnum(TargetTypeKind, instruction.detail);
-}
-
-fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left == null or right == null) return left == null and right == null;
-    return std.mem.eql(u8, left.?, right.?);
 }
 
 fn targetTypeTypedOwnerCompatible(instruction: Instruction, fact: TargetTypeFact) bool {
@@ -4107,7 +4114,6 @@ fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction:
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
-        if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
@@ -4130,7 +4136,6 @@ fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instru
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
-        if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
@@ -4148,7 +4153,6 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
         const kind = targetTypeKindForInstruction(instruction) orelse continue;
         if (kind != fact.kind) continue;
         if (instruction.target_index != fact.target_index) continue;
-        if (!optionalTextEql(instruction.target_owner, fact.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
@@ -4166,7 +4170,6 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
         const instruction_kind = targetTypeKindForInstruction(instruction) orelse continue;
         if (instruction_kind != kind) continue;
         if (instruction.target_index != target.target_index) continue;
-        if (!optionalTextEql(instruction.target_owner, target.target_owner)) continue;
         if (!targetTypeInstructionOwnersCompatible(instruction, target)) continue;
         if (!targetTypeInstructionSpansCompatible(instruction, target)) continue;
         if (!targetTypeInstructionCalleeSpansCompatible(instruction, target, kind)) continue;
@@ -4182,7 +4185,6 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
     for (function.target_type_facts) |fact| {
         if (fact.kind != target.kind) continue;
         if (fact.target_index != target.target_index) continue;
-        if (!optionalTextEql(fact.target_owner, target.target_owner)) continue;
         if (!fact.typed_target_owner_id.eql(target.typed_target_owner_id)) continue;
         if (!fact.typed_result_ty.eql(target.typed_result_ty)) continue;
         if (!fact.typed_span_id.eql(target.typed_span_id)) continue;
@@ -4199,7 +4201,6 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
-        if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
@@ -16942,7 +16943,6 @@ const FunctionBuilder = struct {
         const typed_span_id = instructions.items[instructions.items.len - 1].typed_span_id;
         instructions.items[instructions.items.len - 1].target_ty = target_ty;
         instructions.items[instructions.items.len - 1].target_index = target_index;
-        instructions.items[instructions.items.len - 1].target_owner = target_owner;
         instructions.items[instructions.items.len - 1].typed_target_owner_id = typed_target_owner_id;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
@@ -16951,7 +16951,6 @@ const FunctionBuilder = struct {
             .typed_result_ty = typed_result_ty,
             .typed_span_id = typed_span_id,
             .target_index = target_index,
-            .target_owner = target_owner,
             .typed_target_owner_id = typed_target_owner_id,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
@@ -20035,7 +20034,6 @@ const FunctionBuilder = struct {
         const root_span_id = try self.internSpanId(self.sourcePoint(root.span));
         const instructions = &self.blocks.items[self.current].instructions;
         const instruction = &instructions.items[instructions.items.len - 1];
-        instruction.target_owner = place;
         instruction.typed_target_owner_id = owner_id;
         instruction.typed_callee_root_value_id = root_id;
         instruction.typed_callee_root_span_id = root_span_id;

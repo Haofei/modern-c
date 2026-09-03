@@ -1697,6 +1697,10 @@ fn targetOwnerIdentityBySpelling(function: mir.Function, spelling: []const u8) ?
     return null;
 }
 
+fn targetOwnerSpelling(function: mir.Function, owner_id: SymbolId) ?[]const u8 {
+    return mir.targetOwnerSpelling(function, owner_id);
+}
+
 fn typeIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.TypeIdentity {
     for (function.type_identities) |identity| {
         if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
@@ -2044,7 +2048,7 @@ test "MIR target-type owner identities mirror direct calls" {
     const result_type = typeIdentityBySpelling(caller, "u32") orelse return error.TestUnexpectedResult;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     const result_span = spanIdentityBySource(caller, result_fact.source) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("callee", result_fact.target_owner.?);
+    try std.testing.expectEqualStrings("callee", targetOwnerSpelling(caller, result_fact.typed_target_owner_id).?);
     try std.testing.expect(result_fact.typed_target_owner_id.eql(owner.id));
     try std.testing.expect(result_fact.typed_result_ty.eql(result_type.id));
     try std.testing.expect(result_fact.typed_span_id.eql(result_span.id));
@@ -2058,7 +2062,7 @@ test "MIR target-type owner identities mirror direct calls" {
         }
         if (instruction.kind != .target_type) continue;
         if (!std.mem.eql(u8, instruction.detail, @tagName(mir.TargetTypeKind.direct_call_result))) continue;
-        try std.testing.expectEqualStrings("callee", instruction.target_owner.?);
+        try std.testing.expectEqualStrings("callee", targetOwnerSpelling(caller, instruction.typed_target_owner_id.?).?);
         try std.testing.expect(instruction.typed_target_owner_id.?.eql(owner.id));
         try std.testing.expect(instruction.typed_result_ty.eql(result_type.id));
         try std.testing.expect(instruction.typed_span_id.eql(result_span.id));
@@ -2179,13 +2183,16 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const db = mir_facts_view.MirFactsView.init();
     const result_span = result_fact.source;
 
-    try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) == null);
+    try std.testing.expect(db.targetOwnerIdBySpelling(&caller, "callee").?.eql(result_fact.typed_target_owner_id));
+    try std.testing.expect(db.targetOwnerIdBySpelling(&caller, "missing") == null);
+
+    try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.typed_target_owner_id, result_fact.target_index) == null);
     try std.testing.expect(db.targetTypeFactAtOwnedCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .direct_call_result,
             .source = result_span,
-            .owner = result_fact.target_owner.?,
+            .typed_target_owner_id = result_fact.typed_target_owner_id,
             .index = result_fact.target_index,
         },
     }) == null);
@@ -2201,7 +2208,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         .fact = .{
             .kind = .inferred_local,
             .source = local_fact.source,
-            .owner = local_fact.target_owner.?,
+            .typed_target_owner_id = local_fact.typed_target_owner_id,
             .index = local_fact.target_index,
         },
     }) == null);
@@ -2254,7 +2261,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         .offset = result_fact.source.offset + 100,
         .len = result_fact.source.len,
     };
-    try std.testing.expect(db.targetTypeFactAtOwned(&caller, .direct_call_result, wrong_span, result_fact.target_owner.?, result_fact.target_index) == null);
+    try std.testing.expect(db.targetTypeFactAtOwned(&caller, .direct_call_result, wrong_span, result_fact.typed_target_owner_id, result_fact.target_index) == null);
 
     const by_id = db.targetTypeFactById(&caller, .{
         .kind = .direct_call_result,
@@ -2523,7 +2530,7 @@ test "MIR target-type admission rejects target fact identity table drift" {
         defer module_mir.deinit();
         const caller = functionByNameMut(&module_mir, "caller").?;
         const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
-        caller.target_owner_identities[fact.typed_target_owner_id.index()].spelling = "other_callee";
+        caller.target_owner_identities[fact.typed_target_owner_id.index()].id = SymbolId.fromIndex(4096);
 
         try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
     }
@@ -3027,7 +3034,7 @@ test "MIR owns inferred local types for conversion results" {
     const result_fact = targetTypeFactByKind(function, .conversion_target) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u8", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("narrowed", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("narrowed", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u8", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -3056,7 +3063,7 @@ test "MIR owns inferred local types for reflection results" {
     const result_fact = targetTypeFactByKind(function, .reflection_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("usize", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("size", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("size", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("usize", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -4072,7 +4079,7 @@ test "MIR owns inferred local copy types" {
     try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .inferred_local));
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        try std.testing.expect(fact.target_owner != null);
+        try std.testing.expect(fact.typed_target_owner_id.isValid());
         try std.testing.expect(fact.target_index == null);
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
@@ -4111,19 +4118,19 @@ test "MIR owns inferred local direct storage read types" {
     var saw_loaded = false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        if (std.mem.eql(u8, fact.target_owner.?, "field")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "field")) {
             try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
             saw_field = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "item")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "item")) {
             try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
             saw_item = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "window")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "window")) {
             try std.testing.expect(fact.target_ty.kind == .slice);
             saw_window = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "loaded")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "loaded")) {
             try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
             saw_loaded = true;
         }
@@ -4301,11 +4308,11 @@ test "MIR owns inferred local cast types" {
     var saw_view = false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        if (std.mem.eql(u8, fact.target_owner.?, "narrowed")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "narrowed")) {
             try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
             saw_narrowed = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "view")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "view")) {
             try std.testing.expect(fact.target_ty.kind == .pointer);
             saw_view = true;
         }
@@ -4348,15 +4355,15 @@ test "MIR owns inferred local binary types" {
     var saw_both = false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        if (std.mem.eql(u8, fact.target_owner.?, "sum")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "sum")) {
             try std.testing.expectEqualStrings("u64", fact.target_ty.kind.name.text);
             saw_sum = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "is_less")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "is_less")) {
             try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
             saw_is_less = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "both")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "both")) {
             try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
             saw_both = true;
         }
@@ -4401,11 +4408,11 @@ test "MIR owns inferred local literal types" {
     var saw_literal_results: usize = 0;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        if (std.mem.eql(u8, fact.target_owner.?, "count")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "count")) {
             try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
             saw_count = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "enabled")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "enabled")) {
             try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
             saw_enabled = true;
         }
@@ -4522,11 +4529,11 @@ test "MIR owns inferred local unary types" {
     var saw_disabled = false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        if (std.mem.eql(u8, fact.target_owner.?, "negated")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "negated")) {
             try std.testing.expectEqualStrings("i64", fact.target_ty.kind.name.text);
             saw_negated = true;
         }
-        if (std.mem.eql(u8, fact.target_owner.?, "disabled")) {
+        if (std.mem.eql(u8, targetOwnerSpelling(function, fact.typed_target_owner_id).?, "disabled")) {
             try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
             saw_disabled = true;
         }
@@ -4667,7 +4674,7 @@ test "MIR owns inferred local direct call types" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "caller").?;
     const fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("count", fact.target_owner.?);
+    try std.testing.expectEqualStrings("count", targetOwnerSpelling(function, fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u64", fact.target_ty.kind.name.text);
     var local_value_id: ?ValueId = null;
     var found_typed_local_use = false;
@@ -4715,7 +4722,7 @@ test "MIR owns inferred local indirect call types" {
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
         const function = functionByName(typed_mir, name).?;
         const fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqualStrings("result", fact.target_owner.?);
+        try std.testing.expectEqualStrings("result", targetOwnerSpelling(function, fact.typed_target_owner_id).?);
         try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
         try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
     }
@@ -4746,14 +4753,14 @@ test "MIR owns inferred local dyn dispatch call types" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "caller").?;
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("result", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("result", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
     const dispatch_fact = targetTypeFactByKind(function, .dyn_dispatch_result) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("Shape", dispatch_fact.target_owner.?);
+    try std.testing.expectEqualStrings("Shape", targetOwnerSpelling(function, dispatch_fact.typed_target_owner_id).?);
     try std.testing.expectEqual(@as(?usize, 0), dispatch_fact.target_index);
     try std.testing.expectEqualStrings("u32", dispatch_fact.target_ty.kind.name.text);
     const argument_fact = targetTypeFactByKind(function, .dyn_dispatch_argument) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("Shape", argument_fact.target_owner.?);
+    try std.testing.expectEqualStrings("Shape", targetOwnerSpelling(function, argument_fact.typed_target_owner_id).?);
     try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(0, 0)), argument_fact.target_index);
     try std.testing.expectEqualStrings("u32", argument_fact.target_ty.kind.name.text);
     const notify = functionByName(typed_mir, "notify").?;
@@ -4767,7 +4774,7 @@ test "MIR owns inferred local dyn dispatch call types" {
         .fact = .{
             .kind = .dyn_dispatch_result,
             .source = dispatch_fact.source,
-            .owner = dispatch_fact.target_owner,
+            .typed_target_owner_id = dispatch_fact.typed_target_owner_id,
             .index = dispatch_fact.target_index,
         },
     }) == null);
@@ -4776,7 +4783,7 @@ test "MIR owns inferred local dyn dispatch call types" {
         .fact = .{
             .kind = .dyn_dispatch_argument,
             .source = argument_fact.source,
-            .owner = argument_fact.target_owner,
+            .typed_target_owner_id = argument_fact.typed_target_owner_id,
             .index = argument_fact.target_index,
         },
     }) == null);
@@ -4813,16 +4820,18 @@ test "MIR owns ordinary direct call result and argument types" {
     for (caller.target_type_facts) |fact| switch (fact.kind) {
         .direct_call_result => {
             result_count += 1;
-            try std.testing.expect(fact.target_owner != null);
+            try std.testing.expect(fact.typed_target_owner_id.isValid());
             try std.testing.expect(fact.target_index == null);
-            try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "log") or std.mem.eql(u8, fact.target_owner.?, "widen"));
+            const owner = targetOwnerSpelling(caller, fact.typed_target_owner_id).?;
+            try std.testing.expect(std.mem.eql(u8, owner, "log") or std.mem.eql(u8, owner, "widen"));
             try std.testing.expect(std.mem.eql(u8, fact.target_ty.kind.name.text, "void") or std.mem.eql(u8, fact.target_ty.kind.name.text, "u64"));
         },
         .direct_call_argument => {
             argument_count += 1;
-            try std.testing.expect(fact.target_owner != null);
-            try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "log") or std.mem.eql(u8, fact.target_owner.?, "widen"));
-            if (std.mem.eql(u8, fact.target_owner.?, "log")) {
+            try std.testing.expect(fact.typed_target_owner_id.isValid());
+            const owner = targetOwnerSpelling(caller, fact.typed_target_owner_id).?;
+            try std.testing.expect(std.mem.eql(u8, owner, "log") or std.mem.eql(u8, owner, "widen"));
+            if (std.mem.eql(u8, owner, "log")) {
                 try std.testing.expect(fact.target_index == @as(?usize, 0) or fact.target_index == @as(?usize, 1));
             } else {
                 try std.testing.expectEqual(@as(?usize, 0), fact.target_index);
@@ -5493,7 +5502,7 @@ test "MIR owns inferred local types for enum raw results" {
     const result_fact = targetTypeFactByKind(function, .enum_raw_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("raw", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("raw", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -5606,7 +5615,7 @@ test "MIR owns inferred local types for arithmetic domain call results" {
     const domain_fact = targetTypeFactByKind(function, .domain_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Result", typeExprHeadName(domain_fact.target_ty).?);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("value", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("value", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("Result", typeExprHeadName(local_fact.target_ty).?);
     try mir.validateLoweringAdmission(typed_mir);
 }
@@ -6010,7 +6019,7 @@ test "MIR owns inferred local types for raw-many offset results" {
     const result_fact = targetTypeFactByKind(function, .raw_many_offset_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Words", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("shifted", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("shifted", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("Words", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -6041,7 +6050,7 @@ test "MIR owns inferred local types for raw-many offset dereferences" {
     const element_fact = targetTypeFactByKind(function, .raw_many_offset_element) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u16", element_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("value", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("value", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u16", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -6408,7 +6417,7 @@ test "MIR owns MMIO read write identities and complete types" {
     const result_fact = targetTypeFactByKind(inferred, .mmio_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(inferred, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("value", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("value", targetOwnerSpelling(inferred, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
@@ -7775,7 +7784,7 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(global, .atomic_init_result));
     const global_payload = targetTypeFactByKind(global, .atomic_init_payload).?;
     const global_result = targetTypeFactByKind(global, .atomic_init_result).?;
-    try std.testing.expectEqualStrings("atomic.init", global_payload.target_owner.?);
+    try std.testing.expectEqualStrings("atomic.init", targetOwnerSpelling(global, global_payload.typed_target_owner_id).?);
     try std.testing.expectEqual(global_payload.target_index, global_result.target_index);
     try std.testing.expectEqualStrings("u64", global_payload.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("atomic", global_result.target_ty.kind.generic.base.text);
@@ -7794,7 +7803,7 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqual(@as(usize, 4), countTargetTypeFactsByKind(function, .atomic_payload));
     const init_payload = targetTypeFactByKind(function, .atomic_init_payload).?;
     const init_result = targetTypeFactByKind(function, .atomic_init_result).?;
-    try std.testing.expectEqualStrings("atomic.init", init_payload.target_owner.?);
+    try std.testing.expectEqualStrings("atomic.init", targetOwnerSpelling(function, init_payload.typed_target_owner_id).?);
     try std.testing.expectEqual(init_payload.target_index, init_result.target_index);
     try std.testing.expectEqualStrings("u32", init_payload.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("atomic", init_result.target_ty.kind.generic.base.text);
@@ -7805,7 +7814,7 @@ test "MIR records typed call target facts for atomic member calls" {
         .fact = .{
             .kind = .atomic_init_payload,
             .source = init_payload.source,
-            .owner = init_payload.target_owner,
+            .typed_target_owner_id = init_payload.typed_target_owner_id,
             .index = init_payload.target_index,
         },
     }) == null);
@@ -7814,7 +7823,7 @@ test "MIR records typed call target facts for atomic member calls" {
         .fact = .{
             .kind = .atomic_init_result,
             .source = init_result.source,
-            .owner = init_result.target_owner,
+            .typed_target_owner_id = init_result.typed_target_owner_id,
             .index = init_result.target_index,
         },
     }) == null);
@@ -7942,13 +7951,14 @@ test "MIR owns inferred local types for atomic and MaybeUninit result calls" {
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(atomic_function, .inferred_local));
     for (atomic_function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
-        try std.testing.expect(fact.target_owner != null);
-        try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "previous") or std.mem.eql(u8, fact.target_owner.?, "loaded"));
+        try std.testing.expect(fact.typed_target_owner_id.isValid());
+        const owner = targetOwnerSpelling(atomic_function, fact.typed_target_owner_id).?;
+        try std.testing.expect(std.mem.eql(u8, owner, "previous") or std.mem.eql(u8, owner, "loaded"));
         try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
     }
     const maybe_function = functionByName(typed_mir, "maybe_uninit_inferred_local").?;
     const maybe_fact = targetTypeFactByKind(maybe_function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("value", maybe_fact.target_owner.?);
+    try std.testing.expectEqualStrings("value", targetOwnerSpelling(maybe_function, maybe_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("Node", maybe_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -8008,7 +8018,7 @@ test "MIR owns inferred local types for bitcast results" {
     const result_fact = targetTypeFactByKind(function, .bitcast_target) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("bits", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("bits", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -8039,11 +8049,13 @@ test "MIR owns inferred local types for byte-view results" {
 
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
-    const view_fact = targetTypeFactByKind(functionByName(typed_mir, "inferred_byte_view").?, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("bytes", view_fact.target_owner.?);
+    const view_function = functionByName(typed_mir, "inferred_byte_view").?;
+    const view_fact = targetTypeFactByKind(view_function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bytes", targetOwnerSpelling(view_function, view_fact.typed_target_owner_id).?);
     try std.testing.expectEqual(@as(std.meta.Tag(ast.TypeExpr.Kind), .slice), std.meta.activeTag(view_fact.target_ty.kind));
-    const equal_fact = targetTypeFactByKind(functionByName(typed_mir, "inferred_byte_equal").?, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("equal", equal_fact.target_owner.?);
+    const equal_function = functionByName(typed_mir, "inferred_byte_equal").?;
+    const equal_fact = targetTypeFactByKind(equal_function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("equal", targetOwnerSpelling(equal_function, equal_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("bool", equal_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -8075,7 +8087,7 @@ test "MIR owns inferred local types for semantic escape results" {
     const result_fact = targetTypeFactByKind(function, .assume_noalias_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(.pointer, std.meta.activeTag(result_fact.target_ty.kind));
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("alias", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("alias", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqual(.pointer, std.meta.activeTag(local_fact.target_ty.kind));
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -8133,7 +8145,7 @@ test "MIR owns inferred local types for phys results" {
     const result_fact = targetTypeFactByKind(function, .phys_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("PAddr", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("address", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("address", targetOwnerSpelling(function, local_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("PAddr", local_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -8169,11 +8181,11 @@ test "MIR owns inferred local types for raw result calls" {
     defer typed_mir.deinit();
     const load = functionByName(typed_mir, "inferred_raw_load").?;
     const load_fact = targetTypeFactByKind(load, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("value", load_fact.target_owner.?);
+    try std.testing.expectEqualStrings("value", targetOwnerSpelling(load, load_fact.typed_target_owner_id).?);
     try std.testing.expectEqualStrings("u32", load_fact.target_ty.kind.name.text);
     const pointer = functionByName(typed_mir, "inferred_raw_ptr").?;
     const pointer_fact = targetTypeFactByKind(pointer, .inferred_local) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("pointer", pointer_fact.target_owner.?);
+    try std.testing.expectEqualStrings("pointer", targetOwnerSpelling(pointer, pointer_fact.typed_target_owner_id).?);
     try std.testing.expect(pointer_fact.target_ty.kind == .pointer);
     try std.testing.expectEqual(ast.Mutability.mut, pointer_fact.target_ty.kind.pointer.mutability);
     try mir.validateTargetTypeFactsForLowering(typed_mir);

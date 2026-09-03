@@ -6217,7 +6217,9 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(self.currentMirFunction(), kind, span, target_owner, target_index);
+        const function = self.currentMirFunction() orelse return null;
+        const owner_id = mir.targetOwnerIdBySpelling(function.*, target_owner) orelse return null;
+        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(function, kind, span, owner_id, target_index);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast_bridge.Span) ?usize {

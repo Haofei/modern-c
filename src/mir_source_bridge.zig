@@ -65,18 +65,19 @@ pub fn atomicInitPayloadTypeAt(current: ?*const mir.Function, type_aliases: *con
     const function = current orelse return null;
     const view = MirFactsView.init();
     const source = mir.sourcePointFromSpan(span);
+    const owner_id = view.targetOwnerIdBySpelling(function, "atomic.init") orelse return null;
     const resolved_result_ty = type_bridge.resolveAliasType(type_aliases, expected_result_ty);
     const resolved_expected_payload_ty = type_bridge.resolveAliasType(type_aliases, expected_payload_ty);
     var matched_payload_ty: ?ast_bridge.TypeExpr = null;
     var found_result = false;
     for (function.target_type_facts) |result_fact| {
-        if (result_fact.target_index == null or !view.targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result, source, "atomic.init")) continue;
+        if (result_fact.target_index == null or !view.targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result, source, owner_id)) continue;
         if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, result_fact.target_ty), resolved_result_ty)) continue;
         found_result = true;
 
         var group_payload_ty: ?ast_bridge.TypeExpr = null;
         for (function.target_type_facts) |payload_fact| {
-            if (payload_fact.target_index != result_fact.target_index or !view.targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload, source, "atomic.init")) continue;
+            if (payload_fact.target_index != result_fact.target_index or !view.targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload, source, owner_id)) continue;
             if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, payload_fact.target_ty), resolved_expected_payload_ty)) return null;
             if (group_payload_ty) |known| {
                 if (!type_bridge.sameTypeSyntax(type_bridge.resolveAliasType(type_aliases, known), type_bridge.resolveAliasType(type_aliases, payload_fact.target_ty))) return null;
@@ -93,13 +94,16 @@ pub fn atomicInitPayloadTypeAt(current: ?*const mir.Function, type_aliases: *con
     return matched_payload_ty;
 }
 
-pub fn targetTypeFactAtOwnedCurrentSpan(current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-    return MirFactsView.init().targetTypeFactAtOwnedCurrentSpan(.{
-        .current = current,
+pub fn targetTypeFactAtOwnedCurrentSpan(current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, owner_id: mir.SymbolId, target_index: ?usize) ?mir.TargetTypeFact {
+    const function = current orelse return null;
+    const view = MirFactsView.init();
+    if (!owner_id.isValid()) return null;
+    return view.targetTypeFactAtOwnedCurrentSpan(.{
+        .current = function,
         .fact = .{
             .kind = kind,
             .source = mir.sourcePointFromSpan(span),
-            .owner = target_owner,
+            .typed_target_owner_id = owner_id,
             .index = target_index,
         },
     });
