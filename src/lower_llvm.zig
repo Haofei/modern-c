@@ -18,6 +18,7 @@ const mir_source_bridge = @import("mir_source_bridge.zig");
 const numeric = @import("numeric.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
+const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
 const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
 
@@ -307,7 +308,11 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     codegen_request.rejectExperimentalDynamicTraits(program, reporter) catch |err| switch (err) {
         error.ExperimentalDynamicTraitCodegen => return error.UnsupportedLlvmEmission,
     };
-    const comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(early_metadata, program.typed_mir.signature_types);
+    const comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithTypeFacts(
+        early_metadata,
+        program.typed_mir.signature_types,
+        program.typed_mir.type_aliases,
+    );
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -380,7 +385,8 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .linux_kernel = linux_kernel,
     };
     defer ctx.deinit();
-    try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata);
+    try ctx.collectTypeAliasFacts();
+    try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
     try ctx.collectCheckedScalarConstGlobals();
     var reflect_env = ctx.reflectEnv();
     try eval.collectConstGlobalsFromDeclarationsWithOptions(allocator, comptime_declarations, &ctx.const_fns, &ctx.const_globals, .{
@@ -546,11 +552,14 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: CodegenDeclArtifacts) !void {
-        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(artifacts, self.mir_module.signature_types), &self.const_fns);
+    fn preRegisterTypeDeclsFromArtifacts(
+        self: *LlvmEmitter,
+        artifacts: CodegenDeclArtifacts,
+        comptime_facts: eval.ComptimeDeclarations,
+    ) !void {
+        try eval.collectConstFunctionsFromDeclarations(comptime_facts, &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
                 .packed_bits_decl => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
@@ -568,6 +577,22 @@ const LlvmEmitter = struct {
             },
             else => {},
         };
+    }
+
+    /// This AST-shaped cache is derived only from the module-owned alias
+    /// fact table for legacy aggregate/body helpers.
+    fn collectTypeAliasFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.type_aliases) |fact| {
+            const identity = self.typeAliasIdentity(fact) orelse return error.UnsupportedLlvmEmission;
+            const target = try signature_type_materializer.typeExpr(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                fact.target_type_id,
+                .{ .offset = 0, .len = 0, .line = 0, .column = 0 },
+            );
+            if (self.type_aliases.contains(identity.spelling)) return error.UnsupportedLlvmEmission;
+            try self.type_aliases.put(identity.spelling, target);
+        }
     }
 
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
@@ -595,18 +620,12 @@ const LlvmEmitter = struct {
         try self.struct_types.put(struct_decl.name.text, struct_decl);
     }
 
-    fn collectTypeAlias(self: *LlvmEmitter, alias: ast_bridge.TypeAlias) !void {
-        _ = try self.llvmType(alias.ty);
-        try self.type_aliases.put(alias.name.text, alias.ty);
-    }
-
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-                .type_alias => |alias| try self.collectTypeAlias(alias),
                 .enum_decl => |enum_decl| try self.collectEnum(enum_decl),
                 .struct_decl => {},
             },
@@ -857,6 +876,12 @@ const LlvmEmitter = struct {
         if (!global.symbol_id.isValid() or global.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[global.symbol_id.index()];
         return if (identity.id.eql(global.symbol_id) and identity.kind == .global) identity.spelling else null;
+    }
+
+    fn typeAliasIdentity(self: *const LlvmEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_ and std.mem.eql(u8, identity.spelling, fact.name)) identity else null;
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
@@ -9606,77 +9631,9 @@ const LlvmEmitter = struct {
         };
     }
 
-    /// Materialize a transient AST-shaped type only inside LLVM's legacy body
-    /// mechanics.  This is deliberately one-way: callable artifacts retain
-    /// only `SignatureTypeId`, and this routine reads no source type payload.
+    /// Shared one-way bridge for remaining legacy body mechanics.
     fn signatureTypeExpr(self: *LlvmEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
-        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
-        const alloc = self.scratch.allocator();
-        const child = struct {
-            fn make(emitter: *LlvmEmitter, child_id: mir.SignatureTypeId, source_span: diagnostics.Span) anyerror!*TransitionalTypeExpr {
-                const value = try emitter.scratch.allocator().create(TransitionalTypeExpr);
-                value.* = try emitter.signatureTypeExpr(child_id, source_span);
-                return value;
-            }
-        }.make;
-        return .{
-            .span = span,
-            .kind = switch (shape) {
-                .name => |name| .{ .name = .{ .text = name, .span = span } },
-                .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
-                .member => |node| .{ .member = .{
-                    .base = try child(self, node.base, span),
-                    .field = .{ .text = node.field, .span = span },
-                } },
-                .nullable => |node| .{ .nullable = try child(self, node, span) },
-                .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) {
-                    .none => .none,
-                    .mut => .mut,
-                    .constant => .@"const",
-                }, .child = try child(self, node.child, span) } },
-                .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) {
-                    .none => .none,
-                    .mut => .mut,
-                    .constant => .@"const",
-                }, .child = try child(self, node.child, span) } },
-                .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) {
-                    .none => .none,
-                    .mut => .mut,
-                    .constant => .@"const",
-                }, .child = try child(self, node.child, span) } },
-                .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) {
-                    .none => .none,
-                    .mut => .mut,
-                    .constant => .@"const",
-                }, .child = try child(self, node.child, span) } },
-                .array => |node| blk: {
-                    const length = node.length orelse return error.UnsupportedLlvmEmission;
-                    const text = try std.fmt.allocPrint(alloc, "{d}", .{length});
-                    break :blk .{ .array = .{
-                        .len = .{ .span = span, .kind = .{ .int_literal = text } },
-                        .child = try child(self, node.child, span),
-                    } };
-                },
-                .generic => |node| blk: {
-                    const args = try alloc.alloc(TransitionalTypeExpr, node.args.len);
-                    for (node.args, 0..) |arg, index| args[index] = try self.signatureTypeExpr(arg, span);
-                    break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
-                },
-                .fn_pointer => |node| blk: {
-                    const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
-                    for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
-                    break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(self, node.ret, span) } };
-                },
-                .closure_type => |node| blk: {
-                    const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
-                    for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
-                    break :blk .{ .closure_type = .{ .params = params, .ret = try child(self, node.ret, span) } };
-                },
-                // Dynamic trait codegen is explicitly not qualified.  Do not
-                // invent a source-shaped fallback while materializing signatures.
-                .dyn_trait => return error.UnsupportedLlvmEmission,
-            },
-        };
+        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch return error.UnsupportedLlvmEmission;
     }
 
     fn llvmSignatureNameType(self: *LlvmEmitter, name: []const u8) ![]const u8 {

@@ -69,8 +69,10 @@ pub const EarlyDeclarationArtifacts = struct {
                     }
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .type_alias => |alias| {
-                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .type_alias = alias } });
+                .type_alias => {
+                    // Alias targets are module-owned SignatureTypeTable facts.
+                    // Keep source-map metadata, but never retain the alias AST
+                    // on the ordinary codegen ingress.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .struct_decl => |struct_decl| {
@@ -284,7 +286,6 @@ pub const DeclArtifact = union(enum) {
 };
 
 pub const TransitionalTypeDeclArtifact = union(enum) {
-    type_alias: ast.TypeAlias,
     struct_decl: ast.StructDecl,
     enum_decl: ast.EnumDecl,
     union_decl: ast.UnionDecl,

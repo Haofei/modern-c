@@ -14,6 +14,7 @@ const mir_executable_c = @import("mir_executable_c.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
+const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const TransitionalTypeExpr = @TypeOf(@as(mir.TargetTypeFact, undefined).target_ty);
@@ -408,6 +409,7 @@ pub const CEmitter = struct {
 
     fn collectModule(self: *CEmitter, early_metadata: CodegenDeclArtifacts) anyerror!void {
         self.codegen_artifacts = early_metadata;
+        try self.collectTypeAliasFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectCheckedScalarConstGlobals();
@@ -417,7 +419,27 @@ pub const CEmitter = struct {
     }
 
     pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) void {
-        self.comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(artifacts, self.mir_module.signature_types);
+        self.comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithTypeFacts(
+            artifacts,
+            self.mir_module.signature_types,
+            self.mir_module.type_aliases,
+        );
+    }
+
+    /// Materialize legacy helper input from the single module-owned alias
+    /// fact table. No declaration artifact carries a type-alias AST payload.
+    fn collectTypeAliasFacts(self: *CEmitter) !void {
+        for (self.mir_module.type_aliases) |fact| {
+            const identity = self.typeAliasIdentity(fact) orelse return error.UnsupportedCEmission;
+            const target = try signature_type_materializer.typeExpr(
+                self.scratch.allocator(),
+                self.mir_module.signature_types,
+                fact.target_type_id,
+                .{ .offset = 0, .len = 0, .line = 0, .column = 0 },
+            );
+            if (self.type_aliases.contains(identity.spelling)) return error.UnsupportedCEmission;
+            try self.type_aliases.put(identity.spelling, target);
+        }
     }
 
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
@@ -426,7 +448,7 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromCodegenArtifactsWithSignatureTypes(artifacts, self.mir_module.signature_types), &self.const_fns);
+        try eval.collectConstFunctionsFromDeclarations(self.comptime_declarations.?, &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| {
                 const sig = global.signature;
@@ -436,7 +458,6 @@ pub const CEmitter = struct {
                 try self.const_global_widths.put(sig.name.text, bits);
             },
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
@@ -482,7 +503,6 @@ pub const CEmitter = struct {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobalDeclArtifact(global),
             .transitional_type_decl => |type_decl| switch (type_decl) {
-                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
@@ -808,6 +828,12 @@ pub const CEmitter = struct {
         if (!global.symbol_id.isValid() or global.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[global.symbol_id.index()];
         return if (identity.id.eql(global.symbol_id) and identity.kind == .global) identity.spelling else null;
+    }
+
+    fn typeAliasIdentity(self: *const CEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_ and std.mem.eql(u8, identity.spelling, fact.name)) identity else null;
     }
 
     fn globalInitializerMir(self: *const CEmitter, body_id: mir.BodyId) ?mir.Function {
@@ -1459,9 +1485,8 @@ pub const CEmitter = struct {
     fn cSignatureType(self: *CEmitter, id: mir.SignatureTypeId) ![]const u8 {
         const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
         return switch (shape) {
-            // Type aliases live in TransitionalTypeDeclArtifact, not in a
-            // function artifact.  Following that declaration dependency here
-            // is therefore still syntax-free at the callable boundary.
+            // Alias targets are module-owned `TypeAliasFact` rows, not
+            // callable or declaration-artifact payloads.
             .name => |name| if (self.type_aliases.get(name)) |target|
                 try self.cTypeFor(target, .typedef_name)
             else
@@ -1490,68 +1515,9 @@ pub const CEmitter = struct {
         };
     }
 
-    /// One-way backend-local bridge for legacy global-initializer mechanics.
-    /// Declaration artifacts retain only `SignatureTypeId`; this transient is
-    /// synthesized from the module-owned table and is never source payload.
+    /// Shared one-way bridge for remaining legacy initializer/body mechanics.
     fn signatureTypeExpr(self: *CEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
-        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
-        const alloc = self.scratch.allocator();
-        const child = struct {
-            fn make(emitter: *CEmitter, child_id: mir.SignatureTypeId, source_span: diagnostics.Span) anyerror!*TransitionalTypeExpr {
-                const value = try emitter.scratch.allocator().create(TransitionalTypeExpr);
-                value.* = try emitter.signatureTypeExpr(child_id, source_span);
-                return value;
-            }
-        }.make;
-        return .{ .span = span, .kind = switch (shape) {
-            .name => |name| .{ .name = .{ .text = name, .span = span } },
-            .enum_literal => |name| .{ .enum_literal = .{ .text = name, .span = span } },
-            .member => |node| .{ .member = .{ .base = try child(self, node.base, span), .field = .{ .text = node.field, .span = span } } },
-            .nullable => |node| .{ .nullable = try child(self, node, span) },
-            .qualified => |node| .{ .qualified = .{ .mutability = switch (node.mutability) {
-                .none => .none,
-                .mut => .mut,
-                .constant => .@"const",
-            }, .child = try child(self, node.child, span) } },
-            .pointer => |node| .{ .pointer = .{ .mutability = switch (node.mutability) {
-                .none => .none,
-                .mut => .mut,
-                .constant => .@"const",
-            }, .child = try child(self, node.child, span) } },
-            .raw_many_pointer => |node| .{ .raw_many_pointer = .{ .mutability = switch (node.mutability) {
-                .none => .none,
-                .mut => .mut,
-                .constant => .@"const",
-            }, .child = try child(self, node.child, span) } },
-            .slice => |node| .{ .slice = .{ .mutability = switch (node.mutability) {
-                .none => .none,
-                .mut => .mut,
-                .constant => .@"const",
-            }, .child = try child(self, node.child, span) } },
-            .array => |node| blk: {
-                const length = node.length orelse return error.UnsupportedCEmission;
-                break :blk .{ .array = .{
-                    .len = .{ .span = span, .kind = .{ .int_literal = try std.fmt.allocPrint(alloc, "{d}", .{length}) } },
-                    .child = try child(self, node.child, span),
-                } };
-            },
-            .generic => |node| blk: {
-                const args = try alloc.alloc(TransitionalTypeExpr, node.args.len);
-                for (node.args, 0..) |arg, index| args[index] = try self.signatureTypeExpr(arg, span);
-                break :blk .{ .generic = .{ .base = .{ .text = node.base, .span = span }, .args = args } };
-            },
-            .fn_pointer => |node| blk: {
-                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
-                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
-                break :blk .{ .fn_pointer = .{ .params = params, .ret = try child(self, node.ret, span) } };
-            },
-            .closure_type => |node| blk: {
-                const params = try alloc.alloc(TransitionalTypeExpr, node.params.len);
-                for (node.params, 0..) |param, index| params[index] = try self.signatureTypeExpr(param, span);
-                break :blk .{ .closure_type = .{ .params = params, .ret = try child(self, node.ret, span) } };
-            },
-            .dyn_trait => return error.UnsupportedCEmission,
-        } };
+        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch return error.UnsupportedCEmission;
     }
 
     fn cSignatureGenericType(self: *CEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {

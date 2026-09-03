@@ -18,7 +18,7 @@
       "ImplTraitArtifact": 0,
       "pub const TypeDeclArtifact = union(enum)": 0,
       "pub const TransitionalTypeDeclArtifact = union(enum)": 1,
-      "type_alias: ast.TypeAlias": 1,
+      "type_alias: ast.TypeAlias": 0,
       "struct_decl: ast.StructDecl": 1,
       "enum_decl: ast.EnumDecl": 1,
       "union_decl: ast.UnionDecl": 1,
@@ -116,7 +116,9 @@
       "mir.comptimeValueFromConstGlobalScalarFact": 1
     },
     "src/mir_model.zig": {
-      "pub fn checkedScalarConstGlobal": 1
+      "pub fn checkedScalarConstGlobal": 1,
+      "pub const TypeAliasFact = struct": 1,
+      "target_type_id: SignatureTypeId": 1
     },
     "src/mir.zig": {
       "pub fn comptimeValueFromConstGlobalScalarFact": 1

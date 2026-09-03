@@ -3733,6 +3733,29 @@ test "MIR resolves type aliases for checked ints and arithmetic domains" {
     try std.testing.expectEqual(@as(usize, 0), sat_cast_fn.trap_edges.len);
 }
 
+test "MIR type alias facts are syntax-free and fail closed" {
+    const source =
+        \\type Word = *const u32;
+        \\fn identity(value: Word) -> Word { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_type_alias_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.type_aliases.len);
+    const fact = module_mir.type_aliases[0];
+    try std.testing.expectEqualStrings("Word", fact.name);
+    try std.testing.expect(fact.symbol_id.isValid());
+    try std.testing.expect(module_mir.signature_types.contains(fact.target_type_id));
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.type_aliases[0].target_type_id;
+    module_mir.type_aliases[0].target_type_id = .invalid;
+    defer module_mir.type_aliases[0].target_type_id = saved;
+    try std.testing.expectError(error.InvalidMirTypeAliasFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
     const source =
         \\fn const_index(a: [4]u32) -> u32 {

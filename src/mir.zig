@@ -115,6 +115,7 @@ pub const ExecutableIncompleteReason = mir_model.ExecutableIncompleteReason;
 pub const IntegerDomainKind = mir_model.IntegerDomainKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
 pub const FfiParamContract = mir_model.FfiParamContract;
+pub const TypeAliasFact = mir_model.TypeAliasFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -1267,6 +1268,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     }
     var checked_globals: std.ArrayList(CheckedGlobalFact) = .empty;
     errdefer checked_globals.deinit(allocator);
+    var type_alias_facts: std.ArrayList(TypeAliasFact) = .empty;
+    errdefer type_alias_facts.deinit(allocator);
     var const_global_scalar_inits: std.ArrayList(mir_model.ConstGlobalScalarInitFact) = .empty;
     errdefer const_global_scalar_inits.deinit(allocator);
 
@@ -1275,6 +1278,14 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         const typed_source_id = if (fileIdFromBuildItem(item)) |file_id| try internSourceId(&source_ids, file_id) else SourceId.invalid;
         const typed_def_id = defIdFromBuildItem(item, decl_ordinal);
         switch (decl.kind) {
+            .type_alias => |alias| {
+                try type_alias_facts.append(allocator, .{
+                    .name = alias.name.text,
+                    .symbol_id = try internSymbolId(&symbol_ids, alias.name.text),
+                    .source_id = typed_source_id,
+                    .target_type_id = try signature_types.internTypeExpr(alias.ty, &const_fns, &const_globals),
+                });
+            },
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     var checked_global: CheckedGlobalFact = .{
@@ -1463,6 +1474,16 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         identity.kind = .global;
         identity.mutable = !checked_global.is_const;
     }
+    for (type_alias_facts.items) |fact| {
+        if (fact.name.len == 0 or !fact.symbol_id.isValid() or fact.symbol_id.index() >= symbol_identities.len or
+            !fact.target_type_id.isValid() or fact.target_type_id.index() >= signature_types.shapes.items.len)
+            return error.InvalidMirSymbolIdentity;
+        const identity = &symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or !std.mem.eql(u8, identity.spelling, fact.name) or
+            (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirSymbolIdentity;
+        identity.kind = .type_;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1480,6 +1501,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     }
     const checked_globals_slice = try checked_globals.toOwnedSlice(allocator);
     errdefer allocator.free(checked_globals_slice);
+    const type_alias_facts_slice = try type_alias_facts.toOwnedSlice(allocator);
+    errdefer allocator.free(type_alias_facts_slice);
     var signature_type_table = try signature_types.finish();
     errdefer signature_type_table.deinit(allocator);
     const const_global_scalar_inits_slice = try const_global_scalar_inits.toOwnedSlice(allocator);
@@ -1492,6 +1515,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .signature_types = signature_type_table,
         .checked_callables = checked_callables_slice,
         .checked_globals = checked_globals_slice,
+        .type_aliases = type_alias_facts_slice,
         .const_global_scalar_inits = const_global_scalar_inits_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
@@ -3938,6 +3962,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirBindThunkFacts,
     InvalidMirDropGlueFacts,
     InvalidMirTypeOwnershipFacts,
+    InvalidMirTypeAliasFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
@@ -3966,9 +3991,26 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateBindThunkFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
     try validateTypeOwnershipFactsForLowering(module);
+    try validateTypeAliasFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
+}
+
+fn validateTypeAliasFactsForLowering(module: Module) error{InvalidMirTypeAliasFacts}!void {
+    for (module.type_aliases, 0..) |fact, index| {
+        if (fact.name.len == 0 or !fact.symbol_id.isValid() or fact.symbol_id.index() >= module.symbol_identities.len or
+            !fact.target_type_id.isValid() or !module.signature_types.contains(fact.target_type_id))
+            return error.InvalidMirTypeAliasFacts;
+        const identity = module.symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or !std.mem.eql(u8, identity.spelling, fact.name) or identity.kind != .type_) return error.InvalidMirTypeAliasFacts;
+        if (fact.source_id.isValid() and (fact.source_id.index() >= module.source_identities.len or
+            !module.source_identities[fact.source_id.index()].id.eql(fact.source_id)))
+            return error.InvalidMirTypeAliasFacts;
+        for (module.type_aliases[0..index]) |prior| {
+            if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirTypeAliasFacts;
+        }
+    }
 }
 
 pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLoweringType}!void {

@@ -4040,6 +4040,17 @@ pub const CheckedGlobalFact = struct {
     is_extern: bool,
 };
 
+/// Syntax-free transparent type-alias declaration. The target is interned in
+/// the module-owned signature graph, so codegen never needs an alias AST
+/// payload merely to resolve a nominal spelling.
+pub const TypeAliasFact = struct {
+    /// Rendering spelling. Semantic joins must use `symbol_id`.
+    name: []const u8,
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    target_type_id: SignatureTypeId,
+};
+
 /// Syntax-free scalar value already evaluated by the frontend for a `const`
 /// global initializer.  This deliberately excludes aggregates and enum tags:
 /// their rendering still depends on transitional aggregate/type artifacts.
@@ -4113,6 +4124,7 @@ pub const Module = struct {
     signature_types: SignatureTypeTable = .{},
     checked_callables: []CheckedCallableFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
+    type_aliases: []TypeAliasFact = &.{},
     const_global_scalar_inits: []ConstGlobalScalarInitFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
@@ -4200,6 +4212,7 @@ pub const Module = struct {
             self.allocator.free(self.checked_callables);
         }
         if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
+        if (self.type_aliases.len != 0) self.allocator.free(self.type_aliases);
         if (self.const_global_scalar_inits.len != 0) self.allocator.free(self.const_global_scalar_inits);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);

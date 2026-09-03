@@ -54,7 +54,7 @@ EXACT_BACKEND_COUNTS = {
     # may only lower this count.
     # Float literal lowering now consumes typed FloatFact identity instead of
     # a target-type AST payload, removing one backend syntax reference.
-    "ast_bridge.": 2754,
+    "ast_bridge.": 2753,
     "declaration_artifacts.": 20,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
@@ -141,6 +141,7 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "trait_decl_artifacts: []const TraitDeclArtifact"): 0,
     ("src/declaration_artifacts.zig", "impl_trait_artifacts: []const ImplTraitArtifact"): 0,
     ("src/declaration_artifacts.zig", "type_alias_artifacts: []const ast.TypeAlias"): 0,
+    ("src/declaration_artifacts.zig", "type_alias: ast.TypeAlias"): 0,
     ("src/declaration_artifacts.zig", "struct_artifacts: []const ast.StructDecl"): 0,
     ("src/declaration_artifacts.zig", "enum_artifacts: []const ast.EnumDecl"): 0,
     ("src/declaration_artifacts.zig", "union_artifacts: []const ast.UnionDecl"): 0,

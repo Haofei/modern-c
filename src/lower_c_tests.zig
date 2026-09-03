@@ -83,6 +83,42 @@ test "lower-c renders scalar const globals from verified MIR facts" {
     try expectContains(output.items, "float NEG_ZERO = __builtin_bit_cast(float, ((uint32_t)0x80000000U));");
 }
 
+test "lower-c derives type aliases from module signature facts" {
+    const source =
+        \\type Word = u32;
+        \\const BASE: Word = 41;
+        \\fn next(value: Word) -> Word { return value + BASE; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_type_alias_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.type_aliases.len);
+    try std.testing.expectEqualStrings("Word", module_mir.type_aliases[0].name);
+
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    // The scalar const global and type alias both have syntax-free fact paths;
+    // only the function requires an ordinary declaration artifact.
+    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_type_alias_facts.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "uint32_t BASE = 41;");
+    try expectContains(output.items, "next(uint32_t value)");
+}
+
 test "lower-c scalar const globals do not retain an AST initializer dependency" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("c_scalar_const_global_no_ast_init.mc", source);
