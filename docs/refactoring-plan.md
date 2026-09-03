@@ -47,13 +47,13 @@ inspection HIR remains a dump tool and is not promoted into the pipeline.
 - deployable kernel, Agent, runtime, package, or hardware scope;
 - validation workloads defining compiler semantics.
 
-## Active phases
+## Completed review phases
 
-| Phase | Theme | Exit signal |
+| Phase | Theme | Closed evidence |
 |---:|---|---|
-| 0 | Stop backend authority growth | `semantic-facts-inventory-test` does not grow, or each remaining exception is exact-count-gated. |
-| 1 | CheckedProgram + typed MIR identity | syntax-free callable/body tables and backend-critical type, symbol, value, ABI/layout, representation, control, and ownership facts are typed or verifier-owned. |
-| 2 | `VerifiedProgram` narrowing | C/LLVM entrypoints no longer expose AST as semantic input. |
+| 0 | Stop backend authority growth | Remaining exceptions are exact-count-gated by the architecture and semantic-facts inventories. |
+| 1 | CheckedProgram + executable MIR body identity | `CheckedProgram` is syntax-free and executable function bodies no longer use legacy AST fallback emitters. |
+| 2 | Per-file source/module cutover | The loader no longer builds a combined textual source; parsing and source identity are per-file. |
 
 `docs/codegen-ingress-migration.json` is the working migration ledger for Phase
 2. It records the remaining AST-shaped declaration payloads still carried beside
@@ -61,20 +61,23 @@ inspection HIR remains a dump tool and is not promoted into the pipeline.
 counts. `codegen-ingress-migration-test` must pass in every core tier; migration
 patches should lower those budgets instead of adding new compatibility paths.
 
-Phases 0–2 are the work. Artifact packaging, manifests, LSP, QEMU, and
-tooling polish must not displace these compiler-core phases.
+The machine-readable completion evidence for these bounded review goals lives
+in `docs/review-goal-status.json`. Their completion does not claim that all
+backend declaration syntax ingress or internal MIR compatibility projections
+have been removed.
 
 ## Current queue
 
 Do these in order unless a failing test forces a narrower slice:
 
-1. Keep architecture ratchets exact: backend `ast_bridge`, `eval`, and
-   `declaration_artifacts` ingress may only shrink.
-2. Remove or quarantine the next backend-local semantic helper.
-3. Convert the next backend-critical fact family toward typed IDs or
-   verifier-owned facts.
-4. Narrow the next `VerifiedProgram` or codegen request syntax ingress.
-5. Keep advanced language forms experimental and frozen until phases 0–2 close.
+1. Remove the transitional function return-type syntax payload.
+2. Normalize global, type-declaration, and trait declaration codegen facts.
+3. Move comptime evaluation before `LowerRequest` construction.
+4. Reduce backend `ast_bridge`, `eval`, and `declaration_artifacts` imports to
+   zero, lowering the exact ratchets with every deletion.
+5. Remove legacy MIR compatibility projections after their canonical typed
+   replacements are direct builder outputs.
+6. Keep advanced language forms experimental and frozen during this cutover.
 
 ## Patch rules
 
