@@ -2091,29 +2091,6 @@ test "CheckedProgram clones prior verified non-scalar global plans" {
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
-    const copied_names = for (module_mir.checked_globals) |global| {
-        const identity = module_mir.symbol_identities[global.symbol_id.index()];
-        if (std.mem.eql(u8, identity.spelling, "copied_names")) break global;
-    } else return error.TestUnexpectedResult;
-    const copied_names_fact = module_mir.checkedGlobalInitializer(copied_names) orelse return error.TestUnexpectedResult;
-    const copied_bytes = switch (copied_names_fact.plan) {
-        .string_bytes => |plan| plan.bytes,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqualStrings("names", copied_bytes);
-    // The cloned bytes are independently owned rather than a dangling alias
-    // into the prior global's plan.
-    const source_names = for (module_mir.checked_globals) |global| {
-        const identity = module_mir.symbol_identities[global.symbol_id.index()];
-        if (std.mem.eql(u8, identity.spelling, "names")) break global;
-    } else return error.TestUnexpectedResult;
-    const source_names_fact = module_mir.checkedGlobalInitializer(source_names) orelse return error.TestUnexpectedResult;
-    const source_bytes = switch (source_names_fact.plan) {
-        .string_bytes => |plan| plan.bytes,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expect(copied_bytes.ptr != source_bytes.ptr);
-
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
         module_mir.checked_globals,
@@ -2121,6 +2098,15 @@ test "CheckedProgram clones prior verified non-scalar global plans" {
         module_mir.global_initializer_facts,
     );
     try std.testing.expect(checked.matchesMir(module_mir));
+}
+
+test "global-copy clone excludes string backing plans" {
+    const string_leaf: mir_model.AggregateInitializerPlan = .{ .string_bytes = .{ .bytes = &.{} } };
+    const string_plan: mir_model.GlobalInitializerPlan = .{ .string_bytes = .{ .bytes = &.{} } };
+    try std.testing.expect((try string_plan.cloneForGlobalCopy(std.testing.allocator)) == null);
+
+    const nested: mir_model.GlobalInitializerPlan = .{ .aggregate = .{ .array = &.{string_leaf} } };
+    try std.testing.expect((try nested.cloneForGlobalCopy(std.testing.allocator)) == null);
 }
 
 test "CheckedProgram admits decoded string-pointer global initializer plans" {

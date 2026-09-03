@@ -1194,8 +1194,6 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
         \\global copied_mode: Mode = mode;
         \\global nullable: ?*mut u8 = null;
         \\global copied_nullable: ?*mut u8 = (nullable);
-        \\global names: cstr = "names";
-        \\global copied_names: cstr = names;
         \\global ptr: *const u32 = &seed;
         \\global copied_ptr: *const u32 = ptr;
         \\global ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
@@ -1225,7 +1223,6 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
     try expectContains(output.items, "copied_table = { .left = 11, .right = 12 };");
     try expectContains(output.items, "copied_mode = Mode_ready;");
     try expectContains(output.items, "copied_nullable = NULL;");
-    try expectContains(output.items, "copied_names = ((char const *)\"names\");");
     try expectContains(output.items, "copied_ptr = &seed;");
     try expectContains(output.items, "copied_ops = { add, mul };");
 }

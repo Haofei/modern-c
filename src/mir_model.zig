@@ -4267,18 +4267,19 @@ pub const GlobalInitializerPlan = union(enum) {
         }
     }
 
-    /// Clone an admitted plan for a later declaration without recovering its
-    /// source expression. Plans that own bytes or recursive aggregate storage
-    /// make independent copies, so a copied global never aliases another
-    /// global fact's lifecycle.
-    pub fn clone(self: GlobalInitializerPlan, allocator: std.mem.Allocator) !GlobalInitializerPlan {
+    /// Clone a plan only when global-copy semantics are value semantics.
+    ///
+    /// String-pointer plans are deliberately excluded: `b: cstr = a` copies
+    /// the pointer value and must retain `a`'s backing identity, not allocate
+    /// a second literal. Nested string leaves have the same property. Until a
+    /// plan carries a stable backing identity, those copies remain on the
+    /// transitional artifact path.
+    pub fn cloneForGlobalCopy(self: GlobalInitializerPlan, allocator: std.mem.Allocator) !?GlobalInitializerPlan {
         return switch (self) {
-            .scalar => |value| .{ .scalar = value },
-            .zero => .zero,
-            .aggregate => |value| .{ .aggregate = try value.clone(allocator) },
+            .scalar, .zero, .string_bytes => null,
+            .aggregate => |value| if (try value.cloneForGlobalCopy(allocator)) |cloned| .{ .aggregate = cloned } else null,
             .enum_case => |value| .{ .enum_case = value },
             .nullable_null => .nullable_null,
-            .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
             .global_address => |value| .{ .global_address = value },
             .function_symbol => |value| .{ .function_symbol = value },
         };
@@ -4317,10 +4318,6 @@ pub const StringBytesInitializerPlan = struct {
 
     pub fn deinit(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) void {
         if (self.bytes.len != 0) allocator.free(self.bytes);
-    }
-
-    pub fn clone(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) !StringBytesInitializerPlan {
-        return .{ .bytes = if (self.bytes.len == 0) &.{} else try allocator.dupe(u8, self.bytes) };
     }
 };
 
@@ -4362,38 +4359,47 @@ pub const AggregateInitializerPlan = union(enum) {
         }
     }
 
-    pub fn clone(self: AggregateInitializerPlan, allocator: std.mem.Allocator) !AggregateInitializerPlan {
+    pub fn cloneForGlobalCopy(self: AggregateInitializerPlan, allocator: std.mem.Allocator) !?AggregateInitializerPlan {
         return switch (self) {
             .scalar => |value| .{ .scalar = value },
             .function_symbol => |value| .{ .function_symbol = value },
             .zero => .zero,
             .enum_case => |value| .{ .enum_case = value },
-            .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
+            .string_bytes => null,
             .global_address => |value| .{ .global_address = value },
             .array => |items| blk: {
                 const cloned = try allocator.alloc(AggregateInitializerPlan, items.len);
                 var initialized: usize = 0;
-                errdefer {
-                    for (cloned[0..initialized]) |item| item.deinit(allocator);
-                    allocator.free(cloned);
+                var transferred = false;
+                defer {
+                    if (!transferred) {
+                        for (cloned[0..initialized]) |item| item.deinit(allocator);
+                        allocator.free(cloned);
+                    }
                 }
                 for (items, 0..) |item, index| {
-                    cloned[index] = try item.clone(allocator);
+                    cloned[index] = (try item.cloneForGlobalCopy(allocator)) orelse break :blk null;
                     initialized += 1;
                 }
+                transferred = true;
                 break :blk .{ .array = cloned };
             },
             .struct_ => |value| blk: {
                 const cloned = try allocator.alloc(StructInitializerFieldPlan, value.fields.len);
                 var initialized: usize = 0;
-                errdefer {
-                    for (cloned[0..initialized]) |field| field.value.deinit(allocator);
-                    allocator.free(cloned);
+                var transferred = false;
+                defer {
+                    if (!transferred) {
+                        for (cloned[0..initialized]) |field| field.value.deinit(allocator);
+                        allocator.free(cloned);
+                    }
                 }
                 for (value.fields, 0..) |field, index| {
-                    cloned[index] = .{ .field_index = field.field_index, .value = try field.value.clone(allocator) };
+                    const nested = (try field.value.cloneForGlobalCopy(allocator)) orelse break :blk null;
+                    cloned[index] = .{ .field_index = field.field_index, .value = nested };
                     initialized += 1;
                 }
+                transferred = true;
                 break :blk .{ .struct_ = .{ .struct_symbol_id = value.struct_symbol_id, .fields = cloned } };
             },
         };

@@ -5615,8 +5615,6 @@ test "LLVM emits copied verified aggregate and relocation global plans without A
         \\global copied_mode: Mode = mode;
         \\global nullable: ?*mut u8 = null;
         \\global copied_nullable: ?*mut u8 = (nullable);
-        \\global names: cstr = "names";
-        \\global copied_names: cstr = names;
         \\global ptr: *const u32 = &seed;
         \\global copied_ptr: *const u32 = ptr;
         \\global ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
@@ -5647,7 +5645,6 @@ test "LLVM emits copied verified aggregate and relocation global plans without A
     try expectContains(output.items, "@copied_table = internal global { i32, i32 } { i32 11, i32 12 }");
     try expectContains(output.items, "@copied_mode = internal global i32 7");
     try expectContains(output.items, "@copied_nullable = internal global ptr null");
-    try expectContains(output.items, "@copied_names = internal global ptr getelementptr");
     try expectContains(output.items, "@copied_ptr = internal global ptr @seed");
     try expectContains(output.items, "@copied_ops = internal global [2 x ptr] [ptr @add, ptr @mul]");
 }
