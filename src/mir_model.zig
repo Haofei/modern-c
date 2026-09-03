@@ -4268,18 +4268,16 @@ pub const GlobalInitializerPlan = union(enum) {
     }
 
     /// Clone a plan only when global-copy semantics are value semantics.
-    ///
-    /// String-pointer plans are deliberately excluded: `b: cstr = a` copies
-    /// the pointer value and must retain `a`'s backing identity, not allocate
-    /// a second literal. Nested string leaves have the same property. Until a
-    /// plan carries a stable backing identity, those copies remain on the
-    /// transitional artifact path.
+    /// String-pointer leaves duplicate their owned byte payload while retaining
+    /// the same stable backing identity, so the copied initializer preserves
+    /// the pointer value in both backends.
     pub fn cloneForGlobalCopy(self: GlobalInitializerPlan, allocator: std.mem.Allocator) !?GlobalInitializerPlan {
         return switch (self) {
-            .scalar, .zero, .string_bytes => null,
+            .scalar, .zero => null,
             .aggregate => |value| if (try value.cloneForGlobalCopy(allocator)) |cloned| .{ .aggregate = cloned } else null,
             .enum_case => |value| .{ .enum_case = value },
             .nullable_null => .nullable_null,
+            .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
             .global_address => |value| .{ .global_address = value },
             .function_symbol => |value| .{ .function_symbol = value },
         };
@@ -4333,6 +4331,13 @@ pub const StringBytesInitializerPlan = struct {
     pub fn deinit(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) void {
         if (self.bytes.len != 0) allocator.free(self.bytes);
     }
+
+    pub fn clone(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) !StringBytesInitializerPlan {
+        return .{
+            .bytes = if (self.bytes.len == 0) &.{} else try allocator.dupe(u8, self.bytes),
+            .backing_id = self.backing_id,
+        };
+    }
 };
 
 /// A named field of a declared-struct global literal. The index is the field
@@ -4379,7 +4384,7 @@ pub const AggregateInitializerPlan = union(enum) {
             .function_symbol => |value| .{ .function_symbol = value },
             .zero => .zero,
             .enum_case => |value| .{ .enum_case = value },
-            .string_bytes => null,
+            .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
             .global_address => |value| .{ .global_address = value },
             .array => |items| blk: {
                 const cloned = try allocator.alloc(AggregateInitializerPlan, items.len);
@@ -4854,7 +4859,7 @@ fn nullableNullInitializerPlanMatchesGlobal(module: Module, global: CheckedGloba
 }
 
 fn stringBytesInitializerPlanMatchesType(plan: StringBytesInitializerPlan, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
-    if (!stringBackingIdMatchesModule(plan.backing_id, module, owner_global)) return false;
+    if (!stringBackingPlanMatchesModule(plan, module, owner_global)) return false;
     const shape = transparentSignatureShape(module, type_id) orelse return false;
     return switch (shape) {
         .name => |name| std.mem.eql(u8, name, "cstr"),
@@ -4878,7 +4883,8 @@ fn stringBytesInitializerPlanMatchesGlobal(plan: StringBytesInitializerPlan, mod
     return stringBytesInitializerPlanMatchesType(plan, module, global, global.signature_type_id);
 }
 
-fn stringBackingIdMatchesModule(backing_id: StringBackingId, module: Module, owner_global: CheckedGlobalFact) bool {
+fn stringBackingPlanMatchesModule(plan: StringBytesInitializerPlan, module: Module, owner_global: CheckedGlobalFact) bool {
+    const backing_id = plan.backing_id;
     if (!backing_id.owner_global_symbol_id.isValid() or backing_id.owner_global_symbol_id.index() >= module.symbol_identities.len) return false;
     const identity = module.symbol_identities[backing_id.owner_global_symbol_id.index()];
     if (!identity.id.eql(backing_id.owner_global_symbol_id) or identity.kind != .global) return false;
@@ -4890,8 +4896,58 @@ fn stringBackingIdMatchesModule(backing_id: StringBackingId, module: Module, own
     } else return false;
     // A copy can only point at a source literal that has already been planned.
     // This forbids a backend-only forward backing reference without storing a
-    // parallel source-string table.
-    return backing_index <= owner_index;
+    // parallel source-string table.  The identity must also occur in that
+    // owner's plan with exactly the same bytes: otherwise two malformed plans
+    // could give one backing ID different contents and make backend traversal
+    // order observable.
+    if (backing_index > owner_index) return false;
+    const backing_global = module.checked_globals[backing_index];
+    if (backing_global.is_extern or !backing_global.has_initializer_plan) return false;
+    const backing_fact = module.globalInitializerFactForGlobal(backing_global) orelse return false;
+    const match = globalPlanStringBackingMatch(backing_fact.plan, backing_id, plan.bytes);
+    return match.found and match.consistent;
+}
+
+const StringBackingMatch = struct {
+    found: bool = false,
+    consistent: bool = true,
+
+    fn merge(self: StringBackingMatch, other: StringBackingMatch) StringBackingMatch {
+        return .{
+            .found = self.found or other.found,
+            .consistent = self.consistent and other.consistent,
+        };
+    }
+};
+
+fn globalPlanStringBackingMatch(plan: GlobalInitializerPlan, backing_id: StringBackingId, bytes: []const u8) StringBackingMatch {
+    return switch (plan) {
+        .string_bytes => |string_plan| stringPlanBackingMatch(string_plan, backing_id, bytes),
+        .aggregate => |aggregate| aggregatePlanStringBackingMatch(aggregate, backing_id, bytes),
+        else => .{},
+    };
+}
+
+fn aggregatePlanStringBackingMatch(plan: AggregateInitializerPlan, backing_id: StringBackingId, bytes: []const u8) StringBackingMatch {
+    return switch (plan) {
+        .string_bytes => |string_plan| stringPlanBackingMatch(string_plan, backing_id, bytes),
+        .array => |items| blk: {
+            var result: StringBackingMatch = .{};
+            for (items) |item| result = result.merge(aggregatePlanStringBackingMatch(item, backing_id, bytes));
+            break :blk result;
+        },
+        .struct_ => |struct_plan| blk: {
+            var result: StringBackingMatch = .{};
+            for (struct_plan.fields) |field| result = result.merge(aggregatePlanStringBackingMatch(field.value, backing_id, bytes));
+            break :blk result;
+        },
+        else => .{},
+    };
+}
+
+fn stringPlanBackingMatch(plan: StringBytesInitializerPlan, backing_id: StringBackingId, bytes: []const u8) StringBackingMatch {
+    if (!plan.backing_id.eql(backing_id)) return .{};
+    return .{ .found = true, .consistent = std.mem.eql(u8, plan.bytes, bytes) };
 }
 
 fn globalAddressInitializerPlanMatchesGlobal(plan: GlobalAddressInitializerPlan, module: Module, global: CheckedGlobalFact) bool {

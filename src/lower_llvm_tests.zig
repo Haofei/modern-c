@@ -5603,13 +5603,13 @@ test "LLVM emits function-symbol global and array plans without AST initializer 
 test "LLVM emits copied verified aggregate and relocation global plans without AST artifacts" {
     const source =
         \\open enum Mode: u32 { ready = 7 }
-        \\struct Table { left: u32, right: u32 }
+        \\struct Table { label: cstr, left: u32, right: u32 }
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
         \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
         \\global seed: u32 = 1;
         \\global values: [2]u32 = .{ 7, 8 };
         \\global copied_values: [2]u32 = values;
-        \\global table: Table = .{ .left = 11, .right = 12 };
+        \\global table: Table = .{ .label = "table", .left = 11, .right = 12 };
         \\global copied_table: Table = ((table) as Table);
         \\global mode: Mode = .ready;
         \\global copied_mode: Mode = mode;
@@ -5642,7 +5642,8 @@ test "LLVM emits copied verified aggregate and relocation global plans without A
         null,
     );
     try expectContains(output.items, "@copied_values = internal global [2 x i32] [i32 7, i32 8]");
-    try expectContains(output.items, "@copied_table = internal global { i32, i32 } { i32 11, i32 12 }");
+    try expectContains(output.items, "@table = internal global { ptr, i32, i32 } { ptr getelementptr ([6 x i8], ptr @.str.0, i64 0, i64 0), i32 11, i32 12 }");
+    try expectContains(output.items, "@copied_table = internal global { ptr, i32, i32 } { ptr getelementptr ([6 x i8], ptr @.str.0, i64 0, i64 0), i32 11, i32 12 }");
     try expectContains(output.items, "@copied_mode = internal global i32 7");
     try expectContains(output.items, "@copied_nullable = internal global ptr null");
     try expectContains(output.items, "@copied_ptr = internal global ptr @seed");

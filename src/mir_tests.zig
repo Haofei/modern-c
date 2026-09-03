@@ -2100,13 +2100,28 @@ test "CheckedProgram clones prior verified non-scalar global plans" {
     try std.testing.expect(checked.matchesMir(module_mir));
 }
 
-test "global-copy clone excludes string backing plans" {
-    const string_leaf: mir_model.AggregateInitializerPlan = .{ .string_bytes = .{ .bytes = &.{} } };
-    const string_plan: mir_model.GlobalInitializerPlan = .{ .string_bytes = .{ .bytes = &.{} } };
-    try std.testing.expect((try string_plan.cloneForGlobalCopy(std.testing.allocator)) == null);
+test "global-copy clone retains string backing identity" {
+    const backing_id: mir_model.StringBackingId = .{
+        .owner_global_symbol_id = mir_model.SymbolId.fromIndex(0),
+        .ordinal = 3,
+    };
+    const string_plan: mir_model.GlobalInitializerPlan = .{ .string_bytes = .{
+        .bytes = "same",
+        .backing_id = backing_id,
+    } };
+    const cloned_string = (try string_plan.cloneForGlobalCopy(std.testing.allocator)) orelse return error.TestUnexpectedResult;
+    defer cloned_string.deinit(std.testing.allocator);
+    try std.testing.expect(cloned_string.string_bytes.backing_id.eql(backing_id));
+    try std.testing.expectEqualStrings("same", cloned_string.string_bytes.bytes);
 
+    const string_leaf: mir_model.AggregateInitializerPlan = .{ .string_bytes = .{
+        .bytes = "same",
+        .backing_id = backing_id,
+    } };
     const nested: mir_model.GlobalInitializerPlan = .{ .aggregate = .{ .array = &.{string_leaf} } };
-    try std.testing.expect((try nested.cloneForGlobalCopy(std.testing.allocator)) == null);
+    const cloned_nested = (try nested.cloneForGlobalCopy(std.testing.allocator)) orelse return error.TestUnexpectedResult;
+    defer cloned_nested.deinit(std.testing.allocator);
+    try std.testing.expect(cloned_nested.aggregate.array[0].string_bytes.backing_id.eql(backing_id));
 }
 
 test "CheckedProgram admits decoded string-pointer global initializer plans" {
@@ -2160,6 +2175,11 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
     module_mir.global_initializer_facts[1].plan.string_bytes.backing_id.owner_global_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
     module_mir.global_initializer_facts[1] = saved_backing;
+
+    const saved_copy = module_mir.global_initializer_facts[1];
+    module_mir.global_initializer_facts[1].plan.string_bytes.bytes = "different";
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved_copy;
 }
 
 test "pure aggregate global plan releases partial trees on unsupported later elements" {

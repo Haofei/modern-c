@@ -1184,13 +1184,13 @@ test "lower-c emits function-symbol global and array plans without AST initializ
 test "lower-c emits copied verified aggregate and relocation global plans without AST artifacts" {
     const source =
         \\open enum Mode: u32 { ready = 7 }
-        \\struct Table { left: u32, right: u32 }
+        \\struct Table { label: cstr, left: u32, right: u32 }
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }
         \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
         \\global seed: u32 = 1;
         \\global values: [2]u32 = .{ 7, 8 };
         \\global copied_values: [2]u32 = values;
-        \\global table: Table = .{ .left = 11, .right = 12 };
+        \\global table: Table = .{ .label = "table", .left = 11, .right = 12 };
         \\global copied_table: Table = ((table) as Table);
         \\global mode: Mode = .ready;
         \\global copied_mode: Mode = mode;
@@ -1222,7 +1222,8 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
         null,
     );
     try expectContains(output.items, "copied_values = { 7, 8 };");
-    try expectContains(output.items, "copied_table = { .left = 11, .right = 12 };");
+    try expectContains(output.items, "table = { .label = ((char const *)mc_str_table_0), .left = 11, .right = 12 };");
+    try expectContains(output.items, "copied_table = { .label = ((char const *)mc_str_table_0), .left = 11, .right = 12 };");
     try expectContains(output.items, "copied_mode = Mode_ready;");
     try expectContains(output.items, "copied_nullable = NULL;");
     try expectContains(output.items, "copied_ptr = &seed;");
