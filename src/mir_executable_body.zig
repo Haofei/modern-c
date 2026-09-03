@@ -357,11 +357,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     const indexed = mir.executableFixedArrayIndexPlace(body, target.*).?;
                     const representation_count: usize = @intFromBool(indexed.indirectPointee());
                     if (indexed.indirectPointee()) {
-                        const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
-                        try verifySpan(function, operation.representation_span_id, source);
+                        try verifySpanId(function, operation.representation_span_id);
                         if (ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                             return error.InvalidMemoryAccessTrap;
-                    } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
+                    } else if (operation.representation_span_id.isValid()) {
                         return error.InvalidMemoryAccessTrap;
                     }
                     if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*, representation_count))
@@ -370,9 +369,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 }
                 const expected_traps: usize = if (placeNeedsRepresentationGuard(body, target.*)) 1 else 0;
                 if (expected_traps == 1) {
-                    const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
-                    try verifySpan(function, operation.representation_span_id, source);
-                } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
+                    try verifySpanId(function, operation.representation_span_id);
+                } else if (operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
                 if (ownedTrapCountAll(body, .{ .expression = value.id }) != expected_traps or
@@ -389,12 +387,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidAtomicLoad;
                 const guarded = placeNeedsRepresentationGuard(body, target.*);
                 if (guarded) {
-                    const source = operation.representation_source orelse return error.InvalidAtomicLoad;
-                    try verifySpan(function, operation.representation_span_id, source);
+                    try verifySpanId(function, operation.representation_span_id);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidAtomicLoad;
-                } else if (operation.representation_source != null or operation.representation_span_id.isValid() or
+                } else if (operation.representation_span_id.isValid() or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                 {
                     return error.InvalidAtomicLoad;
@@ -452,12 +449,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidAtomicLoad;
                 const guarded = placeNeedsRepresentationGuard(body, target.*);
                 if (guarded) {
-                    const source = operation.representation_source orelse return error.InvalidAtomicLoad;
-                    try verifySpan(function, operation.representation_span_id, source);
+                    try verifySpanId(function, operation.representation_span_id);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidAtomicLoad;
-                } else if (operation.representation_source != null or operation.representation_span_id.isValid() or
+                } else if (operation.representation_span_id.isValid() or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                 {
                     return error.InvalidAtomicLoad;
@@ -697,18 +693,17 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     return error.InvalidBuiltinCall;
                 }
                 if (call.kind == .raw_ptr) {
-                    const source = call.representation_source orelse return error.InvalidMemoryAccessTrap;
-                    try verifySpan(function, call.representation_span_id, source);
-                    if (!sameSource(source, value.source) or !call.representation_span_id.eql(value.span_id))
+                    try verifySpanId(function, call.representation_span_id);
+                    if (!call.representation_span_id.eql(value.span_id))
                         return error.InvalidMemoryAccessTrap;
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
                 } else if (call.kind == .conversion_trap_from) {
-                    if (call.representation_source != null or call.representation_span_id.isValid() or
+                    if (call.representation_span_id.isValid() or
                         !builtinTrapConversionHasExactEdge(body, value))
                         return error.InvalidBuiltinCall;
-                } else if (call.representation_source != null or call.representation_span_id.isValid() or
+                } else if (call.representation_span_id.isValid() or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                 {
                     return error.InvalidMemoryAccessTrap;
@@ -741,12 +736,11 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 }
                 const guarded = placeNeedsRepresentationGuard(body, receiver.*);
                 if (guarded) {
-                    const source = call.representation_source orelse return error.InvalidMemoryAccessTrap;
-                    try verifySpan(function, call.representation_span_id, source);
+                    try verifySpanId(function, call.representation_span_id);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
-                } else if (call.representation_source != null or call.representation_span_id.isValid() or
+                } else if (call.representation_span_id.isValid() or
                     ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                 {
                     return error.InvalidMemoryAccessTrap;
@@ -776,7 +770,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
             if (body.complete) {
                 if (!addressResultMatchesPlace(value.result_ty, target.ty)) return error.InvalidPlaceType;
                 if (mir.executableSliceIndexPlace(body, target.*) != null) {
-                    if (address.representation_source != null or address.representation_span_id.isValid() or
+                    if (address.representation_span_id.isValid() or
                         !indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*, 0))
                         return error.InvalidMemoryAccessTrap;
                 } else if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
@@ -784,11 +778,10 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidMemoryAccessTrap;
                     const representation_count: usize = @intFromBool(indexed.indirectPointee());
                     if (indexed.indirectPointee()) {
-                        const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
-                        try verifySpan(function, address.representation_span_id, source);
+                        try verifySpanId(function, address.representation_span_id);
                         if (ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                             return error.InvalidMemoryAccessTrap;
-                    } else if (address.representation_source != null or address.representation_span_id.isValid()) {
+                    } else if (address.representation_span_id.isValid()) {
                         return error.InvalidMemoryAccessTrap;
                     }
                     if (!indexedBoundsEdgesExact(body, .{ .expression = value.id }, value.block_id, target.*, representation_count))
@@ -800,28 +793,26 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                     target.*,
                     false,
                 )) {
-                    if (address.representation_source != null or address.representation_span_id.isValid() or
+                    if (address.representation_span_id.isValid() or
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
                 } else if (target.projection_count == 0) {
-                    if (!directAddressablePlace(body, target.*) or address.representation_source != null or
-                        address.representation_span_id.isValid() or ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
+                    if (!directAddressablePlace(body, target.*) or address.representation_span_id.isValid() or
+                        ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
                 } else if (isComputedRawManyDerefPlace(body, target.*, false)) {
-                    if (address.representation_source != null or address.representation_span_id.isValid() or
+                    if (address.representation_span_id.isValid() or
                         ownedTrapCountAll(body, .{ .expression = value.id }) != 0)
                         return error.InvalidMemoryAccessTrap;
                 } else if (mir.executableParameterProjectedPlace(body, target.*, false)) {
-                    const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
-                    try verifySpan(function, address.representation_span_id, source);
+                    try verifySpanId(function, address.representation_span_id);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
                 } else {
                     if (!(isSingleParameterDerefPlace(body, target.*, false) or mir.executableLocalAddressDerefPlace(body, target.*, false)) or
                         !sameValueType(value.result_ty, target.root_ty)) return error.InvalidPlaceType;
-                    const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
-                    try verifySpan(function, address.representation_span_id, source);
+                    try verifySpanId(function, address.representation_span_id);
                     if (ownedTrapCountAll(body, .{ .expression = value.id }) != 1 or
                         ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1) return error.InvalidMemoryAccessTrap;
                 }
@@ -1099,11 +1090,11 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                     },
                     .builtin_call => |call| {
                         if (call.kind == .raw_ptr) {
-                            if (call.representation_source == null or !call.representation_span_id.isValid() or
+                            if (!call.representation_span_id.isValid() or
                                 edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                                 return error.InvalidTrapEdge;
                         } else if (call.kind == .conversion_trap_from) {
-                            if (call.representation_source != null or call.representation_span_id.isValid() or
+                            if (call.representation_span_id.isValid() or
                                 edge.kind != .IntegerOverflow or edge.source != .checked_arithmetic)
                                 return error.InvalidTrapEdge;
                         } else return error.InvalidTrapEdge;
@@ -1112,7 +1103,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         const receiver = place(body, call.receiver) orelse return error.InvalidTrapEdge;
                         if (mir.executableDynTraitPlace(body, receiver.*) == null or
                             !placeNeedsRepresentationGuard(body, receiver.*) or
-                            call.representation_source == null or !call.representation_span_id.isValid() or
+                            !call.representation_span_id.isValid() or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
                     },
@@ -1443,11 +1434,10 @@ fn verifyStatement(function: *const mir.Function, statement_value: mir.Executabl
                 const checked_indices = if (indexed) mir.executableCheckedIndexProjectionCount(target.*) else 0;
                 const expected_traps = @as(usize, @intFromBool(guarded)) + checked_indices;
                 if (guarded) {
-                    const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
-                    try verifySpan(function, operation.representation_span_id, source);
+                    try verifySpanId(function, operation.representation_span_id);
                     if (ownedTrapCount(body, .{ .statement = statement_value.id }, .InvalidRepresentation, .representation_check) != 1)
                         return error.InvalidMemoryAccessTrap;
-                } else if (operation.representation_source != null or operation.representation_span_id.isValid()) {
+                } else if (operation.representation_span_id.isValid()) {
                     return error.InvalidMemoryAccessTrap;
                 }
                 if (indexed and !indexedBoundsEdgesExact(

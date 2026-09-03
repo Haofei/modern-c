@@ -99,6 +99,13 @@ def main() -> int:
     executable_expression_end = model.index("pub const ExecutablePlace = struct {", executable_expression_start)
     if "callee_source:" in model[executable_expression_start:executable_expression_end]:
         fail("src/mir_model.zig executable call operations duplicate callee source beside SpanId")
+    if "representation_source:" in model[executable_expression_start:executable_expression_end]:
+        fail("src/mir_model.zig executable operations duplicate representation source beside SpanId")
+
+    executable_statement_start = model.index("pub const ExecutableStatement = struct {")
+    executable_statement_end = model.index("/// Prove that `local` is initialized exactly once", executable_statement_start)
+    if "representation_source:" in model[executable_statement_start:executable_statement_end]:
+        fail("src/mir_model.zig executable statements duplicate representation source beside SpanId")
 
     start = model.index("pub const ExecutableCleanupAction = struct {")
     end = model.index("\n};", start)

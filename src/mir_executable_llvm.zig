@@ -3876,19 +3876,18 @@ const Renderer = struct {
                     .store => |value| value,
                     else => return null,
                 };
-                if (!store.place.eql(place.id) or store.representation_source == null or
-                    !store.representation_span_id.isValid()) return null;
+                if (!store.place.eql(place.id) or !store.representation_span_id.isValid()) return null;
                 break :blk statement.block_id;
             },
             .expression => |id| blk: {
                 if (!expressionValid(self.body, id)) return null;
                 const expression = self.body.expressions[id.index()];
                 const metadata_place = switch (expression.operation) {
-                    .address_of => |value| if (value.representation_source != null and value.representation_span_id.isValid())
+                    .address_of => |value| if (value.representation_span_id.isValid())
                         value.place
                     else
                         return null,
-                    .load => |value| if (value.representation_source != null and value.representation_span_id.isValid())
+                    .load => |value| if (value.representation_span_id.isValid())
                         value.place
                     else
                         return null,
@@ -4770,7 +4769,7 @@ fn dynCallSupported(
             !argument.type_id.eql(call.signature.parameter_type_ids[index])) return false;
     }
     const guarded = placeNeedsRepresentationGuard(body, receiver);
-    if (guarded != (call.representation_source != null and call.representation_span_id.isValid())) return false;
+    if (guarded != call.representation_span_id.isValid()) return false;
     return if (guarded) representationTrapEdgeIsExact(body, expression) else ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
@@ -5295,12 +5294,12 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
     if (call.kind == .counter_elapsed_bounded and !counterElapsedResultSupported(body, expression)) return false;
     if (call.kind == .raw_ptr) {
-        if (call.representation_source == null or !call.representation_span_id.isValid() or
+        if (!call.representation_span_id.isValid() or
             !representationTrapEdgeIsExact(body, expression)) return false;
     } else if (call.kind == .conversion_trap_from) {
-        if (call.representation_source != null or call.representation_span_id.isValid() or
+        if (call.representation_span_id.isValid() or
             !builtinTrapConversionEdgeIsExact(body, expression)) return false;
-    } else if (call.representation_source != null or call.representation_span_id.isValid() or
+    } else if (call.representation_span_id.isValid() or
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
         (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
@@ -5870,11 +5869,11 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
     )) return false;
     const place = body.places[load.place.index()];
     if (place.projection_count == 0) {
-        return load.representation_source == null and !load.representation_span_id.isValid();
+        return !load.representation_span_id.isValid();
     }
     if (!expression.type_id.isValid() or !expression.type_id.eql(place.type_id)) return false;
     if (mir.executableFixedArrayIndexPlace(body, place)) |indexed| {
-        return indexed.indirectPointee() == (load.representation_source != null and load.representation_span_id.isValid()) and
+        return indexed.indirectPointee() == load.representation_span_id.isValid() and
             if (mir.executableFixedArrayCheckedProjectionCount(place) != 0)
                 fixedArrayLoadBoundsTrapEdge(body, expression) != null and
                     ownedExpressionTrapCount(body, expression.id) == mir.executableFixedArrayCheckedProjectionCount(place) +
@@ -5888,17 +5887,16 @@ fn memoryLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
         body.aggregate_types,
         place,
         false,
-    )) return load.representation_source == null and
-        !load.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
+    )) return !load.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
     if (computedRawManyDerefPlaceSupported(body, place, false)) {
-        return load.representation_source == null and !load.representation_span_id.isValid() and
+        return !load.representation_span_id.isValid() and
             ownedExpressionTrapCount(body, expression.id) == 0;
     }
     if (!placeNeedsRepresentationGuard(body, place)) {
-        return load.representation_source == null and !load.representation_span_id.isValid() and
+        return !load.representation_span_id.isValid() and
             ownedExpressionTrapCount(body, expression.id) == 0;
     }
-    return load.representation_source != null and load.representation_span_id.isValid() and
+    return load.representation_span_id.isValid() and
         representationTrapEdgeIsExact(body, expression);
 }
 
@@ -5907,7 +5905,7 @@ fn addressOfFixedArrayIndexSupported(body: *const mir.ExecutableBody, expression
     const place = body.places[address.place.index()];
     const indexed = mir.executableFixedArrayIndexPlace(body, place) orelse return false;
     if (!addressResultMatchesPlace(expression.result_ty, place.ty) or
-        indexed.indirectPointee() != (address.representation_source != null and address.representation_span_id.isValid()))
+        indexed.indirectPointee() != address.representation_span_id.isValid())
         return false;
     const root_addressable = indexed.indirectPointee() or switch (place.root) {
         .local => |id| localAddressable(body, id),
@@ -5926,7 +5924,7 @@ fn addressOfSliceIndexSupported(body: *const mir.ExecutableBody, expression: mir
     const place = body.places[address.place.index()];
     return mir.executableSliceIndexPlace(body, place) != null and
         addressResultMatchesPlace(expression.result_ty, place.ty) and expression.type_id.isValid() and
-        address.representation_source == null and !address.representation_span_id.isValid() and
+        !address.representation_span_id.isValid() and
         fixedArrayLoadBoundsTrapEdgeIsExact(body, expression);
 }
 
@@ -5935,9 +5933,9 @@ fn atomicLoadSupported(body: *const mir.ExecutableBody, expression: mir.Executab
     const place = body.places[load.place.index()];
     if (!atomicPlaceSupported(body, place) or !sameValueType(place.ty, expression.result_ty) or
         !place.type_id.eql(expression.type_id)) return false;
-    if (placeNeedsRepresentationGuard(body, place)) return load.representation_source != null and
-        load.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
-    return load.representation_source == null and !load.representation_span_id.isValid() and
+    if (placeNeedsRepresentationGuard(body, place)) return load.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+    return !load.representation_span_id.isValid() and
         ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
@@ -5991,9 +5989,9 @@ fn atomicUpdateSupported(body: *const mir.ExecutableBody, expression: mir.Execut
     if (update.kind == .store) {
         if (expression.result_ty != .void) return false;
     } else if (!sameValueType(expression.result_ty, place.ty) or !expression.type_id.eql(place.type_id)) return false;
-    if (placeNeedsRepresentationGuard(body, place)) return update.representation_source != null and
-        update.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
-    return update.representation_source == null and !update.representation_span_id.isValid() and
+    if (placeNeedsRepresentationGuard(body, place)) return update.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
+    return !update.representation_span_id.isValid() and
         ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
@@ -6103,8 +6101,8 @@ fn addressOfAggregateFieldSupported(body: *const mir.ExecutableBody, expression:
         place,
         false,
     ) and addressResultMatchesPlace(expression.result_ty, place.ty) and
-        expression.type_id.isValid() and address.representation_source == null and
-        !address.representation_span_id.isValid() and ownedExpressionTrapCount(body, expression.id) == 0;
+        expression.type_id.isValid() and !address.representation_span_id.isValid() and
+        ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
 fn addressOfParameterFieldSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
@@ -6112,8 +6110,8 @@ fn addressOfParameterFieldSupported(body: *const mir.ExecutableBody, expression:
     const place = body.places[address.place.index()];
     return mir.executableParameterProjectedPlace(body, place, false) and
         addressResultMatchesPlace(expression.result_ty, place.ty) and
-        expression.type_id.isValid() and address.representation_source != null and
-        address.representation_span_id.isValid() and representationTrapEdgeIsExact(body, expression);
+        expression.type_id.isValid() and address.representation_span_id.isValid() and
+        representationTrapEdgeIsExact(body, expression);
 }
 
 fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, address: anytype) bool {
@@ -6122,7 +6120,7 @@ fn addressOfParameterDerefSupported(body: *const mir.ExecutableBody, expression:
     return singleParameterDerefPlaceSupported(body, place) and
         sameValueType(expression.result_ty, place.root_ty) and
         expression.type_id.isValid() and expression.type_id.eql(place.root_type_id) and
-        address.representation_source != null and address.representation_span_id.isValid() and
+        address.representation_span_id.isValid() and
         representationTrapEdgeIsExact(body, expression);
 }
 
@@ -6132,7 +6130,7 @@ fn addressOfLocalAddressAliasDerefSupported(body: *const mir.ExecutableBody, exp
     return mir.executableLocalAddressDerefPlace(body, place, false) and
         sameValueType(expression.result_ty, place.root_ty) and
         expression.type_id.isValid() and expression.type_id.eql(place.root_type_id) and
-        address.representation_source != null and address.representation_span_id.isValid() and
+        address.representation_span_id.isValid() and
         representationTrapEdgeIsExact(body, expression);
 }
 
@@ -6141,7 +6139,7 @@ fn addressOfComputedRawManyDerefSupported(body: *const mir.ExecutableBody, expre
     const place = body.places[address.place.index()];
     return computedRawManyDerefPlaceSupported(body, place, false) and
         addressResultMatchesPlace(expression.result_ty, place.ty) and expression.type_id.isValid() and
-        address.representation_source == null and !address.representation_span_id.isValid() and
+        !address.representation_span_id.isValid() and
         ownedExpressionTrapCount(body, expression.id) == 0;
 }
 
@@ -6149,8 +6147,7 @@ fn directAddressOfSupported(body: *const mir.ExecutableBody, expression: mir.Exe
     if (!placeValid(body, address.place)) return false;
     const place = body.places[address.place.index()];
     if (place.storage != .ordinary or place.projection_count != 0 or !sameValueType(place.root_ty, place.ty) or
-        !addressResultMatchesPlace(expression.result_ty, place.ty) or
-        address.representation_source != null or address.representation_span_id.isValid() or
+        !addressResultMatchesPlace(expression.result_ty, place.ty) or address.representation_span_id.isValid() or
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return switch (place.root) {
         .local => |id| localExists(body, id),
@@ -6200,13 +6197,13 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
     if (!memoryAccessSupported(body, store.place, store.ty, store.access, true, special_value_store)) return false;
     if (!sameValueType(store.ty, value.result_ty)) return false;
     if (place.projection_count == 0) {
-        return store.representation_source == null and !store.representation_span_id.isValid();
+        return !store.representation_span_id.isValid();
     }
     if (!store.type_id.isValid() or !store.type_id.eql(place.type_id) or
         !value.type_id.isValid() or !value.type_id.eql(store.type_id)) return false;
     if (mir.executableFixedArrayIndexPlace(body, place)) |indexed| {
         return (!indexed.indirectPointee() or mir.executableFixedArrayIndirectPointeePlace(body, place, true)) and
-            indexed.indirectPointee() == (store.representation_source != null and store.representation_span_id.isValid()) and
+            indexed.indirectPointee() == store.representation_span_id.isValid() and
             if (mir.executableFixedArrayCheckedProjectionCount(place) != 0)
                 statementBoundsTrapEdge(body, statement) != null and
                     ownedStatementTrapEdgeCount(body, statement.id) == mir.executableFixedArrayCheckedProjectionCount(place) +
@@ -6220,8 +6217,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
             else => false,
         };
         return mutable_slice and mir.executableCheckedSliceValueRoot(body, place) and
-            store.access.kind == .race_unordered and
-            store.representation_source == null and !store.representation_span_id.isValid() and
+            store.access.kind == .race_unordered and !store.representation_span_id.isValid() and
             statementBoundsTrapEdge(body, statement) != null and
             ownedStatementTrapEdgeCount(body, statement.id) == 1;
     }
@@ -6231,18 +6227,17 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         body.aggregate_types,
         place,
         true,
-    )) return store.representation_source == null and
-        !store.representation_span_id.isValid() and ownedStatementTrapEdgeCount(body, statement.id) == 0;
+    )) return !store.representation_span_id.isValid() and ownedStatementTrapEdgeCount(body, statement.id) == 0;
     if (parameterCallableProjectedPlaceSupported(body, place, true)) {
-        return store.representation_source != null and store.representation_span_id.isValid() and
+        return store.representation_span_id.isValid() and
             statementRepresentationTrapEdgeIsExact(body, statement);
     }
     if (dynStoreTargetSupported(body, place, value) and mir.executableParameterProjectedPlace(body, place, true)) {
-        return store.representation_source != null and store.representation_span_id.isValid() and
+        return store.representation_span_id.isValid() and
             statementRepresentationTrapEdgeIsExact(body, statement);
     }
     if (computedRawManyDerefPlaceSupported(body, place, true)) {
-        return store.representation_source == null and !store.representation_span_id.isValid() and
+        return !store.representation_span_id.isValid() and
             statementRepresentationTrapEdge(body, statement) == null;
     }
     return (parameterScalarAccessStorePlaceSupported(body, place) or
@@ -6256,8 +6251,7 @@ fn memoryStoreSupported(body: *const mir.ExecutableBody, statement: mir.Executab
         mir.executableLocalAddressDerefPlace(body, place, true) or
         mir.executableGuardedLocalScalarDerefPlace(body, place, true) or
         mir.executableGuardedLocalAggregateDerefPlace(body, place, true) or
-        mir.executableGlobalPointerDerefPlace(body, place, true)) and
-        store.representation_source != null and store.representation_span_id.isValid() and
+        mir.executableGlobalPointerDerefPlace(body, place, true)) and store.representation_span_id.isValid() and
         statementRepresentationTrapEdgeIsExact(body, statement);
 }
 
@@ -6483,8 +6477,8 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
     if (expected == 0 or ownedExpressionTrapCount(body, expression.id) != expected + representation_count) return null;
     if (representation_count == 1) {
         const has_metadata = switch (expression.operation) {
-            .address_of => |value| value.representation_source != null and value.representation_span_id.isValid(),
-            .load => |value| value.representation_source != null and value.representation_span_id.isValid(),
+            .address_of => |value| value.representation_span_id.isValid(),
+            .load => |value| value.representation_span_id.isValid(),
             else => return null,
         };
         if (!has_metadata) return null;
@@ -6705,8 +6699,7 @@ fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.Execu
     const indexed = mir.executableFixedArrayIndexPlace(body, place);
     const representation_count: usize = @intFromBool(indexed != null and indexed.?.indirectPointee());
     if (expected == 0 or ownedStatementTrapEdgeCount(body, statement.id) != expected + representation_count) return null;
-    if (representation_count == 1 and
-        (store.representation_source == null or !store.representation_span_id.isValid())) return null;
+    if (representation_count == 1 and !store.representation_span_id.isValid()) return null;
     for (place.projections[0..place.projection_count]) |projection| switch (projection) {
         .index => |index| if (index.checked) {
             var matching_span: usize = 0;
@@ -7829,7 +7822,6 @@ test "mechanical renderer guards single parameter deref before race-unordered lo
         .operation = .{ .load = .{
             .place = mir.PlaceId.fromIndex(0),
             .access = .{ .kind = .race_unordered, .alignment = 4 },
-            .representation_source = source,
             .representation_span_id = mir.SpanId.fromIndex(0),
         } },
     }};
@@ -7895,7 +7887,6 @@ test "mechanical renderer guards address of parameter deref and returns the same
         .type_id = mir.TypeId.fromIndex(0),
         .operation = .{ .address_of = .{
             .place = mir.PlaceId.fromIndex(0),
-            .representation_source = source,
             .representation_span_id = mir.SpanId.fromIndex(0),
         } },
     }};
@@ -7946,7 +7937,6 @@ test "mechanical renderer rejects mutated parameter deref place access and trap 
         .operation = .{ .load = .{
             .place = mir.PlaceId.fromIndex(0),
             .access = .{ .kind = .race_unordered, .alignment = 4 },
-            .representation_source = source,
             .representation_span_id = mir.SpanId.fromIndex(0),
         } },
     }};
@@ -8045,7 +8035,6 @@ test "mechanical renderer guards statement-owned parameter deref before atomic s
                 .ty = value_ty,
                 .type_id = mir.TypeId.fromIndex(1),
                 .access = .{ .kind = .race_unordered, .alignment = 4 },
-                .representation_source = source,
                 .representation_span_id = mir.SpanId.fromIndex(0),
             } },
         },

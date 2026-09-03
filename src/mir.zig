@@ -8909,35 +8909,11 @@ const FunctionBuilder = struct {
             expression.span_id = self.span_ids.get(expression.source) orelse .invalid;
             expression.type_id = self.type_ids.get(expression.result_ty) orelse .invalid;
             switch (expression.operation) {
-                .load => |*load| if (load.representation_source) |source| {
-                    load.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                    if (!load.representation_span_id.isValid()) complete = false;
-                },
-                .atomic_load => |*load| if (load.representation_source) |source| {
-                    load.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                    if (!load.representation_span_id.isValid()) complete = false;
-                },
-                .atomic_update => |*update| if (update.representation_source) |source| {
-                    update.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                    if (!update.representation_span_id.isValid()) complete = false;
-                },
-                .address_of => |*address| if (address.representation_source) |source| {
-                    address.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                    if (!address.representation_span_id.isValid()) complete = false;
-                },
                 .direct_call => |call| {
                     if (!call.callee_span_id.isValid()) complete = false;
                 },
                 .builtin_call => |*call| {
                     if (!call.callee_span_id.isValid()) complete = false;
-                    if (call.representation_source) |source| {
-                        call.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                        if (!call.representation_span_id.isValid()) complete = false;
-                    }
-                },
-                .dyn_call => |*call| if (call.representation_source) |source| {
-                    call.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                    if (!call.representation_span_id.isValid()) complete = false;
                 },
                 else => {},
             }
@@ -8965,9 +8941,6 @@ const FunctionBuilder = struct {
                 },
                 .store => |*store| {
                     store.type_id = self.type_ids.get(store.ty) orelse .invalid;
-                    if (store.representation_source) |source| {
-                        store.representation_span_id = self.span_ids.get(source) orelse .invalid;
-                    }
                     if (!store.type_id.isValid() or store.value.index() >= self.executable_expressions.items.len or
                         !store.place.isValid() or store.place.index() >= self.executable_places.items.len or
                         !self.executableMemoryAccessComplete(self.executable_places.items[store.place.index()], store.ty, store.access, true))
@@ -8975,8 +8948,7 @@ const FunctionBuilder = struct {
                         complete = false;
                     } else {
                         const guarded = self.executablePlaceNeedsRepresentationGuard(self.executable_places.items[store.place.index()]);
-                        if ((guarded and (store.representation_source == null or !store.representation_span_id.isValid())) or
-                            (!guarded and (store.representation_source != null or store.representation_span_id.isValid()))) complete = false;
+                        if (guarded != store.representation_span_id.isValid()) complete = false;
                         const value = self.executable_expressions.items[store.value.index()];
                         if (!sameValueType(value.result_ty, store.ty)) complete = false;
                     }
@@ -9260,18 +9232,18 @@ const FunctionBuilder = struct {
                 const target = self.executable_places.items[address.place.index()];
                 if (!self.executableAddressOfComplete(expression.result_ty, target)) break :address_complete false;
                 break :address_complete if (self.executablePlaceNeedsRepresentationGuard(target))
-                    address.representation_source != null and address.representation_span_id.isValid()
+                    address.representation_span_id.isValid()
                 else
-                    address.representation_source == null and !address.representation_span_id.isValid();
+                    !address.representation_span_id.isValid();
             },
             .load => |load| load_complete: {
                 if (!load.place.isValid() or load.place.index() >= self.executable_places.items.len or
                     !self.executableMemoryAccessComplete(self.executable_places.items[load.place.index()], expression.result_ty, load.access, false)) break :load_complete false;
                 const guarded = self.executablePlaceNeedsRepresentationGuard(self.executable_places.items[load.place.index()]);
                 break :load_complete if (guarded)
-                    load.representation_source != null and load.representation_span_id.isValid()
+                    load.representation_span_id.isValid()
                 else
-                    load.representation_source == null and !load.representation_span_id.isValid();
+                    !load.representation_span_id.isValid();
             },
             .atomic_load => |load| self.executableAtomicLoadComplete(expression, load),
             .atomic_init => |operand| operand.isValid() and operand.index() < expression.id.index() and
@@ -10007,7 +9979,7 @@ const FunctionBuilder = struct {
         if (!self.executableAtomicPlaceComplete(place) or !sameValueType(place.ty, expression.result_ty) or
             !place.type_id.eql(expression.type_id)) return false;
         const guarded = self.executablePlaceNeedsRepresentationGuard(place);
-        if (guarded != (load.representation_source != null and load.representation_span_id.isValid())) return false;
+        if (guarded != load.representation_span_id.isValid()) return false;
         var owned: usize = 0;
         for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
             .expression => |id| if (id.eql(expression.id)) {
@@ -10101,7 +10073,7 @@ const FunctionBuilder = struct {
             if (expression.result_ty != .void) return false;
         } else if (!sameValueType(expression.result_ty, place.ty) or !expression.type_id.eql(place.type_id)) return false;
         const guarded = self.executablePlaceNeedsRepresentationGuard(place);
-        if (guarded != (update.representation_source != null and update.representation_span_id.isValid())) return false;
+        if (guarded != update.representation_span_id.isValid()) return false;
         var owned: usize = 0;
         for (self.executable_trap_edges.items) |edge| switch (edge.owner) {
             .expression => |id| if (id.eql(expression.id)) {
@@ -10366,11 +10338,9 @@ const FunctionBuilder = struct {
         }
         if (call.kind == .enum_raw and !self.executableEnumRawComplete(expression, call)) return false;
         return if (call.kind == .raw_ptr)
-            call.representation_source != null and
-                sourcePointEquivalent(call.representation_source.?, expression.source) and
-                call.representation_span_id.eql(expression.span_id)
+            call.representation_span_id.eql(expression.span_id)
         else
-            call.representation_source == null and !call.representation_span_id.isValid();
+            !call.representation_span_id.isValid();
     }
 
     fn executableVaListLocal(self: *const FunctionBuilder, local: LocalId) bool {
@@ -11690,7 +11660,6 @@ const FunctionBuilder = struct {
                     null;
                 break :address .{ .address_of = .{
                     .place = place_id,
-                    .representation_source = guard_source,
                     .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                 } };
             },
@@ -11714,7 +11683,6 @@ const FunctionBuilder = struct {
                 break :load .{ .load = .{
                     .place = place_id,
                     .access = self.executableMemoryAccessForPlace(place_id, expr, result_ty),
-                    .representation_source = guard_source,
                     .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                 } };
             },
@@ -11770,7 +11738,6 @@ const FunctionBuilder = struct {
                     break :index .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
                         .access = self.executableMemoryAccess(expr, result_ty),
-                        .representation_source = guard_source,
                         .representation_span_id = if (guard_source) |point| try self.internSpanId(point) else .invalid,
                     } };
                 }
@@ -11879,7 +11846,7 @@ const FunctionBuilder = struct {
                 if (pointer_shape) |shape| {
                     // Pointer member access is a memory operation, not a pure
                     // aggregate projection. The load owns the pointer
-                    // representation guard through representation_source;
+                    // representation guard through representation_span_id;
                     // scalar result validation, when required, is already an
                     // independent MIR representation edge for this expression.
                     // Pointer-valued fields stay closed until MIR can own both
@@ -11892,7 +11859,6 @@ const FunctionBuilder = struct {
                     break :member .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
                         .access = self.executableMemoryAccess(expr, result_ty),
-                        .representation_source = guard_source,
                         .representation_span_id = try self.internSpanId(guard_source),
                     } };
                 }
@@ -11905,7 +11871,6 @@ const FunctionBuilder = struct {
                     break :member .{ .load = .{
                         .place = try self.appendExecutablePlace(expr),
                         .access = self.executableMemoryAccess(expr, result_ty),
-                        .representation_source = guard_source,
                         .representation_span_id = try self.internSpanId(guard_source),
                     } };
                 }
@@ -12064,7 +12029,6 @@ const FunctionBuilder = struct {
                     break :call .{ .atomic_load = .{
                         .place = place_id,
                         .ordering = ordering,
-                        .representation_source = guard_source,
                         .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                     } };
                 }
@@ -12102,7 +12066,6 @@ const FunctionBuilder = struct {
                             .place = place_id,
                             .value = try self.ensureExecutableCoercedExpr(node.args[0], payload_ty),
                             .ordering = ordering,
-                            .representation_source = guard_source,
                             .representation_span_id = if (guard_source) |guard| try self.internSpanId(guard) else .invalid,
                         } };
                     },
@@ -12227,7 +12190,6 @@ const FunctionBuilder = struct {
                         .kind = kind,
                         .unsafe_authorized = mir_model.executableBuiltinRequiresUnsafe(kind) and self.active_unsafe,
                         .callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span)),
-                        .representation_source = if (kind == .raw_ptr) source else null,
                         .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
                         .const_index = if (const_get_target) |target| target.index else null,
                         .vararg_cursor = vararg_cursor,
@@ -12364,7 +12326,6 @@ const FunctionBuilder = struct {
                     if (self.executablePlaceNeedsRepresentationGuard(receiver)) {
                         const guard = self.executableDerefOperandSource(member.base.*) orelse
                             break :call self.unsupportedExecutableExpression(.unsupported_call);
-                        call_value.representation_source = guard;
                         call_value.representation_span_id = try self.internSpanId(guard);
                     }
                     break :call .{ .dyn_call = call_value };
@@ -14534,7 +14495,7 @@ const FunctionBuilder = struct {
                 } else {
                     const place_id = try self.appendExecutablePlace(node.target);
                     const place = self.executable_places.items[place_id.index()];
-                    const representation_source = if (self.executablePlaceNeedsRepresentationGuard(place))
+                    const representation_guard_source = if (self.executablePlaceNeedsRepresentationGuard(place))
                         self.executableDerefOperandSource(node.target)
                     else
                         null;
@@ -14547,8 +14508,7 @@ const FunctionBuilder = struct {
                         .value = store_value,
                         .ty = assignment_target_ty,
                         .access = store_access,
-                        .representation_source = representation_source,
-                        .representation_span_id = if (representation_source) |source| try self.internSpanId(source) else .invalid,
+                        .representation_span_id = if (representation_guard_source) |source| try self.internSpanId(source) else .invalid,
                     } });
                 }
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);

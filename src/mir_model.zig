@@ -1251,13 +1251,11 @@ pub const ExecutableExpression = struct {
         load: struct {
             place: PlaceId,
             access: ExecutableMemoryAccess,
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
         atomic_load: struct {
             place: PlaceId,
             ordering: ExecutableAtomicOrdering,
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
         /// Storage-normalized `atomic.init(value)`. `atomic<T>` has the same
@@ -1286,7 +1284,6 @@ pub const ExecutableExpression = struct {
             place: PlaceId,
             value: ExprId,
             ordering: ExecutableAtomicOrdering,
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
         /// A syntax-free typed MMIO register read.  The frontend has already
@@ -1365,7 +1362,6 @@ pub const ExecutableExpression = struct {
             /// Exact source location of a constrained builtin result
             /// representation check. `raw.ptr<T>` uses this to own its
             /// non-null pointer obligation in MIR rather than in a backend.
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
             /// Compile-time index owned by `const_get`; absent for every other
             /// builtin kind. Keeping it on the verified operation prevents a
@@ -1400,7 +1396,6 @@ pub const ExecutableExpression = struct {
             signature: ExecutableCallSignature,
             arguments: [max_executable_operands]ExprId = [_]ExprId{.invalid} ** max_executable_operands,
             argument_count: usize = 0,
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
         /// Construct a checked dynamic-trait fat value from a concrete
@@ -1413,7 +1408,6 @@ pub const ExecutableExpression = struct {
         },
         address_of: struct {
             place: PlaceId,
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
         deref: ExprId,
@@ -1779,7 +1773,6 @@ pub const ExecutableStatement = struct {
             ty: ValueType,
             type_id: TypeId = .invalid,
             access: ExecutableMemoryAccess,
-            representation_source: ?SourcePoint = null,
             representation_span_id: SpanId = .invalid,
         },
         /// Update one boolean field in a packed-bits value.  The place names

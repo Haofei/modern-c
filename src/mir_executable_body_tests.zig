@@ -435,7 +435,6 @@ test "single parameter pointer deref owns typed place and race access" {
     switch (store_statement.operation) {
         .store => |*store| {
             try std.testing.expect(store.access.kind == .race_unordered);
-            try std.testing.expect(store.representation_source != null);
             try std.testing.expect(store.representation_span_id.isValid());
 
             const store_place = &store_function.executable_body.places[store.place.index()];
@@ -494,7 +493,6 @@ test "single parameter pointer deref owns typed place and race access" {
     for (identity.executable_body.expressions) |value| switch (value.operation) {
         .address_of => |address| {
             try std.testing.expect(address.representation_span_id.isValid());
-            try std.testing.expect(address.representation_source != null);
             try std.testing.expect(address.place.eql(identity.executable_body.places[0].id));
             return;
         },
@@ -914,7 +912,6 @@ test "raw pointer construction owns its nonnull trap and unsafe authority" {
         .builtin_call => |call| if (call.kind == .raw_ptr) {
             call_index = index;
             try std.testing.expect(call.unsafe_authorized);
-            try std.testing.expect(call.representation_source != null);
             try std.testing.expect(call.representation_span_id.isValid());
         },
         else => {},
@@ -930,13 +927,16 @@ test "raw pointer construction owns its nonnull trap and unsafe authority" {
     try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
     function.executable_body.expressions[index].operation.builtin_call.representation_span_id = saved_span;
 
+    const saved_identity = function.span_identities[saved_span.index()].id;
+    function.span_identities[saved_span.index()].id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    function.span_identities[saved_span.index()].id = saved_identity;
+
     const argument_id = function.executable_body.expressions[index].operation.builtin_call.arguments[0];
     const argument = function.executable_body.expressions[argument_id.index()];
-    const saved_representation_source = function.executable_body.expressions[index].operation.builtin_call.representation_source;
-    function.executable_body.expressions[index].operation.builtin_call.representation_source = argument.source;
+    try std.testing.expect(!argument.span_id.eql(saved_span));
     function.executable_body.expressions[index].operation.builtin_call.representation_span_id = argument.span_id;
     try std.testing.expectError(error.InvalidMemoryAccessTrap, executable.verify(function));
-    function.executable_body.expressions[index].operation.builtin_call.representation_source = saved_representation_source;
     function.executable_body.expressions[index].operation.builtin_call.representation_span_id = saved_span;
 
     const saved_source = function.executable_body.trap_edges[0].source;

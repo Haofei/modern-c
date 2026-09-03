@@ -404,7 +404,6 @@ test "executable MIR owns bounded atomic loads and rejects semantic drift" {
     pointer.executable_body.expressions[index].operation = .{ .load = .{
         .place = place_id,
         .access = .{ .kind = .race_unordered, .alignment = 4 },
-        .representation_source = saved_operation.atomic_load.representation_source,
         .representation_span_id = saved_operation.atomic_load.representation_span_id,
     } };
     try std.testing.expectError(error.InvalidMemoryAccessType, mir_executable_body.verify(pointer));
@@ -1052,7 +1051,6 @@ test "executable MIR owns direct global address place without a trap" {
     const place = mir_executable_body.place(&function.executable_body, address.place) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 0), place.projection_count);
     try std.testing.expect(place.root == .symbol);
-    try std.testing.expect(address.representation_source == null);
     try std.testing.expect(!address.representation_span_id.isValid());
     try mir.validateLoweringAdmission(module_mir);
 
