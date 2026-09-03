@@ -100,6 +100,11 @@ def main() -> int:
     if "callee_source:" in model[executable_expression_start:executable_expression_end]:
         fail("src/mir_model.zig executable call operations duplicate callee source beside SpanId")
 
+    start = model.index("pub const ExecutableCleanupAction = struct {")
+    end = model.index("\n};", start)
+    if "source:" in model[start:end]:
+        fail("src/mir_model.zig ExecutableCleanupAction duplicates source identity beside SpanId")
+
     start = model.index("pub const TrapEdge = struct {")
     end = model.index("\n};", start)
     trap_edge = model[start:end]

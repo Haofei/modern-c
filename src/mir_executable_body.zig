@@ -193,9 +193,10 @@ pub fn verify(function: *const mir.Function) !void {
         if (!action.id.isValid() or action.id.index() != index or
             !action.registration.isValid() or action.registration.index() >= body.statements.len or
             !blockExists(function, action.block_id)) return error.InvalidCleanupActionIdentity;
-        try verifySpan(function, action.span_id, action.source);
+        try verifySpanId(function, action.span_id);
         const registration = body.statements[action.registration.index()];
-        if (!registration.id.eql(action.registration) or !registration.block_id.eql(action.block_id))
+        if (!registration.id.eql(action.registration) or !registration.block_id.eql(action.block_id) or
+            !registration.span_id.eql(action.span_id))
             return error.InvalidCleanupRegistration;
         switch (registration.operation) {
             .defer_register => |id| if (!id.eql(action.id)) return error.InvalidCleanupRegistration,

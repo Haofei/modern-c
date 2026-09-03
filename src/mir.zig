@@ -9035,7 +9035,6 @@ const FunctionBuilder = struct {
             }
         }
         for (self.executable_cleanup_actions.items) |*action| {
-            action.span_id = self.span_ids.get(action.source) orelse .invalid;
             if (!action.span_id.isValid() or action.roots.len == 0) complete = false;
         }
         // Representation facts are recorded by the source-shaped walk after
@@ -13718,7 +13717,6 @@ const FunctionBuilder = struct {
             .id = id,
             .registration = InstId.fromIndex(self.executable_statements.items.len),
             .block_id = BlockId.fromIndex(self.current),
-            .source = source,
             .span_id = try self.internSpanId(source),
             .roots = owned_roots,
         });

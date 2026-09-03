@@ -1760,7 +1760,6 @@ pub const ExecutableCleanupAction = struct {
     id: CleanupActionId,
     registration: InstId,
     block_id: BlockId,
-    source: SourcePoint,
     span_id: SpanId = .invalid,
     roots: []const ExprId = &.{},
 };

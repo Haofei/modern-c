@@ -379,7 +379,7 @@ fn emitExecutableCleanupActions(
         // A block-form defer has its own source span in addition to the spans
         // of the expressions inside it. Preserve that registration origin in
         // the generated map even though registration has no runtime work.
-        try writeSourceLineDirective(allocator, out, source_path, action.source);
+        try writeSourceLineDirective(allocator, out, source_path, registration.source);
         try writeIndent(allocator, out, indent + 1);
         try out.appendSlice(allocator, "/* canonical defer cleanup */\n");
         for (action.roots) |root| {

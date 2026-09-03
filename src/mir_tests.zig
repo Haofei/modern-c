@@ -8444,6 +8444,27 @@ test "MIR cleanup cfg records ordinary defer cleanup actions" {
     try std.testing.expectEqual(@as(usize, 2), mutable_function.executable_body.cleanup_actions.len);
     try mir_executable_body.verify(mutable_function);
 
+    const first_action = &mutable_function.executable_body.cleanup_actions[0];
+    const registration = mutable_function.executable_body.statements[first_action.registration.index()];
+    try std.testing.expect(first_action.span_id.eql(registration.span_id));
+    const saved_action_span = first_action.span_id;
+    first_action.span_id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, mir_executable_body.verify(mutable_function));
+    first_action.span_id = saved_action_span;
+
+    const saved_identity = mutable_function.span_identities[saved_action_span.index()].id;
+    mutable_function.span_identities[saved_action_span.index()].id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, mir_executable_body.verify(mutable_function));
+    mutable_function.span_identities[saved_action_span.index()].id = saved_identity;
+
+    const saved_registration_span = mutable_function.executable_body.statements[first_action.registration.index()].span_id;
+    const other_action_span = mutable_function.executable_body.cleanup_actions[1].span_id;
+    try std.testing.expect(!other_action_span.eql(saved_registration_span));
+    mutable_function.executable_body.statements[first_action.registration.index()].span_id = other_action_span;
+    try std.testing.expectError(error.InvalidCleanupRegistration, mir_executable_body.verify(mutable_function));
+    mutable_function.executable_body.statements[first_action.registration.index()].span_id = saved_registration_span;
+    try mir_executable_body.verify(mutable_function);
+
     var cleanup_statement_index: ?usize = null;
     var original: []const mir.CleanupActionId = &.{};
     for (mutable_function.executable_body.statements, 0..) |statement, index| {
