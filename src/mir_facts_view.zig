@@ -71,10 +71,11 @@ pub const MirFactsView = struct {
     pub fn floatTargetTypeAtCurrentSpan(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.ValueType {
         _ = self;
         const function = current orelse return null;
+        const typed_span_id = mir.spanIdAtSource(function.*, source) orelse return null;
         var found: ?mir.ValueType = null;
         for (function.float_facts) |fact| {
-            if (!sourcePointExactMatches(source, fact.source)) continue;
-            if (!floatFactSpanIdentityIsValid(function, fact)) return null;
+            if (!fact.typed_span_id.eql(typed_span_id)) continue;
+            if (mir.sourcePointForSpanId(function.*, fact.typed_span_id) == null) return null;
             const target_ty = mir.floatFactTargetType(function, fact) orelse return null;
             if (found != null) return null;
             found = target_ty;
@@ -224,13 +225,6 @@ fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeK
         return fact;
     }
     return null;
-}
-
-fn floatFactSpanIdentityIsValid(function: *const mir.Function, fact: mir.FloatFact) bool {
-    if (!fact.typed_span_id.isValid()) return false;
-    const span_index = fact.typed_span_id.index();
-    return span_index < function.span_identities.len and
-        sourcePointExactMatches(function.span_identities[span_index].source, fact.source);
 }
 
 fn targetTypeFactMatches(function: *const mir.Function, fact: mir.TargetTypeFact, query: TargetTypeFactQuery) bool {

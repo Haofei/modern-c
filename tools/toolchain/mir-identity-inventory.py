@@ -86,6 +86,13 @@ def main() -> int:
     ):
         require_contains("src/mir_model.zig", needle)
 
+    model = read("src/mir_model.zig")
+    for fact_name in ("IntegerFact", "FloatFact"):
+        start = model.index(f"pub const {fact_name} = struct {{")
+        end = model.index("\n};", start)
+        if "source:" in model[start:end]:
+            fail(f"src/mir_model.zig {fact_name} duplicates source identity beside SpanId")
+
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",

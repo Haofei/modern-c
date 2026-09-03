@@ -2175,6 +2175,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
     const local_fact = targetTypeFactByKind(caller, .inferred_local) orelse return error.TestUnexpectedResult;
     const float_fact = literal_source.float_facts[0];
+    const float_source = mir.sourcePointForSpanId(literal_source, float_fact.typed_span_id) orelse return error.TestUnexpectedResult;
     const string_fact = targetTypeFactByKind(text_source, .string_literal) orelse return error.TestUnexpectedResult;
     const array_fact = targetTypeFactByKind(array_source, .array_literal) orelse return error.TestUnexpectedResult;
     const ok_fact = targetTypeFactByKind(ok_source, .result_ok) orelse return error.TestUnexpectedResult;
@@ -2212,7 +2213,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
             .index = local_fact.target_index,
         },
     }) == null);
-    try std.testing.expect(db.floatTargetTypeAtCurrentSpan(&callee, float_fact.source) == null);
+    try std.testing.expect(db.floatTargetTypeAtCurrentSpan(&callee, float_source) == null);
     try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
@@ -2294,7 +2295,8 @@ test "MIR float facts are the complete typed authority for float literals" {
     try std.testing.expect(mir.ValueType.eql(mir.floatFactTargetType(&f32_function, f32_function.float_facts[0]).?, .{ .float = "f32" }));
     try std.testing.expect(mir.ValueType.eql(mir.floatFactTargetType(&f64_function, f64_function.float_facts[0]).?, .{ .float = "f64" }));
     const facts_view = mir_facts_view.MirFactsView.init();
-    try std.testing.expect(mir.ValueType.eql(facts_view.floatTargetTypeAtCurrentSpan(&f32_function, f32_function.float_facts[0].source).?, .{ .float = "f32" }));
+    const f32_source = mir.sourcePointForSpanId(f32_function, f32_function.float_facts[0].typed_span_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mir.ValueType.eql(facts_view.floatTargetTypeAtCurrentSpan(&f32_function, f32_source).?, .{ .float = "f32" }));
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();

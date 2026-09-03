@@ -3319,7 +3319,6 @@ pub const IntegerFact = struct {
     /// owning function's type-identity table.
     target_type_id: TypeId = .invalid,
     typed_span_id: SpanId = .invalid,
-    source: SourcePoint,
 };
 
 pub const FloatFact = struct {
@@ -3329,7 +3328,6 @@ pub const FloatFact = struct {
     /// function's type-identity table.
     target_type_id: TypeId = .invalid,
     typed_span_id: SpanId = .invalid,
-    source: SourcePoint,
 };
 
 pub const ConstGetFact = struct {

@@ -2080,18 +2080,20 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         }
         for (function.integer_facts) |fact| {
             const target_name = if (integerFactTargetType(&function, fact)) |target_ty| target_ty.name() else "invalid";
+            const source = sourcePointForSpanId(function, fact.typed_span_id);
             try out.print(
                 allocator,
                 "mir integer_fact fn={s} literal={s} target_type={s} target_type_id={} typed_span_id={} recorded=true line={} column={}\n",
-                .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize), fact.source.line, fact.source.column },
+                .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize), if (source) |point| point.line else std.math.maxInt(usize), if (source) |point| point.column else std.math.maxInt(usize) },
             );
         }
         for (function.float_facts) |fact| {
             const target_name = if (floatFactTargetType(&function, fact)) |target_ty| target_ty.name() else "invalid";
+            const source = sourcePointForSpanId(function, fact.typed_span_id);
             try out.print(
                 allocator,
-                "mir float_fact fn={s} literal={s} target_type={s} target_type_id={} recorded=true line={} column={}\n",
-                .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), fact.source.line, fact.source.column },
+                "mir float_fact fn={s} literal={s} target_type={s} target_type_id={} typed_span_id={} recorded=true line={} column={}\n",
+                .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize), if (source) |point| point.line else std.math.maxInt(usize), if (source) |point| point.column else std.math.maxInt(usize) },
             );
         }
         for (function.const_get_facts) |fact| {
@@ -4304,9 +4306,7 @@ fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bo
 
 fn integerFactTypedIdentitiesValid(function: Function, fact: IntegerFact) bool {
     if (integerFactTargetType(&function, fact) == null) return false;
-    const span_index = if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else return false;
-    if (span_index >= function.span_identities.len) return false;
-    return sourcePointEquivalent(function.span_identities[span_index].source, fact.source);
+    return sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
 fn isIntegerLiteralConversionInstruction(instruction: Instruction) bool {
@@ -4349,10 +4349,7 @@ fn countMatchingIntegerFactsForInstruction(function: Function, instruction: Inst
 
 fn floatFactTypedIdentitiesValid(function: Function, fact: FloatFact) bool {
     if (floatFactTargetType(&function, fact) == null) return false;
-    const span_index = if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else return false;
-    if (span_index >= function.span_identities.len) return false;
-    if (!sourcePointEquivalent(function.span_identities[span_index].source, fact.source)) return false;
-    return true;
+    return sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
 fn isFloatLiteralInstruction(instruction: Instruction) bool {
@@ -17683,7 +17680,6 @@ const FunctionBuilder = struct {
             .literal = literal,
             .target_type_id = try self.internTypeId(target_ty),
             .typed_span_id = try self.internSpanId(source),
-            .source = source,
         });
     }
 
@@ -17693,7 +17689,6 @@ const FunctionBuilder = struct {
             .literal = floatFactLiteralText(expr),
             .target_type_id = try self.internTypeId(target_ty),
             .typed_span_id = try self.internSpanId(source),
-            .source = source,
         });
     }
 
