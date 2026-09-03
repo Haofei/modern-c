@@ -1842,20 +1842,19 @@ const LlvmEmitter = struct {
         const fn_mir = self.mirFunctionByDefId(function.def_id) orelse return error.UnsupportedLlvmEmission;
         if (!std.mem.eql(u8, sig_facts.name.text, fn_mir.name)) return error.UnsupportedLlvmEmission;
         if (!mir.ValueType.eql(sig_facts.return_ty, fn_mir.return_ty)) return error.UnsupportedLlvmEmission;
-        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = if (sig_facts.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
-            try self.llvmType(ret_ty)
+            try self.llvmSignatureType(sig_facts.return_type_id)
         else
             mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, sig_facts.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
+                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(sig_facts.return_type_id),
                 else => return err,
             };
         const sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
-        const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ty) else "";
+        const ret_ext = if (sig.c_abi) self.cAbiExtensionForSignature(sig_facts.return_type_id) else "";
         try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, ret_llvm, sig_facts.name.text });
         for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
+            const param_ext = if (sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
             try self.out.appendSlice(self.allocator, try self.executableFunctionParamType(fn_mir, param, i));
             if (param_ext.len != 0) try self.out.print(self.allocator, " {s}", .{std.mem.trimEnd(u8, param_ext, " ")});
         }
