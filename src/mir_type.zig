@@ -609,11 +609,11 @@ fn unionTypeNameAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(a
 }
 
 pub fn pointerShape(kind: PointerKind, mutability: ast.Mutability, child: ast.TypeExpr) PointerShape {
-    return .{ .kind = kind, .mutability = mutability, .child = typeText(child) };
+    return .{ .kind = kind, .mutability = typeMutabilityFromAst(mutability), .child = typeText(child) };
 }
 
 pub fn pointerShapeAlias(kind: PointerKind, mutability: ast.Mutability, child: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) PointerShape {
-    return .{ .kind = kind, .mutability = mutability, .child = typeText(aggregateTargetTypeAlias(child, aliases)) };
+    return .{ .kind = kind, .mutability = typeMutabilityFromAst(mutability), .child = typeText(aggregateTargetTypeAlias(child, aliases)) };
 }
 
 pub fn nullPointerShape() PointerShape {
@@ -630,10 +630,18 @@ pub fn pointerShapeFromName(name: []const u8) PointerShape {
     return .{ .kind = .single, .mutability = pointerMutabilityFromName(name), .child = pointerChildFromName(name) };
 }
 
-fn pointerMutabilityFromName(name: []const u8) ast.Mutability {
+fn pointerMutabilityFromName(name: []const u8) mir_model.TypeMutability {
     if (std.mem.indexOf(u8, name, "mut") != null) return .mut;
     if (std.mem.indexOf(u8, name, "const") != null) return .@"const";
     return .none;
+}
+
+fn typeMutabilityFromAst(mutability: ast.Mutability) mir_model.TypeMutability {
+    return switch (mutability) {
+        .none => .none,
+        .mut => .mut,
+        .@"const" => .@"const",
+    };
 }
 
 fn pointerChildFromName(name: []const u8) []const u8 {

@@ -103,7 +103,7 @@ pub const PointerKind = enum {
 pub const TypeMutability = enum {
     none,
     mut,
-    constant,
+    @"const",
 };
 
 /// A recursive, source-independent representation of every `ast.TypeExpr`
@@ -243,7 +243,7 @@ test "signature type table rejects invalid, self, and forward child rows" {
 
 pub const PointerShape = struct {
     kind: PointerKind,
-    mutability: ast.Mutability,
+    mutability: TypeMutability,
     child: []const u8,
 };
 
@@ -4271,7 +4271,7 @@ fn isNullPointerShape(shape: PointerShape) bool {
     return std.mem.eql(u8, shape.child, "null");
 }
 
-fn pointerTypeText(mutability: ast.Mutability) []const u8 {
+fn pointerTypeText(mutability: TypeMutability) []const u8 {
     return switch (mutability) {
         .none => "*",
         .mut => "*mut",
@@ -4279,7 +4279,7 @@ fn pointerTypeText(mutability: ast.Mutability) []const u8 {
     };
 }
 
-fn rawManyPointerTypeText(mutability: ast.Mutability) []const u8 {
+fn rawManyPointerTypeText(mutability: TypeMutability) []const u8 {
     return switch (mutability) {
         .none => "[*]",
         .mut => "[*]mut",
@@ -4287,7 +4287,7 @@ fn rawManyPointerTypeText(mutability: ast.Mutability) []const u8 {
     };
 }
 
-fn sliceTypeText(mutability: ast.Mutability) []const u8 {
+fn sliceTypeText(mutability: TypeMutability) []const u8 {
     return switch (mutability) {
         .none => "[]",
         .mut => "[]mut",

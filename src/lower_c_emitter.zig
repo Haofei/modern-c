@@ -1496,11 +1496,11 @@ pub const CEmitter = struct {
             .qualified => |node| try self.cSignatureType(node.child),
             .pointer => |node| blk: {
                 const child = try self.cSignatureType(node.child);
-                break :blk std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{ child, if (node.mutability == .constant) " const" else "" });
+                break :blk std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{ child, if (node.mutability == .@"const") " const" else "" });
             },
             .raw_many_pointer => |node| blk: {
                 const child = try self.cSignatureType(node.child);
-                break :blk std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{ child, if (node.mutability == .constant) " const" else "" });
+                break :blk std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{ child, if (node.mutability == .@"const") " const" else "" });
             },
             .slice => |node| std.fmt.allocPrint(self.scratch.allocator(), "mc_slice_{s}_{s}", .{ if (node.mutability == .mut) "mut" else "const", try self.cSignatureSuffix(node.child) }),
             .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "mc_array_{s}_{d}", .{ try self.cSignatureSuffix(node.child), node.length orelse return error.UnsupportedCEmission }),
@@ -1589,7 +1589,7 @@ pub const CEmitter = struct {
         const code: []const u8 = switch (mutability) {
             .none => "n",
             .mut => "m",
-            .constant => "c",
+            .@"const" => "c",
         };
         return std.fmt.allocPrint(self.scratch.allocator(), "{s}_{s}_{d}_{s}", .{ prefix, code, suffix.len, suffix });
     }

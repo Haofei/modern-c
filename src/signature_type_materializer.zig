@@ -96,6 +96,6 @@ fn astMutability(mutability: mir.TypeMutability) ast.Mutability {
     return switch (mutability) {
         .none => .none,
         .mut => .mut,
-        .constant => .@"const",
+        .@"const" => .@"const",
     };
 }

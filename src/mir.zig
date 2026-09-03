@@ -1090,7 +1090,7 @@ fn typeMutabilityFromAst(mutability: ast.Mutability) TypeMutability {
     return switch (mutability) {
         .none => .none,
         .mut => .mut,
-        .@"const" => .constant,
+        .@"const" => .@"const",
     };
 }
 

@@ -1383,6 +1383,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/mir_model.zig": {
         "pub const DeferCleanupExprFact = struct": 1,
+        "mutability: ast.Mutability": 0,
     },
     "src/lower_c.zig": {
         "VerifiedProgram.init(typed_mir": 1,

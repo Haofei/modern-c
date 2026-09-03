@@ -145,7 +145,7 @@ test "dynamic trait signature admission traverses nested syntax-free shapes" {
     const shapes = [_]mir.TypeShape{
         .{ .dyn_trait = .{ .mutability = .none, .trait_name = "Shape" } },
         .{ .nullable = mir.SignatureTypeId.fromIndex(0) },
-        .{ .pointer = .{ .mutability = .constant, .child = mir.SignatureTypeId.fromIndex(1) } },
+        .{ .pointer = .{ .mutability = .@"const", .child = mir.SignatureTypeId.fromIndex(1) } },
         .{ .generic = .{ .base = "Result", .args = ids[0..1] } },
         .{ .fn_pointer = .{ .params = ids[0..1], .ret = mir.SignatureTypeId.fromIndex(3) } },
         .{ .closure_type = .{ .params = ids[1..], .ret = mir.SignatureTypeId.fromIndex(2) } },
