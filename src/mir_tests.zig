@@ -2519,9 +2519,14 @@ test "MIR exposes generic typed span identity matching for codegen facts" {
     }).?));
     try std.testing.expect(mir.callTargetFactMatchesSpanId(call_target_fn, call_target_fact, call_target_fact.typed_span_id));
     var drifted_call_target = call_target_fact;
-    drifted_call_target.source.line += 100;
-    drifted_call_target.source.column += 100;
-    try std.testing.expect(mir.callTargetFactMatchesSpanId(call_target_fn, drifted_call_target, call_target_fact.typed_span_id));
+    drifted_call_target.typed_span_id = SpanId.fromIndex(4096);
+    try std.testing.expect(!mir.callTargetFactMatchesSpanId(call_target_fn, drifted_call_target, call_target_fact.typed_span_id));
+
+    var invalid_call_target_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer invalid_call_target_mir.deinit();
+    const invalid_call_target_fn = functionByNameMut(&invalid_call_target_mir, "call_target") orelse return error.TestUnexpectedResult;
+    invalid_call_target_fn.call_target_facts[0].typed_span_id = SpanId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(invalid_call_target_mir));
 }
 
 test "MIR verifier rejects target owner instruction identity drift" {

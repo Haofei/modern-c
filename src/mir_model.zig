@@ -437,8 +437,8 @@ pub const Instruction = struct {
     typed_target_operand_span_id: SpanId = .invalid,
     typed_value_operand_span_id: SpanId = .invalid,
     // Calls retain their enclosing expression span above for diagnostics and
-    // source maps, while this ID names the callee occurrence shared by
-    // call-result/argument/callee-signature facts.
+    // source maps, while this ID names the call-target anchor shared by
+    // call-result/argument/callee-signature facts and `CallTargetFact` rows.
     typed_callee_span_id: SpanId = .invalid,
     typed_operand_value_id: ValueId = .invalid,
     // Indirect calls may name a canonical callee storage root. A missing root
@@ -3428,8 +3428,9 @@ pub fn explicitTrapKindForTarget(kind: CallTargetKind) ?TrapKind {
 pub const CallTargetFact = struct {
     kind: CallTargetKind,
     result_ty: ValueType,
+    /// Sole source identity for this call-target fact. Display coordinates are
+    /// recovered from the owning function's span table.
     typed_span_id: SpanId = .invalid,
-    source: SourcePoint,
 };
 
 pub const BindThunkFact = struct {

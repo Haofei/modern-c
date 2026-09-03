@@ -195,8 +195,9 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try appendSourcePointForDigest(allocator, out, fact.source);
         }
         for (function.call_target_facts) |fact| {
+            const source = mir.sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirCallTargetFacts;
             try out.print(allocator, "call_target_fact fn={s} kind={s} result={s} ", .{ function.name, @tagName(fact.kind), fact.result_ty.name() });
-            try appendSourcePointForDigest(allocator, out, fact.source);
+            try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.target_type_facts) |fact| {
             const target_owner = mir.targetOwnerSpelling(function, fact.typed_target_owner_id) orelse "none";

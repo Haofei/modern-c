@@ -4459,7 +4459,7 @@ pub const CEmitter = struct {
                 return true;
             },
             .call => |node| {
-                _ = self.trapHelperForCall(node) orelse return false;
+                _ = self.trapHelperForCall(node, expr.span) orelse return false;
                 try self.writeIndent();
                 if (!try lower_c_call.emitTrapCall(self.callContext(), node)) return error.UnsupportedCEmission;
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -4470,9 +4470,9 @@ pub const CEmitter = struct {
         }
     }
 
-    fn trapHelperForCall(self: *CEmitter, call: anytype) ?[]const u8 {
-        const call_span = call.callee.*.span;
-        const kind = self.mirCallTargetKindAt(call_span) orelse return null;
+    fn trapHelperForCall(self: *CEmitter, call: anytype, span: anytype) ?[]const u8 {
+        _ = call;
+        const kind = self.mirCallTargetKindAt(span) orelse return null;
         return mir.explicitTrapHelperForTarget(kind);
     }
 
@@ -5440,7 +5440,8 @@ pub const CEmitter = struct {
     }
 
     fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!void {
-        if (self.mirHasCallTargetKindAt(.atomic_init, expr.span)) {
+        const callee_span = node.callee.*.span;
+        if (self.mirHasCallTargetKindAt(.atomic_init, callee_span)) {
             const expected_result_ty = target_ty orelse return error.UnsupportedCEmission;
             const payload_ty = self.atomicInitPayloadTypeAt(expr.span, expected_result_ty) orelse return error.UnsupportedCEmission;
             if (try lower_c_atomic.emitAtomicInitCall(self.atomicEmitContext(), node, locals, payload_ty)) return;

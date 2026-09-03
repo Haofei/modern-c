@@ -131,8 +131,11 @@ pub const MirFactsView = struct {
     pub fn firstCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
         _ = self;
         const function = current orelse return null;
+        const typed_span_id = mir.spanIdAtSource(function.*, source) orelse return null;
         for (function.call_target_facts) |fact| {
-            if (sourcePointLineColumnMatches(source, fact.source)) return fact.kind;
+            if (!fact.typed_span_id.eql(typed_span_id)) continue;
+            if (!callTargetTypedIdentityIsValid(function, fact)) return null;
+            return fact.kind;
         }
         return null;
     }
@@ -140,9 +143,11 @@ pub const MirFactsView = struct {
     pub fn uniqueCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
         _ = self;
         const function = current orelse return null;
+        const typed_span_id = mir.spanIdAtSource(function.*, source) orelse return null;
         var matched: ?mir.CallTargetKind = null;
         for (function.call_target_facts) |fact| {
-            if (!callTargetSourceMatches(source, fact.source)) continue;
+            if (!fact.typed_span_id.eql(typed_span_id)) continue;
+            if (!callTargetTypedIdentityIsValid(function, fact)) return null;
             if (matched) |kind| {
                 if (kind != fact.kind) return null;
             } else {
@@ -154,14 +159,14 @@ pub const MirFactsView = struct {
 
     pub fn hasCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.CallTargetKind, source: mir.SourcePoint, strict_call_source: bool) bool {
         _ = self;
+        _ = strict_call_source;
         const function = current orelse return false;
+        const typed_span_id = mir.spanIdAtSource(function.*, source) orelse return false;
         for (function.call_target_facts) |fact| {
             if (fact.kind != kind) continue;
-            const matches = if (strict_call_source)
-                callTargetSourceMatches(source, fact.source)
-            else
-                sourcePointLineColumnMatches(source, fact.source);
-            if (matches) return true;
+            if (!fact.typed_span_id.eql(typed_span_id)) continue;
+            if (!callTargetTypedIdentityIsValid(function, fact)) return false;
+            return true;
         }
         return false;
     }
@@ -264,11 +269,7 @@ fn callTargetFactInFunctionById(function: *const mir.Function, key: CallTargetLo
 }
 
 fn callTargetTypedIdentityIsValid(function: *const mir.Function, fact: mir.CallTargetFact) bool {
-    if (!fact.typed_span_id.isValid()) return false;
-    const span_index = fact.typed_span_id.index();
-    if (span_index >= function.span_identities.len) return false;
-    const source = function.span_identities[span_index].source;
-    return sourcePointExactMatches(source, fact.source);
+    return mir.sourcePointForSpanId(function.*, fact.typed_span_id) != null;
 }
 
 fn typedIdentityIsValid(function: *const mir.Function, fact: mir.TargetTypeFact) bool {
@@ -314,12 +315,6 @@ pub fn sourcePointOffsetsMatch(query: mir.SourcePoint, source: mir.SourcePoint) 
 
 pub fn sourcePointHasLineColumn(source: mir.SourcePoint) bool {
     return source.line != 0 and source.column != 0;
-}
-
-pub fn callTargetSourceMatches(query: mir.SourcePoint, source: mir.SourcePoint) bool {
-    if (!sourcePointLineColumnMatches(query, source)) return false;
-    if (source.offset == 0 and source.len == 0) return true;
-    return sourcePointOffsetsMatch(query, source);
 }
 
 pub fn targetTypeSourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint, source: mir.SourcePoint) bool {

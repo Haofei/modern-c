@@ -282,10 +282,10 @@ pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePo
 
 pub fn callTargetDeferCleanupForRef(function: Function, defer_ref: DeferCleanupRef, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
     if (!deferCleanupRefValid(function, defer_ref)) return false;
+    const callee_span_id = spanIdAtSource(function, callee_source) orelse return false;
     for (function.call_target_facts) |fact| {
         if (fact.kind != kind) continue;
-        if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
-        if (fact.source.offset != callee_source.offset or fact.source.len != callee_source.len) continue;
+        if (!callTargetFactMatchesSpanId(function, fact, callee_span_id)) continue;
         return switch (kind) {
             .raw_store => targetTypeFactAtSource(function, .raw_address, call_source) and
                 targetTypeFactAtSource(function, .raw_payload, call_source) and
@@ -2134,10 +2134,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.call_target_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirCallTargetFacts;
             try out.print(
                 allocator,
                 "mir call_target_fact fn={s} kind={s} result_type={s} recorded=true line={} column={} typed_span_id={}\n",
-                .{ function.name, @tagName(fact.kind), fact.result_ty.name(), fact.source.line, fact.source.column, if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize) },
+                .{ function.name, @tagName(fact.kind), fact.result_ty.name(), source.line, source.column, if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize) },
             );
         }
         for (function.target_type_facts) |fact| {
@@ -2919,7 +2920,8 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
     const is_direct_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.direct_call_argument));
     const is_indirect_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.indirect_call_argument));
     const is_for_element = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.for_element));
-    if (instruction.kind == .call or instruction.kind == .indirect_call or is_direct_argument or is_indirect_argument) {
+    const is_call_target = instruction.kind == .call_target;
+    if (instruction.kind == .call or instruction.kind == .indirect_call or is_call_target or is_direct_argument or is_indirect_argument) {
         if (!instruction.typed_callee_span_id.isValid()) return false;
         if (instruction.typed_callee_span_id.index() >= function.span_identities.len) return false;
     } else if (instruction.typed_callee_span_id.isValid()) {
@@ -3168,7 +3170,7 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
             const kind = callTargetKindForInstruction(instruction) orelse continue;
             const fact_count = countMatchingCallTargetFacts(function, kind, instruction);
             if (fact_count == 0 or fact_count != countMatchingCallTargetInstructionsForInstruction(function, kind, instruction)) return error.InvalidMirCallTargetFacts;
-            if (!matchingCallTargetFactsAgreeAtSource(function, instruction)) return error.InvalidMirCallTargetFacts;
+            if (!matchingCallTargetFactsAgreeForInstruction(function, instruction)) return error.InvalidMirCallTargetFacts;
         };
         for (function.call_target_facts) |fact| {
             if (!callTargetFactTypedIdentityValid(function, fact)) return error.InvalidMirCallTargetFacts;
@@ -4338,7 +4340,7 @@ fn countMatchingCallTargetFacts(function: Function, kind: CallTargetKind, instru
     for (function.call_target_facts) |fact| {
         if (fact.kind != kind) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
+        if (fact.typed_span_id.isValid() and fact.typed_span_id.eql(instruction.typed_callee_span_id)) count += 1;
     }
     return count;
 }
@@ -4349,7 +4351,7 @@ fn countMatchingCallTargetInstructions(function: Function, fact: CallTargetFact)
         const kind = callTargetKindForInstruction(instruction) orelse continue;
         if (kind != fact.kind) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
+        if (fact.typed_span_id.isValid() and fact.typed_span_id.eql(instruction.typed_callee_span_id)) count += 1;
     };
     return count;
 }
@@ -4360,7 +4362,7 @@ fn countMatchingCallTargetInstructionsForInstruction(function: Function, kind: C
         const instruction_kind = callTargetKindForInstruction(instruction) orelse continue;
         if (instruction_kind != kind) continue;
         if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
-        if (instruction.line == target.line and instruction.column == target.column) count += 1;
+        if (instruction.typed_callee_span_id.isValid() and instruction.typed_callee_span_id.eql(target.typed_callee_span_id)) count += 1;
     };
     return count;
 }
@@ -4370,15 +4372,16 @@ fn countMatchingCallTargetFactsForFact(function: Function, target: CallTargetFac
     for (function.call_target_facts) |fact| {
         if (fact.kind != target.kind) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
-        if (fact.source.line == target.source.line and fact.source.column == target.source.column) count += 1;
+        if (!fact.typed_span_id.eql(target.typed_span_id)) continue;
+        count += 1;
     }
     return count;
 }
 
-fn matchingCallTargetFactsAgreeAtSource(function: Function, instruction: Instruction) bool {
+fn matchingCallTargetFactsAgreeForInstruction(function: Function, instruction: Instruction) bool {
     var first: ?CallTargetKind = null;
     for (function.call_target_facts) |fact| {
-        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
+        if (!fact.typed_span_id.isValid() or !fact.typed_span_id.eql(instruction.typed_callee_span_id)) continue;
         if (first) |expected| {
             if (fact.kind != expected) return false;
         } else {
@@ -4389,11 +4392,7 @@ fn matchingCallTargetFactsAgreeAtSource(function: Function, instruction: Instruc
 }
 
 fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bool {
-    if (!fact.typed_span_id.isValid()) return false;
-    const span_index = fact.typed_span_id.index();
-    if (span_index >= function.span_identities.len) return false;
-    const source = function.span_identities[span_index].source;
-    return sourcePointEquivalent(source, fact.source);
+    return sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
 fn integerFactTypedIdentitiesValid(function: Function, fact: IntegerFact) bool {
@@ -16564,12 +16563,21 @@ const FunctionBuilder = struct {
 
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
         const source = self.sourcePoint(span);
+        const typed_span_id = try self.internSpanId(source);
         try self.call_target_facts.append(self.allocator, .{
             .kind = kind,
             .result_ty = result_ty,
-            .typed_span_id = try self.internSpanId(source),
-            .source = source,
+            .typed_span_id = typed_span_id,
         });
+        const instructions = &self.blocks.items[self.current].instructions;
+        if (instructions.items.len == 0) return error.UnsupportedMirConstruction;
+        const instruction = &instructions.items[instructions.items.len - 1];
+        if (instruction.kind != .call_target or !std.mem.eql(u8, instruction.detail, @tagName(kind)) or !sameRepresentationValueType(instruction.result_ty, result_ty)) return error.UnsupportedMirConstruction;
+        // A call-target instruction remains located at the full expression for
+        // diagnostics and control-flow verification. Its secondary span is the
+        // exact fact anchor (callee token for ordinary builtins, full call for
+        // target-typed constructors and explicit traps).
+        instruction.typed_callee_span_id = typed_span_id;
     }
 
     fn addBindThunkFactForExpr(self: *FunctionBuilder, expr: ast.Expr, closure_type_expr: ast.TypeExpr, closure_ty: ValueType) !void {

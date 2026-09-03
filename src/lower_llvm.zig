@@ -3285,7 +3285,7 @@ const LlvmEmitter = struct {
                 return true;
             },
             .call => |call| {
-                const helper = self.trapHelperForCall(call) orelse return false;
+                const helper = self.trapHelperForCall(call, expr.span) orelse return false;
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ helper, try self.debugCallSuffix() });
                 return true;
@@ -3304,16 +3304,16 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .unreachable_expr => true,
             .call => |call| blk: {
-                break :blk self.trapHelperForCall(call) != null;
+                break :blk self.trapHelperForCall(call, expr.span) != null;
             },
             .grouped, .move_expr => |inner| self.exprStatementDiverges(inner.*),
             else => false,
         };
     }
 
-    fn trapHelperForCall(self: *LlvmEmitter, call: anytype) ?[]const u8 {
-        const call_span = call.callee.*.span;
-        const kind = self.mirCallTargetKindAt(call_span) orelse return null;
+    fn trapHelperForCall(self: *LlvmEmitter, call: anytype, span: anytype) ?[]const u8 {
+        _ = call;
+        const kind = self.mirCallTargetKindAt(span) orelse return null;
         return mir.explicitTrapHelperForTarget(kind);
     }
 
@@ -7667,7 +7667,7 @@ const LlvmEmitter = struct {
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
-        const call_kind = self.mirCallTargetKindAt(span);
+        const call_kind = self.mirCallTargetKindAt(call.callee.*.span);
         if (call_kind) |kind| switch (kind) {
             .drop, .forget_unchecked => return error.UnsupportedLlvmEmission,
             else => {},

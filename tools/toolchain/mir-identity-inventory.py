@@ -110,6 +110,11 @@ def main() -> int:
     if "source:" in model[start:end]:
         fail("src/mir_model.zig RepresentationFact duplicates source identity beside SpanId")
 
+    start = model.index("pub const CallTargetFact = struct {")
+    end = model.index("\n};", start)
+    if "source:" in model[start:end]:
+        fail("src/mir_model.zig CallTargetFact duplicates source identity beside SpanId")
+
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",
@@ -172,6 +177,8 @@ def main() -> int:
         "fn representationFactMatchesInstruction(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedResultTypesCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
+        "fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bool {",
+        "fn matchingCallTargetFactsAgreeForInstruction(function: Function, instruction: Instruction) bool {",
         "pub fn floatFactTargetType(function: *const Function, fact: FloatFact) ?ValueType {",
         "pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwnershipEvents}!void {",
         "fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent) bool {",
