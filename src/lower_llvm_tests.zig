@@ -140,7 +140,7 @@ test "LLVM derives overlay unions from checked module facts" {
         false,
         null,
     );
-    try expectContains(output.items, "define internal i32 @read_word([4 x i8] %value)");
+    try expectContains(output.items, "define internal i32 @read_word([4 x i8] %mc_arg_0)");
 }
 
 test "LLVM canonical MIR renders scalar closure capture through a thunk" {
