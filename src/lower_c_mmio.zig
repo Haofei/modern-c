@@ -57,8 +57,8 @@ pub const ValueCTypeFn = *const fn (ctx: *anyopaque, value_type: []const u8) []c
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
-pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
-pub const MirOwnedTargetValueTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.ValueType;
+pub const MirOwnedTargetTypeFn = lower_c_call.MirOwnedTargetTypeFn;
+pub const MirOwnedTargetValueTypeFn = lower_c_call.MirOwnedTargetValueTypeFn;
 pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void;
 
 pub const AccessContext = struct {
