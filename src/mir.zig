@@ -696,6 +696,7 @@ pub const CheckedCallableFact = mir_model.CheckedCallableFact;
 pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
+pub const GlobalAddressInitializerPlan = mir_model.GlobalAddressInitializerPlan;
 pub const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
 pub const EnumInitializerPlan = mir_model.EnumInitializerPlan;
 pub const valueTypeRequiresScalarGlobalInitializerFact = mir_model.valueTypeRequiresScalarGlobalInitializerFact;
@@ -1561,6 +1562,24 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 .plan = .nullable_null,
                             });
                         }
+                        if (!checked_global.has_initializer_plan) {
+                            if (directGlobalAddressInitializerPlan(
+                                initializer,
+                                checked_global,
+                                checked_globals.items,
+                                &signature_types,
+                                type_alias_facts.items,
+                                &symbol_ids,
+                            )) |plan| {
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .global_address = plan },
+                                });
+                            }
+                        }
                     } else if (!global.is_extern) {
                         // No source initializer is an explicit frontend fact,
                         // not a backend invitation to recover `= 0` from the
@@ -2032,6 +2051,80 @@ fn directNullablePointerNullInitializerPlan(initializer: ast.Expr, global_ty: Va
         .grouped => |inner| directNullablePointerNullInitializerPlan(inner.*, global_ty),
         else => false,
     };
+}
+
+/// Admit only the completely mechanical relocation family: `global P: *T =
+/// &earlier_global;`.  The target must already have an admitted initializer
+/// plan, which preserves declaration order without retaining either source
+/// expression in the declaration artifact.  Member/index projections, casts,
+/// externs and forward relocations deliberately remain residual AST input.
+fn directGlobalAddressInitializerPlan(
+    initializer: ast.Expr,
+    global: CheckedGlobalFact,
+    prior_globals: []const CheckedGlobalFact,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) ?mir_model.GlobalAddressInitializerPlan {
+    if (global.ty != .pointer) return null;
+    const target_name = directAddressOfGlobalName(initializer) orelse return null;
+    const target_symbol_id = symbol_ids.get(target_name) orelse return null;
+    const target = for (prior_globals) |candidate| {
+        if (candidate.symbol_id.eql(target_symbol_id)) break candidate;
+    } else return null;
+    if (target.is_extern or !target.has_initializer_plan) return null;
+
+    const global_shape_id = transparentSignatureTypeIdForBuild(global.signature_type_id, signature_types, type_aliases, symbol_ids) orelse return null;
+    const pointee_id = switch (signature_types.get(global_shape_id) orelse return null) {
+        .pointer => |pointer| pointer.child,
+        else => return null,
+    };
+    const canonical_pointee = transparentSignatureTypeIdForBuild(pointee_id, signature_types, type_aliases, symbol_ids) orelse return null;
+    const canonical_target = transparentSignatureTypeIdForBuild(target.signature_type_id, signature_types, type_aliases, symbol_ids) orelse return null;
+    if (!canonical_pointee.eql(canonical_target)) return null;
+    return .{ .target_symbol_id = target_symbol_id };
+}
+
+fn directAddressOfGlobalName(initializer: ast.Expr) ?[]const u8 {
+    return switch (initializer.kind) {
+        .grouped => |inner| directAddressOfGlobalName(inner.*),
+        .address_of => |operand| directGlobalIdentifierName(operand.*),
+        else => null,
+    };
+}
+
+fn directGlobalIdentifierName(expression: ast.Expr) ?[]const u8 {
+    return switch (expression.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| directGlobalIdentifierName(inner.*),
+        else => null,
+    };
+}
+
+fn transparentSignatureTypeIdForBuild(
+    initial_type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) ?SignatureTypeId {
+    var current_type_id = initial_type_id;
+    var steps: usize = 0;
+    while (steps <= type_aliases.len) : (steps += 1) {
+        const shape = signature_types.get(current_type_id) orelse return null;
+        switch (shape) {
+            .name => |name| {
+                const symbol_id = symbol_ids.get(name) orelse return current_type_id;
+                for (type_aliases) |alias| {
+                    if (!alias.symbol_id.eql(symbol_id)) continue;
+                    current_type_id = alias.target_type_id;
+                    break;
+                } else return current_type_id;
+            },
+            .qualified => |node| current_type_id = node.child,
+            else => return current_type_id,
+        }
+    }
+    return null;
 }
 
 fn resolveEnumFactForSignatureType(

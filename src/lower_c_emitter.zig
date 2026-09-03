@@ -589,7 +589,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null => {},
+                .zero, .aggregate, .enum_case, .nullable_null, .global_address => {},
             }
         }
     }
@@ -837,6 +837,7 @@ pub const CEmitter = struct {
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
+                .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
@@ -977,6 +978,16 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "{s} {s} = NULL;\n\n", .{ rendered_type, name });
     }
 
+    fn emitCheckedGlobalAddressGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.GlobalAddressInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const target = self.checkedGlobalSymbolId(plan.target_symbol_id) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = &{s};\n\n", .{ rendered_type, name, target });
+    }
+
     fn enumFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.EnumFact {
         for (self.mir_module.enums) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
         return null;
@@ -1013,9 +1024,13 @@ pub const CEmitter = struct {
     }
 
     fn checkedGlobalSymbol(self: *const CEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
-        if (!global.symbol_id.isValid() or global.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
-        const identity = self.mir_module.symbol_identities[global.symbol_id.index()];
-        return if (identity.id.eql(global.symbol_id) and identity.kind == .global) identity.spelling else null;
+        return self.checkedGlobalSymbolId(global.symbol_id);
+    }
+
+    fn checkedGlobalSymbolId(self: *const CEmitter, symbol_id: mir.SymbolId) ?[]const u8 {
+        if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[symbol_id.index()];
+        return if (identity.id.eql(symbol_id) and identity.kind == .global) identity.spelling else null;
     }
 
     fn typeAliasIdentity(self: *const CEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {

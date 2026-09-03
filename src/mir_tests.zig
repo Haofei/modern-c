@@ -1645,6 +1645,7 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
         .aggregate => {},
         .enum_case => {},
         .nullable_null => {},
+        .global_address => {},
     };
     const float_fact_index = float_index orelse return error.TestUnexpectedResult;
     const saved_float = module_mir.global_initializer_facts[float_fact_index];
@@ -1724,6 +1725,7 @@ test "CheckedProgram requires an admitted zero-global initializer plan" {
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
         .nullable_null => return error.TestUnexpectedResult,
+        .global_address => return error.TestUnexpectedResult,
     }
     const saved = module_mir.global_initializer_facts;
     module_mir.global_initializer_facts = &.{};
@@ -1750,7 +1752,7 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     const saved = module_mir.global_initializer_facts[0];
     switch (saved.plan) {
         .aggregate => {},
-        .scalar, .zero, .enum_case, .nullable_null => return error.TestUnexpectedResult,
+        .scalar, .zero, .enum_case, .nullable_null, .global_address => return error.TestUnexpectedResult,
     }
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
@@ -1788,7 +1790,7 @@ test "CheckedProgram admits direct enum global initializer plans" {
     const saved = module_mir.global_initializer_facts[0];
     const plan = switch (saved.plan) {
         .enum_case => |value| value,
-        .scalar, .zero, .aggregate, .nullable_null => return error.TestUnexpectedResult,
+        .scalar, .zero, .aggregate, .nullable_null, .global_address => return error.TestUnexpectedResult,
     };
     try std.testing.expect(module_mir.checkedEnumGlobal(module_mir.checked_globals[0]) != null);
     const checked = try checked_program.CheckedProgram.init(
@@ -1861,6 +1863,46 @@ test "CheckedProgram admits nullable pointer null global initializer plans" {
     module_mir.global_initializer_facts[0] = saved;
 }
 
+test "CheckedProgram admits direct global-address initializer plans" {
+    const source =
+        \\global shared: u32 = 7;
+        \\global shared_ptr: *mut u32 = &shared;
+    ;
+    var parsed = try test_support.parseCheckedModule("global_address_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    const fact = module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) orelse return error.TestUnexpectedResult;
+    const plan = switch (fact.plan) {
+        .global_address => |value| value,
+        .scalar, .zero, .aggregate, .enum_case, .nullable_null => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(plan.target_symbol_id.eql(module_mir.checked_globals[0].symbol_id));
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    const saved = module_mir.global_initializer_facts[1];
+    module_mir.global_initializer_facts[1].plan.global_address.target_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    module_mir.global_initializer_facts[1] = saved;
+}
+
 test "pure aggregate global plan releases partial trees on unsupported later elements" {
     // The first element builds a scalar node; the mutable global reference in
     // the second element is deliberately not a foldable scalar leaf. The
@@ -1878,7 +1920,7 @@ test "pure aggregate global plan releases partial trees on unsupported later ele
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     switch (module_mir.global_initializer_facts[0].plan) {
         .scalar => {},
-        .zero, .aggregate, .enum_case, .nullable_null => return error.TestUnexpectedResult,
+        .zero, .aggregate, .enum_case, .nullable_null, .global_address => return error.TestUnexpectedResult,
     }
 }
 

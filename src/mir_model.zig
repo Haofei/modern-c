@@ -4222,20 +4222,22 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 
 /// Syntax-free global-initializer payloads admitted by the frontend. This
 /// starts with folded scalar values, zero-initialized storage, pure fixed
-/// arrays, direct nominal enum cases, and nullable-pointer `null`. Struct
-/// literals and relocations still need their own explicit facts and remain
-/// outside this representation.
+/// arrays, direct nominal enum cases, nullable-pointer `null`, and direct
+/// relocations to already-planned globals. Struct literals and projected
+/// relocations still need their own explicit facts and remain outside this
+/// representation.
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
     aggregate: AggregateInitializerPlan,
     enum_case: EnumInitializerPlan,
     nullable_null,
+    global_address: GlobalAddressInitializerPlan,
 
     pub fn deinit(self: GlobalInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
             .aggregate => |plan| plan.deinit(allocator),
-            .scalar, .zero, .enum_case, .nullable_null => {},
+            .scalar, .zero, .enum_case, .nullable_null, .global_address => {},
         }
     }
 };
@@ -4246,6 +4248,14 @@ pub const EnumInitializerPlan = struct {
     enum_symbol_id: SymbolId,
     repr_type_id: SignatureTypeId,
     case_index: u32,
+};
+
+/// A direct `&global` relocation. The target is a checked global symbol, not
+/// an identifier spelling or a source expression. Admission additionally
+/// proves source order and pointee-shape agreement before either backend emits
+/// the relocation.
+pub const GlobalAddressInitializerPlan = struct {
+    target_symbol_id: SymbolId,
 };
 
 /// Recursive, syntax-free initializer tree for the deliberately narrow
@@ -4284,6 +4294,7 @@ pub const GlobalInitializerFact = struct {
             .aggregate => unreachable,
             .enum_case => unreachable,
             .nullable_null => unreachable,
+            .global_address => unreachable,
         };
     }
 
@@ -4408,6 +4419,9 @@ pub const Module = struct {
             .nullable_null => if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 nullableNullInitializerPlanMatchesGlobal(self, global)) fact else null,
+            .global_address => |plan| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                globalAddressInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
         };
     }
 
@@ -4421,7 +4435,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero, .aggregate, .enum_case, .nullable_null => null,
+            .zero, .aggregate, .enum_case, .nullable_null, .global_address => null,
         };
     }
 
@@ -4429,7 +4443,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar, .aggregate, .enum_case, .nullable_null => null,
+            .scalar, .aggregate, .enum_case, .nullable_null, .global_address => null,
         };
     }
 
@@ -4437,7 +4451,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .enum_case => fact,
-            .scalar, .zero, .aggregate, .nullable_null => null,
+            .scalar, .zero, .aggregate, .nullable_null, .global_address => null,
         };
     }
 
@@ -4445,7 +4459,15 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .nullable_null => fact,
-            .scalar, .zero, .aggregate, .enum_case => null,
+            .scalar, .zero, .aggregate, .enum_case, .global_address => null,
+        };
+    }
+
+    pub fn checkedGlobalAddressGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .global_address => fact,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null => null,
         };
     }
 
@@ -4559,22 +4581,48 @@ fn nullableNullInitializerPlanMatchesGlobal(module: Module, global: CheckedGloba
     };
 }
 
+fn globalAddressInitializerPlanMatchesGlobal(plan: GlobalAddressInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+    if (global.ty != .pointer or !plan.target_symbol_id.isValid()) return false;
+    const current_index = for (module.checked_globals, 0..) |candidate, index| {
+        if (candidate.symbol_id.eql(global.symbol_id)) break index;
+    } else return false;
+    const target = for (module.checked_globals, 0..) |candidate, index| {
+        if (candidate.symbol_id.eql(plan.target_symbol_id)) break .{ .global = candidate, .index = index };
+    } else return false;
+    if (target.index >= current_index or target.global.is_extern or !target.global.has_initializer_plan or
+        module.checkedGlobalInitializer(target.global) == null)
+        return false;
+    const global_shape = module.signature_types.get(transparentSignatureTypeId(module, global.signature_type_id) orelse return false) orelse return false;
+    const pointee = switch (global_shape) {
+        .pointer => |shape| shape.child,
+        else => return false,
+    };
+    const canonical_pointee = transparentSignatureTypeId(module, pointee) orelse return false;
+    const canonical_target = transparentSignatureTypeId(module, target.global.signature_type_id) orelse return false;
+    return canonical_pointee.eql(canonical_target);
+}
+
 fn transparentSignatureShape(module: Module, initial_type_id: SignatureTypeId) ?TypeShape {
+    const type_id = transparentSignatureTypeId(module, initial_type_id) orelse return null;
+    return module.signature_types.get(type_id);
+}
+
+fn transparentSignatureTypeId(module: Module, initial_type_id: SignatureTypeId) ?SignatureTypeId {
     var current_type_id = initial_type_id;
     var steps: usize = 0;
     while (steps <= module.type_aliases.len) : (steps += 1) {
         const shape = module.signature_types.get(current_type_id) orelse return null;
         switch (shape) {
             .name => |name| {
-                const symbol_id = symbolIdForTypeSpelling(module.symbol_identities, name) orelse return shape;
+                const symbol_id = symbolIdForTypeSpelling(module.symbol_identities, name) orelse return current_type_id;
                 for (module.type_aliases) |alias| {
                     if (!alias.symbol_id.eql(symbol_id)) continue;
                     current_type_id = alias.target_type_id;
                     break;
-                } else return shape;
+                } else return current_type_id;
             },
             .qualified => |node| current_type_id = node.child,
-            else => return shape,
+            else => return current_type_id,
         }
     }
     return null;

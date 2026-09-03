@@ -115,6 +115,19 @@ pub const CheckedProgram = struct {
                         !global.initializer_body_id.eql(fact.initializer_body_id))
                         return error.InvalidGlobalInitializerFact;
                 },
+                .global_address => |plan| {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len or
+                        global.ty != .pointer or !plan.target_symbol_id.isValid())
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    const current_index = globalIndexForSymbol(globals, global.symbol_id) orelse return error.InvalidGlobalInitializerFact;
+                    const target_index = globalIndexForSymbol(globals, plan.target_symbol_id) orelse return error.InvalidGlobalInitializerFact;
+                    const target = globals[target_index];
+                    if (target_index >= current_index or target.is_extern or !target.has_initializer_plan or
+                        callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id))
+                        return error.InvalidGlobalInitializerFact;
+                },
             }
             for (global_initializer_facts[0..index]) |prior| {
                 if (prior.global_symbol_id.eql(fact.global_symbol_id)) return error.DuplicateGlobalInitializerFact;
@@ -166,6 +179,12 @@ fn globalInitializerFactForGlobal(facts: []const mir.GlobalInitializerFact, glob
 fn globalForSymbol(globals: []const mir.CheckedGlobalFact, symbol_id: mir.SymbolId) ?mir.CheckedGlobalFact {
     if (!symbol_id.isValid()) return null;
     for (globals) |global| if (global.symbol_id.eql(symbol_id)) return global;
+    return null;
+}
+
+fn globalIndexForSymbol(globals: []const mir.CheckedGlobalFact, symbol_id: mir.SymbolId) ?usize {
+    if (!symbol_id.isValid()) return null;
+    for (globals, 0..) |global, index| if (global.symbol_id.eql(symbol_id)) return index;
     return null;
 }
 
