@@ -4121,6 +4121,7 @@ fn validateEnumFactsForLowering(module: Module) error{InvalidMirEnumFacts}!void 
             if (case.spelling.len == 0 or !enumCaseFitsRepr(case, enum_fact.repr_ty)) return error.InvalidMirEnumFacts;
             for (enum_fact.cases[0..case_index]) |prior| {
                 if (std.mem.eql(u8, prior.spelling, case.spelling)) return error.InvalidMirEnumFacts;
+                if (prior.negative == case.negative and prior.magnitude == case.magnitude) return error.InvalidMirEnumFacts;
             }
         }
         for (module.enums[0..index]) |prior| {

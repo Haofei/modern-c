@@ -3820,6 +3820,11 @@ test "MIR enum facts are syntax-free and fail closed" {
     mutable_cases[1].magnitude = 128;
     defer mutable_cases[1].magnitude = saved_magnitude;
     try std.testing.expectError(error.InvalidMirEnumFacts, mir.validateLoweringAdmission(module_mir));
+
+    mutable_cases[1].magnitude = mutable_cases[0].magnitude;
+    mutable_cases[1].negative = mutable_cases[0].negative;
+    defer mutable_cases[1].negative = false;
+    try std.testing.expectError(error.InvalidMirEnumFacts, mir.validateLoweringAdmission(module_mir));
 }
 
 test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
