@@ -1080,7 +1080,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, true) })": 0,
         "const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, false,": 1,
         "const function = try FunctionArtifact.fromDecl(allocator, def_id, fn_decl, decl.attrs, true,": 1,
-        "try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, globalByName(typed_mir, global.name.text)) })": 1,
+        # Folded scalar const globals now take the checked-fact path and do
+        # not retain a GlobalArtifact. Aggregate/mutable/extern globals remain
+        # explicitly transitional until their declaration facts are complete.
+        "const checked = globalByName(typed_mir, global.name.text);": 1,
+        "if (!usesConstGlobalScalarInitFact(typed_mir, checked)) {": 1,
+        "try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });": 1,
         "callable_value_artifacts": 0,
         "pub const TraitArtifact = union(enum)": 0,
         "trait_artifacts: []const TraitArtifact": 0,

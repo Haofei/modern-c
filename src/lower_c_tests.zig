@@ -91,8 +91,8 @@ test "lower-c scalar const globals do not retain an AST initializer dependency" 
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    for (@constCast(artifacts.decl_artifacts)) |*artifact| switch (artifact.*) {
-        .global => |*global| global.initializer.init = null,
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
         else => {},
     };
     var output: std.ArrayList(u8) = .empty;
@@ -134,6 +134,36 @@ test "lower-c fails closed when a scalar const-global fact is missing" {
             &output,
             .kernel,
             "c_missing_scalar_const_global_fact.mc",
+            .{},
+            false,
+            null,
+        ),
+    );
+}
+
+test "lower-c fails closed when a scalar const-global fact is stale" {
+    const source = "const COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("c_stale_scalar_const_global_fact.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const saved = module_mir.const_global_scalar_inits[0];
+    defer module_mir.const_global_scalar_inits[0] = saved;
+    module_mir.const_global_scalar_inits[0].value_ty = .bool;
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.InvalidConstGlobalScalarInitFact,
+        lower_c.appendCProfileWithMirArtifacts(
+            std.testing.allocator,
+            artifacts.codegen(),
+            &module_mir,
+            &output,
+            .kernel,
+            "c_stale_scalar_const_global_fact.mc",
             .{},
             false,
             null,

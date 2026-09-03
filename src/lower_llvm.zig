@@ -35,6 +35,22 @@ const overlayArrayElementType = type_bridge.overlayArrayElementType;
 const overlayMemberFromIndexBase = syntax_bridge.overlayMemberFromIndexBase;
 const taggedUnionCase = syntax_bridge.taggedUnionCase;
 
+fn isCheckedScalarConstGlobal(global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) bool {
+    return global.is_const and !global.is_extern and global.initializer_body_id.isValid() and
+        global.initializer_body_id.eql(fact.initializer_body_id) and
+        mir.valueTypeRequiresScalarConstInitFact(global.ty) and
+        mir.ValueType.eql(global.ty, fact.value_ty) and fact.value.isCompatibleWith(fact.value_ty);
+}
+
+fn comptimeValueFromScalarFact(fact: mir.ConstGlobalScalarInitFact) eval.ComptimeValue {
+    return switch (fact.value) {
+        .int => |value| .{ .int = value },
+        .uint => |value| .{ .uint = value },
+        .boolean => |value| .{ .boolean = value },
+        .float => |value| .{ .float = .{ .bits = value.bits, .width = value.width } },
+    };
+}
+
 const backend_mod = @import("backend.zig");
 const lower_llvm_lookup = @import("lower_llvm_lookup.zig");
 const lower_llvm_shape = @import("lower_llvm_shape.zig");
@@ -379,6 +395,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     };
     defer ctx.deinit();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata);
+    try ctx.collectCheckedScalarConstGlobals();
     var reflect_env = ctx.reflectEnv();
     try eval.collectConstGlobalsFromDeclarationsWithOptions(allocator, comptime_declarations, &ctx.const_fns, &ctx.const_globals, .{
         .reflect = lower_llvm_reflect.comptimeReflectThunk,
@@ -677,6 +694,18 @@ const LlvmEmitter = struct {
         };
     }
 
+    /// Scalar const globals are already complete semantic values in MIR. Seed
+    /// comptime lookup before folding the remaining transitional globals, but
+    /// do not recreate an AST-shaped global declaration for code generation.
+    fn collectCheckedScalarConstGlobals(self: *LlvmEmitter) !void {
+        for (self.mir_module.checked_globals) |global| {
+            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
+            if (!isCheckedScalarConstGlobal(global, fact)) continue;
+            const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+            try self.const_globals.put(name, comptimeValueFromScalarFact(fact));
+        }
+    }
+
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const sig = global.signature;
         const ty = sig.ty orelse return error.UnsupportedLlvmEmission;
@@ -792,10 +821,28 @@ const LlvmEmitter = struct {
     }
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
+        for (self.mir_module.checked_globals) |global| {
+            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
+            if (isCheckedScalarConstGlobal(global, fact)) try self.emitCheckedScalarConstGlobal(global, fact);
+        }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
             else => {},
         };
+    }
+
+    fn emitCheckedScalarConstGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try mir_executable_llvm.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty, null);
+        const init = try self.scalarConstGlobalInitializer(fact);
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        try self.out.print(self.allocator, "@{s} = {s}constant {s} {s}\n", .{ name, visibility, llvm_ty, init });
+    }
+
+    fn checkedGlobalSymbol(self: *const LlvmEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
+        if (!global.symbol_id.isValid() or global.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[global.symbol_id.index()];
+        return if (identity.id.eql(global.symbol_id) and identity.kind == .global) identity.spelling else null;
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
@@ -808,13 +855,13 @@ const LlvmEmitter = struct {
         // source-shaped body artifact is still the transitional rendering
         // payload, but it no longer decides which functions enter body
         // lowering.
-        for (self.mir_module.functions, 0..) |fn_mir, function_index| {
+        for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
             // Global initializer bodies are compiler-internal checked MIR, not
-            // callable source entries. They deliberately have no FunctionArtifact.
-            if (function_index < self.mir_module.checked_callables.len and
-                self.mir_module.checked_callables[function_index].kind == .global_initializer)
-                continue;
+            // callable source entries. They deliberately have no FunctionArtifact
+            // and are identified by the absence of a declaration DefId, rather
+            // than by positional coupling to the checked-callable table.
+            if (!fn_mir.typed_def_id.isValid()) continue;
             // Declaration facts are mandatory for every executable body.  Do
             // not silently omit a verified MIR function when its matching
             // artifact is absent: ordinary codegen has no AST body fallback
@@ -1584,7 +1631,10 @@ const LlvmEmitter = struct {
                 .local, .value => {},
                 .symbol => |id| {
                     const identity = mir_executable_body.symbol(&fn_mir.executable_body, id) orelse return false;
-                    if (identity.kind != .global or !self.global_types.contains(identity.spelling)) return false;
+                    // Executable MIR global places are admitted against the
+                    // checked global table.  In particular, const scalar
+                    // globals intentionally have no AST GlobalArtifact.
+                    if (identity.kind != .global or self.checkedGlobalType(identity.spelling) == null) return false;
                 },
             }
             // The syntax-free executable-MIR renderer owns projection
@@ -1593,6 +1643,14 @@ const LlvmEmitter = struct {
             // typed place semantics here.
         }
         return true;
+    }
+
+    fn checkedGlobalType(self: *const LlvmEmitter, spelling: []const u8) ?mir.ValueType {
+        for (self.mir_module.checked_globals) |global| {
+            const symbol = self.checkedGlobalSymbol(global) orelse continue;
+            if (std.mem.eql(u8, symbol, spelling)) return global.ty;
+        }
+        return null;
     }
 
     fn mirFunctionByName(self: *const LlvmEmitter, name: []const u8) ?mir.Function {

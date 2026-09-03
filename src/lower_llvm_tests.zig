@@ -5240,6 +5240,37 @@ test "LLVM fails closed when a scalar const-global fact is missing" {
     );
 }
 
+test "LLVM fails closed when a scalar const-global fact is stale" {
+    const source = "const COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("llvm_stale_scalar_const_global_fact.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const saved = module_mir.const_global_scalar_inits[0];
+    defer module_mir.const_global_scalar_inits[0] = saved;
+    module_mir.const_global_scalar_inits[0].value_ty = .bool;
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.InvalidConstGlobalScalarInitFact,
+        lower_llvm.appendLlvmCheckedMirArtifacts(
+            std.testing.allocator,
+            artifacts.codegen(),
+            &module_mir,
+            &output,
+            "llvm_stale_scalar_const_global_fact.mc",
+            .{},
+            false,
+            .riscv64,
+            false,
+            null,
+        ),
+    );
+}
+
 fn appendLlvmExecutableMirTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

@@ -59,7 +59,14 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .global_decl => |global| {
-                    try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, globalByName(typed_mir, global.name.text)) });
+                    const checked = globalByName(typed_mir, global.name.text);
+                    // Scalar const globals have a complete checked declaration
+                    // and a folded initializer fact. Keep their source-map row,
+                    // but do not retain an AST-shaped codegen artifact merely to
+                    // repeat a declaration that C/LLVM can render from MIR.
+                    if (!usesConstGlobalScalarInitFact(typed_mir, checked)) {
+                        try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });
+                    }
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .type_alias => |alias| {
@@ -271,6 +278,14 @@ fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalF
     return null;
 }
 
+fn usesConstGlobalScalarInitFact(module: *const mir.Module, checked: ?mir.CheckedGlobalFact) bool {
+    const global = checked orelse return false;
+    if (!global.is_const or !global.initializer_body_id.isValid()) return false;
+    if (!mir.valueTypeRequiresScalarConstInitFact(global.ty)) return false;
+    const fact = module.constGlobalScalarInit(global.initializer_body_id) orelse return false;
+    return mir.ValueType.eql(fact.value_ty, global.ty) and fact.value.isCompatibleWith(global.ty);
+}
+
 pub const DeclArtifact = union(enum) {
     function: FunctionArtifact,
     global: GlobalArtifact,
@@ -443,4 +458,34 @@ test "declaration artifacts collect from resolved declaration stream" {
     try std.testing.expect(saw_function);
     try std.testing.expect(saw_global);
     try std.testing.expect(saw_struct);
+}
+
+test "declaration artifacts omit folded scalar const globals but retain source-map rows" {
+    const test_support = @import("test_support.zig");
+    var parsed = try test_support.parseModule("declaration_artifacts_scalar_const.mc",
+        \\const count: u32 = 1 + 2;
+        \\fn read() -> u32 { return count; }
+    );
+    defer parsed.deinit();
+    var module_mir = try @import("mir.zig").buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var resolved_decls = try std.testing.allocator.alloc(module_parser.ResolvedDecl, parsed.decls().len);
+    defer std.testing.allocator.free(resolved_decls);
+    for (parsed.decls(), 0..) |decl, index| {
+        resolved_decls[index] = .{
+            .def_id = .{ .file_id = 0, .ordinal = @intCast(index) },
+            .file_id = @enumFromInt(0),
+            .decl = decl,
+        };
+    }
+    var artifacts = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), artifacts.decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 2), artifacts.source_map_artifacts.len);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        .function => |function| try std.testing.expectEqualStrings("read", function.signature.name.text),
+        else => return error.TestUnexpectedResult,
+    };
 }

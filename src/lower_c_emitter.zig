@@ -36,6 +36,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const checkedHelperParts = lower_c_op.checkedHelperParts;
 const satHelperParts = lower_c_op.satHelperParts;
+const widthBits = lower_c_op.widthBits;
 
 const lower_c_atomic = @import("lower_c_atomic.zig");
 
@@ -96,6 +97,22 @@ const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const isSourceSpan = mir_source_bridge.isSourceSpan;
 const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
+
+fn isCheckedScalarConstGlobal(global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) bool {
+    return global.is_const and !global.is_extern and global.initializer_body_id.isValid() and
+        global.initializer_body_id.eql(fact.initializer_body_id) and
+        mir.valueTypeRequiresScalarConstInitFact(global.ty) and
+        mir.ValueType.eql(global.ty, fact.value_ty) and fact.value.isCompatibleWith(fact.value_ty);
+}
+
+fn comptimeValueFromScalarFact(fact: mir.ConstGlobalScalarInitFact) eval.ComptimeValue {
+    return switch (fact.value) {
+        .int => |value| .{ .int = value },
+        .uint => |value| .{ .uint = value },
+        .boolean => |value| .{ .boolean = value },
+        .float => |value| .{ .float = .{ .bits = value.bits, .width = value.width } },
+    };
+}
 
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
@@ -409,6 +426,7 @@ pub const CEmitter = struct {
         self.codegen_artifacts = early_metadata;
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
+        try self.collectCheckedScalarConstGlobals();
         try self.collectConstGlobals();
         try self.collectDeclArtifacts(early_metadata);
         try self.collectBindThunks();
@@ -452,6 +470,28 @@ pub const CEmitter = struct {
             .reflect_ctx = &reflect_env,
             .domains = &self.const_global_domains,
         });
+    }
+
+    /// Seed backend lookup/comptime state from the admitted scalar-global
+    /// facts before evaluating the residual aggregate global artifacts. These
+    /// rows deliberately have no `GlobalArtifact` payload.
+    fn collectCheckedScalarConstGlobals(self: *CEmitter) !void {
+        for (self.mir_module.checked_globals) |global| {
+            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
+            if (!isCheckedScalarConstGlobal(global, fact)) continue;
+            const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+            const c_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
+            try self.globals.put(name, .{
+                .type_name = global.ty.name(),
+                .c_type = c_type,
+                .race_type_name = global.ty.name(),
+                .race_c_type = c_type,
+                .width_bits = widthBits(global.ty.name()),
+                .pointer_like = false,
+                .is_const = true,
+            });
+            try self.const_globals.put(name, comptimeValueFromScalarFact(fact));
+        }
     }
 
     pub fn collectDeclArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) anyerror!void {
@@ -688,6 +728,10 @@ pub const CEmitter = struct {
         // in an imported module). Globals are simple `static` definitions, so
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
+        for (self.mir_module.checked_globals) |global| {
+            const fact = self.mir_module.constGlobalScalarInit(global.initializer_body_id) orelse continue;
+            if (isCheckedScalarConstGlobal(global, fact)) try self.emitCheckedScalarConstGlobal(global, fact);
+        }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
             else => {},
@@ -696,13 +740,13 @@ pub const CEmitter = struct {
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
         // Function-definition admission is driven exclusively by verified MIR.
-        for (self.mir_module.functions, 0..) |fn_mir, function_index| {
+        for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
             // Global initializer bodies are compiler-internal checked MIR, not
-            // callable declarations. They deliberately have no FunctionArtifact.
-            if (function_index < self.mir_module.checked_callables.len and
-                self.mir_module.checked_callables[function_index].kind == .global_initializer)
-                continue;
+            // callable declarations. They deliberately have no FunctionArtifact
+            // and are identified by the absence of a declaration DefId, rather
+            // than by positional coupling to the checked-callable table.
+            if (!fn_mir.typed_def_id.isValid()) continue;
             // A verified executable body without its declaration facts is not
             // a declaration we can safely render.  In particular, do not
             // silently omit it: the old AST body fallback made that kind of
@@ -757,6 +801,21 @@ pub const CEmitter = struct {
             else => return err,
         };
         try emitGlobalDecl(self.globalEmitContext(), global, rendered_type);
+    }
+
+    fn emitCheckedScalarConstGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, fact: mir.ConstGlobalScalarInitFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const rendered_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
+        const value = (try self.constGlobalCValue(fact.initializer_body_id, global.ty)) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, value });
+    }
+
+    fn checkedGlobalSymbol(self: *const CEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {
+        if (!global.symbol_id.isValid() or global.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[global.symbol_id.index()];
+        return if (identity.id.eql(global.symbol_id) and identity.kind == .global) identity.spelling else null;
     }
 
     fn globalInitializerMir(self: *const CEmitter, body_id: mir.BodyId) ?mir.Function {

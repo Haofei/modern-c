@@ -1434,8 +1434,22 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         }
     }
 
-    const symbol_identities = try buildSymbolIdentities(allocator, &symbol_ids);
+    var symbol_identities = try buildSymbolIdentities(allocator, &symbol_ids);
     errdefer allocator.free(symbol_identities);
+    // Module-level symbol IDs are interned before body-local executable
+    // symbols exist.  Publish the checked declaration kind here so consumers
+    // of syntax-free global facts can validate the identity without falling
+    // back to an AST declaration.
+    for (checked_globals.items) |checked_global| {
+        if (!checked_global.symbol_id.isValid() or checked_global.symbol_id.index() >= symbol_identities.len)
+            return error.InvalidMirSymbolIdentity;
+        const identity = &symbol_identities[checked_global.symbol_id.index()];
+        if (!identity.id.eql(checked_global.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .global))
+            return error.InvalidMirSymbolIdentity;
+        identity.kind = .global;
+        identity.mutable = !checked_global.is_const;
+    }
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
