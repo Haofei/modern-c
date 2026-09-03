@@ -47,6 +47,33 @@ fn appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Alloc
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
+test "lower-c rejects a verified body with missing declaration facts" {
+    const source =
+        \\fn value() -> u32 { return 7; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_declaration_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.UnsupportedCEmission,
+        lower_c.appendCProfileWithMirArtifacts(
+            std.testing.allocator,
+            .empty,
+            &module_mir,
+            &output,
+            .kernel,
+            "c_missing_declaration_facts.mc",
+            .{},
+            false,
+            null,
+        ),
+    );
+}
+
 fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: []const u8, generated_c_path: ?[]const u8) !void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);

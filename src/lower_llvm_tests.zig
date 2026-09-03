@@ -5172,6 +5172,34 @@ fn appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(allocator: std.mem
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
+test "LLVM rejects a verified body with missing declaration facts" {
+    const source =
+        \\fn value() -> u32 { return 7; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_declaration_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.UnsupportedLlvmEmission,
+        lower_llvm.appendLlvmCheckedMirArtifacts(
+            std.testing.allocator,
+            .empty,
+            &module_mir,
+            &output,
+            "llvm_missing_declaration_facts.mc",
+            .{},
+            false,
+            .riscv64,
+            false,
+            null,
+        ),
+    );
+}
+
 fn appendLlvmTestNoFunctionBodyFallback(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

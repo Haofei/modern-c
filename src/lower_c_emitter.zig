@@ -629,9 +629,19 @@ pub const CEmitter = struct {
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
         // Function-definition admission is driven exclusively by verified MIR.
-        for (self.mir_module.functions) |fn_mir| {
+        for (self.mir_module.functions, 0..) |fn_mir, function_index| {
             if (fn_mir.is_extern) continue;
-            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse continue;
+            // Global initializer bodies are compiler-internal checked MIR, not
+            // callable declarations. They deliberately have no FunctionArtifact.
+            if (function_index < self.mir_module.checked_callables.len and
+                self.mir_module.checked_callables[function_index].kind == .global_initializer)
+                continue;
+            // A verified executable body without its declaration facts is not
+            // a declaration we can safely render.  In particular, do not
+            // silently omit it: the old AST body fallback made that kind of
+            // omission easy to hide.  Codegen has one body authority now, so
+            // an incomplete ingress must fail closed.
+            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse return error.UnsupportedCEmission;
             const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
                 .function => |function| function,
                 else => unreachable,

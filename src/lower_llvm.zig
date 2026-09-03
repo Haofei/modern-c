@@ -818,9 +818,18 @@ const LlvmEmitter = struct {
         // source-shaped body artifact is still the transitional rendering
         // payload, but it no longer decides which functions enter body
         // lowering.
-        for (self.mir_module.functions) |fn_mir| {
+        for (self.mir_module.functions, 0..) |fn_mir, function_index| {
             if (fn_mir.is_extern) continue;
-            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse continue;
+            // Global initializer bodies are compiler-internal checked MIR, not
+            // callable declarations. They deliberately have no FunctionArtifact.
+            if (function_index < self.mir_module.checked_callables.len and
+                self.mir_module.checked_callables[function_index].kind == .global_initializer)
+                continue;
+            // Declaration facts are mandatory for every executable body.  Do
+            // not silently omit a verified MIR function when its matching
+            // artifact is absent: ordinary codegen has no AST body fallback
+            // that could make such an ingress failure acceptable.
+            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse return error.UnsupportedLlvmEmission;
             const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
                 .function => |function| function,
                 else => unreachable,
