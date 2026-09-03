@@ -4358,7 +4358,7 @@ fn functionByNameForBind(module: Module, name: []const u8) ?Function {
 }
 
 fn spanIdValid(function: Function, id: SpanId) bool {
-    return id.index() < function.span_identities.len and function.span_identities[id.index()].id.eql(id);
+    return id.isValid() and id.index() < function.span_identities.len and function.span_identities[id.index()].id.eql(id);
 }
 fn spanIdMatchesSource(function: Function, id: SpanId, source: SourcePoint) bool {
     if (!spanIdValid(function, id)) return false;
@@ -4366,14 +4366,14 @@ fn spanIdMatchesSource(function: Function, id: SpanId, source: SourcePoint) bool
     return actual.line == source.line and actual.column == source.column and actual.offset == source.offset and actual.len == source.len and actual.file_id == source.file_id;
 }
 fn valueIdValid(function: Function, id: ValueId) bool {
-    return id.index() < function.value_identities.len and function.value_identities[id.index()].id.eql(id);
+    return id.isValid() and id.index() < function.value_identities.len and function.value_identities[id.index()].id.eql(id);
 }
 fn valueSpelling(function: Function, id: ValueId) ?[]const u8 {
     if (!id.isValid() or !valueIdValid(function, id)) return null;
     return function.value_identities[id.index()].spelling;
 }
 fn typeIdValid(function: Function, id: TypeId) bool {
-    return id.index() < function.type_identities.len and function.type_identities[id.index()].id.eql(id);
+    return id.isValid() and id.index() < function.type_identities.len and function.type_identities[id.index()].id.eql(id);
 }
 fn typeForId(function: Function, id: TypeId) ?ValueType {
     if (!typeIdValid(function, id)) return null;
