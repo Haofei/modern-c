@@ -587,7 +587,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null, .global_address => {},
+                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => {},
             }
         }
     }
@@ -853,6 +853,7 @@ pub const CEmitter = struct {
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
+                .string_bytes => |plan| try self.emitCheckedStringBytesGlobal(global, plan),
                 .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
             }
         }
@@ -991,6 +992,17 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
         try self.out.print(self.allocator, "{s} {s} = NULL;\n\n", .{ rendered_type, name });
+    }
+
+    fn emitCheckedStringBytesGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.StringBytesInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = (({s})\"", .{ rendered_type, name, rendered_type });
+        for (plan.bytes) |byte| try self.emitCStringByte(byte);
+        try self.out.appendSlice(self.allocator, "\");\n\n");
     }
 
     fn emitCheckedGlobalAddressGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.GlobalAddressInitializerPlan) !void {

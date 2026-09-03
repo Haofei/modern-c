@@ -4256,21 +4256,23 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 
 /// Syntax-free global-initializer payloads admitted by the frontend. This
 /// starts with folded scalar values, zero-initialized storage, pure fixed
-/// arrays, direct nominal enum cases, nullable-pointer `null`, and direct
-/// relocations to already-planned globals. Struct literals and projected
-/// relocations still need their own explicit facts and remain outside this
-/// representation.
+/// arrays, direct nominal enum cases, nullable-pointer `null`, direct string
+/// pointer literals, and relocations to already-planned globals. Struct
+/// literals and projected relocations still need their own explicit facts and
+/// remain outside this representation.
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
     aggregate: AggregateInitializerPlan,
     enum_case: EnumInitializerPlan,
     nullable_null,
+    string_bytes: StringBytesInitializerPlan,
     global_address: GlobalAddressInitializerPlan,
 
     pub fn deinit(self: GlobalInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
             .aggregate => |plan| plan.deinit(allocator),
+            .string_bytes => |plan| plan.deinit(allocator),
             .scalar, .zero, .enum_case, .nullable_null, .global_address => {},
         }
     }
@@ -4290,6 +4292,17 @@ pub const EnumInitializerPlan = struct {
 /// the relocation.
 pub const GlobalAddressInitializerPlan = struct {
     target_symbol_id: SymbolId,
+};
+
+/// Decoded bytes for a direct string literal assigned to a string-pointer
+/// global. The plan deliberately owns bytes, not an AST token/spelling; both
+/// backends encode their target format from this single semantic payload.
+pub const StringBytesInitializerPlan = struct {
+    bytes: []const u8,
+
+    pub fn deinit(self: StringBytesInitializerPlan, allocator: std.mem.Allocator) void {
+        if (self.bytes.len != 0) allocator.free(self.bytes);
+    }
 };
 
 /// Recursive, syntax-free initializer tree for the deliberately narrow
@@ -4328,6 +4341,7 @@ pub const GlobalInitializerFact = struct {
             .aggregate => unreachable,
             .enum_case => unreachable,
             .nullable_null => unreachable,
+            .string_bytes => unreachable,
             .global_address => unreachable,
         };
     }
@@ -4468,6 +4482,9 @@ pub const Module = struct {
             .nullable_null => if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 nullableNullInitializerPlanMatchesGlobal(self, global)) fact else null,
+            .string_bytes => |plan| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                stringBytesInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
             .global_address => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 globalAddressInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
@@ -4484,7 +4501,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero, .aggregate, .enum_case, .nullable_null, .global_address => null,
+            .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
         };
     }
 
@@ -4492,7 +4509,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar, .aggregate, .enum_case, .nullable_null, .global_address => null,
+            .scalar, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
         };
     }
 
@@ -4500,7 +4517,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .enum_case => fact,
-            .scalar, .zero, .aggregate, .nullable_null, .global_address => null,
+            .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address => null,
         };
     }
 
@@ -4508,7 +4525,15 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .nullable_null => fact,
-            .scalar, .zero, .aggregate, .enum_case, .global_address => null,
+            .scalar, .zero, .aggregate, .enum_case, .string_bytes, .global_address => null,
+        };
+    }
+
+    pub fn checkedStringBytesGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .string_bytes => fact,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address => null,
         };
     }
 
@@ -4516,7 +4541,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .global_address => fact,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null => null,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes => null,
         };
     }
 
@@ -4630,6 +4655,26 @@ fn nullableNullInitializerPlanMatchesGlobal(module: Module, global: CheckedGloba
     };
     return switch (transparentSignatureShape(module, child) orelse return false) {
         .pointer, .raw_many_pointer => true,
+        else => false,
+    };
+}
+
+fn stringBytesInitializerPlanMatchesGlobal(_: StringBytesInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+    switch (global.ty) {
+        .cstr, .pointer => {},
+        else => return false,
+    }
+    const shape = transparentSignatureShape(module, global.signature_type_id) orelse return false;
+    return switch (shape) {
+        .name => |name| std.mem.eql(u8, name, "cstr"),
+        .pointer => |pointer| switch (transparentSignatureShape(module, pointer.child) orelse return false) {
+            .name => |name| std.mem.eql(u8, name, "u8"),
+            else => false,
+        },
+        .raw_many_pointer => |pointer| switch (transparentSignatureShape(module, pointer.child) orelse return false) {
+            .name => |name| std.mem.eql(u8, name, "u8"),
+            else => false,
+        },
         else => false,
     };
 }

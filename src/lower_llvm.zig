@@ -799,7 +799,7 @@ const LlvmEmitter = struct {
             try self.global_is_const.put(name, global.is_const);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null, .global_address => {},
+                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => {},
             }
         }
     }
@@ -929,6 +929,7 @@ const LlvmEmitter = struct {
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
+                .string_bytes => |plan| try self.emitCheckedStringBytesGlobal(global, plan),
                 .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
             }
         }
@@ -993,6 +994,18 @@ const LlvmEmitter = struct {
             self.allocator,
             "@{s} = {s}{s} {s} null\n",
             .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id) },
+        );
+    }
+
+    fn emitCheckedStringBytesGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.StringBytesInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const string = try self.internCanonicalStringLiteral(plan.bytes);
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(
+            self.allocator,
+            "@{s} = {s}{s} {s} getelementptr ([{d} x i8], ptr @{s}, i64 0, i64 0)\n",
+            .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id), string.len, string.name },
         );
     }
 

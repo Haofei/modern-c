@@ -347,6 +347,7 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
         .nullable_null => return error.TestUnexpectedResult,
+        .string_bytes => return error.TestUnexpectedResult,
         .global_address => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
@@ -1064,6 +1065,51 @@ test "lower-c emits direct global-address plans without AST initializer artifact
         null,
     );
     try expectContains(output.items, "shared_ptr = &shared;");
+}
+
+test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
+    const source =
+        \\global greeting: cstr = "hi\n";
+        \\global raw: *const u8 = "raw";
+    ;
+    var parsed = try test_support.parseCheckedModule("c_string_bytes_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[0]) != null);
+    try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[1]) != null);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_string_bytes_global_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "greeting = ((char const *)\"hi\\n\");");
+    try expectContains(output.items, "raw = ((uint8_t const *)\"raw\");");
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "string_bytes_global_plan.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "string_bytes_global_plan.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "clang", "-fsyntax-only", generated_c },
+    });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
 }
 
 test "lower-c emits strict nullable control plans from MIR without body fallback" {

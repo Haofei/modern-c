@@ -5452,6 +5452,7 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
         .nullable_null => return error.TestUnexpectedResult,
+        .string_bytes => return error.TestUnexpectedResult,
         .global_address => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
@@ -5529,6 +5530,42 @@ test "LLVM emits direct global-address plans without AST initializer artifacts" 
         null,
     );
     try expectContains(output.items, "@shared_ptr = internal global ptr @shared");
+}
+
+test "LLVM emits decoded string-byte global plans without AST initializer artifacts" {
+    const source =
+        \\global greeting: cstr = "hi\n";
+        \\global raw: *const u8 = "raw";
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_string_bytes_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[0]) != null);
+    try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[1]) != null);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        "llvm_string_bytes_global_plan.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+    try expectContains(output.items, "@greeting = internal global ptr getelementptr ([4 x i8], ptr @.str.0, i64 0, i64 0)");
+    try expectContains(output.items, "@raw = internal global ptr getelementptr ([4 x i8], ptr @.str.1, i64 0, i64 0)");
+    try expectContains(output.items, "@.str.0 = private unnamed_addr constant [4 x i8] c\"hi\\0A\\00\"");
 }
 
 test "LLVM fails closed when a scalar const-global fact is missing" {

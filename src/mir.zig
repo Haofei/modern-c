@@ -700,6 +700,7 @@ pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
 pub const GlobalAddressInitializerPlan = mir_model.GlobalAddressInitializerPlan;
+pub const StringBytesInitializerPlan = mir_model.StringBytesInitializerPlan;
 pub const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
 pub const EnumInitializerPlan = mir_model.EnumInitializerPlan;
 pub const valueTypeRequiresScalarGlobalInitializerFact = mir_model.valueTypeRequiresScalarGlobalInitializerFact;
@@ -1571,6 +1572,25 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             });
                         }
                         if (!checked_global.has_initializer_plan) {
+                            if (try directStringBytesGlobalInitializerPlan(
+                                allocator,
+                                initializer,
+                                checked_global,
+                                &signature_types,
+                                type_alias_facts.items,
+                                &symbol_ids,
+                            )) |plan| {
+                                errdefer plan.deinit(allocator);
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .string_bytes = plan },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
                             if (directGlobalAddressInitializerPlan(
                                 initializer,
                                 checked_global,
@@ -2075,6 +2095,74 @@ fn directNullablePointerNullInitializerPlan(initializer: ast.Expr, global_ty: Va
     return switch (initializer.kind) {
         .null_literal => true,
         .grouped => |inner| directNullablePointerNullInitializerPlan(inner.*, global_ty),
+        else => false,
+    };
+}
+
+/// Admit direct pointer-string globals by retaining decoded bytes, never a
+/// source token. Slices deliberately remain outside this family: their fat
+/// pointer representation needs a separate aggregate plan. Aliases are
+/// followed through the module-owned signature table before admission.
+fn directStringBytesGlobalInitializerPlan(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    global: CheckedGlobalFact,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) !?mir_model.StringBytesInitializerPlan {
+    switch (global.ty) {
+        .cstr, .pointer => {},
+        else => return null,
+    }
+    const literal = directStringLiteral(initializer) orelse return null;
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+    if (!signatureTypeIsStringPointer(global.signature_type_id, signature_types, type_aliases, symbol_ids)) return null;
+    var bytes = try allocator.alloc(u8, literal.len - 2);
+    errdefer allocator.free(bytes);
+    const decoded = string_literal.decodeInto(bytes, literal) catch {
+        allocator.free(bytes);
+        return null;
+    };
+    if (decoded.len == 0) {
+        allocator.free(bytes);
+        return .{ .bytes = &.{} };
+    }
+    bytes = try allocator.realloc(bytes, decoded.len);
+    return .{ .bytes = bytes };
+}
+
+fn directStringLiteral(initializer: ast.Expr) ?[]const u8 {
+    return switch (initializer.kind) {
+        .string_literal => |literal| literal,
+        .grouped => |inner| directStringLiteral(inner.*),
+        else => null,
+    };
+}
+
+fn signatureTypeIsStringPointer(
+    initial_type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) bool {
+    const type_id = transparentSignatureTypeIdForBuild(initial_type_id, signature_types, type_aliases, symbol_ids) orelse return false;
+    return switch (signature_types.get(type_id) orelse return false) {
+        .name => |name| std.mem.eql(u8, name, "cstr"),
+        .pointer => |pointer| blk: {
+            const child_id = transparentSignatureTypeIdForBuild(pointer.child, signature_types, type_aliases, symbol_ids) orelse break :blk false;
+            break :blk switch (signature_types.get(child_id) orelse break :blk false) {
+                .name => |name| std.mem.eql(u8, name, "u8"),
+                else => false,
+            };
+        },
+        .raw_many_pointer => |pointer| blk: {
+            const child_id = transparentSignatureTypeIdForBuild(pointer.child, signature_types, type_aliases, symbol_ids) orelse break :blk false;
+            break :blk switch (signature_types.get(child_id) orelse break :blk false) {
+                .name => |name| std.mem.eql(u8, name, "u8"),
+                else => false,
+            };
+        },
         else => false,
     };
 }

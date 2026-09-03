@@ -115,6 +115,18 @@ pub const CheckedProgram = struct {
                         !global.initializer_body_id.eql(fact.initializer_body_id))
                         return error.InvalidGlobalInitializerFact;
                 },
+                .string_bytes => {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    switch (global.ty) {
+                        .cstr, .pointer => {},
+                        else => return error.InvalidGlobalInitializerFact,
+                    }
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id))
+                        return error.InvalidGlobalInitializerFact;
+                },
                 .global_address => |plan| {
                     if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len or
                         global.ty != .pointer or !plan.target_symbol_id.isValid())
