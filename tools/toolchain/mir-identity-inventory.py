@@ -105,6 +105,11 @@ def main() -> int:
     if "source:" in model[start:end]:
         fail("src/mir_model.zig BoundsFact duplicates source identity beside SpanId")
 
+    start = model.index("pub const RepresentationFact = struct {")
+    end = model.index("\n};", start)
+    if "source:" in model[start:end]:
+        fail("src/mir_model.zig RepresentationFact duplicates source identity beside SpanId")
+
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",
@@ -164,7 +169,7 @@ def main() -> int:
         "if (!fact.typed_result_ty.isValid()) return false;",
         "if (!fact.typed_span_id.isValid()) return false;",
         "fn representationTypedSpansCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
-        "fn representationSourceMatches(instruction: Instruction, fact: RepresentationFact) bool {",
+        "fn representationFactMatchesInstruction(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedResultTypesCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "pub fn floatFactTargetType(function: *const Function, fact: FloatFact) ?ValueType {",

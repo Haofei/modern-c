@@ -231,6 +231,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try appendSourcePointForDigest(allocator, out, fact.source);
         }
         for (function.representation_facts) |fact| {
+            const source = mir.sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirRepresentationFacts;
             try out.print(allocator, "representation_fact fn={s} kind={s} detail={s} result={s} typed_result={} value_id={s} typed_value={} typed_span={} ", .{
                 function.name,
                 @tagName(fact.kind),
@@ -241,7 +242,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                 typedIndexOrMax(fact.typed_value_id),
                 typedIndexOrMax(fact.typed_span_id),
             });
-            try appendSourcePointForDigest(allocator, out, fact.source);
+            try appendSourcePointForDigest(allocator, out, source);
         }
         for (function.elided_bounds) |source| {
             try out.print(allocator, "elided_bounds fn={s} ", .{function.name});

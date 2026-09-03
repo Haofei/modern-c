@@ -1033,7 +1033,7 @@ at entry instead of treating the AST as a second representation authority.
 | Boundary | Evidence |
 |---|---|
 | Owned fact model | `src/mir_model.zig` owns `RepresentationFact` rows in `Function.representation_facts`; `src/mir.zig` records rows through the `representationFactKind` producer path. |
-| Stable identity key | Facts match by instruction kind, result type, source point, detail, and `ValueId`; the value spelling is stored once in `Function.value_identities` and `lower-mir` resolves it only for display. |
+| Stable identity key | Facts match by instruction kind, result type, opaque `SpanId`, detail, and `ValueId`; the value spelling and display coordinates are resolved only through the owning function's identity tables. |
 | Flow-proven nonnull bindings | A nullable-pointer `if let` or switch binding records a scope-local nonnull proof. Uses still emit matching typed-load and representation-check facts, but the statically discharged check has no `InvalidRepresentation` trap edge. Shadowed bindings restore the outer proof state; ordinary pointer parameters remain trapping. |
 | Backend admission gate | C and LLVM receive a `VerifiedProgram`; `VerifiedProgram.init` calls the unified `validateLoweringAdmission` seam before emission. That seam includes `validateRepresentationFactsForLowering` and rejects `.unknown` placeholders in admitted representation fact types. |
 | Missing-fact rejection | `lower-c rejects prebuilt MIR with missing representation facts` and `LLVM rejects prebuilt MIR with missing representation facts` remove required rows and expect `InvalidMirRepresentationFacts`. |

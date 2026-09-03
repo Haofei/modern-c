@@ -2074,6 +2074,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.representation_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirRepresentationFacts;
             try out.print(
                 allocator,
                 "mir representation_fact fn={s} kind={s} detail={s} type={s} value_id={s} recorded=true line={} column={} typed_result_ty_id={} typed_value_id={} typed_span_id={}\n",
@@ -2083,8 +2084,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     fact.detail,
                     fact.result_ty.name(),
                     valueSpelling(function, fact.typed_value_id) orelse "none",
-                    fact.source.line,
-                    fact.source.column,
+                    source.line,
+                    source.column,
                     if (fact.typed_result_ty.isValid()) fact.typed_result_ty.index() else std.math.maxInt(usize),
                     if (fact.typed_value_id.isValid()) fact.typed_value_id.index() else std.math.maxInt(usize),
                     if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize),
@@ -2366,21 +2367,22 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
             }
         }
         for (function.representation_facts) |fact| {
+            const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirRepresentationFacts;
             switch (fact.kind) {
                 .representation_check => try out.print(
                     allocator,
                     "mir verify fn={s} pass=representation finding=representation_check type={s} line={} column={}\n",
-                    .{ function.name, fact.detail, fact.source.line, fact.source.column },
+                    .{ function.name, fact.detail, source.line, source.column },
                 ),
                 .representation_use => try out.print(
                     allocator,
                     "mir verify fn={s} pass=representation finding=representation_use detail={s} type={s} line={} column={}\n",
-                    .{ function.name, fact.detail, fact.result_ty.name(), fact.source.line, fact.source.column },
+                    .{ function.name, fact.detail, fact.result_ty.name(), source.line, source.column },
                 ),
                 .typed_load => try out.print(
                     allocator,
                     "mir verify fn={s} pass=representation finding=typed_load detail={s} type={s} line={} column={}\n",
-                    .{ function.name, fact.detail, fact.result_ty.name(), fact.source.line, fact.source.column },
+                    .{ function.name, fact.detail, fact.result_ty.name(), source.line, source.column },
                 ),
                 else => {},
             }
@@ -4526,14 +4528,7 @@ fn countMatchingFloatFactsForInstruction(function: Function, instruction: Instru
 
 fn functionHasMatchingRepresentationFact(function: Function, instruction: Instruction) bool {
     for (function.representation_facts) |fact| {
-        if (fact.kind != instruction.kind) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (!representationSourceMatches(instruction, fact)) continue;
-        if (!std.mem.eql(u8, fact.detail, instruction.detail)) continue;
-        if (!representationTypedSpansCompatible(instruction, fact)) continue;
-        if (!representationTypedResultTypesCompatible(instruction, fact)) continue;
-        if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
-        return true;
+        if (representationFactMatchesInstruction(instruction, fact)) return true;
     }
     return false;
 }
@@ -4542,17 +4537,19 @@ fn functionHasMatchingRepresentationInstruction(function: Function, fact: Repres
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
             if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
-            if (instruction.kind != fact.kind) continue;
-            if (!sameRepresentationValueType(instruction.result_ty, fact.result_ty)) continue;
-            if (!representationSourceMatches(instruction, fact)) continue;
-            if (!std.mem.eql(u8, instruction.detail, fact.detail)) continue;
-            if (!representationTypedSpansCompatible(instruction, fact)) continue;
-            if (!representationTypedResultTypesCompatible(instruction, fact)) continue;
-            if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
-            return true;
+            if (representationFactMatchesInstruction(instruction, fact)) return true;
         }
     }
     return false;
+}
+
+fn representationFactMatchesInstruction(instruction: Instruction, fact: RepresentationFact) bool {
+    return fact.kind == instruction.kind and
+        sameRepresentationValueType(fact.result_ty, instruction.result_ty) and
+        std.mem.eql(u8, fact.detail, instruction.detail) and
+        representationTypedSpansCompatible(instruction, fact) and
+        representationTypedResultTypesCompatible(instruction, fact) and
+        representationTypedValueIdsCompatible(instruction, fact);
 }
 
 fn representationFactTypedIdentitiesValid(function: Function, fact: RepresentationFact) bool {
@@ -4561,13 +4558,7 @@ fn representationFactTypedIdentitiesValid(function: Function, fact: Representati
     if (result_index >= function.type_identities.len) return false;
     if (!function.type_identities[result_index].matches(fact.result_ty)) return false;
 
-    if (!fact.typed_span_id.isValid()) return false;
-    const span_index = fact.typed_span_id.index();
-    if (span_index >= function.span_identities.len) return false;
-    const source = function.span_identities[span_index].source;
-    if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
-
-    return true;
+    return sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
 fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {
@@ -4589,14 +4580,6 @@ fn representationTypedSpansCompatible(instruction: Instruction, fact: Representa
         return fact.typed_span_id.isValid() and fact.typed_span_id.eql(instruction.typed_span_id);
     }
     return !fact.typed_span_id.isValid();
-}
-
-fn representationSourceMatches(instruction: Instruction, fact: RepresentationFact) bool {
-    if (instruction.line != fact.source.line or instruction.column != fact.source.column) return false;
-    if (instruction.typed_span_id.isValid() or fact.typed_span_id.isValid()) {
-        return instruction.source_offset == fact.source.offset and instruction.source_len == fact.source.len;
-    }
-    return true;
 }
 
 fn sameRepresentationValueType(left: ValueType, right: ValueType) bool {
@@ -17501,7 +17484,6 @@ const FunctionBuilder = struct {
                 .typed_result_ty = typed_result_ty,
                 .typed_value_id = typed_value_id orelse .invalid,
                 .typed_span_id = typed_span_id,
-                .source = source,
             });
         }
     }

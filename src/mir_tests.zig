@@ -9451,7 +9451,9 @@ test "MIR dump exposes representation value identities" {
     const read_p_identity = valueIdentityBySpelling(read_fn, "p").?;
     const return_mut_ptr_identity = typeIdentityBySpelling(return_fn, "*mut").?;
     const read_mut_ptr_identity = typeIdentityBySpelling(read_fn, "*mut").?;
-    const read_load_span_identity = spanIdentityBySource(read_fn, read_fn.representation_facts[0].source).?;
+    const read_load_span_id = read_fn.representation_facts[0].typed_span_id;
+    try std.testing.expect(read_load_span_id.isValid());
+    const read_load_span_identity = read_fn.span_identities[read_load_span_id.index()];
     try std.testing.expectEqual(@as(usize, 2), return_fn.representation_facts.len);
     try std.testing.expectEqual(.typed_load, return_fn.representation_facts[0].kind);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].detail);

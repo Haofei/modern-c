@@ -3862,8 +3862,10 @@ pub const RepresentationFact = struct {
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     typed_value_id: ValueId = .invalid,
+    /// Sole source identity for this representation-sensitive operation.
+    /// Display coordinates are recovered from the owning function's span
+    /// table.
     typed_span_id: SpanId = .invalid,
-    source: SourcePoint,
 };
 
 pub const TypeIdentity = struct {
