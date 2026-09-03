@@ -51,7 +51,7 @@
       ".is_const = fn_decl.is_const": 1,
       "signature: codegen_attrs.GlobalSignatureFacts": 1,
       "initializer: codegen_attrs.GlobalInitFacts": 1,
-      "checkedScalarGlobal(checked.?)": 1,
+      "checkedGlobalInitializer(checked.?)": 1,
       ".signature = .{": 2,
       ".initializer = .{": 1
     },
@@ -81,7 +81,7 @@
       "fn emitFunctionBody(self: *CEmitter, function: anytype": 0,
       "fn emitVerifiedMirFunction(self: *CEmitter, function: anytype": 1,
       "fn emitExecutableMirFunction(self: *CEmitter, function: anytype": 1,
-      "fn collectCheckedScalarGlobals(self: *CEmitter)": 1,
+      "fn collectCheckedPlannedGlobals(self: *CEmitter)": 1,
       "fn emitCheckedScalarGlobal(self: *CEmitter": 1,
       "mir.comptimeValueFromGlobalInitializerFact": 1
     },
@@ -111,12 +111,12 @@
       "fn emitFunction(self: *LlvmEmitter, function: anytype": 0,
       "fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype": 1,
       "fn emitExternFunction(self: *LlvmEmitter, function: anytype)": 1,
-      "fn collectCheckedScalarGlobals(self: *LlvmEmitter)": 1,
+      "fn collectCheckedPlannedGlobals(self: *LlvmEmitter)": 1,
       "fn emitCheckedScalarGlobal(self: *LlvmEmitter": 1,
       "mir.comptimeValueFromGlobalInitializerFact": 1
     },
     "src/mir_model.zig": {
-      "pub fn checkedScalarGlobal": 1,
+      "pub fn checkedGlobalInitializer": 1,
       "pub const TypeAliasFact = struct": 1,
       "target_type_id: SignatureTypeId": 1,
       "pub const EnumFact = struct": 1,

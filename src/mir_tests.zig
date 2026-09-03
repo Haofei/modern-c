@@ -1593,6 +1593,7 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
             .float => float_index = index,
             else => {},
         },
+        .zero => {},
     };
     const float_fact_index = float_index orelse return error.TestUnexpectedResult;
     const saved_float = module_mir.global_initializer_facts[float_fact_index];
@@ -1643,6 +1644,33 @@ test "CheckedProgram requires an admitted mutable scalar global initializer plan
 
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     try std.testing.expect(module_mir.checked_globals[0].has_initializer_plan);
+    const saved = module_mir.global_initializer_facts;
+    module_mir.global_initializer_facts = &.{};
+    defer module_mir.global_initializer_facts = saved;
+    try std.testing.expectError(
+        error.MissingGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+}
+
+test "CheckedProgram requires an admitted zero-global initializer plan" {
+    const source = "global VALUES: [2]u32;";
+    var parsed = try test_support.parseCheckedModule("zero_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    try std.testing.expect(!module_mir.global_initializer_facts[0].initializer_body_id.isValid());
+    switch (module_mir.global_initializer_facts[0].plan) {
+        .zero => {},
+        .scalar => return error.TestUnexpectedResult,
+    }
     const saved = module_mir.global_initializer_facts;
     module_mir.global_initializer_facts = &.{};
     defer module_mir.global_initializer_facts = saved;

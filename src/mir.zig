@@ -1405,12 +1405,25 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             if (value.isCompatibleWith(global_ty)) {
                                 checked_global.has_initializer_plan = true;
                                 try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
                                     .initializer_body_id = checked_global.initializer_body_id,
                                     .value_ty = global_ty,
                                     .plan = .{ .scalar = value },
                                 });
                             }
                         }
+                    } else if (!global.is_extern) {
+                        // No source initializer is an explicit frontend fact,
+                        // not a backend invitation to recover `= 0` from the
+                        // declaration AST.  The plan covers scalar and
+                        // aggregate storage uniformly; its representation is
+                        // supplied by the module-owned SignatureTypeTable.
+                        checked_global.has_initializer_plan = true;
+                        try global_initializer_facts.append(allocator, .{
+                            .global_symbol_id = checked_global.symbol_id,
+                            .value_ty = checked_global.ty,
+                            .plan = .zero,
+                        });
                     }
                     try checked_globals.append(allocator, checked_global);
                 }

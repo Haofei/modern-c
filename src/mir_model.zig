@@ -4150,23 +4150,28 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 }
 
 /// Syntax-free global-initializer payloads admitted by the frontend. This
-/// starts with folded scalar values: aggregate and relocation forms need an
-/// explicit recursive plan and remain outside this representation.
+/// starts with folded scalar values and zero-initialized storage. Aggregate
+/// literals and relocations still need an explicit recursive plan and remain
+/// outside this representation.
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
+    zero,
 };
 
-/// A plan is keyed by its checked initializer body, not source spelling. The
-/// same fact covers immutable and mutable scalar globals; mutability remains
-/// a declaration property.
+/// A plan is keyed by its checked global identity, never source spelling.
+/// Scalar plans additionally retain their checked initializer body; zero
+/// plans intentionally have no body because they describe storage with no
+/// source initializer.
 pub const GlobalInitializerFact = struct {
-    initializer_body_id: BodyId,
+    global_symbol_id: SymbolId,
+    initializer_body_id: BodyId = .invalid,
     value_ty: ValueType,
     plan: GlobalInitializerPlan,
 
     pub fn scalarValue(self: GlobalInitializerFact) ConstScalarValue {
         return switch (self.plan) {
             .scalar => |value| value,
+            .zero => unreachable,
         };
     }
 };
@@ -4206,6 +4211,31 @@ pub const Module = struct {
         return found;
     }
 
+    pub fn globalInitializerFactForGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        if (!global.symbol_id.isValid()) return null;
+        var found: ?GlobalInitializerFact = null;
+        for (self.global_initializer_facts) |fact| {
+            if (!fact.global_symbol_id.eql(global.symbol_id)) continue;
+            if (found != null) return null;
+            found = fact;
+        }
+        return found;
+    }
+
+    /// Returns a fully admitted syntax-free declaration plan.  Backends must
+    /// use this gate rather than infer a missing initializer from AST syntax.
+    pub fn checkedGlobalInitializer(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        if (global.is_extern or !global.has_initializer_plan) return null;
+        const fact = self.globalInitializerFactForGlobal(global) orelse return null;
+        if (!ValueType.eql(global.ty, fact.value_ty)) return null;
+        return switch (fact.plan) {
+            .scalar => |value| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                value.isCompatibleWith(fact.value_ty)) fact else null,
+            .zero => if (!global.initializer_body_id.isValid() and !fact.initializer_body_id.isValid()) fact else null,
+        };
+    }
+
     /// Returns the one scalar global plan that is complete enough for
     /// syntax-free declaration emission. This is intentionally stricter than
     /// `globalInitializerFact`: callers must not turn a stale, aggregate, or
@@ -4213,10 +4243,19 @@ pub const Module = struct {
     pub fn checkedScalarGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
         if (global.is_extern or !global.initializer_body_id.isValid() or !global.has_initializer_plan) return null;
         if (!valueTypeRequiresScalarGlobalInitializerFact(global.ty)) return null;
-        const fact = self.globalInitializerFact(global.initializer_body_id) orelse return null;
-        if (!global.initializer_body_id.eql(fact.initializer_body_id)) return null;
-        if (!ValueType.eql(global.ty, fact.value_ty) or !fact.scalarValue().isCompatibleWith(fact.value_ty)) return null;
-        return fact;
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .scalar => fact,
+            .zero => null,
+        };
+    }
+
+    pub fn checkedZeroGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .zero => fact,
+            .scalar => null,
+        };
     }
 
     pub fn deinit(self: *Module) void {

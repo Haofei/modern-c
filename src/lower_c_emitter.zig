@@ -414,7 +414,7 @@ pub const CEmitter = struct {
         try self.collectPackedBitsFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
-        try self.collectCheckedScalarGlobals();
+        try self.collectCheckedPlannedGlobals();
         try self.collectConstGlobals();
         try self.collectDeclArtifacts(early_metadata);
         try self.collectBindThunks();
@@ -509,24 +509,22 @@ pub const CEmitter = struct {
         });
     }
 
-    /// Seed backend lookup/comptime state from the admitted scalar-global
-    /// facts before evaluating the residual aggregate global artifacts. These
-    /// rows deliberately have no `GlobalArtifact` payload.
-    fn collectCheckedScalarGlobals(self: *CEmitter) !void {
+    /// Seed backend lookup/comptime state from admitted global plans before
+    /// evaluating residual aggregate/relocation artifacts. Planned rows have
+    /// no `GlobalArtifact` payload; their type is materialized solely from
+    /// the module-owned SignatureTypeTable.
+    fn collectCheckedPlannedGlobals(self: *CEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedScalarGlobal(global) orelse continue;
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
-            const c_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
-            try self.globals.put(name, .{
-                .type_name = global.ty.name(),
-                .c_type = c_type,
-                .race_type_name = global.ty.name(),
-                .race_c_type = c_type,
-                .width_bits = widthBits(global.ty.name()),
-                .pointer_like = false,
-                .is_const = global.is_const,
-            });
-            if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact));
+            const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
+            var info = try self.globalInfoFromType(ty);
+            info.is_const = global.is_const;
+            try self.globals.put(name, info);
+            switch (fact.plan) {
+                .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
+                .zero => {},
+            }
         }
     }
 
@@ -640,6 +638,10 @@ pub const CEmitter = struct {
             },
             else => {},
         };
+        for (self.mir_module.checked_globals) |global| {
+            if (self.mir_module.checkedGlobalInitializer(global) != null)
+                try self.emitSignatureTypeDefinition(global.signature_type_id);
+        }
     }
 
     /// Materialize aggregate callable-signature types without looking at an
@@ -763,8 +765,11 @@ pub const CEmitter = struct {
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedScalarGlobal(global) orelse continue;
-            try self.emitCheckedScalarGlobal(global, fact);
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
+            switch (fact.plan) {
+                .scalar => try self.emitCheckedScalarGlobal(global, fact),
+                .zero => try self.emitCheckedZeroGlobal(global),
+            }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
@@ -853,6 +858,23 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
         try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, value });
+    }
+
+    fn emitCheckedZeroGlobal(self: *CEmitter, global: mir.CheckedGlobalFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const signature_ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        if (global.ty != .value) {
+            const executable_type = mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty) catch |err| switch (err) {
+                error.UnsupportedType => null,
+                else => return err,
+            };
+            if (executable_type) |value| if (!std.mem.eql(u8, rendered_type, value)) return error.UnsupportedCEmission;
+        }
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, if (self.isAggregateGlobalType(signature_ty)) "{0}" else "0" });
     }
 
     fn checkedGlobalSymbol(self: *const CEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {

@@ -64,21 +64,29 @@ pub const CheckedProgram = struct {
             }
         }
         for (global_initializer_facts, 0..) |fact, index| {
-            if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
-                return error.InvalidGlobalInitializerFact;
-            const callable = callables[fact.initializer_body_id.index()];
-            if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id))
-                return error.InvalidGlobalInitializerFact;
-            const global = globalForInitializer(callables, globals, fact.initializer_body_id) orelse return error.InvalidGlobalInitializerFact;
-            if (!global.has_initializer_plan or !mir.ValueType.eql(global.ty, fact.value_ty) or !fact.scalarValue().isCompatibleWith(fact.value_ty))
-                return error.InvalidGlobalInitializerFact;
+            const global = globalForSymbol(globals, fact.global_symbol_id) orelse return error.InvalidGlobalInitializerFact;
+            if (!global.has_initializer_plan or global.is_extern or !mir.ValueType.eql(global.ty, fact.value_ty)) return error.InvalidGlobalInitializerFact;
+            switch (fact.plan) {
+                .scalar => |value| {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id) or !value.isCompatibleWith(fact.value_ty))
+                        return error.InvalidGlobalInitializerFact;
+                },
+                .zero => {
+                    if (fact.initializer_body_id.isValid() or global.initializer_body_id.isValid())
+                        return error.InvalidGlobalInitializerFact;
+                },
+            }
             for (global_initializer_facts[0..index]) |prior| {
-                if (prior.initializer_body_id.eql(fact.initializer_body_id)) return error.DuplicateGlobalInitializerFact;
+                if (prior.global_symbol_id.eql(fact.global_symbol_id)) return error.DuplicateGlobalInitializerFact;
             }
         }
         for (globals) |global| {
-            if (requiresScalarGlobalInitializerFact(global)) {
-                _ = scalarGlobalInitializerFactForGlobal(global_initializer_facts, global) orelse return error.MissingGlobalInitializerFact;
+            if (requiresGlobalInitializerFact(global)) {
+                _ = globalInitializerFactForGlobal(global_initializer_facts, global) orelse return error.MissingGlobalInitializerFact;
             }
         }
         return .{
@@ -105,31 +113,23 @@ pub const CheckedProgram = struct {
     }
 };
 
-fn requiresScalarGlobalInitializerFact(global: mir.CheckedGlobalFact) bool {
-    if (global.is_extern or !global.initializer_body_id.isValid() or !global.has_initializer_plan) return false;
-    return mir.valueTypeRequiresScalarGlobalInitializerFact(global.ty);
+fn requiresGlobalInitializerFact(global: mir.CheckedGlobalFact) bool {
+    return !global.is_extern and global.has_initializer_plan;
 }
 
-fn scalarGlobalInitializerFactForGlobal(facts: []const mir.GlobalInitializerFact, global: mir.CheckedGlobalFact) ?mir.GlobalInitializerFact {
+fn globalInitializerFactForGlobal(facts: []const mir.GlobalInitializerFact, global: mir.CheckedGlobalFact) ?mir.GlobalInitializerFact {
     var found: ?mir.GlobalInitializerFact = null;
     for (facts) |fact| {
-        if (!fact.initializer_body_id.eql(global.initializer_body_id)) continue;
+        if (!fact.global_symbol_id.eql(global.symbol_id)) continue;
         if (found != null) return null;
         found = fact;
     }
     return found;
 }
 
-fn globalForInitializer(
-    callables: []const mir.CheckedCallableFact,
-    globals: []const mir.CheckedGlobalFact,
-    body_id: mir.BodyId,
-) ?mir.CheckedGlobalFact {
-    if (!body_id.isValid() or body_id.index() >= callables.len) return null;
-    const callable = callables[body_id.index()];
-    for (globals) |global| {
-        if (global.initializer_body_id.eql(body_id) and global.symbol_id.eql(callable.symbol_id)) return global;
-    }
+fn globalForSymbol(globals: []const mir.CheckedGlobalFact, symbol_id: mir.SymbolId) ?mir.CheckedGlobalFact {
+    if (!symbol_id.isValid()) return null;
+    for (globals) |global| if (global.symbol_id.eql(symbol_id)) return global;
     return null;
 }
 

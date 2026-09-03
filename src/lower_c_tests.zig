@@ -244,6 +244,43 @@ test "lower-c renders mutable scalar globals from verified initializer plans" {
     try expectContains(output.items, "uint32_t COUNT = 3;");
 }
 
+test "lower-c renders no-init scalar and array globals from verified zero plans" {
+    const source =
+        \\global COUNT: u32;
+        \\global VALUES: [2]u32;
+    ;
+    var parsed = try test_support.parseCheckedModule("c_zero_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    for (module_mir.global_initializer_facts) |fact| switch (fact.plan) {
+        .zero => {},
+        .scalar => return error.TestUnexpectedResult,
+    };
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        .global => return error.TestUnexpectedResult,
+        else => {},
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_zero_global_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "uint32_t COUNT = 0;");
+    try expectContains(output.items, "mc_array_u32_2 VALUES = {0};");
+}
+
 test "lower-c fails closed when a scalar const-global fact is missing" {
     const source = "const COUNT: u32 = 1 + 2;";
     var parsed = try test_support.parseCheckedModule("c_missing_scalar_const_global_fact.mc", source);

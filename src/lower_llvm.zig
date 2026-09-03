@@ -390,7 +390,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectEnumFacts();
     try ctx.collectPackedBitsFacts();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata, comptime_declarations);
-    try ctx.collectCheckedScalarGlobals();
+    try ctx.collectCheckedPlannedGlobals();
     var reflect_env = ctx.reflectEnv();
     try eval.collectConstGlobalsFromDeclarationsWithOptions(allocator, comptime_declarations, &ctx.const_fns, &ctx.const_globals, .{
         .reflect = lower_llvm_reflect.comptimeReflectThunk,
@@ -751,12 +751,12 @@ const LlvmEmitter = struct {
         };
     }
 
-    /// Scalar globals are already complete semantic values in MIR. Seed
-    /// comptime lookup before folding the remaining transitional globals, but
-    /// do not recreate an AST-shaped global declaration for code generation.
-    fn collectCheckedScalarGlobals(self: *LlvmEmitter) !void {
+    /// Admitted global plans are complete semantic global rows. Seed lookup
+    /// and comptime state before folding residual aggregate/relocation
+    /// artifacts, without recreating AST-shaped global payloads.
+    fn collectCheckedPlannedGlobals(self: *LlvmEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedScalarGlobal(global) orelse continue;
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
             // Residual aggregate/relocation lowering can take the address of
             // this scalar. Retain only a backend-local materialization of the
@@ -764,8 +764,9 @@ const LlvmEmitter = struct {
             const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
             try self.global_types.put(name, ty);
             try self.global_is_const.put(name, global.is_const);
-            if (global.is_const) {
-                try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact));
+            switch (fact.plan) {
+                .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
+                .zero => {},
             }
         }
     }
@@ -888,8 +889,11 @@ const LlvmEmitter = struct {
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedScalarGlobal(global) orelse continue;
-            try self.emitCheckedScalarGlobal(global, fact);
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
+            switch (fact.plan) {
+                .scalar => try self.emitCheckedScalarGlobal(global, fact),
+                .zero => try self.emitCheckedZeroGlobal(global),
+            }
         }
         for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
@@ -904,6 +908,22 @@ const LlvmEmitter = struct {
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const kind: []const u8 = if (global.is_const) "constant" else "global";
         try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, init });
+    }
+
+    fn emitCheckedZeroGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
+        const llvm_ty = try self.llvmSignatureType(global.signature_type_id);
+        if (global.ty != .value) {
+            const executable_type = mir_executable_llvm.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty, null) catch |err| switch (err) {
+                error.Unsupported, error.InvalidBody => null,
+                else => return err,
+            };
+            if (executable_type) |value| if (!std.mem.eql(u8, llvm_ty, value)) return error.UnsupportedLlvmEmission;
+        }
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, try self.zeroInitializer(ty) });
     }
 
     fn checkedGlobalSymbol(self: *const LlvmEmitter, global: mir.CheckedGlobalFact) ?[]const u8 {

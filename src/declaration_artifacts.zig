@@ -60,11 +60,10 @@ pub const EarlyDeclarationArtifacts = struct {
                 },
                 .global_decl => |global| {
                     const checked = globalByName(typed_mir, global.name.text);
-                    // Scalar const globals have a complete checked declaration
-                    // and a folded initializer fact. Keep their source-map row,
-                    // but do not retain an AST-shaped codegen artifact merely to
-                    // repeat a declaration that C/LLVM can render from MIR.
-                    if (checked == null or typed_mir.checkedScalarGlobal(checked.?) == null) {
+                    // Admitted initializer plans own the declaration payload.
+                    // Keep the source-map row, but never retain an AST-shaped
+                    // global merely to emit a scalar fact or zeroed storage.
+                    if (checked == null or typed_mir.checkedGlobalInitializer(checked.?) == null) {
                         try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, checked) });
                     }
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
