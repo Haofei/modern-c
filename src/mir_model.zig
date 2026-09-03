@@ -4253,7 +4253,8 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 /// Syntax-free global-initializer payloads admitted by the frontend. This
 /// starts with folded scalar values, zero-initialized storage, pure fixed
 /// arrays, direct nominal enum cases, nullable-pointer `null`, direct string
-/// pointer literals, and relocations to already-planned globals. Struct
+/// pointer literals, relocations to already-planned globals, and direct
+/// function symbols. Struct
 /// literals and projected relocations still need their own explicit facts and
 /// remain outside this representation.
 pub const GlobalInitializerPlan = union(enum) {
@@ -4264,12 +4265,13 @@ pub const GlobalInitializerPlan = union(enum) {
     nullable_null,
     string_bytes: StringBytesInitializerPlan,
     global_address: GlobalAddressInitializerPlan,
+    function_symbol: FunctionSymbolInitializerPlan,
 
     pub fn deinit(self: GlobalInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
             .aggregate => |plan| plan.deinit(allocator),
             .string_bytes => |plan| plan.deinit(allocator),
-            .scalar, .zero, .enum_case, .nullable_null, .global_address => {},
+            .scalar, .zero, .enum_case, .nullable_null, .global_address, .function_symbol => {},
         }
     }
 };
@@ -4287,6 +4289,14 @@ pub const EnumInitializerPlan = struct {
 /// proves source order and pointee-shape agreement before either backend emits
 /// the relocation.
 pub const GlobalAddressInitializerPlan = struct {
+    target_symbol_id: SymbolId,
+};
+
+/// A first-class function value stored in a global. The target is resolved by
+/// symbol identity; admission proves that its checked callable signature is
+/// exactly the destination `fn(...) -> ...` shape before either backend emits
+/// a raw symbol reference.
+pub const FunctionSymbolInitializerPlan = struct {
     target_symbol_id: SymbolId,
 };
 
@@ -4310,9 +4320,10 @@ pub const StructInitializerFieldPlan = struct {
 
 /// Recursive, syntax-free initializer tree. Fixed arrays and fully named
 /// ordinary struct literals are admitted only when every leaf has an explicit
-/// backend-independent plan.
+/// backend-independent plan, including checked function-symbol references.
 pub const AggregateInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
+    function_symbol: FunctionSymbolInitializerPlan,
     array: []const AggregateInitializerPlan,
     struct_: struct {
         struct_symbol_id: SymbolId,
@@ -4325,7 +4336,7 @@ pub const AggregateInitializerPlan = union(enum) {
 
     pub fn deinit(self: AggregateInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
-            .scalar, .zero, .enum_case, .global_address => {},
+            .scalar, .function_symbol, .zero, .enum_case, .global_address => {},
             .array => |items| {
                 for (items) |item| item.deinit(allocator);
                 if (items.len != 0) allocator.free(items);
@@ -4358,6 +4369,7 @@ pub const GlobalInitializerFact = struct {
             .nullable_null => unreachable,
             .string_bytes => unreachable,
             .global_address => unreachable,
+            .function_symbol => unreachable,
         };
     }
 
@@ -4373,15 +4385,18 @@ pub fn aggregateInitializerPlanMatchesType(
     plan: AggregateInitializerPlan,
     types: SignatureTypeTable,
     id: SignatureTypeId,
+    callables: []const CheckedCallableFact,
+    source_order: usize,
 ) bool {
     const shape = types.get(id) orelse return false;
     return switch (plan) {
         .scalar => |value| scalarInitializerMatchesShape(value, types, shape),
+        .function_symbol => |value| functionSymbolInitializerPlanMatchesType(value, types, id, callables, source_order),
         .array => |items| switch (shape) {
             .array => |array| blk: {
                 const length = array.length orelse break :blk false;
                 if (items.len != length) break :blk false;
-                for (items) |item| if (!aggregateInitializerPlanMatchesType(item, types, array.child)) break :blk false;
+                for (items) |item| if (!aggregateInitializerPlanMatchesType(item, types, array.child, callables, source_order)) break :blk false;
                 break :blk true;
             },
             else => false,
@@ -4394,7 +4409,7 @@ pub fn aggregateInitializerPlanMatchesType(
         // sequence.  Do not reintroduce an AST-shaped struct description.
         .struct_ => |struct_plan| switch (shape) {
             .name => structInitializerPlanHasCanonicalFieldOrder(struct_plan),
-            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child),
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
             else => false,
         },
         .zero, .enum_case, .string_bytes, .global_address => false,
@@ -4405,6 +4420,35 @@ fn structInitializerPlanHasCanonicalFieldOrder(plan: anytype) bool {
     if (!plan.struct_symbol_id.isValid()) return false;
     for (plan.fields, 0..) |field, index| if (field.field_index != index) return false;
     return true;
+}
+
+/// Validates the syntax-free function-symbol relocation family against the
+/// module's checked callable table. `source_order` is the checked global
+/// initializer body's index, so forward function references cannot become a
+/// backend-only ordering convention.
+pub fn functionSymbolInitializerPlanMatchesType(
+    plan: FunctionSymbolInitializerPlan,
+    types: SignatureTypeTable,
+    id: SignatureTypeId,
+    callables: []const CheckedCallableFact,
+    source_order: usize,
+) bool {
+    if (!plan.target_symbol_id.isValid()) return false;
+    const signature = switch (types.get(id) orelse return false) {
+        .fn_pointer => |value| value,
+        else => return false,
+    };
+    for (callables, 0..) |callable, index| {
+        if (!callable.symbol_id.eql(plan.target_symbol_id)) continue;
+        if (index >= source_order or (callable.kind != .function and callable.kind != .extern_function)) return false;
+        if (!callable.signature_return_type_id.eql(signature.ret) or callable.signature_param_type_ids.len != signature.params.len)
+            return false;
+        for (callable.signature_param_type_ids, signature.params) |actual, expected| {
+            if (!actual.eql(expected)) return false;
+        }
+        return true;
+    }
+    return false;
 }
 
 fn scalarInitializerMatchesShape(value: ConstScalarValue, types: SignatureTypeTable, shape: TypeShape) bool {
@@ -4521,6 +4565,9 @@ pub const Module = struct {
             .global_address => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 globalAddressInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
+            .function_symbol => |plan| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                functionSymbolInitializerPlanMatchesType(plan, self.signature_types, global.signature_type_id, self.checked_callables, fact.initializer_body_id.index())) fact else null,
         };
     }
 
@@ -4534,7 +4581,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
+            .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4542,7 +4589,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
+            .scalar, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4550,7 +4597,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .enum_case => fact,
-            .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address => null,
+            .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4558,7 +4605,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .nullable_null => fact,
-            .scalar, .zero, .aggregate, .enum_case, .string_bytes, .global_address => null,
+            .scalar, .zero, .aggregate, .enum_case, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4566,7 +4613,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .string_bytes => fact,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address => null,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => null,
         };
     }
 
@@ -4574,7 +4621,15 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .global_address => fact,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes => null,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .function_symbol => null,
+        };
+    }
+
+    pub fn checkedFunctionSymbolGlobal(self: Module, global: CheckedGlobalFact) ?GlobalInitializerFact {
+        const fact = self.checkedGlobalInitializer(global) orelse return null;
+        return switch (fact.plan) {
+            .function_symbol => fact,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
         };
     }
 
@@ -4661,7 +4716,13 @@ pub const Module = struct {
 
 fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
     return switch (plan) {
-        .scalar, .array => aggregateInitializerPlanMatchesType(plan, module.signature_types, type_id),
+        .scalar, .function_symbol, .array => aggregateInitializerPlanMatchesType(
+            plan,
+            module.signature_types,
+            type_id,
+            module.checked_callables,
+            owner_global.initializer_body_id.index(),
+        ),
         .struct_ => |struct_plan| structInitializerPlanMatchesType(struct_plan, module, owner_global, type_id),
         .zero => signatureTypeCanUseZeroInitializer(module, type_id),
         .enum_case => |enum_plan| enumInitializerPlanMatchesType(enum_plan, module, type_id),

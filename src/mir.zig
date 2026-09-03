@@ -694,6 +694,7 @@ pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
 pub const GlobalAddressInitializerPlan = mir_model.GlobalAddressInitializerPlan;
+pub const FunctionSymbolInitializerPlan = mir_model.FunctionSymbolInitializerPlan;
 pub const StringBytesInitializerPlan = mir_model.StringBytesInitializerPlan;
 pub const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
 pub const EnumInitializerPlan = mir_model.EnumInitializerPlan;
@@ -1583,6 +1584,44 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             }
                         }
                         if (!checked_global.has_initializer_plan) {
+                            if (try buildFunctionSymbolArrayGlobalInitializerPlan(
+                                allocator,
+                                initializer,
+                                checked_global.signature_type_id,
+                                checked_global.initializer_body_id.index(),
+                                checked_callables.items,
+                                &signature_types,
+                                &symbol_ids,
+                            )) |plan| {
+                                errdefer plan.deinit(allocator);
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .aggregate = plan },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
+                            if (directFunctionSymbolGlobalInitializerPlan(
+                                initializer,
+                                checked_global.signature_type_id,
+                                checked_global.initializer_body_id.index(),
+                                checked_callables.items,
+                                &signature_types,
+                                &symbol_ids,
+                            )) |plan| {
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .function_symbol = plan },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
                             if (try directEnumGlobalInitializerPlan(
                                 initializer,
                                 checked_global.signature_type_id,
@@ -2312,6 +2351,88 @@ fn resolveStructFactForSignatureType(
             current_type_id = alias.target_type_id;
             break;
         } else return null;
+    }
+    return null;
+}
+
+/// A separate recursive array family for first-class function symbols. It is
+/// intentionally limited to direct `fn(...) -> ...` leaves: aliases, casts,
+/// closures, structs, and relocations keep their transitional artifact until
+/// they have equally explicit facts. The emitted plan contains only SymbolId
+/// edges and already-interned signature type IDs.
+fn buildFunctionSymbolArrayGlobalInitializerPlan(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    type_id: SignatureTypeId,
+    source_order: usize,
+    callables: []const CheckedCallableFact,
+    signature_types: *const SignatureTypeTableBuilder,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) !?mir_model.AggregateInitializerPlan {
+    const array = switch (signature_types.get(type_id) orelse return null) {
+        .array => |value| value,
+        else => return null,
+    };
+    const items = switch (initializer.kind) {
+        .array_literal => |value| value,
+        .grouped => |inner| return buildFunctionSymbolArrayGlobalInitializerPlan(allocator, inner.*, type_id, source_order, callables, signature_types, symbol_ids),
+        else => return null,
+    };
+    const length = array.length orelse return null;
+    if (items.len != length) return null;
+
+    var plans: std.ArrayList(mir_model.AggregateInitializerPlan) = .empty;
+    var plans_transferred = false;
+    defer {
+        if (!plans_transferred) {
+            for (plans.items) |plan| plan.deinit(allocator);
+            plans.deinit(allocator);
+        }
+    }
+    for (items) |item| {
+        const child = switch (signature_types.get(array.child) orelse return null) {
+            .array => (try buildFunctionSymbolArrayGlobalInitializerPlan(allocator, item, array.child, source_order, callables, signature_types, symbol_ids)) orelse return null,
+            .fn_pointer => blk: {
+                const function = directFunctionSymbolGlobalInitializerPlan(item, array.child, source_order, callables, signature_types, symbol_ids) orelse return null;
+                break :blk mir_model.AggregateInitializerPlan{ .function_symbol = function };
+            },
+            else => return null,
+        };
+        var child_transferred = false;
+        errdefer if (!child_transferred) child.deinit(allocator);
+        try plans.append(allocator, child);
+        child_transferred = true;
+    }
+    const owned = try plans.toOwnedSlice(allocator);
+    plans_transferred = true;
+    return .{ .array = owned };
+}
+
+/// Admit one direct function symbol only when it refers to an already checked
+/// source callable and the module-owned fn-pointer shape agrees exactly. The
+/// emitter will never need to rediscover a function signature from AST.
+fn directFunctionSymbolGlobalInitializerPlan(
+    initializer: ast.Expr,
+    type_id: SignatureTypeId,
+    source_order: usize,
+    callables: []const CheckedCallableFact,
+    signature_types: *const SignatureTypeTableBuilder,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+) ?mir_model.FunctionSymbolInitializerPlan {
+    const target_name = directGlobalIdentifierName(initializer) orelse return null;
+    const target_symbol_id = symbol_ids.get(target_name) orelse return null;
+    const signature = switch (signature_types.get(type_id) orelse return null) {
+        .fn_pointer => |value| value,
+        else => return null,
+    };
+    for (callables, 0..) |callable, index| {
+        if (!callable.symbol_id.eql(target_symbol_id)) continue;
+        if (index >= source_order or (callable.kind != .function and callable.kind != .extern_function)) return null;
+        if (!callable.signature_return_type_id.eql(signature.ret) or callable.signature_param_type_ids.len != signature.params.len) return null;
+        for (callable.signature_param_type_ids, signature.params) |actual, expected| {
+            if (!actual.eql(expected)) return null;
+        }
+        return .{ .target_symbol_id = target_symbol_id };
     }
     return null;
 }

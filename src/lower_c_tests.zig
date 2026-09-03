@@ -384,6 +384,7 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
         .nullable_null => return error.TestUnexpectedResult,
         .string_bytes => return error.TestUnexpectedResult,
         .global_address => return error.TestUnexpectedResult,
+        .function_symbol => return error.TestUnexpectedResult,
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
@@ -1121,6 +1122,38 @@ test "lower-c emits direct global-address plans without AST initializer artifact
         null,
     );
     try expectContains(output.items, "shared_ptr = &shared;");
+}
+
+test "lower-c emits function-symbol global and array plans without AST initializer artifacts" {
+    const source =
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
+        \\global default_op: fn(u32, u32) -> u32 = add;
+        \\global default_ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
+    ;
+    var parsed = try test_support.parseCheckedModule("c_function_symbol_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.checkedFunctionSymbolGlobal(module_mir.checked_globals[0]) != null);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        &module_mir,
+        &output,
+        .kernel,
+        "c_function_symbol_global_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "default_op = add;");
+    try expectContains(output.items, "default_ops = { add, mul };");
 }
 
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {

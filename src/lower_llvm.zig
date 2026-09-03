@@ -799,7 +799,7 @@ const LlvmEmitter = struct {
             try self.global_is_const.put(name, global.is_const);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => {},
+                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
             }
         }
     }
@@ -931,6 +931,7 @@ const LlvmEmitter = struct {
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
                 .string_bytes => |plan| try self.emitCheckedStringBytesGlobal(global, plan),
                 .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
+                .function_symbol => |plan| try self.emitCheckedFunctionSymbolGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |global| try self.emitGlobal(global);
@@ -1021,6 +1022,18 @@ const LlvmEmitter = struct {
         );
     }
 
+    fn emitCheckedFunctionSymbolGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.FunctionSymbolInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const target = self.checkedFunctionSymbolId(plan.target_symbol_id) orelse return error.UnsupportedLlvmEmission;
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(
+            self.allocator,
+            "@{s} = {s}{s} {s} @{s}\n",
+            .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id), target },
+        );
+    }
+
     fn enumFact(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?mir.EnumFact {
         for (self.mir_module.enums) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
         return null;
@@ -1036,6 +1049,10 @@ const LlvmEmitter = struct {
     fn llvmAggregateGlobalInitializer(self: *LlvmEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {
         return switch (plan) {
             .scalar => |value| self.llvmScalarGlobalInitializer(value),
+            .function_symbol => |value| blk: {
+                const target = self.checkedFunctionSymbolId(value.target_symbol_id) orelse return error.UnsupportedLlvmEmission;
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{target});
+            },
             .array => |items| blk: {
                 const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
                 const array = switch (shape) {
@@ -1102,6 +1119,12 @@ const LlvmEmitter = struct {
         if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[symbol_id.index()];
         return if (identity.id.eql(symbol_id) and identity.kind == .global) identity.spelling else null;
+    }
+
+    fn checkedFunctionSymbolId(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?[]const u8 {
+        if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[symbol_id.index()];
+        return if (identity.id.eql(symbol_id) and identity.kind == .function) identity.spelling else null;
     }
 
     fn typeAliasIdentity(self: *const LlvmEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {

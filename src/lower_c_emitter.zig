@@ -587,7 +587,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => {},
+                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
             }
         }
     }
@@ -855,6 +855,7 @@ pub const CEmitter = struct {
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
                 .string_bytes => |plan| try self.emitCheckedStringBytesGlobal(global, plan),
                 .global_address => |plan| try self.emitCheckedGlobalAddressGlobal(global, plan),
+                .function_symbol => |plan| try self.emitCheckedFunctionSymbolGlobal(global, plan),
             }
         }
         for (self.codegen_artifacts.decl_artifacts) |global| try self.emitGlobal(global);
@@ -1015,6 +1016,16 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "{s} {s} = &{s};\n\n", .{ rendered_type, name, target });
     }
 
+    fn emitCheckedFunctionSymbolGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.FunctionSymbolInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const target = self.checkedFunctionSymbolId(plan.target_symbol_id) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, target });
+    }
+
     fn enumFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.EnumFact {
         for (self.mir_module.enums) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
         return null;
@@ -1030,6 +1041,7 @@ pub const CEmitter = struct {
     fn cAggregateGlobalInitializer(self: *CEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {
         return switch (plan) {
             .scalar => |value| self.cScalarGlobalValue(value),
+            .function_symbol => |value| self.checkedFunctionSymbolId(value.target_symbol_id) orelse error.UnsupportedCEmission,
             .array => |items| blk: {
                 const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
                 const array = switch (shape) {
@@ -1106,6 +1118,12 @@ pub const CEmitter = struct {
         if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
         const identity = self.mir_module.symbol_identities[symbol_id.index()];
         return if (identity.id.eql(symbol_id) and identity.kind == .global) identity.spelling else null;
+    }
+
+    fn checkedFunctionSymbolId(self: *const CEmitter, symbol_id: mir.SymbolId) ?[]const u8 {
+        if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[symbol_id.index()];
+        return if (identity.id.eql(symbol_id) and identity.kind == .function) identity.spelling else null;
     }
 
     fn typeAliasIdentity(self: *const CEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {

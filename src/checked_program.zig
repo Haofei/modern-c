@@ -88,7 +88,7 @@ pub const CheckedProgram = struct {
                     const callable = callables[fact.initializer_body_id.index()];
                     if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
                         !global.initializer_body_id.eql(fact.initializer_body_id) or
-                        !mir.aggregateInitializerPlanMatchesType(plan, signature_types, global.signature_type_id))
+                        !mir.aggregateInitializerPlanMatchesType(plan, signature_types, global.signature_type_id, callables, fact.initializer_body_id.index()))
                         return error.InvalidGlobalInitializerFact;
                 },
                 .enum_case => |plan| {
@@ -138,6 +138,15 @@ pub const CheckedProgram = struct {
                     if (target_index >= current_index or target.is_extern or !target.has_initializer_plan or
                         callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
                         !global.initializer_body_id.eql(fact.initializer_body_id))
+                        return error.InvalidGlobalInitializerFact;
+                },
+                .function_symbol => |plan| {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
+                        return error.InvalidGlobalInitializerFact;
+                    const callable = callables[fact.initializer_body_id.index()];
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id) or
+                        !mir.functionSymbolInitializerPlanMatchesType(plan, signature_types, global.signature_type_id, callables, fact.initializer_body_id.index()))
                         return error.InvalidGlobalInitializerFact;
                 },
             }

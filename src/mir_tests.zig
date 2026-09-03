@@ -1658,6 +1658,7 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
         .nullable_null => {},
         .string_bytes => {},
         .global_address => {},
+        .function_symbol => {},
     };
     const float_fact_index = float_index orelse return error.TestUnexpectedResult;
     const saved_float = module_mir.global_initializer_facts[float_fact_index];
@@ -1741,7 +1742,7 @@ test "CheckedProgram admits direct scalar global copies without source initializ
             .uint => |integer| try std.testing.expectEqual(@as(u128, 7), integer),
             else => return error.TestUnexpectedResult,
         },
-        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => return error.TestUnexpectedResult,
+        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     };
     for (module_mir.checked_globals) |global| try std.testing.expect(global.has_initializer_plan);
 
@@ -1784,6 +1785,7 @@ test "CheckedProgram requires an admitted zero-global initializer plan" {
         .nullable_null => return error.TestUnexpectedResult,
         .string_bytes => return error.TestUnexpectedResult,
         .global_address => return error.TestUnexpectedResult,
+        .function_symbol => return error.TestUnexpectedResult,
     }
     const saved = module_mir.global_initializer_facts;
     module_mir.global_initializer_facts = &.{};
@@ -1810,7 +1812,7 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     const saved = module_mir.global_initializer_facts[0];
     switch (saved.plan) {
         .aggregate => {},
-        .scalar, .zero, .enum_case, .nullable_null, .string_bytes, .global_address => return error.TestUnexpectedResult,
+        .scalar, .zero, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     }
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
@@ -1887,7 +1889,7 @@ test "CheckedProgram admits direct enum global initializer plans" {
     const saved = module_mir.global_initializer_facts[0];
     const plan = switch (saved.plan) {
         .enum_case => |value| value,
-        .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address => return error.TestUnexpectedResult,
+        .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     };
     try std.testing.expect(module_mir.checkedEnumGlobal(module_mir.checked_globals[0]) != null);
     const checked = try checked_program.CheckedProgram.init(
@@ -1974,7 +1976,7 @@ test "CheckedProgram admits direct global-address initializer plans" {
     const fact = module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) orelse return error.TestUnexpectedResult;
     const plan = switch (fact.plan) {
         .global_address => |value| value,
-        .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes => return error.TestUnexpectedResult,
+        .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .function_symbol => return error.TestUnexpectedResult,
     };
     try std.testing.expect(plan.target_symbol_id.eql(module_mir.checked_globals[0].symbol_id));
     const checked = try checked_program.CheckedProgram.init(
@@ -2000,6 +2002,63 @@ test "CheckedProgram admits direct global-address initializer plans" {
     module_mir.global_initializer_facts[1] = saved;
 }
 
+test "CheckedProgram admits direct function-symbol global and array initializer plans" {
+    const source =
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\fn mul(left: u32, right: u32) -> u32 { return left * right; }
+        \\global default_op: fn(u32, u32) -> u32 = add;
+        \\global default_ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
+    ;
+    var parsed = try test_support.parseCheckedModule("function_symbol_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    const direct = module_mir.checkedFunctionSymbolGlobal(module_mir.checked_globals[0]) orelse return error.TestUnexpectedResult;
+    const direct_plan = switch (direct.plan) {
+        .function_symbol => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const add_symbol = functionByName(module_mir, "add").?.typed_symbol_id;
+    try std.testing.expect(direct_plan.target_symbol_id.eql(add_symbol));
+    const array_fact = module_mir.checkedGlobalInitializer(module_mir.checked_globals[1]) orelse return error.TestUnexpectedResult;
+    switch (array_fact.plan) {
+        .aggregate => |plan| switch (plan) {
+            .array => |items| {
+                try std.testing.expectEqual(@as(usize, 2), items.len);
+                for (items) |item| switch (item) {
+                    .function_symbol => {},
+                    else => return error.TestUnexpectedResult,
+                };
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    const checked = try checked_program.CheckedProgram.init(
+        module_mir.checked_callables,
+        module_mir.checked_globals,
+        module_mir.signature_types,
+        module_mir.global_initializer_facts,
+    );
+    try std.testing.expect(checked.matchesMir(module_mir));
+
+    const saved = module_mir.global_initializer_facts[0];
+    module_mir.global_initializer_facts[0].plan.function_symbol.target_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    module_mir.global_initializer_facts[0] = saved;
+}
+
 test "CheckedProgram admits decoded string-pointer global initializer plans" {
     const source =
         \\global greeting: cstr = "hi\n";
@@ -2016,7 +2075,7 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
         const fact = module_mir.checkedStringBytesGlobal(global) orelse return error.TestUnexpectedResult;
         const bytes = switch (fact.plan) {
             .string_bytes => |plan| plan.bytes,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address => return error.TestUnexpectedResult,
+            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => return error.TestUnexpectedResult,
         };
         try std.testing.expectEqual(global.symbol_id, fact.global_symbol_id);
         try std.testing.expect(module_mir.global_initializer_facts[index].plan == .string_bytes);
@@ -2062,7 +2121,7 @@ test "pure aggregate global plan releases partial trees on unsupported later ele
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     switch (module_mir.global_initializer_facts[0].plan) {
         .scalar => {},
-        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => return error.TestUnexpectedResult,
+        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     }
 }
 
