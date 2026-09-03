@@ -2174,7 +2174,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
     const local_fact = targetTypeFactByKind(caller, .inferred_local) orelse return error.TestUnexpectedResult;
-    const float_fact = targetTypeFactByKind(literal_source, .float_literal) orelse return error.TestUnexpectedResult;
+    const float_fact = literal_source.float_facts[0];
     const string_fact = targetTypeFactByKind(text_source, .string_literal) orelse return error.TestUnexpectedResult;
     const array_fact = targetTypeFactByKind(array_source, .array_literal) orelse return error.TestUnexpectedResult;
     const ok_fact = targetTypeFactByKind(ok_source, .result_ok) orelse return error.TestUnexpectedResult;
@@ -2212,13 +2212,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
             .index = local_fact.target_index,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .float_literal,
-            .source = float_fact.source,
-        },
-    }) == null);
+    try std.testing.expect(db.floatTargetTypeAtCurrentSpan(&callee, float_fact.source) == null);
     try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
@@ -2278,6 +2272,67 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         .typed_result_ty = result_fact.typed_result_ty,
         .target_index = result_fact.target_index,
     }) == null);
+}
+
+test "MIR float facts are the complete typed authority for float literals" {
+    const source =
+        \\fn f32_value() -> f32 { return 1.5; }
+        \\fn f64_value() -> f64 { return 2.5; }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_float_fact_admission.mc", source);
+    defer parsed.deinit();
+
+    var admitted = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer admitted.deinit();
+    try mir.validateLoweringAdmission(admitted);
+    const f32_function = functionByName(admitted, "f32_value") orelse return error.TestUnexpectedResult;
+    const f64_function = functionByName(admitted, "f64_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), f32_function.float_facts.len);
+    try std.testing.expectEqual(@as(usize, 1), f64_function.float_facts.len);
+    try std.testing.expectEqual(@as(usize, 0), f32_function.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 0), f64_function.target_type_facts.len);
+    try std.testing.expect(mir.ValueType.eql(mir.floatFactTargetType(&f32_function, f32_function.float_facts[0]).?, .{ .float = "f32" }));
+    try std.testing.expect(mir.ValueType.eql(mir.floatFactTargetType(&f64_function, f64_function.float_facts[0]).?, .{ .float = "f64" }));
+    const facts_view = mir_facts_view.MirFactsView.init();
+    try std.testing.expect(mir.ValueType.eql(facts_view.floatTargetTypeAtCurrentSpan(&f32_function, f32_function.float_facts[0].source).?, .{ .float = "f32" }));
+
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer missing.deinit();
+    const missing_function = functionByNameMut(&missing, "f32_value") orelse return error.TestUnexpectedResult;
+    const original_facts = missing_function.float_facts;
+    missing_function.float_facts = try std.testing.allocator.alloc(mir.FloatFact, 0);
+    std.testing.allocator.free(original_facts);
+    try std.testing.expectError(error.InvalidMirFloatFacts, mir.validateLoweringAdmission(missing));
+
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer duplicate.deinit();
+    try duplicateFloatFact(functionByNameMut(&duplicate, "f32_value") orelse return error.TestUnexpectedResult, std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirFloatFacts, mir.validateLoweringAdmission(duplicate));
+
+    var invalid = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid.deinit();
+    const invalid_fact = &((functionByNameMut(&invalid, "f32_value") orelse return error.TestUnexpectedResult).float_facts[0]);
+    invalid_fact.target_type_id = mir.TypeId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirFloatFacts, mir.validateLoweringAdmission(invalid));
+
+    var invalid_span = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid_span.deinit();
+    const invalid_span_fact = &((functionByNameMut(&invalid_span, "f32_value") orelse return error.TestUnexpectedResult).float_facts[0]);
+    invalid_span_fact.typed_span_id = SpanId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirFloatFacts, mir.validateLoweringAdmission(invalid_span));
+
+    var mismatched = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer mismatched.deinit();
+    const mismatched_function = functionByNameMut(&mismatched, "f32_value") orelse return error.TestUnexpectedResult;
+    const mismatched_fact = &mismatched_function.float_facts[0];
+    for (mismatched_function.type_identities) |identity| {
+        const candidate = identity.ty orelse continue;
+        if (mir.ValueType.eql(candidate, .{ .float = "f32" })) continue;
+        mismatched_fact.target_type_id = identity.id;
+        break;
+    }
+    try std.testing.expect(!mismatched_fact.target_type_id.eql(.invalid));
+    try std.testing.expectError(error.InvalidMirFloatFacts, mir.validateLoweringAdmission(mismatched));
 }
 
 test "MIR exposes generic typed span identity matching for codegen facts" {
@@ -2726,6 +2781,15 @@ fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator
     facts[function.target_type_facts.len] = function.target_type_facts[0];
     allocator.free(function.target_type_facts);
     function.target_type_facts = facts;
+}
+
+fn duplicateFloatFact(function: *mir.Function, allocator: std.mem.Allocator) !void {
+    if (function.float_facts.len == 0) return error.TestUnexpectedResult;
+    const facts = try allocator.alloc(mir.FloatFact, function.float_facts.len + 1);
+    @memcpy(facts[0..function.float_facts.len], function.float_facts);
+    facts[function.float_facts.len] = function.float_facts[0];
+    allocator.free(function.float_facts);
+    function.float_facts = facts;
 }
 
 fn simpleTypeExprForTest(name: []const u8, span: ast.Span) ast.TypeExpr {
@@ -3193,16 +3257,15 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_slot kind=struct_literal target_type=Slot result_type=Slot aggregate_construction=declared_struct") != null);
     try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_flags kind=struct_literal target_type=Flags result_type=Flags aggregate_construction=packed_bits") != null);
     try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_c_word kind=struct_literal target_type=CWord result_type=CWord aggregate_construction=c_union") != null);
-    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "default_float").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(typed_mir, "default_float").?.float_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.char_literal, functionByName(typed_mir, "default_char").?.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "make_float").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(typed_mir, "make_float").?.float_facts.len);
     const float_expr_fn = functionByName(typed_mir, "make_float_expr").?;
-    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(float_expr_fn, .float_literal));
+    try std.testing.expectEqual(@as(usize, 2), float_expr_fn.float_facts.len);
     try std.testing.expect(targetTypeFactByKind(float_expr_fn, .expression_result) != null);
     const float_slot_fn = functionByName(typed_mir, "make_float_slot").?;
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, float_slot_fn.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[1].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[2].kind);
+    try std.testing.expectEqual(@as(usize, 2), float_slot_fn.float_facts.len);
     const char_fn = functionByName(typed_mir, "make_char").?;
     try std.testing.expectEqual(@as(usize, 1), char_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.char_literal, char_fn.target_type_facts[0].kind);

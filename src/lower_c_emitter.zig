@@ -4326,7 +4326,23 @@ pub const CEmitter = struct {
     fn emitScalarLiteralExpr(self: *CEmitter, expr: ast_bridge.Expr) !void {
         switch (expr.kind) {
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
-            .float_literal => |literal| try appendCFloatLiteral(self.allocator, self.out, literal, false),
+            .float_literal => |literal| {
+                // User-source floats never choose a backend default width. A
+                // generated zero-span literal has no source fact and retains
+                // the historic f64 presentation fallback.
+                if (isSourceSpan(expr.span)) {
+                    const target_ty = self.mirFloatTargetTypeAt(expr.span) orelse return error.UnsupportedCEmission;
+                    const name = switch (target_ty) {
+                        .float => |value| value,
+                        else => return error.UnsupportedCEmission,
+                    };
+                    if (std.mem.eql(u8, name, "f32")) {
+                        try appendCFloatLiteral(self.allocator, self.out, literal, true);
+                    } else if (std.mem.eql(u8, name, "f64")) {
+                        try appendCFloatLiteral(self.allocator, self.out, literal, false);
+                    } else return error.UnsupportedCEmission;
+                } else try appendCFloatLiteral(self.allocator, self.out, literal, false);
+            },
             .char_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .null_literal => try self.out.appendSlice(self.allocator, "NULL"),
@@ -5106,8 +5122,8 @@ pub const CEmitter = struct {
         // f32 target: compute the float expression in `float`, not `double`. A bare C decimal
         // literal is `double`, so `1.7 * 2.3` would multiply in double and round twice when
         // narrowed to f32 — diverging ~1 ULP from the LLVM `fmul`. Suffix f32 literals with `f`.
-        if (expr.kind != .float_literal) if (try self.mirFloatLiteralTargetForExpr(expr)) |mir_float_ty| if (typeName(self.resolveAliasType(mir_float_ty))) |tn| {
-            if (std.mem.eql(u8, tn, "f32")) {
+        if (expr.kind != .float_literal) if (try self.mirFloatLiteralTargetForExpr(expr)) |mir_float_ty| {
+            if (mir_float_ty == .float and std.mem.eql(u8, mir_float_ty.float, "f32")) {
                 try self.emitF32Expr(expr, locals);
                 return true;
             }
@@ -5177,8 +5193,11 @@ pub const CEmitter = struct {
     }
 
     fn emitFloatLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast_bridge.Span) anyerror!void {
-        const fact = self.mirTargetTypeFactAt(.float_literal, span) orelse return error.UnsupportedCEmission;
-        const name = typeName(self.resolveAliasType(fact.target_ty)) orelse return error.UnsupportedCEmission;
+        const target_ty = self.mirFloatTargetTypeAt(span) orelse return error.UnsupportedCEmission;
+        const name = switch (target_ty) {
+            .float => |value| value,
+            else => return error.UnsupportedCEmission,
+        };
         if (!std.mem.eql(u8, name, "f32") and !std.mem.eql(u8, name, "f64")) return error.UnsupportedCEmission;
         try appendCFloatLiteral(self.allocator, self.out, literal, std.mem.eql(u8, name, "f32"));
     }
@@ -6163,6 +6182,10 @@ pub const CEmitter = struct {
         return mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span);
     }
 
+    fn mirFloatTargetTypeAt(self: *CEmitter, span: anytype) ?mir.ValueType {
+        return mir_source_bridge.floatTargetTypeAtCurrentSpan(self.currentMirFunction(), span);
+    }
+
     fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
         return mir_source_bridge.targetTypeFactMatchingType(self.currentMirFunction(), &self.type_aliases, kind, span, expected_ty);
     }
@@ -6203,9 +6226,9 @@ pub const CEmitter = struct {
         return construction;
     }
 
-    fn mirFloatLiteralTargetForExpr(self: *CEmitter, expr: ast_bridge.Expr) !?ast_bridge.TypeExpr {
+    fn mirFloatLiteralTargetForExpr(self: *CEmitter, expr: ast_bridge.Expr) !?mir.ValueType {
         return switch (expr.kind) {
-            .float_literal => if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
+            .float_literal => if (self.mirFloatTargetTypeAt(expr.span)) |target_ty| target_ty else error.UnsupportedCEmission,
             .grouped => |inner| self.mirFloatLiteralTargetForExpr(inner.*),
             .unary => |node| self.mirFloatLiteralTargetForExpr(node.expr.*),
             .binary => |node| blk: {
@@ -6213,10 +6236,7 @@ pub const CEmitter = struct {
                 const right = try self.mirFloatLiteralTargetForExpr(node.right.*);
                 if (left == null) break :blk right;
                 if (right == null) break :blk left;
-                // TypeExpr carries source spans. Two f32 facts at different
-                // literals are semantically equal even though their AST values
-                // are not byte-for-byte equal.
-                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(left.?), self.resolveAliasType(right.?))) return error.UnsupportedCEmission;
+                if (!mir.ValueType.eql(left.?, right.?)) return error.UnsupportedCEmission;
                 break :blk left;
             },
             else => null,

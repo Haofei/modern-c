@@ -1066,7 +1066,7 @@ follow the same direct `expression_result` rule as C. LLVM source binary
 expression typing now also consumes the binary expression's own
 `expression_result` row directly; source unary expression typing follows the
 same direct rule. LLVM source float literal expression typing consumes the MIR
-`float_literal` target fact, and char literal expression typing consumes
+`FloatFact` type identity (resolved through the function type table), and char literal expression typing consumes
 `char_literal`. LLVM source string literal expression typing consumes
 `string_literal`; enum literal expression typing consumes `enum_literal`;
 null literal expression typing consumes `null_literal`; struct literal expression

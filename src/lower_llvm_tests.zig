@@ -5701,6 +5701,16 @@ fn clearTargetTypeFactsForFunction(module_mir: *mir.Module, name: []const u8) !v
     return error.TestUnexpectedResult;
 }
 
+fn clearFloatFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.float_facts.len != 0) module_mir.allocator.free(function.float_facts);
+        function.float_facts = try module_mir.allocator.alloc(mir.FloatFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn removeTargetTypeKindForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -5970,7 +5980,7 @@ test "LLVM struct literal construction class is MIR-owned" {
     }
 }
 
-test "LLVM rejects missing float-literal target type facts" {
+test "LLVM rejects missing typed float facts" {
     const source =
         \\fn value() -> f32 { return 1.25; }
     ;
@@ -5978,10 +5988,10 @@ test "LLVM rejects missing float-literal target type facts" {
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
-    try clearTargetTypeFactsForFunction(&module_mir, "value");
+    try clearFloatFactsForFunction(&module_mir, "value");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_missing_float_target_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirFloatFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_missing_float_target_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM rejects missing null and value-optional target type facts" {

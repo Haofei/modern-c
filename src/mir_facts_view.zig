@@ -65,6 +65,23 @@ pub const MirFactsView = struct {
         return null;
     }
 
+    /// Float literal target types are a syntax-free fact family.  A duplicate
+    /// or malformed row is intentionally indistinguishable from absence here;
+    /// admission rejects it before either backend can render a literal.
+    pub fn floatTargetTypeAtCurrentSpan(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.ValueType {
+        _ = self;
+        const function = current orelse return null;
+        var found: ?mir.ValueType = null;
+        for (function.float_facts) |fact| {
+            if (!sourcePointExactMatches(source, fact.source)) continue;
+            if (!floatFactSpanIdentityIsValid(function, fact)) return null;
+            const target_ty = mir.floatFactTargetType(function, fact) orelse return null;
+            if (found != null) return null;
+            found = target_ty;
+        }
+        return found;
+    }
+
     /// Same local query for fact families whose target belongs to a typed owner
     /// and optional target index (for example atomic-init payload/result pairs).
     pub fn targetTypeFactAtOwned(self: MirFactsView, current: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner_id: mir.SymbolId, index: ?usize) ?mir.TargetTypeFact {
@@ -207,6 +224,13 @@ fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeK
         return fact;
     }
     return null;
+}
+
+fn floatFactSpanIdentityIsValid(function: *const mir.Function, fact: mir.FloatFact) bool {
+    if (!fact.typed_span_id.isValid()) return false;
+    const span_index = fact.typed_span_id.index();
+    return span_index < function.span_identities.len and
+        sourcePointExactMatches(function.span_identities[span_index].source, fact.source);
 }
 
 fn targetTypeFactMatches(function: *const mir.Function, fact: mir.TargetTypeFact, query: TargetTypeFactQuery) bool {

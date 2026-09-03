@@ -2095,10 +2095,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             );
         }
         for (function.float_facts) |fact| {
+            const target_name = if (floatFactTargetType(&function, fact)) |target_ty| target_ty.name() else "invalid";
             try out.print(
                 allocator,
-                "mir float_fact fn={s} literal={s} target_type={s} recorded=true line={} column={}\n",
-                .{ function.name, fact.literal, fact.target_ty.name(), fact.source.line, fact.source.column },
+                "mir float_fact fn={s} literal={s} target_type={s} target_type_id={} recorded=true line={} column={}\n",
+                .{ function.name, fact.literal, target_name, if (fact.target_type_id.isValid()) fact.target_type_id.index() else std.math.maxInt(usize), fact.source.line, fact.source.column },
             );
         }
         for (function.const_get_facts) |fact| {
@@ -2978,9 +2979,30 @@ pub fn validateBoolFactsForLowering(module: Module) error{InvalidMirBoolFacts}!v
 pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}!void {
     for (module.functions) |function| {
         for (function.float_facts) |fact| {
-            if (!functionHasMatchingFloatInstruction(function, fact)) return error.InvalidMirFloatFacts;
+            if (!floatFactTypedIdentitiesValid(function, fact)) return error.InvalidMirFloatFacts;
+            const instruction_count = countMatchingFloatInstructions(function, fact);
+            if (instruction_count != 1 or countMatchingFloatFacts(function, fact) != 1) return error.InvalidMirFloatFacts;
+        }
+        for (function.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (!isFloatLiteralInstruction(instruction)) continue;
+                if (countMatchingFloatFactsForInstruction(function, instruction) != 1) return error.InvalidMirFloatFacts;
+            }
         }
     }
+}
+
+/// Resolves the sole type authority carried by a float literal fact. A
+/// spelling-only identity is deliberately insufficient: it would make the
+/// backend recover type semantics from source-shaped data again.
+pub fn floatFactTargetType(function: *const Function, fact: FloatFact) ?ValueType {
+    const type_index = if (fact.target_type_id.isValid()) fact.target_type_id.index() else return null;
+    if (type_index >= function.type_identities.len) return null;
+    const target_ty = function.type_identities[type_index].ty orelse return null;
+    return switch (target_ty) {
+        .float => |name| if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) target_ty else null,
+        else => null,
+    };
 }
 
 pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGetFacts}!void {
@@ -4321,17 +4343,50 @@ fn functionHasMatchingBoolInstruction(function: Function, fact: BoolFact) bool {
     return false;
 }
 
-fn functionHasMatchingFloatInstruction(function: Function, fact: FloatFact) bool {
+fn floatFactTypedIdentitiesValid(function: Function, fact: FloatFact) bool {
+    if (floatFactTargetType(&function, fact) == null) return false;
+    const span_index = if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else return false;
+    if (span_index >= function.span_identities.len) return false;
+    if (!sourcePointEquivalent(function.span_identities[span_index].source, fact.source)) return false;
+    return true;
+}
+
+fn isFloatLiteralInstruction(instruction: Instruction) bool {
+    return instruction.kind == .expr and
+        sameRepresentationValueType(instruction.result_ty, .{ .float = "comptime_float" }) and
+        std.mem.eql(u8, instruction.detail, "float");
+}
+
+fn floatFactMatchesInstruction(fact: FloatFact, instruction: Instruction) bool {
+    return fact.typed_span_id.eql(instruction.typed_span_id);
+}
+
+fn countMatchingFloatInstructions(function: Function, fact: FloatFact) usize {
+    var count: usize = 0;
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
-            if (instruction.kind != .expr) continue;
-            if (!sameRepresentationValueType(instruction.result_ty, .{ .float = "comptime_float" })) continue;
-            if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
-            if (!std.mem.eql(u8, instruction.detail, "float")) continue;
-            return true;
+            if (isFloatLiteralInstruction(instruction) and floatFactMatchesInstruction(fact, instruction)) count += 1;
         }
     }
-    return false;
+    return count;
+}
+
+fn countMatchingFloatFacts(function: Function, target: FloatFact) usize {
+    var count: usize = 0;
+    for (function.float_facts) |fact| {
+        if (!fact.target_type_id.eql(target.target_type_id) or !fact.typed_span_id.eql(target.typed_span_id)) continue;
+        if (!std.mem.eql(u8, fact.literal, target.literal)) continue;
+        count += 1;
+    }
+    return count;
+}
+
+fn countMatchingFloatFactsForInstruction(function: Function, instruction: Instruction) usize {
+    var count: usize = 0;
+    for (function.float_facts) |fact| {
+        if (floatFactMatchesInstruction(fact, instruction)) count += 1;
+    }
+    return count;
 }
 
 fn functionHasMatchingRepresentationFact(function: Function, instruction: Instruction) bool {
@@ -16877,10 +16932,10 @@ const FunctionBuilder = struct {
                 .struct_ => .struct_literal,
                 else => return,
             },
-            .float_literal => switch (result_ty) {
-                .float => .float_literal,
-                else => return,
-            },
+            // Float literals have a dedicated syntax-free `FloatFact`.
+            // Keeping them out of `TargetTypeFact` removes this AST type
+            // ingress instead of maintaining the same target twice.
+            .float_literal => return,
             .char_literal => switch (result_ty) {
                 .integer => .char_literal,
                 else => return,
@@ -17642,10 +17697,12 @@ const FunctionBuilder = struct {
     }
 
     fn addFloatLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
+        const source = self.sourcePoint(span);
         try self.float_facts.append(self.allocator, .{
             .literal = floatFactLiteralText(expr),
-            .target_ty = target_ty,
-            .source = .{ .line = span.line, .column = span.column },
+            .target_type_id = try self.internTypeId(target_ty),
+            .typed_span_id = try self.internSpanId(source),
+            .source = source,
         });
     }
 

@@ -970,10 +970,10 @@ const LlvmEmitter = struct {
                     .{ global.len, global.name },
                 );
             },
-            .float_literal => |literal| if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact|
-                try normalizedFloatLiteral(self.scratch.allocator(), literal, lower_llvm_shape.isF32TypeOf(&self.type_aliases, fact.target_ty))
-            else
-                error.UnsupportedLlvmEmission,
+            .float_literal => |literal| blk: {
+                const target_ty = self.mirFloatTargetTypeAt(expr.span) orelse break :blk error.UnsupportedLlvmEmission;
+                break :blk try normalizedFloatLiteral(self.scratch.allocator(), literal, self.mirFloatTargetTypeIsF32(target_ty) orelse break :blk error.UnsupportedLlvmEmission);
+            },
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
                 if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, semantic_ty)) {
@@ -1841,10 +1841,10 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_expected_ty),
             .string_literal => |literal| try self.emitStringLiteral(literal, expr.span),
-            .float_literal => |literal| if (self.contextualTargetTypeAt(.float_literal, expr.span, semantic_expected_ty)) |target_ty|
-                try normalizedFloatLiteral(self.scratch.allocator(), literal, lower_llvm_shape.isF32TypeOf(&self.type_aliases, target_ty))
-            else
-                error.UnsupportedLlvmEmission,
+            .float_literal => |literal| blk: {
+                const target_ty = self.mirFloatTargetTypeAt(expr.span) orelse break :blk error.UnsupportedLlvmEmission;
+                break :blk try normalizedFloatLiteral(self.scratch.allocator(), literal, self.mirFloatTargetTypeIsF32(target_ty) orelse break :blk error.UnsupportedLlvmEmission);
+            },
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
             .enum_literal => |literal| if (self.contextualTargetTypeAt(.enum_literal, expr.span, semantic_expected_ty)) |target_ty|
@@ -6184,6 +6184,22 @@ const LlvmEmitter = struct {
         return mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span);
     }
 
+    fn mirFloatTargetTypeAt(self: *LlvmEmitter, span: anytype) ?mir.ValueType {
+        return mir_source_bridge.floatTargetTypeAtCurrentSpan(self.currentMirFunction(), span);
+    }
+
+    fn mirFloatTargetTypeIsF32(_: *LlvmEmitter, target_ty: mir.ValueType) ?bool {
+        return switch (target_ty) {
+            .float => |name| if (std.mem.eql(u8, name, "f32")) true else if (std.mem.eql(u8, name, "f64")) false else null,
+            else => null,
+        };
+    }
+
+    fn mirFloatTargetTypeExpr(self: *LlvmEmitter, target_ty: mir.ValueType, span: anytype) ?TransitionalTypeExpr {
+        const is_f32 = self.mirFloatTargetTypeIsF32(target_ty) orelse return null;
+        return simpleType(span, if (is_f32) "f32" else "f64");
+    }
+
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, generated_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(span)) return generated_ty;
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
@@ -9544,7 +9560,7 @@ const LlvmEmitter = struct {
             else
                 null,
             .float_literal => if (isSourceSpan(expr.span))
-                if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact| fact.target_ty else null
+                if (self.mirFloatTargetTypeAt(expr.span)) |target_ty| self.mirFloatTargetTypeExpr(target_ty, expr.span) else null
             else
                 null,
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else null,

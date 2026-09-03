@@ -52,7 +52,9 @@ EXACT_BACKEND_COUNTS = {
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
-    "ast_bridge.": 2758,
+    # Float literal lowering now consumes typed FloatFact identity instead of
+    # a target-type AST payload, removing one backend syntax reference.
+    "ast_bridge.": 2757,
     "declaration_artifacts.": 20,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,

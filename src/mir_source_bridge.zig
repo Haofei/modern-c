@@ -49,6 +49,12 @@ pub fn targetTypeFactAtCurrentSpan(current: ?*const mir.Function, kind: mir.Targ
     });
 }
 
+/// Syntax-to-MIR compatibility lookup for a float literal's canonical MIR
+/// type. Unlike `TargetTypeFact`, this carries no `ast.TypeExpr`.
+pub fn floatTargetTypeAtCurrentSpan(current: ?*const mir.Function, span: ast_bridge.Span) ?mir.ValueType {
+    return MirFactsView.init().floatTargetTypeAtCurrentSpan(current, mir.sourcePointFromSpan(span));
+}
+
 pub fn targetTypeFactMatchingType(current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
     const function = current orelse return null;
     const view = MirFactsView.init();
