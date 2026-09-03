@@ -105,7 +105,6 @@ pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
 pub const BindThunkFact = mir_model.BindThunkFact;
 pub const BodyTypeArtifactFact = mir_model.BodyTypeArtifactFact;
-pub const DeferCleanupExprFact = mir_model.DeferCleanupExprFact;
 pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
@@ -254,67 +253,6 @@ pub fn deferCleanupRefValid(function: Function, ref: DeferCleanupRef) bool {
     if (ref.instruction_index >= block.instructions.len) return false;
     const instruction = block.instructions[ref.instruction_index];
     return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(ref.source, instruction);
-}
-
-pub fn deferCleanupExprForRef(function: Function, ref: DeferCleanupRef) ?ast.Expr {
-    if (!deferCleanupRefValid(function, ref)) return null;
-    for (function.defer_cleanup_expr_facts) |fact| {
-        if (fact.source.line != ref.source.line or fact.source.column != ref.source.column) continue;
-        if (fact.source.offset != ref.source.offset or fact.source.len != ref.source.len) continue;
-        return fact.expr;
-    }
-    return null;
-}
-
-pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
-    return deferCleanupRefAtSource(function, source) != null;
-}
-
-pub fn directDeferCallCleanupForRef(function: Function, defer_ref: DeferCleanupRef, call_source: SourcePoint, callee_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
-    if (!deferCleanupRefValid(function, defer_ref)) return false;
-    if (!directCallInstructionAtSource(function, call_source, fn_name)) return false;
-    if (!directCallResultFactAtSource(function, fn_name, callee_source)) return false;
-    for (args, 0..) |arg, index| {
-        if (!directCallArgumentFactAtSource(function, fn_name, index, sourcePointFromSpan(arg.span))) return false;
-    }
-    return true;
-}
-
-pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
-    const defer_ref = deferCleanupRefAtSource(function, defer_source) orelse return false;
-    return directDeferCallCleanupForRef(function, defer_ref, call_source, callee_source, fn_name, args);
-}
-
-pub fn callTargetDeferCleanupForRef(function: Function, defer_ref: DeferCleanupRef, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
-    if (!deferCleanupRefValid(function, defer_ref)) return false;
-    const callee_span_id = spanIdAtSource(function, callee_source) orelse return false;
-    for (function.call_target_facts) |fact| {
-        if (fact.kind != kind) continue;
-        if (!callTargetFactMatchesSpanId(function, fact, callee_span_id)) continue;
-        return switch (kind) {
-            .raw_store => targetTypeFactAtSource(function, .raw_address, call_source) and
-                targetTypeFactAtSource(function, .raw_payload, call_source) and
-                targetTypeFactAtSource(function, .raw_result, call_source),
-            .mmio_read, .mmio_write => targetTypeFactAtSource(function, .mmio_struct, call_source) and
-                targetTypeFactAtSource(function, .mmio_storage, call_source) and
-                targetTypeFactAtSource(function, .mmio_value, call_source) and
-                targetTypeFactAtSource(function, .mmio_result, call_source),
-            .dma_cache_clean, .dma_cache_invalidate => targetTypeFactAtSource(function, .dma_buffer, call_source) and
-                targetTypeFactAtSource(function, .dma_payload, call_source) and
-                targetTypeFactAtSource(function, .dma_result, call_source),
-            .maybe_uninit_write => targetTypeFactAtSource(function, .maybe_uninit_payload, call_source),
-            .atomic_store => targetTypeFactAtSource(function, .atomic_payload, call_source),
-            .va_end => targetTypeFactAtSource(function, .va_cursor, call_source) and
-                targetTypeFactAtSource(function, .va_result, call_source),
-            else => true,
-        };
-    }
-    return false;
-}
-
-pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
-    const defer_ref = deferCleanupRefAtSource(function, defer_source) orelse return false;
-    return callTargetDeferCleanupForRef(function, defer_ref, call_source, callee_source, kind);
 }
 
 pub fn buildDeferCleanupEdgeTable(
@@ -654,44 +592,6 @@ fn sourcePointMatches(actual: SourcePoint, expected: SourcePoint) bool {
     if (actual.line != expected.line or actual.column != expected.column) return false;
     if (actual.offset == 0 and actual.len == 0 and expected.offset == 0 and expected.len == 0) return true;
     return actual.offset == expected.offset and actual.len == expected.len;
-}
-
-fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, fn_name: []const u8) bool {
-    for (function.blocks) |block| {
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .call) continue;
-            if (!std.mem.eql(u8, instruction.detail, fn_name)) continue;
-            if (instruction.line != call_source.line or instruction.column != call_source.column) continue;
-            if (sourcePointOffsetsMatch(instruction.source_offset, instruction.source_len, call_source)) return true;
-        }
-    }
-    return false;
-}
-
-fn directCallResultFactAtSource(function: Function, fn_name: []const u8, callee_source: SourcePoint) bool {
-    const owner_id = targetOwnerIdBySpelling(function, fn_name) orelse return false;
-    for (function.target_type_facts) |fact| {
-        if (fact.kind != .direct_call_result) continue;
-        if (fact.target_index != null) continue;
-        if (!fact.typed_target_owner_id.eql(owner_id)) continue;
-        if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
-        if (fact.source.offset != callee_source.offset or fact.source.len != callee_source.len) continue;
-        return true;
-    }
-    return false;
-}
-
-fn directCallArgumentFactAtSource(function: Function, fn_name: []const u8, arg_index: usize, arg_source: SourcePoint) bool {
-    const owner_id = targetOwnerIdBySpelling(function, fn_name) orelse return false;
-    for (function.target_type_facts) |fact| {
-        if (fact.kind != .direct_call_argument) continue;
-        if (fact.target_index != arg_index) continue;
-        if (!fact.typed_target_owner_id.eql(owner_id)) continue;
-        if (fact.source.line != arg_source.line or fact.source.column != arg_source.column) continue;
-        if (fact.source.offset != arg_source.offset or fact.source.len != arg_source.len) continue;
-        return true;
-    }
-    return false;
 }
 
 pub fn targetOwnerIdBySpelling(function: Function, spelling: []const u8) ?SymbolId {
@@ -1521,7 +1421,6 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .bind_thunk_facts = try allocator.alloc(BindThunkFact, 0),
                         .body_type_artifact_facts = try allocator.alloc(BodyTypeArtifactFact, 0),
-                        .defer_cleanup_expr_facts = try allocator.alloc(DeferCleanupExprFact, 0),
                         .target_type_facts = try allocator.alloc(TargetTypeFact, 0),
                         .ownership_events = try allocator.alloc(OwnershipEvent, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
@@ -6943,7 +6842,6 @@ const FunctionBuilder = struct {
     call_target_facts: std.ArrayList(CallTargetFact),
     bind_thunk_facts: std.ArrayList(BindThunkFact),
     body_type_artifact_facts: std.ArrayList(BodyTypeArtifactFact),
-    defer_cleanup_expr_facts: std.ArrayList(DeferCleanupExprFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
     generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
     generated_type_expr_args: std.ArrayList([]ast.TypeExpr),
@@ -7090,7 +6988,6 @@ const FunctionBuilder = struct {
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
             .body_type_artifact_facts = .empty,
-            .defer_cleanup_expr_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -7272,7 +7169,6 @@ const FunctionBuilder = struct {
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
             .body_type_artifact_facts = .empty,
-            .defer_cleanup_expr_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -7355,7 +7251,6 @@ const FunctionBuilder = struct {
         self.call_target_facts.deinit(self.allocator);
         self.bind_thunk_facts.deinit(self.allocator);
         self.body_type_artifact_facts.deinit(self.allocator);
-        self.defer_cleanup_expr_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
         self.ownership_events.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
@@ -7469,8 +7364,6 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(bind_thunk_facts);
         const body_type_artifact_facts = try self.body_type_artifact_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(body_type_artifact_facts);
-        const defer_cleanup_expr_facts = try self.defer_cleanup_expr_facts.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(defer_cleanup_expr_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
@@ -7590,7 +7483,6 @@ const FunctionBuilder = struct {
             .call_target_facts = call_target_facts,
             .bind_thunk_facts = bind_thunk_facts,
             .body_type_artifact_facts = body_type_artifact_facts,
-            .defer_cleanup_expr_facts = defer_cleanup_expr_facts,
             .target_type_facts = target_type_facts,
             .span_identities = span_identities,
             .type_identities = type_identities,
@@ -12952,13 +12844,6 @@ const FunctionBuilder = struct {
         });
     }
 
-    fn addDeferCleanupExprFact(self: *FunctionBuilder, expr: ast.Expr, stmt_span: ast.Span) !void {
-        try self.defer_cleanup_expr_facts.append(self.allocator, .{
-            .expr = expr,
-            .source = self.sourcePoint(stmt_span),
-        });
-    }
-
     fn collectBodyTypeArtifactBlock(self: *FunctionBuilder, block: ast.Block) anyerror!void {
         for (block.items) |stmt| try self.collectBodyTypeArtifactStmt(stmt);
     }
@@ -13592,7 +13477,6 @@ const FunctionBuilder = struct {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .defer_register = action });
                 try self.active_executable_cleanups.append(self.allocator, action);
                 try self.addInstr(.defer_cleanup, "cleanup", .void, stmt.span);
-                try self.addDeferCleanupExprFact(expr, stmt.span);
                 try self.addResultDeferCheck(expr);
                 try self.buildExpr(expr);
                 return false;
@@ -20962,7 +20846,6 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.bind_thunk_facts.len != 0) allocator.free(function.bind_thunk_facts);
     if (function.body_type_artifact_facts.len != 0) allocator.free(function.body_type_artifact_facts);
-    if (function.defer_cleanup_expr_facts.len != 0) allocator.free(function.defer_cleanup_expr_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
     if (function.span_identities.len != 0) allocator.free(function.span_identities);
     if (function.type_identities.len != 0) allocator.free(function.type_identities);

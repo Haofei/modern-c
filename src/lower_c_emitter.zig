@@ -3839,41 +3839,11 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitBlockDeferItem(self: *CEmitter, expr: ast_bridge.Expr, stmt_span: ast_bridge.Span) !void {
-        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr.span);
-        switch (deferred_drop) {
-            .ignored => {},
-            .applied => {
-                try self.validateCleanupCfg();
-            },
-            .rejected => return error.UnsupportedCEmission,
-        }
-        const defer_ref = mir_source_bridge.deferCleanupRefAtSpan(function.*, stmt_span) orelse return error.UnsupportedCEmission;
-        const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedCEmission;
-        if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
-                .applied => {},
-                .ignored, .rejected => return error.UnsupportedCEmission,
-            }
-            return;
-        }
-        if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
-                .applied => {},
-                .ignored, .rejected => return error.UnsupportedCEmission,
-            }
-            return;
-        }
-        switch (expr.kind) {
-            .block => {
-                switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, defer_ref)) {
-                    .applied => {},
-                    .ignored, .rejected => return error.UnsupportedCEmission,
-                }
-            },
-            else => return error.UnsupportedCEmission,
-        }
+    /// An ordinary defer is emitted only from its verified executable cleanup
+    /// action. Reaching the legacy AST body path is deliberately rejected so
+    /// no backend can reconstruct a cleanup from source syntax.
+    fn emitBlockDeferItem(_: *CEmitter, _: ast_bridge.Expr, _: ast_bridge.Span) !void {
+        return error.UnsupportedCEmission;
     }
 
     fn emitBlockExitItem(self: *CEmitter, stmt: ast_bridge.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
@@ -3949,25 +3919,9 @@ pub const CEmitter = struct {
         if (self.currentMirFunction() == null or self.currentCleanupCfg() == null) return error.UnsupportedCEmission;
     }
 
-    fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
+    fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, _: *std.StringHashMap(LocalInfo), _: ?ast_bridge.TypeExpr) anyerror!void {
         switch (ref) {
-            .defer_ref => |defer_ref| {
-                const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-                const expr = self.deferExprForRef(defer_ref) orelse return error.UnsupportedCEmission;
-                try self.writeLineDirective(expr.span);
-                if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                    try self.emitOrdinaryDeferDirectCallCleanup(cleanup, locals, return_ty);
-                    return;
-                }
-                if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                    try self.emitCallTargetDeferCleanup(cleanup, locals);
-                    return;
-                }
-                switch (expr.kind) {
-                    .block => |block| try self.emitBracedBlockBodyWithCleanup(block, locals, return_ty, false),
-                    else => return error.UnsupportedCEmission,
-                }
-            },
+            .defer_ref => return error.UnsupportedCEmission,
             .ownership_action => |action_ref| {
                 const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
                 if (action_ref.cleanup_action_index >= plan.actions.len) return error.UnsupportedCEmission;
@@ -3983,139 +3937,6 @@ pub const CEmitter = struct {
                 }
             },
         }
-    }
-
-    fn deferExprForRef(self: *CEmitter, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
-        const function = self.currentMirFunction() orelse return null;
-        if (!mir.deferCleanupRefValid(function.*, ref)) return null;
-        return mir.deferCleanupExprForRef(function.*, ref);
-    }
-
-    fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
-        const call = callExpr(expr) orelse return null;
-        if (call.type_args.len != 0) return null;
-        const fn_name = calleeIdentName(call.callee.*) orelse return null;
-        const info = self.functions.get(fn_name) orelse return null;
-        if (info.is_variadic or call.args.len != info.params.len) return error.UnsupportedCEmission;
-        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, fn_name, call.args)) return error.UnsupportedCEmission;
-        return .{ .defer_ref = defer_ref, .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
-    }
-
-    fn ordinaryDeferCallTargetCleanup(self: *CEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.CallTargetDeferCleanup {
-        const call = callExpr(expr) orelse return null;
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
-        switch (kind) {
-            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {
-                if (call.type_args.len != 0 or call.args.len != 0) return null;
-            },
-            .raw_store => {
-                if (!syntax_bridge.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
-            },
-            .mmio_write => {
-                if (call.type_args.len != 0 or call.args.len != 2) return null;
-            },
-            .mmio_read => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            .dma_cache_clean, .dma_cache_invalidate => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            .maybe_uninit_write => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            .atomic_store => {
-                if (call.type_args.len != 0 or call.args.len != 2) return null;
-            },
-            .va_end => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            else => return null,
-        }
-        if (!mir_source_bridge.callTargetDeferCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, kind)) return error.UnsupportedCEmission;
-        return .{ .defer_ref = defer_ref, .kind = kind, .span = expr.span, .callee = call.callee.*, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
-    }
-
-    fn emitCallTargetDeferCleanup(self: *CEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup, locals: *std.StringHashMap(LocalInfo)) !void {
-        if (!mir_source_bridge.callTargetDeferCleanupForSpans((self.currentMirFunction() orelse return error.UnsupportedCEmission).*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.kind)) return error.UnsupportedCEmission;
-        if (cleanup.kind == .raw_store) {
-            try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args, locals);
-            return;
-        }
-        if (cleanup.kind == .mmio_write) {
-            if (!try lower_c_mmio.emitWriteCall(self.mmioEmitContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
-            return;
-        }
-        if (cleanup.kind == .mmio_read) {
-            if (!try lower_c_mmio.emitReadCallStmt(self.mmioEmitContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
-            return;
-        }
-        if (cleanup.kind == .dma_cache_clean or cleanup.kind == .dma_cache_invalidate) {
-            var callee_storage = cleanup.callee;
-            const empty_type_args: []const ast_bridge.TypeExpr = &.{};
-            const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
-            try self.writeIndent();
-            if (!try lower_c_memory.emitDmaCall(self.memoryContext(), call, locals)) return error.UnsupportedCEmission;
-            try self.out.appendSlice(self.allocator, ";\n");
-            return;
-        }
-        if (cleanup.kind == .maybe_uninit_write) {
-            if (!try lower_c_memory.emitMaybeUninitWriteCall(self.memoryContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
-            return;
-        }
-        if (cleanup.kind == .atomic_store) {
-            var callee_storage = cleanup.callee;
-            const empty_type_args: []const ast_bridge.TypeExpr = &.{};
-            const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
-            try self.writeIndent();
-            if (!try lower_c_atomic.emitAtomicCall(self.atomicEmitContext(), call, locals)) return error.UnsupportedCEmission;
-            try self.out.appendSlice(self.allocator, ";\n");
-            return;
-        }
-        if (cleanup.kind == .va_end) {
-            var callee_storage = cleanup.callee;
-            const empty_type_args: []const ast_bridge.TypeExpr = &.{};
-            const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
-            try self.writeIndent();
-            if (!try lower_c_call.emitVaCall(self.callContext(), call, locals)) return error.UnsupportedCEmission;
-            try self.out.appendSlice(self.allocator, ";\n");
-            return;
-        }
-        const statement = switch (cleanup.kind) {
-            .cpu_pause => "mc_cpu_pause",
-            .fence_full => "mc_barrier_full",
-            .fence_release => "mc_barrier_release_before",
-            .fence_acquire => "mc_barrier_acquire_after",
-            else => return error.UnsupportedCEmission,
-        };
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s}();\n", .{statement});
-    }
-
-    fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !void {
-        _ = return_ty;
-        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.fn_name, cleanup.args)) return error.UnsupportedCEmission;
-        const info = self.functions.get(cleanup.fn_name) orelse return error.UnsupportedCEmission;
-        if (info.is_variadic or cleanup.args.len != info.params.len) return error.UnsupportedCEmission;
-        if (cleanup.args.len == 0) {
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s}();\n", .{try self.cIdent(cleanup.fn_name)});
-            self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span, locals);
-            return;
-        }
-        var temps: std.ArrayList(SequencedArgTemp) = .empty;
-        defer temps.deinit(self.scratch.allocator());
-        for (cleanup.args, 0..) |arg, i| {
-            const fact = self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, cleanup.fn_name, i) orelse return error.UnsupportedCEmission;
-            if (!mir.ValueType.eql(fact.result_ty, info.params[i].value_ty)) return error.UnsupportedCEmission;
-            const target_ty = fact.target_ty;
-            try temps.append(self.scratch.allocator(), try self.emitSequencedCallArgTemp(arg, locals, target_ty));
-        }
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s}", .{try self.cIdent(cleanup.fn_name)});
-        try lower_c_call.emitSequencedArgList(self.allocator, self.out, temps.items);
-        try self.out.appendSlice(self.allocator, ";\n");
-        self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span, locals);
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, ref: mir_ownership_authority.OwnershipCleanupActionRef) !void {

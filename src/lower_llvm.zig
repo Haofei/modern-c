@@ -2323,42 +2323,9 @@ const LlvmEmitter = struct {
             .let_decl => |local| try self.emitLocalDecl(local, false),
             .var_decl => |local| try self.emitLocalDecl(local, true),
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
-            .@"defer" => |expr| {
-                const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr.span);
-                switch (deferred_drop) {
-                    .ignored => {},
-                    .applied => {
-                        try self.validateCleanupCfg();
-                    },
-                    .rejected => return error.UnsupportedLlvmEmission,
-                }
-                const defer_ref = mir_source_bridge.deferCleanupRefAtSpan(function.*, stmt.span) orelse return error.UnsupportedLlvmEmission;
-                const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
-                if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                    switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
-                        .applied => {},
-                        .ignored, .rejected => return error.UnsupportedLlvmEmission,
-                    }
-                    return false;
-                }
-                if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                    switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
-                        .applied => {},
-                        .ignored, .rejected => return error.UnsupportedLlvmEmission,
-                    }
-                    return false;
-                }
-                switch (expr.kind) {
-                    .block => {
-                        switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, defer_ref)) {
-                            .applied => {},
-                            .ignored, .rejected => return error.UnsupportedLlvmEmission,
-                        }
-                    },
-                    else => return error.UnsupportedLlvmEmission,
-                }
-            },
+            // Ordinary defer is emitted solely from verified executable MIR
+            // cleanup actions. A legacy AST body cannot reconstruct it.
+            .@"defer" => return error.UnsupportedLlvmEmission,
             .loop => |node| {
                 if (try self.emitLoop(node, ret_ty)) return true;
             },
@@ -2478,24 +2445,9 @@ const LlvmEmitter = struct {
         if (self.currentMirFunction() == null or self.currentCleanupCfg() == null) return error.UnsupportedLlvmEmission;
     }
 
-    fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast_bridge.TypeExpr) !void {
+    fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, _: ast_bridge.TypeExpr) !void {
         switch (ref) {
-            .defer_ref => |defer_ref| {
-                const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                const expr = self.deferExprForRef(defer_ref) orelse return error.UnsupportedLlvmEmission;
-                if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                    try self.emitOrdinaryDeferDirectCallCleanup(cleanup);
-                    return;
-                }
-                if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                    try self.emitCallTargetDeferCleanup(cleanup);
-                    return;
-                }
-                switch (expr.kind) {
-                    .block => |block| if (try self.emitScopedBlockWithCleanup(block, ret_ty, false)) return error.UnsupportedLlvmEmission,
-                    else => return error.UnsupportedLlvmEmission,
-                }
-            },
+            .defer_ref => return error.UnsupportedLlvmEmission,
             .ownership_action => |action_ref| {
                 const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedLlvmEmission;
                 if (action_ref.cleanup_action_index >= plan.actions.len) return error.UnsupportedLlvmEmission;
@@ -2505,99 +2457,6 @@ const LlvmEmitter = struct {
                 }
             },
         }
-    }
-
-    fn deferExprForRef(self: *LlvmEmitter, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
-        const function = self.currentMirFunction() orelse return null;
-        if (!mir.deferCleanupRefValid(function.*, ref)) return null;
-        return mir.deferCleanupExprForRef(function.*, ref);
-    }
-
-    fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
-        const call = syntax_bridge.callExpr(expr) orelse return null;
-        if (call.type_args.len != 0) return null;
-        const fn_name = calleeIdentName(call.callee.*) orelse return null;
-        const sig = self.fn_sigs.get(fn_name) orelse return null;
-        if (sig.is_variadic or call.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
-        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, fn_name, call.args)) return error.UnsupportedLlvmEmission;
-        return .{ .defer_ref = defer_ref, .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
-    }
-
-    fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
-        const call = syntax_bridge.callExpr(expr) orelse return null;
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
-        switch (kind) {
-            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {
-                if (call.type_args.len != 0 or call.args.len != 0) return null;
-            },
-            .raw_store => {
-                if (!syntax_bridge.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
-            },
-            .mmio_write => {
-                if (call.type_args.len != 0 or call.args.len != 2) return null;
-            },
-            .mmio_read => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            .dma_cache_clean, .dma_cache_invalidate => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            .maybe_uninit_write => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            .atomic_store => {
-                if (call.type_args.len != 0 or call.args.len != 2) return null;
-            },
-            .va_end => {
-                if (call.type_args.len != 0 or call.args.len != 1) return null;
-            },
-            else => return null,
-        }
-        if (!mir_source_bridge.callTargetDeferCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, kind)) return error.UnsupportedLlvmEmission;
-        return .{ .defer_ref = defer_ref, .kind = kind, .span = expr.span, .callee = call.callee.*, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
-    }
-
-    fn emitCallTargetDeferCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup) !void {
-        if (!mir_source_bridge.callTargetDeferCleanupForSpans((self.currentMirFunction() orelse return error.UnsupportedLlvmEmission).*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.kind)) return error.UnsupportedLlvmEmission;
-        switch (cleanup.kind) {
-            .cpu_pause => try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()}),
-            .fence_full => try self.out.print(self.allocator, "  fence seq_cst{s}\n", .{try self.debugCallSuffix()}),
-            .fence_release => try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()}),
-            .fence_acquire => try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()}),
-            .raw_store => try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args),
-            .mmio_write => try self.emitMmioWritePayload(cleanup.callee, cleanup.args),
-            .mmio_read => _ = try self.emitMmioReadPayload(cleanup.callee, cleanup.args),
-            .dma_cache_clean, .dma_cache_invalidate => try self.emitDmaCachePayload(cleanup.callee, cleanup.args, cleanup.kind),
-            .maybe_uninit_write => try self.emitMaybeUninitWritePayload(cleanup.callee, cleanup.args),
-            .atomic_store => try self.emitAtomicStorePayload(cleanup.callee, cleanup.args),
-            .va_end => try self.emitVaEndPayload(cleanup.callee, cleanup.args),
-            else => return error.UnsupportedLlvmEmission,
-        }
-    }
-
-    fn emitOrdinaryDeferDirectCallCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {
-        defer self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span);
-        defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
-        defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
-        defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
-        defer self.local_pointer_array_aliases.clearRetainingCapacity();
-        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.fn_name, cleanup.args)) return error.UnsupportedLlvmEmission;
-        const sig = self.fn_sigs.get(cleanup.fn_name) orelse return error.UnsupportedLlvmEmission;
-        if (sig.is_variadic or cleanup.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
-        if (typeNameEql(sig.ret, "void") or typeNameEql(sig.ret, "never")) {
-            try self.emitVoidDirectCall(cleanup.fn_name, cleanup.args, cleanup.callee_span);
-            return;
-        }
-        var callee_expr: ast_bridge.Expr = .{
-            .span = cleanup.callee_span,
-            .kind = .{ .ident = .{ .text = cleanup.fn_name, .span = cleanup.callee_span } },
-        };
-        const call = struct {
-            callee: *ast_bridge.Expr,
-            args: []const ast_bridge.Expr,
-        }{ .callee = &callee_expr, .args = cleanup.args };
-        _ = try self.emitDirectCall(cleanup.fn_name, call, sig.ret);
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, ref: mir_ownership_authority.OwnershipCleanupActionRef) !void {

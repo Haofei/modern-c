@@ -46,7 +46,7 @@ EXACT_BACKEND_COUNTS = {
     # so new codegen syntax/eval/artifact ingress fails immediately.  Update
     # these only when the count decreases or a deliberate migration patch
     # moves one of these edges behind verified MIR facts.
-    '@import("ast_bridge.zig")': 41,
+    '@import("ast_bridge.zig")': 40,
     '@import("declaration_artifacts.zig")': 5,
     '@import("eval.zig")': 7,
     # The bounded atomic-load slice aliases its transitional type payload in
@@ -54,7 +54,7 @@ EXACT_BACKEND_COUNTS = {
     # may only lower this count.
     # Float literal lowering now consumes typed FloatFact identity instead of
     # a target-type AST payload, removing one backend syntax reference.
-    "ast_bridge.": 2753,
+    "ast_bridge.": 2727,
     "declaration_artifacts.": 20,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
@@ -506,9 +506,6 @@ EXACT_FILE_COUNTS = {
     ("src/mir_source_bridge.zig", "pub fn pointerFactIsLiveGlobal("): 1,
     ("src/mir_source_bridge.zig", "pub fn pointerFactIsLiveLocal("): 1,
     ("src/mir_source_bridge.zig", "pub fn pointerFactLiveState("): 1,
-    ("src/mir_source_bridge.zig", "pub fn deferCleanupRefAtSpan("): 1,
-    ("src/mir_source_bridge.zig", "pub fn directDeferCallCleanupForSpans("): 1,
-    ("src/mir_source_bridge.zig", "pub fn callTargetDeferCleanupForSpans("): 1,
     ("src/mir_source_bridge.zig", "pub fn replacementSourceFromSpan("): 0,
     ("src/mir_source_bridge.zig", "pub fn replacementSourceMatchesSpan("): 0,
     ("src/mir_source_bridge.zig", "@import(\"ast.zig\")"): 0,

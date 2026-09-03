@@ -1,43 +1,7 @@
 const std = @import("std");
 
-const ast_bridge = @import("ast_bridge.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
-
-/// Backend cleanup payload admitted by MIR cleanup facts.
-///
-/// C and LLVM lowering keep backend-specific expression payloads here, but all
-/// cleanup registration, cancellation, and exit-edge emission is routed through
-/// MIR cleanup CFG actions. Backends must not make cleanup lifetime decisions
-/// from source syntax alone.
-pub const OrdinaryDeferCallCleanup = struct {
-    defer_ref: mir.DeferCleanupRef,
-    fn_name: []const u8,
-    span: ast_bridge.Span,
-    callee_span: ast_bridge.Span,
-    args: []const ast_bridge.Expr,
-};
-
-pub const CallTargetDeferCleanup = struct {
-    defer_ref: mir.DeferCleanupRef,
-    kind: mir.CallTargetKind,
-    span: ast_bridge.Span,
-    callee: ast_bridge.Expr,
-    callee_span: ast_bridge.Span,
-    type_args: []const ast_bridge.TypeExpr,
-    args: []const ast_bridge.Expr,
-};
-
-pub const DeferBlockCleanup = struct {
-    defer_ref: mir.DeferCleanupRef,
-    block: ast_bridge.Block,
-};
-
-pub const AutoDropStackDecision = enum {
-    applied,
-    ignored,
-    rejected,
-};
 
 pub const CleanupEdgeKind = enum {
     scope_exit,
@@ -90,27 +54,6 @@ pub fn validateFunctionCleanupAuthority(
         }
     }
     return true;
-}
-
-pub fn registerDeferredExplicitDropCleanup(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr_span: ast_bridge.Span,
-) AutoDropStackDecision {
-    _ = explicitDropLocalCleanupFromMirAction(module, function, cleanup_plan, mir.sourcePointFromSpan(expr_span)) orelse return .ignored;
-    return .applied;
-}
-
-pub fn registerOrdinaryDeferCleanup(
-    function: *const mir.Function,
-    cleanup_cfg: ?*const mir.CleanupCfg,
-    ref: mir.DeferCleanupRef,
-) AutoDropStackDecision {
-    const cfg = cleanup_cfg orelse return .rejected;
-    if (!cleanupCfgContainsRef(cfg.*, .{ .defer_ref = ref })) return .rejected;
-    if (!mir.deferCleanupRefValid(function.*, ref)) return .rejected;
-    return .applied;
 }
 
 fn cleanupCfgEdgeForKind(cfg: mir.CleanupCfg, kind: mir.CleanupCfgEdgeKind) ?mir.CleanupCfgEdge {
@@ -340,47 +283,6 @@ fn cleanupCfgKindFromBackend(kind: CleanupEdgeKind) mir.CleanupCfgEdgeKind {
     };
 }
 
-fn explicitDropLocalCleanupFromMirAction(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    source: mir.SourcePoint,
-) ?mir_ownership_authority.AutoDropLocalCleanup {
-    const plan = cleanup_plan orelse return null;
-    const action_match = explicitDropActionEntryFromMirPlan(plan, source) orelse return null;
-    if (action_match.entry.place.root_symbol_id.isValid() or action_match.entry.place.projection_count != 0) return null;
-    const root_value_id = action_match.entry.place.root_value_id;
-    const local_name = localNameForValueId(function, root_value_id) orelse return null;
-    const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
-        .local_name = local_name,
-        .source = source,
-        .cleanup_action_index = action_match.action_index,
-        .root_value_id = root_value_id,
-        .resource_type_symbol_id = action_match.entry.place.root_type_symbol_id,
-        .drop_glue_symbol_id = action_match.entry.drop_glue_symbol_id,
-    };
-    return mir_ownership_authority.explicitDropLocalCleanupFromActionRef(module, function, plan, ref);
-}
-
-const ExplicitDropActionMatch = struct {
-    action_index: usize,
-    entry: mir.CleanupActionPlanEntry,
-};
-
-fn explicitDropActionEntryFromMirPlan(
-    plan: *const mir.OwnershipCleanupPlan,
-    source: mir.SourcePoint,
-) ?ExplicitDropActionMatch {
-    var matched: ?ExplicitDropActionMatch = null;
-    for (plan.actions, 0..) |entry, action_index| {
-        if (entry.kind != .explicit_drop) continue;
-        if (!sourceMatches(entry.source, source)) continue;
-        if (matched != null) return null;
-        matched = .{ .action_index = action_index, .entry = entry };
-    }
-    return matched;
-}
-
 fn localNameForValueId(function: *const mir.Function, value_id: mir.ValueId) ?[]const u8 {
     if (!value_id.isValid()) return null;
     for (function.value_identities) |identity| {
@@ -413,8 +315,8 @@ fn cleanupRefValidForEdge(
 }
 
 test "cleanup edge plan comes directly from MIR cleanup cfg" {
-    const span = ast_bridge.Span{ .offset = 10, .len = 1, .line = 1, .column = 10 };
-    const later_span = ast_bridge.Span{ .offset = 20, .len = 1, .line = 1, .column = 20 };
+    const span: mir.SourcePoint = .{ .offset = 10, .len = 1, .line = 1, .column = 10 };
+    const later_span: mir.SourcePoint = .{ .offset = 20, .len = 1, .line = 1, .column = 20 };
     var instructions = [_]mir.Instruction{
         .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = span.line, .column = span.column, .source_offset = span.offset, .source_len = span.len },
         .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = later_span.line, .column = later_span.column, .source_offset = later_span.offset, .source_len = later_span.len },
@@ -442,8 +344,7 @@ test "cleanup edge plan comes directly from MIR cleanup cfg" {
         .representation_facts = &.{},
         .elided_bounds = &.{},
     };
-    const first: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 0, .source = mir.sourcePointFromSpan(span) };
-    const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = mir.sourcePointFromSpan(later_span) };
+    const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = later_span };
     var mir_defer_edges = try mir.buildDeferCleanupEdgeTable(std.testing.allocator, function);
     defer mir_defer_edges.deinit(std.testing.allocator);
     try std.testing.expect(mir.deferCleanupEdgeTableValid(function, mir_defer_edges));
@@ -457,19 +358,6 @@ test "cleanup edge plan comes directly from MIR cleanup cfg" {
     var stale_second = second;
     stale_second.source.column += 1;
     try std.testing.expect(!mir.deferCleanupEdgeTableContainsRef(mir_defer_edges, stale_second));
-    var test_cfg_actions = [_]mir.CleanupCfgActionRef{
-        .{ .defer_cleanup = scope_defer_edge.actions[0] },
-        .{ .defer_cleanup = scope_defer_edge.actions[1] },
-    };
-    var test_cfg_edges = [_]mir.CleanupCfgEdge{.{
-        .kind = .scope_exit,
-        .actions = test_cfg_actions[0..],
-    }};
-    const test_cleanup_cfg: mir.CleanupCfg = .{ .edges = test_cfg_edges[0..] };
-    try std.testing.expectEqual(AutoDropStackDecision.rejected, registerOrdinaryDeferCleanup(&function, null, first));
-    try std.testing.expectEqual(AutoDropStackDecision.applied, registerOrdinaryDeferCleanup(&function, &test_cleanup_cfg, first));
-    try std.testing.expectEqual(AutoDropStackDecision.rejected, registerOrdinaryDeferCleanup(&function, &test_cleanup_cfg, stale_second));
-
     var cleanup_cfg_actions = [_]mir.CleanupCfgActionRef{
         .{ .defer_cleanup = mir_defer_edges.edges[0].actions[0] },
         .{ .defer_cleanup = mir_defer_edges.edges[0].actions[1] },

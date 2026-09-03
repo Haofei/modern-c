@@ -155,15 +155,3 @@ pub fn pointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
 pub fn pointerFactLiveState(fact: mir.PointerProvenanceFact) mir.PointerProvenance {
     return mir_facts_view.pointerFactLiveState(fact);
 }
-
-pub fn deferCleanupRefAtSpan(function: mir.Function, span: ast_bridge.Span) ?mir.DeferCleanupRef {
-    return mir.deferCleanupRefAtSource(function, mir.sourcePointFromSpan(span));
-}
-
-pub fn directDeferCallCleanupForSpans(function: mir.Function, defer_ref: mir.DeferCleanupRef, call_span: ast_bridge.Span, callee_span: ast_bridge.Span, fn_name: []const u8, args: []const ast_bridge.Expr) bool {
-    return mir.directDeferCallCleanupForRef(function, defer_ref, mir.sourcePointFromSpan(call_span), mir.sourcePointFromSpan(callee_span), fn_name, args);
-}
-
-pub fn callTargetDeferCleanupForSpans(function: mir.Function, defer_ref: mir.DeferCleanupRef, call_span: ast_bridge.Span, callee_span: ast_bridge.Span, kind: mir.CallTargetKind) bool {
-    return mir.callTargetDeferCleanupForRef(function, defer_ref, mir.sourcePointFromSpan(call_span), mir.sourcePointFromSpan(callee_span), kind);
-}
