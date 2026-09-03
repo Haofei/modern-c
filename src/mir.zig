@@ -9529,7 +9529,20 @@ const FunctionBuilder = struct {
         };
         if (target_ty == .nullable_value and unwrapped.kind == .null_literal)
             return self.appendExecutableValueOptional(input, target_ty, null);
-        const operand = try self.ensureExecutableExprAsInner(input, target_ty, target_type_expr);
+        // A value optional owns an explicit payload expression plus its
+        // `{ present, value }` wrapper.  Build a target-typed aggregate
+        // literal as that payload, not as an untyped optional expression;
+        // otherwise `return .{ ... }` for `?Struct` can only reach the
+        // unsupported struct-literal fallback.
+        const payload_type_expr = if (target_type_expr) |target|
+            self.valueOptionalPayloadTargetType(target, target_ty)
+        else
+            null;
+        const operand_target_ty = if (payload_type_expr) |payload|
+            self.executableValueType(payload)
+        else
+            target_ty;
+        const operand = try self.ensureExecutableExprAsInner(input, operand_target_ty, payload_type_expr orelse target_type_expr);
         try self.contextualizeExecutableLiteral(operand, target_ty);
         const operand_ty = self.executable_expressions.items[operand.index()].result_ty;
         if (sameValueType(operand_ty, target_ty)) return operand;

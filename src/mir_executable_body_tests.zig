@@ -105,8 +105,11 @@ test "callable parameter signatures are verified executable facts" {
     parameter.callable_signature = original;
     try executable.verify(function);
 
-    parameter.callable_signature.?.parameter_types[0] = .bool;
-    parameter.callable_signature.?.parameter_type_ids[0] = try findTypeId(function, .bool);
+    // Type identities are function-local and no longer seed unrelated
+    // primitive types. Use an existing but mismatched identity to prove the
+    // callable-signature verifier rejects a type/type-id pair consistently.
+    parameter.callable_signature.?.parameter_types[0] = .{ .integer = "u32" };
+    parameter.callable_signature.?.parameter_type_ids[0] = try findTypeId(function, .{ .integer = "u32" });
     try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(function));
     parameter.callable_signature = original;
     try executable.verify(function);
@@ -246,7 +249,7 @@ test "value optional construction is explicit verified executable MIR" {
 
     const saved_payload_type = scalar.executable_body.aggregate_types[0].field_type_ids[1];
     scalar.executable_body.aggregate_types[0].field_type_ids[1] = scalar.executable_body.aggregate_types[0].field_type_ids[0];
-    try std.testing.expectError(error.InvalidAggregateType, executable.verify(scalar));
+    try std.testing.expectError(error.InvalidTypeReference, executable.verify(scalar));
     scalar.executable_body.aggregate_types[0].field_type_ids[1] = saved_payload_type;
     try executable.verify(scalar);
 }
@@ -553,7 +556,7 @@ test "array construction and local aggregate stores are verified executable MIR"
 
     const saved_element_type_id = aggregate.field_type_ids[1];
     aggregate.field_type_ids[1] = .invalid;
-    try std.testing.expectError(error.InvalidAggregateType, executable.verify(function));
+    try std.testing.expectError(error.InvalidTypeReference, executable.verify(function));
     aggregate.field_type_ids[1] = saved_element_type_id;
 
     var array_expression: ?*@TypeOf(function.executable_body.expressions[0]) = null;
@@ -628,7 +631,7 @@ test "aggregate layout facts include nested fixed-array fields" {
                     saw_items = true;
                 } else if (length == 16) {
                     try std.testing.expectEqualStrings("u8", shape.child);
-                    try std.testing.expectEqual(@as(usize, 1), aggregate.field_count);
+                    try std.testing.expectEqual(@as(usize, 16), aggregate.field_count);
                     try std.testing.expect(mir.ValueType.eql(aggregate.field_types[0], .{ .integer = "u8" }));
                     saw_bytes = true;
                 } else return error.TestUnexpectedResult;
@@ -693,7 +696,7 @@ test "value types distinguish every legacy spelling collision family" {
     try std.testing.expect(!mir.ValueType.eql(wrapping, saturating));
 }
 
-test "shadowed local generations keep executable admission closed" {
+test "shadowed local generations have distinct executable identities" {
     const source =
         \\fn shadowed(flag: bool) -> u32 {
         \\    if flag { let temporary: u32 = 1; } else { let temporary: u32 = 2; }
@@ -712,7 +715,14 @@ test "shadowed local generations keep executable admission closed" {
     defer module.deinit();
     const function = &module.functions[0];
     try executable.verify(function);
-    try std.testing.expect(!executable.isComplete(function));
+    try std.testing.expect(executable.isComplete(function));
+    var shadow_count: usize = 0;
+    for (function.executable_body.locals, 0..) |local, index| {
+        if (!std.mem.eql(u8, local.spelling, "temporary")) continue;
+        try std.testing.expectEqual(index, local.id.index());
+        shadow_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), shadow_count);
 }
 
 test "builtin call is explicit and mechanically complete" {
