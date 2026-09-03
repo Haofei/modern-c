@@ -762,6 +762,7 @@ pub const ExecutableBody = mir_model.ExecutableBody;
 pub const executableCheckedBinaryTrapRequirements = mir_model.executableCheckedBinaryTrapRequirements;
 pub const CallableKind = mir_model.CallableKind;
 pub const CheckedCallableFact = mir_model.CheckedCallableFact;
+pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const Function = mir_model.Function;
 pub const Module = mir_model.Module;
 pub const BuildOptions = mir_model.BuildOptions;
@@ -1074,6 +1075,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         }
         checked_callables.deinit(allocator);
     }
+    var checked_globals: std.ArrayList(CheckedGlobalFact) = .empty;
+    errdefer checked_globals.deinit(allocator);
 
     for (decl_items) |item| {
         const decl = declFromBuildItem(item);
@@ -1081,9 +1084,18 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         switch (decl.kind) {
             .global_decl => |global| {
                 if (global.ty) |ty| {
+                    var checked_global: CheckedGlobalFact = .{
+                        .symbol_id = try internSymbolId(&symbol_ids, global.name.text),
+                        .source_id = typed_source_id,
+                        .ty = globals.get(global.name.text) orelse .unknown,
+                        .is_const = global.is_const,
+                        .exported = global.exported,
+                        .is_extern = global.is_extern,
+                    };
                     if (global.init) |initializer| {
+                        checked_global.initializer_body_id = BodyId.fromIndex(checked_callables.items.len);
                         var checked: CheckedCallableFact = .{
-                            .symbol_id = try internSymbolId(&symbol_ids, global.name.text),
+                            .symbol_id = checked_global.symbol_id,
                             .source_id = typed_source_id,
                             .body_id = BodyId.fromIndex(checked_callables.items.len),
                             .kind = .global_initializer,
@@ -1110,6 +1122,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             try functions.append(allocator, function);
                         }
                     }
+                    try checked_globals.append(allocator, checked_global);
                 }
             },
             .fn_decl, .extern_fn => |fn_decl| {
@@ -1222,12 +1235,15 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         }
         allocator.free(checked_callables_slice);
     }
+    const checked_globals_slice = try checked_globals.toOwnedSlice(allocator);
+    errdefer allocator.free(checked_globals_slice);
 
     var built_module: Module = .{
         .allocator = allocator,
         .symbol_identities = symbol_identities,
         .source_identities = source_identities,
         .checked_callables = checked_callables_slice,
+        .checked_globals = checked_globals_slice,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
@@ -3607,6 +3623,9 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
 }
 
 pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLoweringType}!void {
+    for (module.checked_globals) |global| {
+        if (valueTypeIsUnknownPlaceholder(global.ty)) return error.UnknownMirLoweringType;
+    }
     for (module.functions) |function| {
         if (valueTypeIsUnknownPlaceholder(function.return_ty)) return error.UnknownMirLoweringType;
         for (function.blocks) |block| {

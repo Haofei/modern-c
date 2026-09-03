@@ -91,7 +91,7 @@ pub const VerifiedProgram = struct {
         try mir.verifyBuiltMir(typed_mir.*, reporter);
         if (reporter.has_errors) return error.InvalidMir;
         if (!symbolIdentitiesMatchFunctionSpelling(typed_mir.*)) return error.InvalidMir;
-        const checked = try checked_program.CheckedProgram.init(typed_mir.checked_callables);
+        const checked = try checked_program.CheckedProgram.init(typed_mir.checked_callables, typed_mir.checked_globals);
         if (!checked.matchesMir(typed_mir.*)) return error.InvalidCheckedProgram;
         return .{
             .checked = checked,

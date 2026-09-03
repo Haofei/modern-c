@@ -80,7 +80,7 @@
       "completion_evidence": [
         {
           "file": "src/checked_program.zig",
-          "needle": "pub fn init(callables: []const mir.CheckedCallableFact) !CheckedProgram"
+          "needle": "pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact) !CheckedProgram"
         },
         {
           "file": "src/mir.zig",

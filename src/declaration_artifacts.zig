@@ -58,7 +58,7 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .global_decl => |global| {
-                    try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global) });
+                    try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global, globalByName(typed_mir, global.name.text)) });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .type_alias => |alias| {
@@ -225,21 +225,32 @@ pub const GlobalArtifact = struct {
     signature: codegen_attrs.GlobalSignatureFacts,
     initializer: codegen_attrs.GlobalInitFacts,
 
-    pub fn fromDecl(global: ast.GlobalDecl) GlobalArtifact {
+    pub fn fromDecl(global: ast.GlobalDecl, checked: ?mir.CheckedGlobalFact) GlobalArtifact {
         return .{
             .signature = .{
                 .name = global.name,
+                .value_ty = if (checked) |fact| fact.ty else .unknown,
                 .ty = global.ty,
                 .is_const = global.is_const,
                 .exported = global.exported,
                 .is_extern = global.is_extern,
             },
             .initializer = .{
+                .body_id = if (checked) |fact| fact.initializer_body_id else .invalid,
                 .init = global.init,
             },
         };
     }
 };
+
+fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalFact {
+    for (module.checked_globals) |global| {
+        if (!global.symbol_id.isValid() or global.symbol_id.index() >= module.symbol_identities.len) continue;
+        const identity = module.symbol_identities[global.symbol_id.index()];
+        if (identity.id.eql(global.symbol_id) and std.mem.eql(u8, identity.spelling, name)) return global;
+    }
+    return null;
+}
 
 pub const TraitDeclArtifact = struct {
     facts: codegen_attrs.TraitDeclFacts,
@@ -421,10 +432,15 @@ test "declaration artifacts collect from resolved declaration stream" {
     for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
         .function => |function| {
             try std.testing.expectEqualStrings("inc", function.signature.name.text);
+            try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.return_ty));
+            try std.testing.expectEqual(@as(usize, 1), function.signature.params.len);
+            try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, function.signature.params[0].value_ty));
             saw_function = true;
         },
         .global => |global| {
             try std.testing.expectEqualStrings("counter", global.signature.name.text);
+            try std.testing.expect(mir.ValueType.eql(.{ .integer = "u32" }, global.signature.value_ty));
+            try std.testing.expect(global.initializer.body_id.isValid());
             saw_global = true;
         },
         .transitional_type_decl => |type_decl| {

@@ -3862,11 +3862,24 @@ pub const CheckedCallableFact = struct {
     irq_context: bool,
 };
 
+/// Syntax-free module-global declaration facts. Initializer expressions are
+/// represented by the referenced MIR body rather than copied into this table.
+pub const CheckedGlobalFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    ty: ValueType,
+    initializer_body_id: BodyId = .invalid,
+    is_const: bool,
+    exported: bool,
+    is_extern: bool,
+};
+
 pub const Module = struct {
     allocator: std.mem.Allocator,
     symbol_identities: []SymbolIdentity = &.{},
     source_identities: []SourceIdentity = &.{},
     checked_callables: []CheckedCallableFact = &.{},
+    checked_globals: []CheckedGlobalFact = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
     type_ownership_facts: []TypeOwnershipFact = &.{},
@@ -3926,6 +3939,7 @@ pub const Module = struct {
             }
             self.allocator.free(self.checked_callables);
         }
+        if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);

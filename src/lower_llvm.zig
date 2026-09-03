@@ -768,7 +768,14 @@ const LlvmEmitter = struct {
         self.current_function = sig.name.text;
         defer self.current_function = previous_function;
         const ty = sig.ty orelse return error.UnsupportedLlvmEmission;
-        const llvm_ty = try self.llvmType(ty);
+        const initializer_mir = self.globalInitializerMir(init_facts.body_id);
+        const body = if (initializer_mir) |function| &function.executable_body else &mir.ExecutableBody{};
+        const llvm_ty = if (sig.value_ty == .value)
+            try self.llvmType(ty)
+        else mir_executable_llvm.renderType(self.scratch.allocator(), body, sig.value_ty, null) catch |err| switch (err) {
+            error.Unsupported, error.InvalidBody => try self.llvmType(ty),
+            else => return err,
+        };
         // `extern global NAME: T;` — a declaration only; storage lives in another unit.
         if (sig.is_extern) {
             try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ sig.name.text, llvm_ty });
@@ -782,6 +789,16 @@ const LlvmEmitter = struct {
         const visibility: []const u8 = if (sig.exported) "" else "internal ";
         const init = if (init_facts.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
         try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ sig.name.text, visibility, kind, llvm_ty, init });
+    }
+
+    fn globalInitializerMir(self: *const LlvmEmitter, body_id: mir.BodyId) ?mir.Function {
+        if (!body_id.isValid()) return null;
+        for (self.mir_module.functions, 0..) |function, index| {
+            if (index >= self.mir_module.checked_callables.len) continue;
+            const checked = self.mir_module.checked_callables[index];
+            if (checked.kind == .global_initializer and checked.body_id.eql(body_id)) return function;
+        }
+        return null;
     }
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {

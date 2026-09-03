@@ -672,7 +672,22 @@ pub const CEmitter = struct {
             self.current_function = previous_function;
             self.source_path = previous_source_path;
         }
-        try emitGlobalDecl(self.globalEmitContext(), global);
+        const body = if (self.globalInitializerMir(global.initializer.body_id)) |function| &function.executable_body else &mir.ExecutableBody{};
+        const rendered_type = mir_executable_c.renderType(self.scratch.allocator(), body, global.signature.value_ty) catch |err| switch (err) {
+            error.UnsupportedType => if (global.signature.ty) |ty| try self.cTypeFor(ty, .typedef_name) else return error.UnsupportedCEmission,
+            else => return err,
+        };
+        try emitGlobalDecl(self.globalEmitContext(), global, rendered_type);
+    }
+
+    fn globalInitializerMir(self: *const CEmitter, body_id: mir.BodyId) ?mir.Function {
+        if (!body_id.isValid()) return null;
+        for (self.mir_module.functions, 0..) |function, index| {
+            if (index >= self.mir_module.checked_callables.len) continue;
+            const checked = self.mir_module.checked_callables[index];
+            if (checked.kind == .global_initializer and checked.body_id.eql(body_id)) return function;
+        }
+        return null;
     }
 
     fn sourcePathForSpan(self: *CEmitter, span: diagnostics.Span) ?[]const u8 {

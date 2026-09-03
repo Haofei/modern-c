@@ -1308,7 +1308,7 @@ test "CheckedProgram is a syntax-free callable and body table" {
 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
-    const checked = try checked_program.CheckedProgram.init(module_mir.checked_callables);
+    const checked = try checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals);
     try std.testing.expect(checked.matchesMir(module_mir));
     try std.testing.expectEqual(module_mir.functions.len, checked.callables.len);
 
@@ -1361,7 +1361,7 @@ test "CheckedProgram is a syntax-free callable and body table" {
     try std.testing.expectEqual(module_mir.functions.len, std.mem.count(u8, dump.items, "checked callable "));
 
     module_mir.checked_callables[0].param_count += 1;
-    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(module_mir.checked_callables));
+    try std.testing.expectError(error.InvalidCheckedProgram, checked_program.CheckedProgram.init(module_mir.checked_callables, module_mir.checked_globals));
     try std.testing.expect(!checked.matchesMir(module_mir));
 }
 

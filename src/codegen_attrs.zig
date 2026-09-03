@@ -38,6 +38,7 @@ pub const FunctionBodyFacts = struct {
 
 pub const GlobalSignatureFacts = struct {
     name: ast_bridge.Ident,
+    value_ty: mir.ValueType,
     ty: ?ast_bridge.TypeExpr,
     is_const: bool,
     exported: bool,
@@ -45,6 +46,7 @@ pub const GlobalSignatureFacts = struct {
 };
 
 pub const GlobalInitFacts = struct {
+    body_id: mir.BodyId = .invalid,
     init: ?ast_bridge.Expr,
 };
 

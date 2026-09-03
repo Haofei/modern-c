@@ -11,8 +11,9 @@ const mir = @import("mir_model.zig");
 
 pub const CheckedProgram = struct {
     callables: []const mir.CheckedCallableFact,
+    globals: []const mir.CheckedGlobalFact,
 
-    pub fn init(callables: []const mir.CheckedCallableFact) !CheckedProgram {
+    pub fn init(callables: []const mir.CheckedCallableFact, globals: []const mir.CheckedGlobalFact) !CheckedProgram {
         for (callables, 0..) |callable, index| {
             if (!callable.symbol_id.isValid()) return error.InvalidCheckedProgram;
             if (callable.param_types.len != callable.param_count) return error.InvalidCheckedProgram;
@@ -24,7 +25,17 @@ pub const CheckedProgram = struct {
             if (callable.kind == .global_initializer and
                 (callable.param_count != 0 or callable.return_ty != .void or callable.c_abi or callable.is_variadic)) return error.InvalidCheckedProgram;
         }
-        return .{ .callables = callables };
+        for (globals) |global| {
+            if (!global.symbol_id.isValid() or global.ty == .unknown) return error.InvalidCheckedProgram;
+            if (global.is_extern and global.initializer_body_id.isValid()) return error.InvalidCheckedProgram;
+            if (global.initializer_body_id.isValid()) {
+                if (global.initializer_body_id.index() >= callables.len) return error.InvalidCheckedProgram;
+                const initializer = callables[global.initializer_body_id.index()];
+                if (initializer.kind != .global_initializer or !initializer.symbol_id.eql(global.symbol_id))
+                    return error.InvalidCheckedProgram;
+            }
+        }
+        return .{ .callables = callables, .globals = globals };
     }
 
     pub fn body(self: CheckedProgram, body_id: mir.BodyId) ?mir.CheckedCallableFact {
@@ -35,7 +46,8 @@ pub const CheckedProgram = struct {
     }
 
     pub fn matchesMir(self: CheckedProgram, module: mir.Module) bool {
-        return callableFactsMatchMir(self.callables, module);
+        return self.globals.ptr == module.checked_globals.ptr and self.globals.len == module.checked_globals.len and
+            callableFactsMatchMir(self.callables, module);
     }
 };
 
