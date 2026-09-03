@@ -4251,6 +4251,7 @@ pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
     aggregate: AggregateInitializerPlan,
+    atomic_init: AtomicInitializerPlan,
     enum_case: EnumInitializerPlan,
     nullable_null,
     string_bytes: StringBytesInitializerPlan,
@@ -4261,7 +4262,7 @@ pub const GlobalInitializerPlan = union(enum) {
         switch (self) {
             .aggregate => |plan| plan.deinit(allocator),
             .string_bytes => |plan| plan.deinit(allocator),
-            .scalar, .zero, .enum_case, .nullable_null, .global_address, .function_symbol => {},
+            .scalar, .zero, .atomic_init, .enum_case, .nullable_null, .global_address, .function_symbol => {},
         }
     }
 
@@ -4271,7 +4272,7 @@ pub const GlobalInitializerPlan = union(enum) {
     /// the pointer value in both backends.
     pub fn cloneForGlobalCopy(self: GlobalInitializerPlan, allocator: std.mem.Allocator) !?GlobalInitializerPlan {
         return switch (self) {
-            .scalar, .zero => null,
+            .scalar, .zero, .atomic_init => null,
             .aggregate => |value| if (try value.cloneForGlobalCopy(allocator)) |cloned| .{ .aggregate = cloned } else null,
             .enum_case => |value| .{ .enum_case = value },
             .nullable_null => .nullable_null,
@@ -4280,6 +4281,15 @@ pub const GlobalInitializerPlan = union(enum) {
             .function_symbol => |value| .{ .function_symbol = value },
         };
     }
+};
+
+/// A storage-normalized `atomic.init(value)` global. The wrapper type and its
+/// payload use module-owned signature IDs; the scalar is already checked and
+/// can therefore be emitted mechanically by either backend.
+pub const AtomicInitializerPlan = struct {
+    payload_type_id: SignatureTypeId,
+    payload_ty: ValueType,
+    value: ConstScalarValue,
 };
 
 /// A direct enum literal after name resolution.  The case is an index into
@@ -4436,6 +4446,7 @@ pub const GlobalInitializerFact = struct {
     pub fn scalarValue(self: GlobalInitializerFact) ConstScalarValue {
         return switch (self.plan) {
             .scalar => |value| value,
+            .atomic_init => |plan| plan.value,
             .zero => unreachable,
             .aggregate => unreachable,
             .enum_case => unreachable,
@@ -4622,6 +4633,9 @@ pub const Module = struct {
             .scalar => |value| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 value.isCompatibleWith(fact.value_ty)) fact else null,
+            .atomic_init => |plan| if (global.initializer_body_id.isValid() and
+                global.initializer_body_id.eql(fact.initializer_body_id) and
+                atomicInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
             .zero => if (!global.initializer_body_id.isValid() and !fact.initializer_body_id.isValid()) fact else null,
             .aggregate => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
@@ -4654,7 +4668,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .scalar => fact,
-            .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
+            .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4662,7 +4676,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .zero => fact,
-            .scalar, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
+            .scalar, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4670,7 +4684,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .enum_case => fact,
-            .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
+            .scalar, .zero, .atomic_init, .aggregate, .nullable_null, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4678,7 +4692,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .nullable_null => fact,
-            .scalar, .zero, .aggregate, .enum_case, .string_bytes, .global_address, .function_symbol => null,
+            .scalar, .zero, .atomic_init, .aggregate, .enum_case, .string_bytes, .global_address, .function_symbol => null,
         };
     }
 
@@ -4686,7 +4700,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .string_bytes => fact,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => null,
+            .scalar, .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => null,
         };
     }
 
@@ -4694,7 +4708,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .global_address => fact,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .function_symbol => null,
+            .scalar, .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .function_symbol => null,
         };
     }
 
@@ -4702,7 +4716,7 @@ pub const Module = struct {
         const fact = self.checkedGlobalInitializer(global) orelse return null;
         return switch (fact.plan) {
             .function_symbol => fact,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
+            .scalar, .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address => null,
         };
     }
 
@@ -4805,6 +4819,25 @@ fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module:
         .string_bytes => |string_plan| stringBytesInitializerPlanMatchesType(string_plan, module, owner_global, type_id),
         .global_address => |address_plan| globalAddressInitializerPlanMatchesGlobalForType(address_plan, module, owner_global, type_id),
     };
+}
+
+fn atomicInitializerPlanMatchesGlobal(plan: AtomicInitializerPlan, module: Module, global: CheckedGlobalFact) bool {
+    if (global.ty != .value or !module.signature_types.contains(plan.payload_type_id) or
+        !valueTypeRequiresScalarGlobalInitializerFact(plan.payload_ty) or !plan.value.isCompatibleWith(plan.payload_ty)) return false;
+    const shape = transparentSignatureShape(module, global.signature_type_id) orelse return false;
+    const payload_matches = switch (shape) {
+        .generic => |generic| std.mem.eql(u8, generic.base, "atomic") and generic.args.len == 1 and generic.args[0].eql(plan.payload_type_id),
+        else => false,
+    };
+    if (!payload_matches) return false;
+    if (!global.initializer_body_id.isValid() or global.initializer_body_id.index() >= module.functions.len) return false;
+    const body = module.functions[global.initializer_body_id.index()];
+    var atomic_calls: usize = 0;
+    for (body.call_target_facts) |fact| {
+        if (fact.kind != .atomic_init or fact.result_ty != .value) continue;
+        atomic_calls += 1;
+    }
+    return atomic_calls == 1;
 }
 
 fn structInitializerPlanMatchesType(plan: anytype, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {

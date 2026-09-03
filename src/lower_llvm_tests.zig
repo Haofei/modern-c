@@ -5483,6 +5483,7 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
     for (module_mir.global_initializer_facts) |fact| switch (fact.plan) {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
+        .atomic_init => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
         .nullable_null => return error.TestUnexpectedResult,
@@ -8295,7 +8296,7 @@ test "LLVM atomic init requires MIR identity and complete types" {
         \\    var counter: atomic<u32> = atomic.init(1);
         \\}
     ;
-    var parsed = try test_support.parseModule("llvm_atomic_init_facts.mc", source);
+    var parsed = try test_support.parseCheckedModule("llvm_atomic_init_facts.mc", source);
     defer parsed.deinit();
 
     var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());

@@ -609,7 +609,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
+                .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
             }
         }
     }
@@ -873,6 +873,7 @@ pub const CEmitter = struct {
             switch (fact.plan) {
                 .scalar => try self.emitCheckedScalarGlobal(global, fact),
                 .zero => try self.emitCheckedZeroGlobal(global),
+                .atomic_init => |plan| try self.emitCheckedAtomicInitGlobal(global, plan),
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
@@ -963,6 +964,16 @@ pub const CEmitter = struct {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
         const rendered_type = try mir_executable_c.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty);
         const value = (try self.constGlobalCValue(fact.initializer_body_id, global.ty)) orelse return error.UnsupportedCEmission;
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\n", .{name});
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, value });
+    }
+
+    fn emitCheckedAtomicInitGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.AtomicInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        const value = try self.cScalarGlobalValue(plan.value);
         try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");

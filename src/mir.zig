@@ -701,6 +701,7 @@ pub const CallableParameterEmissionFact = mir_model.CallableParameterEmissionFac
 pub const CheckedGlobalFact = mir_model.CheckedGlobalFact;
 pub const ConstScalarValue = mir_model.ConstScalarValue;
 pub const GlobalInitializerFact = mir_model.GlobalInitializerFact;
+pub const AtomicInitializerPlan = mir_model.AtomicInitializerPlan;
 pub const GlobalAddressInitializerPlan = mir_model.GlobalAddressInitializerPlan;
 pub const FunctionSymbolInitializerPlan = mir_model.FunctionSymbolInitializerPlan;
 pub const StringBackingId = mir_model.StringBackingId;
@@ -1539,6 +1540,30 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             }
                         }
                         if (!checked_global.has_initializer_plan) {
+                            if (try directAtomicGlobalInitializerPlan(
+                                allocator,
+                                initializer,
+                                ty,
+                                checked_global,
+                                &aliases,
+                                &enums,
+                                &structs,
+                                &packed_bits,
+                                &signature_types,
+                                &const_fns,
+                                &const_globals,
+                                &reflect_env,
+                            )) |plan| {
+                                checked_global.has_initializer_plan = true;
+                                try global_initializer_facts.append(allocator, .{
+                                    .global_symbol_id = checked_global.symbol_id,
+                                    .initializer_body_id = checked_global.initializer_body_id,
+                                    .value_ty = checked_global.ty,
+                                    .plan = .{ .atomic_init = plan },
+                                });
+                            }
+                        }
+                        if (!checked_global.has_initializer_plan) {
                             if (try directScalarGlobalCopyInitializer(
                                 initializer,
                                 checked_global,
@@ -2127,6 +2152,55 @@ fn directScalarGlobalCopySourceName(
             break :blk try directScalarGlobalCopySourceName(cast.value.*, destination_type_id, signature_types, type_aliases, symbol_ids, const_fns, const_globals);
         },
         else => null,
+    };
+}
+
+/// Admit the narrow top-level `atomic.init(<scalar>)` form as an explicit
+/// syntax-free plan. The source call is inspected once in MIR construction;
+/// the plan records the signature-table payload identity and checked scalar,
+/// so declaration artifacts and both backends do not need the call AST.
+fn directAtomicGlobalInitializerPlan(
+    allocator: std.mem.Allocator,
+    initializer: ast.Expr,
+    declared_type: ast.TypeExpr,
+    global: CheckedGlobalFact,
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    signature_types: *SignatureTypeTableBuilder,
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
+    reflect_env: *const MirReflectEnv,
+) !?mir_model.AtomicInitializerPlan {
+    const call = switch (initializer.kind) {
+        .call => |value| value,
+        .grouped => |inner| return directAtomicGlobalInitializerPlan(allocator, inner.*, declared_type, global, aliases, enums, structs, packed_bits, signature_types, const_fns, const_globals, reflect_env),
+        else => return null,
+    };
+    if (call.type_args.len != 0 or call.args.len != 1) return null;
+    const member = memberExpr(call.callee.*) orelse return null;
+    const base = calleeIdentName(member.base.*) orelse return null;
+    if (!std.mem.eql(u8, base, "atomic") or !std.mem.eql(u8, member.name.text, "init")) return null;
+    const payload_type = atomicPayloadTypeExprAlias(declared_type, aliases) orelse return null;
+    const payload_type_id = try signature_types.internTypeExpr(payload_type, const_fns, const_globals);
+    if (!atomicSignaturePayloadMatches(global.signature_type_id, payload_type_id, signature_types)) return null;
+    const payload_ty = valueTypeFromTypeAlias(payload_type, enums, structs, packed_bits, aliases);
+    if (global.ty != .value or !valueTypeRequiresScalarGlobalInitializerFact(payload_ty)) return null;
+    const value = (try foldMutableScalarGlobalInitializer(allocator, call.args[0], payload_type, const_fns, const_globals, reflect_env)) orelse return null;
+    if (!value.isCompatibleWith(payload_ty)) return null;
+    return .{ .payload_type_id = payload_type_id, .payload_ty = payload_ty, .value = value };
+}
+
+fn atomicSignaturePayloadMatches(
+    global_type_id: SignatureTypeId,
+    payload_type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+) bool {
+    const shape = signature_types.get(global_type_id) orelse return false;
+    return switch (shape) {
+        .generic => |generic| std.mem.eql(u8, generic.base, "atomic") and generic.args.len == 1 and generic.args[0].eql(payload_type_id),
+        else => false,
     };
 }
 

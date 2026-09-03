@@ -78,6 +78,21 @@ pub const CheckedProgram = struct {
                         !global.initializer_body_id.eql(fact.initializer_body_id) or !value.isCompatibleWith(fact.value_ty))
                         return error.InvalidGlobalInitializerFact;
                 },
+                .atomic_init => |plan| {
+                    if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len or
+                        global.ty != .value or !signature_types.contains(plan.payload_type_id) or
+                        !mir.valueTypeRequiresScalarGlobalInitializerFact(plan.payload_ty) or !plan.value.isCompatibleWith(plan.payload_ty))
+                        return error.InvalidGlobalInitializerFact;
+                    const shape = signature_types.get(global.signature_type_id) orelse return error.InvalidGlobalInitializerFact;
+                    const is_atomic = switch (shape) {
+                        .generic => |generic| std.mem.eql(u8, generic.base, "atomic") and generic.args.len == 1 and generic.args[0].eql(plan.payload_type_id),
+                        else => false,
+                    };
+                    const callable = callables[fact.initializer_body_id.index()];
+                    if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                        !global.initializer_body_id.eql(fact.initializer_body_id) or !is_atomic)
+                        return error.InvalidGlobalInitializerFact;
+                },
                 .zero => {
                     if (fact.initializer_body_id.isValid() or global.initializer_body_id.isValid())
                         return error.InvalidGlobalInitializerFact;

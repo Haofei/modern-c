@@ -798,7 +798,7 @@ const LlvmEmitter = struct {
             try self.global_is_const.put(name, global.is_const);
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
+                .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
             }
         }
     }
@@ -925,6 +925,7 @@ const LlvmEmitter = struct {
             switch (fact.plan) {
                 .scalar => try self.emitCheckedScalarGlobal(global, fact),
                 .zero => try self.emitCheckedZeroGlobal(global),
+                .atomic_init => |plan| try self.emitCheckedAtomicInitGlobal(global, plan),
                 .aggregate => |plan| try self.emitCheckedAggregateGlobal(global, plan),
                 .enum_case => |plan| try self.emitCheckedEnumGlobal(global, plan),
                 .nullable_null => try self.emitCheckedNullableNullGlobal(global),
@@ -940,6 +941,15 @@ const LlvmEmitter = struct {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try mir_executable_llvm.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty, null);
         const init = try self.scalarConstGlobalInitializer(fact);
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, init });
+    }
+
+    fn emitCheckedAtomicInitGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.AtomicInitializerPlan) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmSignatureType(global.signature_type_id);
+        const init = try self.llvmScalarGlobalInitializer(plan.value);
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const kind: []const u8 = if (global.is_const) "constant" else "global";
         try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, init });

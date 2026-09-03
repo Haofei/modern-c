@@ -1653,6 +1653,7 @@ test "CheckedProgram admits only complete scalar const-global initializer facts"
             else => {},
         },
         .zero => {},
+        .atomic_init => {},
         .aggregate => {},
         .enum_case => {},
         .nullable_null => {},
@@ -1742,7 +1743,7 @@ test "CheckedProgram admits direct scalar global copies without source initializ
             .uint => |integer| try std.testing.expectEqual(@as(u128, 7), integer),
             else => return error.TestUnexpectedResult,
         },
-        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
+        .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     };
     for (module_mir.checked_globals) |global| try std.testing.expect(global.has_initializer_plan);
 
@@ -1779,7 +1780,7 @@ test "CheckedProgram requires an admitted zero-global initializer plan" {
     try std.testing.expect(!module_mir.global_initializer_facts[0].initializer_body_id.isValid());
     switch (module_mir.global_initializer_facts[0].plan) {
         .zero => {},
-        .scalar => return error.TestUnexpectedResult,
+        .scalar, .atomic_init => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
         .nullable_null => return error.TestUnexpectedResult,
@@ -1812,7 +1813,7 @@ test "CheckedProgram admits only shape-matching aggregate global initializer pla
     const saved = module_mir.global_initializer_facts[0];
     switch (saved.plan) {
         .aggregate => {},
-        .scalar, .zero, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
+        .scalar, .zero, .atomic_init, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     }
     const checked = try checked_program.CheckedProgram.init(
         module_mir.checked_callables,
@@ -1894,7 +1895,7 @@ test "CheckedProgram admits direct enum global initializer plans" {
     const saved = module_mir.global_initializer_facts[0];
     const plan = switch (saved.plan) {
         .enum_case => |value| value,
-        .scalar, .zero, .aggregate, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
+        .scalar, .zero, .atomic_init, .aggregate, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     };
     try std.testing.expect(module_mir.checkedEnumGlobal(module_mir.checked_globals[0]) != null);
     const checked = try checked_program.CheckedProgram.init(
@@ -1981,7 +1982,7 @@ test "CheckedProgram admits direct global-address initializer plans" {
     const fact = module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) orelse return error.TestUnexpectedResult;
     const plan = switch (fact.plan) {
         .global_address => |value| value,
-        .scalar, .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .function_symbol => return error.TestUnexpectedResult,
+        .scalar, .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .function_symbol => return error.TestUnexpectedResult,
     };
     try std.testing.expect(plan.target_symbol_id.eql(module_mir.checked_globals[0].symbol_id));
     const checked = try checked_program.CheckedProgram.init(
@@ -2113,7 +2114,6 @@ test "global-copy clone retains string backing identity" {
     defer cloned_string.deinit(std.testing.allocator);
     try std.testing.expect(cloned_string.string_bytes.backing_id.eql(backing_id));
     try std.testing.expectEqualStrings("same", cloned_string.string_bytes.bytes);
-
     const string_leaf: mir_model.AggregateInitializerPlan = .{ .string_bytes = .{
         .bytes = "same",
         .backing_id = backing_id,
@@ -2122,6 +2122,33 @@ test "global-copy clone retains string backing identity" {
     const cloned_nested = (try nested.cloneForGlobalCopy(std.testing.allocator)) orelse return error.TestUnexpectedResult;
     defer cloned_nested.deinit(std.testing.allocator);
     try std.testing.expect(cloned_nested.aggregate.array[0].string_bytes.backing_id.eql(backing_id));
+}
+
+test "atomic global initializer plans require a valid payload signature" {
+    const source = "global ticks: atomic<u32> = atomic.init(7);";
+    var parsed = try test_support.parseCheckedModule("atomic_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
+    try std.testing.expect(module_mir.global_initializer_facts[0].plan == .atomic_init);
+    try std.testing.expect(module_mir.checked_globals[0].has_initializer_plan);
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved = module_mir.global_initializer_facts[0];
+    module_mir.global_initializer_facts[0].plan.atomic_init.payload_type_id = .invalid;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    module_mir.global_initializer_facts[0] = saved;
 }
 
 test "CheckedProgram admits decoded string-pointer global initializer plans" {
@@ -2141,7 +2168,7 @@ test "CheckedProgram admits decoded string-pointer global initializer plans" {
         const fact = module_mir.checkedStringBytesGlobal(global) orelse return error.TestUnexpectedResult;
         const plan = switch (fact.plan) {
             .string_bytes => |value| value,
-            .scalar, .zero, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => return error.TestUnexpectedResult,
+            .scalar, .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .global_address, .function_symbol => return error.TestUnexpectedResult,
         };
         try std.testing.expectEqual(global.symbol_id, fact.global_symbol_id);
         try std.testing.expect(module_mir.global_initializer_facts[index].plan == .string_bytes);
@@ -2199,7 +2226,7 @@ test "pure aggregate global plan releases partial trees on unsupported later ele
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     switch (module_mir.global_initializer_facts[0].plan) {
         .scalar => {},
-        .zero, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
+        .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => return error.TestUnexpectedResult,
     }
 }
 

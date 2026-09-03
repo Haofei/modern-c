@@ -379,6 +379,7 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
     for (module_mir.global_initializer_facts) |fact| switch (fact.plan) {
         .zero => {},
         .scalar => return error.TestUnexpectedResult,
+        .atomic_init => return error.TestUnexpectedResult,
         .aggregate => return error.TestUnexpectedResult,
         .enum_case => return error.TestUnexpectedResult,
         .nullable_null => return error.TestUnexpectedResult,
@@ -7741,6 +7742,9 @@ test "lower-c atomic init requires MIR identity and complete types" {
 
     var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &complete);
+    defer artifacts.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null);
