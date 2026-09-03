@@ -204,17 +204,16 @@ pub const DeferCleanupRef = struct {
     source: SourcePoint,
 };
 
-fn sourcePointMatchesInstruction(source: SourcePoint, instruction: Instruction) bool {
-    if (instruction.line != source.line or instruction.column != source.column) return false;
-    if (instruction.source_offset == 0 and instruction.source_len == 0 and source.offset == 0 and source.len == 0) return true;
-    return instruction.source_offset == source.offset and instruction.source_len == source.len;
+fn sourcePointMatchesInstruction(function: Function, source: SourcePoint, instruction: Instruction) bool {
+    const span_id = spanIdAtSource(function, source) orelse return false;
+    return instructionMatchesSpanId(function, instruction, span_id);
 }
 
 pub fn deferCleanupRefAtSource(function: Function, source: SourcePoint) ?DeferCleanupRef {
     for (function.blocks, 0..) |block, block_index| {
         for (block.instructions, 0..) |instruction, instruction_index| {
             if (instruction.kind != .defer_cleanup) continue;
-            if (!sourcePointMatchesInstruction(source, instruction)) continue;
+            if (!sourcePointMatchesInstruction(function, source, instruction)) continue;
             return .{
                 .block_id = BlockId.fromIndex(block_index),
                 .instruction_index = instruction_index,
@@ -258,13 +257,13 @@ pub fn deferCleanupRefValid(function: Function, ref: DeferCleanupRef) bool {
     const block = function.blocks[ref.block_id.index()];
     if (ref.instruction_index >= block.instructions.len) return false;
     const instruction = block.instructions[ref.instruction_index];
-    return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(ref.source, instruction);
+    return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(function, ref.source, instruction);
 }
 
 pub fn buildDeferCleanupEdgeTable(
     allocator: std.mem.Allocator,
     function: Function,
-) error{OutOfMemory}!DeferCleanupEdgeTable {
+) error{ OutOfMemory, InvalidSpanReference }!DeferCleanupEdgeTable {
     var refs: std.ArrayList(DeferCleanupEdgeActionRef) = .empty;
     defer refs.deinit(allocator);
 
@@ -280,7 +279,7 @@ pub fn buildDeferCleanupEdgeTable(
             try refs.append(allocator, .{
                 .block_id = BlockId.fromIndex(block_index),
                 .instruction_index = instruction_index,
-                .source = sourcePointFromInstruction(instruction),
+                .source = sourcePointFromInstruction(function, instruction) orelse return error.InvalidSpanReference,
             });
         }
     }
@@ -299,7 +298,7 @@ pub fn buildDeferCleanupEdgeTable(
     try appendDeferCleanupCfgEdge(allocator, &edge_list, .error_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
 
     for (function.blocks) |block| {
-        const source = cleanupEdgeSourceForBlock(block);
+        const source = cleanupEdgeSourceForBlock(function, block) orelse return error.InvalidSpanReference;
         switch (block.terminator) {
             .return_ => try appendDeferCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, actions),
             .jump => |target| {
@@ -340,9 +339,9 @@ fn appendDeferCleanupCfgEdge(
     });
 }
 
-fn cleanupEdgeSourceForBlock(block: Block) SourcePoint {
+fn cleanupEdgeSourceForBlock(function: Function, block: Block) ?SourcePoint {
     if (block.instructions.len == 0) return .{ .line = 0, .column = 0 };
-    return sourcePointFromInstruction(block.instructions[block.instructions.len - 1]);
+    return sourcePointFromInstruction(function, block.instructions[block.instructions.len - 1]);
 }
 
 pub fn cleanupCfgEdgeKindFromOwnership(kind: OwnershipCleanupEdgeKind) CleanupCfgEdgeKind {
@@ -370,7 +369,7 @@ pub fn buildCleanupCfg(
     module: Module,
     function: Function,
     ownership_plan: OwnershipCleanupPlan,
-) error{ InvalidMirOwnershipEvents, OutOfMemory }!CleanupCfg {
+) error{ InvalidMirOwnershipEvents, InvalidSpanReference, OutOfMemory }!CleanupCfg {
     var ownership_edges = try buildOwnershipCleanupEdgeTable(allocator, module, function, ownership_plan);
     defer ownership_edges.deinit(allocator);
     var defer_edges = try buildDeferCleanupEdgeTable(allocator, function);
@@ -576,7 +575,7 @@ fn deferCleanupEdgeActionRefValid(function: Function, ref: DeferCleanupEdgeActio
     const block = function.blocks[ref.block_id.index()];
     if (ref.instruction_index >= block.instructions.len) return false;
     const instruction = block.instructions[ref.instruction_index];
-    return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(ref.source, instruction);
+    return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(function, ref.source, instruction);
 }
 
 fn deferCleanupEdgeActionRefMatchesDeferRef(action: DeferCleanupEdgeActionRef, ref: DeferCleanupRef) bool {
@@ -585,13 +584,8 @@ fn deferCleanupEdgeActionRefMatchesDeferRef(action: DeferCleanupEdgeActionRef, r
         sourcePointMatches(action.source, ref.source);
 }
 
-fn sourcePointFromInstruction(instruction: Instruction) SourcePoint {
-    return .{
-        .line = instruction.line,
-        .column = instruction.column,
-        .offset = instruction.source_offset,
-        .len = instruction.source_len,
-    };
+fn sourcePointFromInstruction(function: Function, instruction: Instruction) ?SourcePoint {
+    return sourcePointForSpanId(function, instruction.typed_span_id);
 }
 
 fn sourcePointMatches(actual: SourcePoint, expected: SourcePoint) bool {
@@ -2409,7 +2403,7 @@ fn applyCheckedCallableFact(allocator: std.mem.Allocator, function: *Function, c
     function.irq_context = checked.irq_context;
 }
 
-fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
+fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) error{ InvalidMirOwnershipEvents, InvalidSpanReference, OutOfMemory }!void {
     for (module.functions) |*function| {
         var cleanup_plan = try buildOwnershipCleanupPlan(allocator, module.*, function.*);
         errdefer cleanup_plan.deinit(allocator);
@@ -3540,7 +3534,7 @@ fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostic
         for (block.instructions) |instruction| {
             if (!instructionTypedIdentitiesValid(function, instruction)) {
                 reporter.err(
-                    sourcePointSpan(.{ .line = instruction.line, .column = instruction.column, .offset = instruction.source_offset, .len = instruction.source_len }),
+                    sourcePointSpan(sourcePointForSpanId(function, instruction.typed_span_id) orelse .{ .line = instruction.line, .column = instruction.column }),
                     "E_MIR_IDENTITY: MIR verifier found malformed instruction identity",
                     .{},
                 );
@@ -3582,7 +3576,7 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
             indexFactForInstruction(function, instruction);
         if (!present) {
             reporter.err(
-                sourcePointSpan(.{ .line = instruction.line, .column = instruction.column, .offset = instruction.source_offset, .len = instruction.source_len }),
+                sourcePointSpan(sourcePointForSpanId(function, instruction.typed_span_id) orelse .{ .line = instruction.line, .column = instruction.column }),
                 "E_MIR_ACCESS_FACT: MIR verifier found index instruction without resolved access fact",
                 .{},
             );
@@ -3704,7 +3698,7 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         const index = instruction.typed_span_id.index();
         if (index >= function.span_identities.len) return false;
         const source = function.span_identities[index].source;
-        if (source.line != instruction.line or source.column != instruction.column or source.offset != instruction.source_offset or source.len != instruction.source_len) return false;
+        if (source.line != instruction.line or source.column != instruction.column) return false;
     }
     const requires_operand_identity = (instruction.kind == .unary and std.mem.eql(u8, instruction.detail, "logical_not")) or
         (instruction.kind == .binary and (std.mem.eql(u8, instruction.detail, "logical_and") or std.mem.eql(u8, instruction.detail, "logical_or")));
@@ -4337,7 +4331,7 @@ pub fn buildOwnershipCleanupEdgeTable(
     module: Module,
     function: Function,
     plan: OwnershipCleanupPlan,
-) error{ InvalidMirOwnershipEvents, OutOfMemory }!OwnershipCleanupEdgeTable {
+) error{ InvalidMirOwnershipEvents, OutOfMemory, InvalidSpanReference }!OwnershipCleanupEdgeTable {
     if (!ownershipCleanupPlanValid(module, function, plan)) return error.InvalidMirOwnershipEvents;
     if (plan.actions.len == 0) return .{};
 
@@ -4366,7 +4360,7 @@ pub fn buildOwnershipCleanupEdgeTable(
     try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .error_exit, .invalid, null, .{ .line = 0, .column = 0 }, action_refs.items, &plan);
 
     for (function.blocks) |block| {
-        const source = cleanupEdgeSourceForBlock(block);
+        const source = cleanupEdgeSourceForBlock(function, block) orelse return error.InvalidSpanReference;
         switch (block.terminator) {
             .return_ => try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, action_refs.items, &plan),
             .jump => |target| {
@@ -5380,12 +5374,12 @@ fn targetTypeInstructionCalleeSpansCompatible(left: Instruction, right: Instruct
 
 fn targetTypeSourceMatches(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
     if (fact.source.line != instruction.line or fact.source.column != instruction.column) return false;
-    return kind != .expression_result or (fact.source.offset == instruction.source_offset and fact.source.len == instruction.source_len);
+    return kind != .expression_result or fact.typed_span_id.eql(instruction.typed_span_id);
 }
 
 fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, right: Instruction) bool {
     if (left.line != right.line or left.column != right.column) return false;
-    return kind != .expression_result or (left.source_offset == right.source_offset and left.source_len == right.source_len);
+    return kind != .expression_result or left.typed_span_id.eql(right.typed_span_id);
 }
 
 fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool {
@@ -18544,8 +18538,6 @@ const FunctionBuilder = struct {
             .typed_span_id = typed_span_id,
             .line = span.line,
             .column = span.column,
-            .source_offset = span.offset,
-            .source_len = span.len,
         });
         if (representationFactKind(kind, ty)) {
             try self.representation_facts.append(self.allocator, .{

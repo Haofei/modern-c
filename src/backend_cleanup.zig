@@ -318,8 +318,12 @@ test "cleanup edge plan comes directly from MIR cleanup cfg" {
     const span: mir.SourcePoint = .{ .offset = 10, .len = 1, .line = 1, .column = 10 };
     const later_span: mir.SourcePoint = .{ .offset = 20, .len = 1, .line = 1, .column = 20 };
     var instructions = [_]mir.Instruction{
-        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = span.line, .column = span.column, .source_offset = span.offset, .source_len = span.len },
-        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = later_span.line, .column = later_span.column, .source_offset = later_span.offset, .source_len = later_span.len },
+        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = span.line, .column = span.column, .typed_span_id = mir.SpanId.fromIndex(0) },
+        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = later_span.line, .column = later_span.column, .typed_span_id = mir.SpanId.fromIndex(1) },
+    };
+    var span_identities = [_]mir.SpanIdentity{
+        .{ .id = mir.SpanId.fromIndex(0), .source = span },
+        .{ .id = mir.SpanId.fromIndex(1), .source = later_span },
     };
     var blocks = [_]mir.Block{
         .{
@@ -343,6 +347,7 @@ test "cleanup edge plan comes directly from MIR cleanup cfg" {
         .pointer_provenance_facts = &.{},
         .representation_facts = &.{},
         .elided_bounds = &.{},
+        .span_identities = span_identities[0..],
     };
     const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = later_span };
     var mir_defer_edges = try mir.buildDeferCleanupEdgeTable(std.testing.allocator, function);

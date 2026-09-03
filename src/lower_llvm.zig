@@ -2045,15 +2045,6 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn instructionSourcePoint(instruction: mir.Instruction) mir.SourcePoint {
-        return .{
-            .line = instruction.line,
-            .column = instruction.column,
-            .offset = instruction.source_offset,
-            .len = instruction.source_len,
-        };
-    }
-
     fn sameMirSourcePoint(a: mir.SourcePoint, b: mir.SourcePoint) bool {
         return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
     }

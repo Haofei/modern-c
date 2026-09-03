@@ -422,12 +422,7 @@ fn verifyInstructions(function: *const mir.Function) !void {
             const identity = typeIdentity(function, instruction.typed_result_ty) orelse return error.InvalidInstructionType;
             if (!std.mem.eql(u8, identity.spelling, instruction.result_ty.name())) return error.InvalidInstructionType;
         }
-        try verifyInstructionSpan(function, instruction.typed_span_id, .{
-            .line = instruction.line,
-            .column = instruction.column,
-            .offset = instruction.source_offset,
-            .len = instruction.source_len,
-        });
+        try verifyInstructionSpan(function, instruction.typed_span_id, null);
         inline for ([_]mir.SpanId{
             instruction.typed_left_operand_span_id,
             instruction.typed_right_operand_span_id,
@@ -495,7 +490,7 @@ fn verifyDeferCleanupRef(function: *const mir.Function, ref: mir.DeferCleanupEdg
     const block = blockById(function, ref.block_id).?;
     if (ref.instruction_index >= block.instructions.len) return error.InvalidCleanupAction;
     const instruction = block.instructions[ref.instruction_index];
-    if (instruction.kind != .defer_cleanup or !instructionSourceMatches(ref.source, sourceOf(instruction))) return error.InvalidCleanupAction;
+    if (instruction.kind != .defer_cleanup or !instructionSourceMatches(ref.source, sourceOf(function, instruction))) return error.InvalidCleanupAction;
 }
 
 fn buildBlocks(allocator: std.mem.Allocator, function: *const mir.Function) ![]const BlockPlan {
@@ -533,7 +528,7 @@ fn instructionPlan(function: *const mir.Function, instruction: mir.Instruction) 
         .value_id = instruction.typed_value_id orelse .invalid,
         .location = .{
             .span_id = instruction.typed_span_id,
-            .source = if (spanIdentity(function, instruction.typed_span_id)) |identity| identity.source else sourceOf(instruction),
+            .source = sourceOf(function, instruction),
         },
         .operands = .{
             .left = instruction.typed_left_operand_span_id,
@@ -722,23 +717,20 @@ fn spanIdAtSource(function: *const mir.Function, source: mir.SourcePoint) mir.Sp
     return found;
 }
 
-fn sourceOf(instruction: mir.Instruction) mir.SourcePoint {
-    return .{
-        .line = instruction.line,
-        .column = instruction.column,
-        .offset = instruction.source_offset,
-        .len = instruction.source_len,
-    };
+fn sourceOf(function: *const mir.Function, instruction: mir.Instruction) mir.SourcePoint {
+    return if (spanIdentity(function, instruction.typed_span_id)) |identity|
+        identity.source
+    else
+        .{ .line = instruction.line, .column = instruction.column };
 }
 
 fn sourceEquivalent(a: mir.SourcePoint, b: mir.SourcePoint) bool {
     return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len and a.file_id == b.file_id;
 }
 
-/// `mir.Instruction` predates per-file source identity and carries line,
-/// column, and offsets rather than a FileId. A typed span is therefore the
-/// authority for file provenance; instruction-to-span validation deliberately
-/// compares only the fields that the instruction stores.
+/// `SpanId` is the authority for instruction provenance. The fallback only
+/// preserves line/column for malformed hand-built fixtures; admitted MIR must
+/// resolve every instruction span through the identity table.
 fn instructionSourceMatches(span_source: mir.SourcePoint, instruction_source: mir.SourcePoint) bool {
     if (span_source.line != instruction_source.line or span_source.column != instruction_source.column) return false;
     if (span_source.offset == 0 and span_source.len == 0 and instruction_source.offset == 0 and instruction_source.len == 0) return true;
@@ -816,8 +808,6 @@ const Fixture = struct {
             .typed_span_id = mir.SpanId.fromIndex(0),
             .line = 1,
             .column = 3,
-            .source_offset = 2,
-            .source_len = 5,
         }};
         self.blocks = .{
             .{

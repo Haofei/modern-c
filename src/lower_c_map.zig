@@ -141,6 +141,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
+                const source = mir.sourcePointForSpanId(function, instruction.typed_span_id) orelse return error.InvalidMirInstructionIdentity;
                 const target_owner = if (instruction.typed_target_owner_id) |owner_id|
                     mir.targetOwnerSpelling(function, owner_id) orelse "<invalid>"
                 else
@@ -161,10 +162,10 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                     if (instruction.typed_value_id) |id| valueSpelling(function, id) else "none",
                     optionalTypedIndexOrMax(instruction.typed_value_id),
                     typedIndexOrMax(instruction.typed_span_id),
-                    instruction.line,
-                    instruction.column,
-                    instruction.source_offset,
-                    instruction.source_len,
+                    source.line,
+                    source.column,
+                    source.offset,
+                    source.len,
                 });
             }
         }
@@ -485,8 +486,9 @@ const SourceMapEmitter = struct {
         }
         for (function.blocks) |block| {
             for (block.instructions, 0..) |instruction, instruction_index| {
-                if (instruction.line == 0) continue;
-                const span = sourcePointAsSpan(instruction.line, instruction.column, instruction.source_offset, instruction.source_len, file_id);
+                const source = mir.sourcePointForSpanId(function, instruction.typed_span_id) orelse continue;
+                if (source.line == 0) continue;
+                const span = sourcePointAsSpan(source.line, source.column, source.offset, source.len, if (source.file_id == diagnostics.invalid_file_id) file_id else source.file_id);
                 const mir_block = try std.fmt.allocPrint(
                     self.allocator,
                     "mir:{s}:block:{d}:instr:{d}:{s}",

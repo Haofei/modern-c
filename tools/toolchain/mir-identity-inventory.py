@@ -91,6 +91,9 @@ def main() -> int:
     instruction_end = model.index("\n\npub const ", instruction_start)
     if "target_ty:" in model[instruction_start:instruction_end]:
         fail("src/mir_model.zig Instruction duplicates target syntax beside SignatureTypeId")
+    for field in ("source_offset:", "source_len:"):
+        if field in model[instruction_start:instruction_end]:
+            fail(f"src/mir_model.zig Instruction duplicates {field[:-1]} beside SpanId")
 
     function_start = model.index("pub const Function = struct {")
     function_end = model.index("\n\n/// Syntax-free semantic summary", function_start)

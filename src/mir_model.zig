@@ -452,8 +452,6 @@ pub const Instruction = struct {
     callee_field_index: ?usize = null,
     line: usize,
     column: usize,
-    source_offset: usize = 0,
-    source_len: usize = 0,
 
     pub const Kind = enum {
         param,
