@@ -3221,7 +3221,7 @@ fn memoryLoadSupported(
     if (place.storage != .ordinary) return false;
     if (place.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
-            const expected_kind: mir.ExecutableMemoryAccessKind = if (indexed.parameter_pointee)
+            const expected_kind: mir.ExecutableMemoryAccessKind = if (indexed.indirectPointee())
                 .race_unordered
             else switch (place.root) {
                 .local => .plain,
@@ -3235,13 +3235,13 @@ fn memoryLoadSupported(
                 .value => return false,
             };
             return load.access.kind == expected_kind and
-                indexed.parameter_pointee == (load.representation_source != null and load.representation_span_id.isValid()) and
+                indexed.indirectPointee() == (load.representation_source != null and load.representation_span_id.isValid()) and
                 if (mir.executableFixedArrayCheckedProjectionCount(place.*) != 0)
                     fixedArrayLoadBoundsTrapEdge(body, expression) != null and
                         ownedTrapEdgeCount(body, expression.id) == mir.executableFixedArrayCheckedProjectionCount(place.*) +
-                            @as(usize, @intFromBool(indexed.parameter_pointee))
+                            @as(usize, @intFromBool(indexed.indirectPointee()))
                 else
-                    ownedTrapEdgeCount(body, expression.id) == @as(usize, @intFromBool(indexed.parameter_pointee));
+                    ownedTrapEdgeCount(body, expression.id) == @as(usize, @intFromBool(indexed.indirectPointee()));
         }
         if (callable or dyn_value or slice_value) {
             const projected_through_pointer = switch (place.root_ty) {
@@ -3512,7 +3512,7 @@ fn addressOfSupported(
     if (!addressResultMatchesPlace(expression.result_ty, place.ty)) return false;
     if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
         if (!fixedArrayAddressablePlaceSupported(body, place.*)) return false;
-        if (indexed.parameter_pointee != (address.representation_source != null and address.representation_span_id.isValid()))
+        if (indexed.indirectPointee() != (address.representation_source != null and address.representation_span_id.isValid()))
             return false;
         return fixedArrayLoadBoundsTrapEdge(body, expression) != null;
     }
@@ -3548,7 +3548,7 @@ fn addressOfSupported(
 
 fn fixedArrayAddressablePlaceSupported(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
     const indexed = mir.executableFixedArrayIndexPlace(body, place) orelse return false;
-    if (indexed.parameter_pointee) return true;
+    if (indexed.indirectPointee()) return true;
     return switch (place.root) {
         .local => |id| local: {
             for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
@@ -3702,8 +3702,8 @@ fn memoryStoreSupported(
         if (!aggregate_copy and !isSliceType(store.ty) and scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
             mir.executableCallablePlace(body.aggregate_types, place.*) == null and !dyn_store) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
-            const access_ok = if (indexed.parameter_pointee)
-                store.access.kind == .race_unordered and mir.executableFixedArrayParameterPointeePlace(body, place.*, true)
+            const access_ok = if (indexed.indirectPointee())
+                store.access.kind == .race_unordered and mir.executableFixedArrayIndirectPointeePlace(body, place.*, true)
             else switch (place.root) {
                 .local => store.access.kind == .plain,
                 .symbol => |id| if (symbolById(body, id)) |symbol|
@@ -3713,13 +3713,13 @@ fn memoryStoreSupported(
                 .value => false,
             };
             return access_ok and
-                indexed.parameter_pointee == (store.representation_source != null and store.representation_span_id.isValid()) and
+                indexed.indirectPointee() == (store.representation_source != null and store.representation_span_id.isValid()) and
                 if (mir.executableFixedArrayCheckedProjectionCount(place.*) != 0)
                     statementBoundsTrapEdge(body, statement) != null and
                         ownedStatementTrapEdgeCount(body, statement.id) == mir.executableFixedArrayCheckedProjectionCount(place.*) +
-                            @as(usize, @intFromBool(indexed.parameter_pointee))
+                            @as(usize, @intFromBool(indexed.indirectPointee()))
                 else
-                    ownedStatementTrapEdgeCount(body, statement.id) == @as(usize, @intFromBool(indexed.parameter_pointee));
+                    ownedStatementTrapEdgeCount(body, statement.id) == @as(usize, @intFromBool(indexed.indirectPointee()));
         }
         if (mir.executableSliceIndexPlace(body, place.*) != null) {
             const mutable_slice = switch (place.root_ty) {
@@ -4020,7 +4020,7 @@ fn fixedArrayLoadBoundsTrapEdge(body: *const mir.ExecutableBody, expression: mir
     if (indexed == null and
         mir.executableSliceIndexPlace(body, place.*) == null) return null;
     const expected = mir.executableCheckedIndexProjectionCount(place.*);
-    const representation_count: usize = @intFromBool(indexed != null and indexed.?.parameter_pointee);
+    const representation_count: usize = @intFromBool(indexed != null and indexed.?.indirectPointee());
     if (expected == 0 or ownedTrapEdgeCount(body, expression.id) != expected + representation_count) return null;
     if (representation_count == 1) {
         const has_metadata = switch (expression.operation) {
@@ -4178,7 +4178,7 @@ fn statementRepresentationOperationHasExactTrapEdge(
 ) bool {
     const place = placeById(body, store.place) orelse return false;
     if (!(parameterScalarAccessPlaceSupported(body, place.*) or
-        mir.executableFixedArrayParameterPointeePlace(body, place.*, true) or
+        mir.executableFixedArrayIndirectPointeePlace(body, place.*, true) or
         mir.executableParameterProjectedPlace(body, place.*, true) or
         mir.executableLocalAddressDerefPlace(body, place.*, false) or
         mir.executableGuardedLocalScalarDerefPlace(body, place.*, true) or
@@ -4208,7 +4208,7 @@ fn statementBoundsTrapEdge(body: *const mir.ExecutableBody, statement: mir.Execu
         mir.executableSliceIndexPlace(body, place.*) == null) return null;
     const expected = mir.executableCheckedIndexProjectionCount(place.*);
     const indexed = mir.executableFixedArrayIndexPlace(body, place.*);
-    const representation_count: usize = @intFromBool(indexed != null and indexed.?.parameter_pointee);
+    const representation_count: usize = @intFromBool(indexed != null and indexed.?.indirectPointee());
     if (expected == 0 or ownedStatementTrapEdgeCount(body, statement.id) != expected + representation_count) return null;
     if (representation_count == 1 and
         (store.representation_source == null or !store.representation_span_id.isValid())) return null;
@@ -4799,12 +4799,12 @@ fn emitPlace(
     const place = &ordinary_place;
     if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
         try out.append(allocator, '(');
-        if (indexed.parameter_pointee) try out.appendSlice(allocator, "*(");
+        if (indexed.indirectPointee()) try out.appendSlice(allocator, "*(");
         try emitPlaceRootValue(allocator, out, body, place.*);
-        if (indexed.parameter_pointee) try out.append(allocator, ')');
+        if (indexed.indirectPointee()) try out.append(allocator, ')');
         try out.append(allocator, ')');
         var current_type_id = place.root_type_id;
-        if (indexed.parameter_pointee) {
+        if (indexed.indirectPointee()) {
             const pointer = switch (place.root_ty) {
                 .pointer => |shape| shape,
                 else => return error.InvalidPlace,
@@ -4830,7 +4830,7 @@ fn emitPlace(
                 try appendIdent(allocator, out, aggregate.field_spellings[field_index]);
                 current_type_id = aggregate.field_type_ids[field_index];
             },
-            .deref => if (!indexed.parameter_pointee) return error.InvalidPlace,
+            .deref => if (!indexed.indirectPointee()) return error.InvalidPlace,
         };
         return;
     }

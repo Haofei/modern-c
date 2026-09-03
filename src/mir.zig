@@ -7973,6 +7973,7 @@ const FunctionBuilder = struct {
             .locals = self.executable_locals.items,
             .statements = self.executable_statements.items,
             .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
             .aggregate_types = self.executable_aggregate_types.items,
         };
         return mir_model.executableFixedArrayIndexPlace(&transient_body, place) != null;
@@ -8173,16 +8174,17 @@ const FunctionBuilder = struct {
             .locals = self.executable_locals.items,
             .statements = self.executable_statements.items,
             .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
             .aggregate_types = self.executable_aggregate_types.items,
         };
         if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| {
-            if (indexed.parameter_pointee) return true;
+            if (indexed.indirectPointee()) return true;
         }
         if (self.executableSliceIndexPlaceComplete(place)) return true;
         if (!self.executablePlaceComplete(place)) return false;
         if (self.executableFixedArrayIndexPlaceComplete(place)) {
             const indexed = mir_model.executableFixedArrayIndexPlace(&transient_body, place) orelse return false;
-            if (indexed.parameter_pointee) return true;
+            if (indexed.indirectPointee()) return true;
             return switch (place.root) {
                 .local => |id| local: {
                     for (self.executable_parameters.items) |parameter| if (parameter.local.eql(id)) break :local false;
@@ -8263,9 +8265,10 @@ const FunctionBuilder = struct {
                     .locals = self.executable_locals.items,
                     .statements = self.executable_statements.items,
                     .expressions = self.executable_expressions.items,
+                    .places = self.executable_places.items,
                     .aggregate_types = self.executable_aggregate_types.items,
                 };
-                if (mir_model.executableFixedArrayParameterPointeePlace(&transient_body, place, is_store))
+                if (mir_model.executableFixedArrayIndirectPointeePlace(&transient_body, place, is_store))
                     return access.kind == .race_unordered;
                 return switch (place.root) {
                     .local => access.kind == .plain,
@@ -8735,7 +8738,7 @@ const FunctionBuilder = struct {
             mir_model.executableGuardedLocalAggregateDerefPlace(&body, place, require_mutable) or
             mir_model.executableGlobalPointerDerefPlace(&body, place, require_mutable) or
             mir_model.executableAggregatePointerFieldDerefPlace(&body, place, require_mutable) != null or
-            mir_model.executableFixedArrayParameterPointeePlace(&body, place, require_mutable) or
+            mir_model.executableFixedArrayIndirectPointeePlace(&body, place, require_mutable) or
             mir_model.executableParameterProjectedPlace(&body, place, require_mutable);
     }
 
@@ -12079,6 +12082,38 @@ const FunctionBuilder = struct {
         return false;
     }
 
+    fn executableLocalPointerInitialization(
+        self: *const FunctionBuilder,
+        local_id: LocalId,
+        root_ty: ValueType,
+    ) ?InstId {
+        var index = self.executable_statements.items.len;
+        while (index != 0) {
+            index -= 1;
+            const statement = self.executable_statements.items[index];
+            switch (statement.operation) {
+                .store => |store| {
+                    // Statement type IDs are finalized after executable place
+                    // construction. The canonical value type is sufficient
+                    // here; the completed witness is checked by the verifier.
+                    if (!sameValueType(store.ty, root_ty) or
+                        !store.place.isValid() or store.place.index() >= self.executable_places.items.len) continue;
+                    const target = self.executable_places.items[store.place.index()];
+                    if (target.root == .local and target.root.local.eql(local_id) and target.projection_count == 0)
+                        return statement.id;
+                },
+                .local_init => |local_init| if (local_init.local.eql(local_id)) {
+                    return if (local_init.value != null and sameValueType(local_init.ty, root_ty))
+                        statement.id
+                    else
+                        null;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
     fn fillExecutablePlace(self: *FunctionBuilder, place: *ExecutablePlace, expr: ast.Expr) anyerror!bool {
         return switch (expr.kind) {
             .grouped => |inner| try self.fillExecutablePlace(place, inner.*),
@@ -12092,6 +12127,12 @@ const FunctionBuilder = struct {
                     .{ .symbol = try self.internExecutableSymbol(ident.text) };
                 place.root_ty = root_ty;
                 place.root_type_id = try self.internTypeId(root_ty);
+                if (place.root == .local and root_ty == .pointer) {
+                    place.root_initialization = self.executableLocalPointerInitialization(
+                        place.root.local,
+                        place.root_ty,
+                    ) orelse .invalid;
+                }
                 break :root true;
             },
             .member => |node| projection: {
@@ -15994,6 +16035,7 @@ const FunctionBuilder = struct {
             .locals = self.executable_locals.items,
             .statements = self.executable_statements.items,
             .expressions = self.executable_expressions.items,
+            .places = self.executable_places.items,
             .aggregate_types = self.executable_aggregate_types.items,
         };
         if (mir_model.executableFixedArrayIndexPlace(&transient_body, place) == null and
@@ -17217,7 +17259,7 @@ const FunctionBuilder = struct {
                 .aggregate_types = self.executable_aggregate_types.items,
             };
             const parameter_index_address = if (representation.parameter_field_address)
-                if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| indexed.parameter_pointee else false
+                if (mir_model.executableFixedArrayIndexPlace(&transient_body, place)) |indexed| indexed.indirectPointee() else false
             else
                 false;
             // A computed pointer value owns its own representation check. In

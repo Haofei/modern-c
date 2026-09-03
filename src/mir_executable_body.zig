@@ -354,8 +354,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 try verifyMemoryAccess(function, operation.place, value.result_ty, operation.access, false);
                 if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
                     const indexed = mir.executableFixedArrayIndexPlace(body, target.*).?;
-                    const representation_count: usize = @intFromBool(indexed.parameter_pointee);
-                    if (indexed.parameter_pointee) {
+                    const representation_count: usize = @intFromBool(indexed.indirectPointee());
+                    if (indexed.indirectPointee()) {
                         const source = operation.representation_source orelse return error.InvalidMemoryAccessTrap;
                         try verifySpan(function, operation.representation_span_id, source);
                         if (ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
@@ -781,8 +781,8 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 } else if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
                     const indexed = mir.executableFixedArrayIndexPlace(body, target.*).?;
                     if (!fixedArrayAddressableRoot(body, target.*)) return error.InvalidMemoryAccessTrap;
-                    const representation_count: usize = @intFromBool(indexed.parameter_pointee);
-                    if (indexed.parameter_pointee) {
+                    const representation_count: usize = @intFromBool(indexed.indirectPointee());
+                    if (indexed.indirectPointee()) {
                         const source = address.representation_source orelse return error.InvalidMemoryAccessTrap;
                         try verifySpan(function, address.representation_span_id, source);
                         if (ownedTrapCount(body, .{ .expression = value.id }, .InvalidRepresentation, .representation_check) != 1)
@@ -951,7 +951,7 @@ fn stringLiteralType(ty: mir.ValueType) bool {
 
 fn fixedArrayAddressableRoot(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) bool {
     const indexed = mir.executableFixedArrayIndexPlace(body, target) orelse return false;
-    if (indexed.parameter_pointee) return true;
+    if (indexed.indirectPointee()) return true;
     return switch (target.root) {
         .local => |id| local: {
             for (body.parameters) |parameter| if (parameter.local.eql(id)) break :local false;
@@ -1067,7 +1067,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                                 mir.executableGuardedLocalAggregateDerefPlace(body, target.*, false) or
                                 mir.executableGlobalPointerDerefPlace(body, target.*, false) or
                                 mir.executableAggregatePointerFieldDerefPlace(body, target.*, false) != null or
-                                mir.executableFixedArrayParameterPointeePlace(body, target.*, false)) or
+                                mir.executableFixedArrayIndirectPointeePlace(body, target.*, false)) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
@@ -1092,7 +1092,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         } else if (!(isSingleParameterDerefPlace(body, target.*, false) or
                             mir.executableLocalAddressDerefPlace(body, target.*, false) or
                             mir.executableParameterProjectedPlace(body, target.*, false) or
-                            (indexed != null and indexed.?.parameter_pointee)) or
+                            (indexed != null and indexed.?.indirectPointee())) or
                             edge.kind != .InvalidRepresentation or
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
@@ -1179,7 +1179,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             mir.executableGuardedLocalAggregateDerefPlace(body, target.*, true) or
                             mir.executableGlobalPointerDerefPlace(body, target.*, true) or
                             mir.executableAggregatePointerFieldDerefPlace(body, target.*, true) != null or
-                            mir.executableFixedArrayParameterPointeePlace(body, target.*, true) or
+                            mir.executableFixedArrayIndirectPointeePlace(body, target.*, true) or
                             mir.executableParameterProjectedPlace(body, target.*, true)) or
                             edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                             return error.InvalidTrapEdge;
@@ -2362,7 +2362,7 @@ fn verifyMemoryAccess(
         !mir.executableRaceAggregateTypeSupported(body, target.type_id, target.ty)) return error.InvalidMemoryAccessType;
     if (target.projection_count != 0) {
         if (mir.executableFixedArrayIndexPlace(body, target.*) != null) {
-            if (mir.executableFixedArrayParameterPointeePlace(body, target.*, is_store)) {
+            if (mir.executableFixedArrayIndirectPointeePlace(body, target.*, is_store)) {
                 if (access.kind != .race_unordered) return error.InvalidMemoryAccessKind;
                 return;
             }

@@ -1538,6 +1538,9 @@ pub const ExecutablePlace = struct {
     /// on the canonical place prevents codegen from consulting the legacy
     /// string-keyed pointer-fact log to choose plain versus unordered access.
     pointer_provenance: PointerProvenance = .unknown,
+    /// Statement that initialized a local pointer root before this projected
+    /// access. Parameters and direct aggregate roots leave this invalid.
+    root_initialization: InstId = .invalid,
     /// The root pointer was produced by unwrapping the present arm of an
     /// optional. This is an executable-MIR proof, not a request for codegen
     /// to rediscover source control flow. Complete bodies may set it only for
@@ -2477,17 +2480,11 @@ pub fn executableParameterProjectedPlace(
         .local => |id| id,
         .symbol, .value => return false,
     };
-    var typed_root = executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id);
-    if (!typed_root) {
-        if (!local.isValid() or local.index() >= body.locals.len or !body.locals[local.index()].id.eql(local)) return false;
-        for (body.statements) |statement| switch (statement.operation) {
-            .local_init => |init| if (init.local.eql(local)) {
-                typed_root = init.type_id.eql(place.root_type_id) and ValueType.eql(init.ty, place.root_ty);
-                break;
-            },
-            else => {},
-        };
-    }
+    const parameter_root = executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id);
+    const typed_root = if (parameter_root)
+        !place.root_initialization.isValid()
+    else
+        executableLocalPointerInitialization(body, place, local);
     if (!typed_root) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
@@ -2796,7 +2793,40 @@ pub const ExecutableFixedArrayIndexPlace = struct {
     /// projection dereferences that parameter.  Consumers must preserve the
     /// representation guard before walking the remaining field/index chain.
     parameter_pointee: bool,
+    /// The same checked pointer projection rooted in an addressable local.
+    /// Its initialization witness is carried by `place.root_initialization`.
+    local_pointee: bool,
+
+    pub fn indirectPointee(self: ExecutableFixedArrayIndexPlace) bool {
+        return self.parameter_pointee or self.local_pointee;
+    }
 };
+
+fn executableLocalPointerInitialization(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    local_id: LocalId,
+) bool {
+    if (!place.root_initialization.isValid() or place.root_initialization.index() >= body.statements.len) return false;
+    const witness = body.statements[place.root_initialization.index()];
+    if (!witness.id.eql(place.root_initialization)) return false;
+    return switch (witness.operation) {
+        .local_init => |init| init.local.eql(local_id) and init.value != null and
+            ValueType.eql(init.ty, place.root_ty),
+        .store => |store| initialized: {
+            if (!ValueType.eql(store.ty, place.root_ty) or
+                !store.place.isValid() or store.place.index() >= body.places.len or
+                !store.value.isValid() or store.value.index() >= body.expressions.len) break :initialized false;
+            const target = body.places[store.place.index()];
+            const value = body.expressions[store.value.index()];
+            break :initialized target.id.eql(store.place) and target.root == .local and
+                target.root.local.eql(local_id) and target.projection_count == 0 and
+                value.id.eql(store.value) and ValueType.eql(value.result_ty, place.root_ty) and
+                value.type_id.eql(place.root_type_id);
+        },
+        else => false,
+    };
+}
 
 /// Validate a typed projection chain containing at least one fixed-array
 /// index. Every index and field advances through the canonical aggregate
@@ -2815,6 +2845,7 @@ pub fn executableFixedArrayIndexPlace(
     var current_type_id = place.root_type_id;
     var projection_start: usize = 0;
     var parameter_pointee = false;
+    var local_pointee = false;
     if (place.projections[0] == .deref) {
         const local_id = switch (place.root) {
             .local => |id| id,
@@ -2825,9 +2856,15 @@ pub fn executableFixedArrayIndexPlace(
             parameter = candidate;
             break;
         };
-        const root = parameter orelse return null;
-        if (!root.type_id.eql(place.root_type_id) or !ValueType.eql(root.ty, place.root_ty)) return null;
-        const pointer = switch (root.ty) {
+        if (parameter) |root| {
+            if (!root.type_id.eql(place.root_type_id) or !ValueType.eql(root.ty, place.root_ty) or
+                place.root_initialization.isValid()) return null;
+            parameter_pointee = true;
+        } else {
+            if (!executableLocalPointerInitialization(body, place, local_id)) return null;
+            local_pointee = true;
+        }
+        const pointer = switch (place.root_ty) {
             .pointer => |shape| shape,
             else => return null,
         };
@@ -2842,7 +2879,6 @@ pub fn executableFixedArrayIndexPlace(
         current_ty = aggregate.ty;
         current_type_id = aggregate.type_id;
         projection_start = 1;
-        parameter_pointee = true;
     }
     var first_index: ?@FieldType(ExecutablePlace.Projection, "index") = null;
     for (place.projections[projection_start..place.projection_count]) |item| switch (item) {
@@ -2891,7 +2927,11 @@ pub fn executableFixedArrayIndexPlace(
         .deref => return null,
     };
     if (!ValueType.eql(current_ty, place.ty) or !current_type_id.eql(place.type_id)) return null;
-    return .{ .first_index = first_index orelse return null, .parameter_pointee = parameter_pointee };
+    return .{
+        .first_index = first_index orelse return null,
+        .parameter_pointee = parameter_pointee,
+        .local_pointee = local_pointee,
+    };
 }
 
 /// A fixed-array projection whose storage begins behind a checked pointer
@@ -2905,6 +2945,20 @@ pub fn executableFixedArrayParameterPointeePlace(
 ) bool {
     const indexed = executableFixedArrayIndexPlace(body, place) orelse return false;
     if (!indexed.parameter_pointee) return false;
+    const pointer = switch (place.root_ty) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return pointer.kind == .single and (!require_mutable or pointer.mutability == .mut);
+}
+
+pub fn executableFixedArrayIndirectPointeePlace(
+    body: *const ExecutableBody,
+    place: ExecutablePlace,
+    require_mutable: bool,
+) bool {
+    const indexed = executableFixedArrayIndexPlace(body, place) orelse return false;
+    if (!indexed.indirectPointee()) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,
         else => return false,
