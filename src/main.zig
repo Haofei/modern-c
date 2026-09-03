@@ -25,7 +25,6 @@ const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
-const monomorphize = @import("monomorphize.zig");
 const symbols = @import("symbols.zig");
 
 const usage =
@@ -237,14 +236,7 @@ fn runMain(init: std.process.Init) !void {
         .mc_path = mc_path_entries.items,
     }, &load_diag) catch |err| switch (err) {
         error.Reported => {
-            if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
-                var out: std.ArrayList(u8) = .empty;
-                defer out.deinit(allocator);
-                try load_diag.appendJson(&out);
-                try session.writeStdout(out.items);
-            } else {
-                load_diag.render();
-            }
+            try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
             return error.ImportNotFound;
         },
         else => return err,
@@ -261,14 +253,7 @@ fn runMain(init: std.process.Init) !void {
     load_diag.source = source;
     load_diag.source_views = diagnostic_sources;
     if (load_diag.has_errors) {
-        if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
-            var out: std.ArrayList(u8) = .empty;
-            defer out.deinit(allocator);
-            try load_diag.appendJson(&out);
-            try session.writeStdout(out.items);
-        } else {
-            load_diag.render();
-        }
+        try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
         return error.ImportNotFound;
     }
     session.source_views = diagnostic_sources;
@@ -291,14 +276,7 @@ fn runMain(init: std.process.Init) !void {
     var parsed_sources: module_parser.ParsedSourceDatabase = undefined;
     var resolved_sources: module_parser.ResolvedSourceDatabase = undefined;
     session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources) catch |err| {
-        if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
-            var out: std.ArrayList(u8) = .empty;
-            defer out.deinit(allocator);
-            try load_diag.appendJson(&out);
-            try session.writeStdout(out.items);
-        } else {
-            load_diag.render();
-        }
+        try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
         return err;
     };
     defer session.resolved_sources = null;
@@ -310,14 +288,7 @@ fn runMain(init: std.process.Init) !void {
     defer session.resolved_program = null;
     if (commandNeedsResolvedProgram(command)) {
         resolved_program = session.prepareResolvedProgram(module_parse_arena.allocator(), &load_diag) catch |err| {
-            if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
-                var out: std.ArrayList(u8) = .empty;
-                defer out.deinit(allocator);
-                try load_diag.appendJson(&out);
-                try session.writeStdout(out.items);
-            } else {
-                load_diag.render();
-            }
+            try emitDiagnostics(&session, &load_diag, std.mem.eql(u8, command, "check") and options.json_diagnostics);
             return err;
         };
         resolved_program_ready = true;
@@ -590,19 +561,19 @@ fn runCheck(session: *CompilationSession, path: []const u8, source: []const u8, 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
     session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.CheckFailed) catch |err| {
         if (diag.has_errors) {
-            try emitCheckDiagnostics(session, &diag, json_diagnostics);
+            try emitDiagnostics(session, &diag, json_diagnostics);
         }
         return err;
     };
 
     if (json_diagnostics) {
-        try emitCheckDiagnostics(session, &diag, true);
+        try emitDiagnostics(session, &diag, true);
     } else {
         std.debug.print("parsed {d} top-level declarations\n", .{resolved.decls.len});
     }
 }
 
-fn emitCheckDiagnostics(session: *CompilationSession, diag: *diagnostics.Reporter, json_diagnostics: bool) !void {
+fn emitDiagnostics(session: *CompilationSession, diag: *diagnostics.Reporter, json_diagnostics: bool) !void {
     if (!json_diagnostics) {
         diag.render();
         return;
