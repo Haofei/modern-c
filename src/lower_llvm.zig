@@ -6301,7 +6301,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
-        return mir_source_bridge.hasCallTargetKindAt(self.currentMirFunction(), kind, span, true);
+        return mir_source_bridge.hasCallTargetKindAt(self.currentMirFunction(), kind, span);
     }
 
     fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {

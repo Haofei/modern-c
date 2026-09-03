@@ -6487,7 +6487,7 @@ pub const CEmitter = struct {
     }
 
     fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
-        return mir_source_bridge.hasCallTargetKindAt(self.currentMirFunction(), kind, span, false);
+        return mir_source_bridge.hasCallTargetKindAt(self.currentMirFunction(), kind, span);
     }
 
     fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {

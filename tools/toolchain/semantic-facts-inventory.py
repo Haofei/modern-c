@@ -2661,7 +2661,6 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn mirTargetTypeFactAtOwned(": 1,
         "fn mirCallTargetSourceMatches(span: ast.Span, source: mir.SourcePoint) bool": 0,
         ".uniqueCallTargetKindAt(self.currentMirFunction(), mir.sourcePointFromSpan(span))": 0,
-        ".hasCallTargetKindAt(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), true)": 0,
         "fact.kind == kind and mirSourceMatches(span, fact.source)": 0,
         "if (type_bridge.sameTypeSyntax(fact_ty, declared_ty)) return true;": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 3,

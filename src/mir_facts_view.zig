@@ -157,9 +157,8 @@ pub const MirFactsView = struct {
         return matched;
     }
 
-    pub fn hasCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.CallTargetKind, source: mir.SourcePoint, strict_call_source: bool) bool {
+    pub fn hasCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.CallTargetKind, source: mir.SourcePoint) bool {
         _ = self;
-        _ = strict_call_source;
         const function = current orelse return false;
         const typed_span_id = mir.spanIdAtSource(function.*, source) orelse return false;
         for (function.call_target_facts) |fact| {

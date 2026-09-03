@@ -31,8 +31,8 @@ pub fn uniqueCallTargetKindAt(current: ?*const mir.Function, span: ast_bridge.Sp
     return MirFactsView.init().uniqueCallTargetKindAt(current, mir.sourcePointFromSpan(span));
 }
 
-pub fn hasCallTargetKindAt(current: ?*const mir.Function, kind: mir.CallTargetKind, span: ast_bridge.Span, strict_call_source: bool) bool {
-    return MirFactsView.init().hasCallTargetKindAt(current, kind, mir.sourcePointFromSpan(span), strict_call_source);
+pub fn hasCallTargetKindAt(current: ?*const mir.Function, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
+    return MirFactsView.init().hasCallTargetKindAt(current, kind, mir.sourcePointFromSpan(span));
 }
 
 pub fn targetTypeFactById(current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
