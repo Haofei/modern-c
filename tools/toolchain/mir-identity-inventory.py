@@ -95,6 +95,13 @@ def main() -> int:
         if field in model[instruction_start:instruction_end]:
             fail(f"src/mir_model.zig Instruction duplicates {field[:-1]} beside SpanId")
 
+    start = model.index("pub const TrapEdge = struct {")
+    end = model.index("\n};", start)
+    trap_edge = model[start:end]
+    for field in ("line:", "column:", "source_offset:", "source_len:"):
+        if field in trap_edge:
+            fail(f"src/mir_model.zig TrapEdge duplicates {field[:-1]} beside SpanId")
+
     start = model.index("pub const ConstGetFact = struct {")
     end = model.index("\n};", start)
     if "source:" in model[start:end]:

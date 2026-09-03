@@ -170,7 +170,8 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             }
         }
         for (function.trap_edges) |edge| {
-            try out.print(allocator, "trap_edge fn={s} from={} trap={} kind={s} source={s} line={} column={} offset={} len={}\n", .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), edge.line, edge.column, edge.source_offset, edge.source_len });
+            const source = mir.sourcePointForSpanId(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
+            try out.print(allocator, "trap_edge fn={s} from={} trap={} kind={s} source={s} line={} column={} offset={} len={}\n", .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), source.line, source.column, source.offset, source.len });
         }
         for (function.contract_regions) |region| {
             try out.print(allocator, "contract_region fn={s} id={} kind={s} begin={} end={}\n", .{ function.name, region.id, region.kind, region.begin_line, region.end_line });

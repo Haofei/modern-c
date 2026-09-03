@@ -4897,6 +4897,34 @@ test "builds typed MIR CFG with explicit trap edge" {
     try std.testing.expectEqual(TrapKind.IntegerOverflow, typed_mir.functions[0].trap_edges[0].kind);
 }
 
+test "typed MIR trap edges reject invalid and misaligned span identities" {
+    const source =
+        \\fn checked_add(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("mir_trap_edge_span_identity.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "checked_add") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.trap_edges.len != 0);
+    const span_id = function.trap_edges[0].typed_span_id;
+    try std.testing.expect(span_id.isValid());
+
+    const saved_span_id = function.trap_edges[0].typed_span_id;
+    function.trap_edges[0].typed_span_id = .invalid;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_body_plan.verify(function));
+    function.trap_edges[0].typed_span_id = saved_span_id;
+
+    const saved_identity_id = function.span_identities[span_id.index()].id;
+    function.span_identities[span_id.index()].id = .invalid;
+    try std.testing.expectError(error.InvalidTrapEdge, mir_body_plan.verify(function));
+    function.span_identities[span_id.index()].id = saved_identity_id;
+}
+
 test "MIR owns every explicit trap reason identity" {
     const source =
         \\fn trap_bounds() -> never { return trap(.Bounds); }
@@ -10026,8 +10054,11 @@ test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
             .terminator = .{ .trap_ = .Bounds },
         },
     };
+    var span_identities = [_]mir.SpanIdentity{
+        .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
+    };
     var trap_edges = [_]TrapEdge{
-        .{ .from_block = 0, .trap_block = 1, .kind = .IntegerOverflow, .source = .checked_arithmetic, .line = 1, .column = 1 },
+        .{ .from_block = 0, .trap_block = 1, .kind = .IntegerOverflow, .source = .checked_arithmetic, .typed_span_id = SpanId.fromIndex(0) },
     };
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
@@ -10041,6 +10072,7 @@ test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .span_identities = span_identities[0..],
             .pointer_provenance_facts = &.{},
             .representation_facts = &.{},
             .elided_bounds = &.{},

@@ -3234,10 +3234,8 @@ pub const TrapEdge = struct {
     trap_block: usize,
     kind: TrapKind,
     source: TrapSource,
-    line: usize,
-    column: usize,
-    source_offset: usize = 0,
-    source_len: usize = 0,
+    /// Sole source identity. Coordinates are materialized from the owning
+    /// function's span table only at diagnostic and rendering boundaries.
     typed_span_id: SpanId = .invalid,
 };
 

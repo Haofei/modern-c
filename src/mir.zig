@@ -241,7 +241,8 @@ pub fn spanIdAtSource(function: Function, source: SourcePoint) ?SpanId {
 
 pub fn sourcePointForSpanId(function: Function, typed_span_id: SpanId) ?SourcePoint {
     if (!typed_span_id.isValid() or typed_span_id.index() >= function.span_identities.len) return null;
-    return function.span_identities[typed_span_id.index()].source;
+    const identity = function.span_identities[typed_span_id.index()];
+    return if (identity.id.eql(typed_span_id)) identity.source else null;
 }
 
 pub fn instructionMatchesSpanId(function: Function, instruction: Instruction, typed_span_id: SpanId) bool {
@@ -3271,10 +3272,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             }
         }
         for (function.trap_edges) |edge| {
+            const source = sourcePointForSpanId(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
             try out.print(
                 allocator,
                 "mir trap_edge fn={s} from={} trap_block={} kind={s} source={s} explicit=true line={} column={} typed_span_id={}\n",
-                .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), edge.line, edge.column, if (edge.typed_span_id.isValid()) edge.typed_span_id.index() else std.math.maxInt(usize) },
+                .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), source.line, source.column, if (edge.typed_span_id.isValid()) edge.typed_span_id.index() else std.math.maxInt(usize) },
             );
         }
         for (function.representation_facts) |fact| {
@@ -3452,10 +3454,11 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
             );
         }
         for (function.trap_edges) |edge| {
+            const source = sourcePointForSpanId(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
             try out.print(
                 allocator,
                 "mir verify fn={s} pass=trap finding=trap_edge detail={s} source={s} no_lang_trap={} line={} column={}\n",
-                .{ function.name, @tagName(edge.kind), @tagName(edge.source), function.no_lang_trap, edge.line, edge.column },
+                .{ function.name, @tagName(edge.kind), @tagName(edge.source), function.no_lang_trap, source.line, source.column },
             );
         }
         for (function.blocks) |block| {
@@ -3636,8 +3639,9 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
 
         if (function.no_lang_trap) {
             for (function.trap_edges) |edge| {
+                const source: SourcePoint = sourcePointForSpanId(function, edge.typed_span_id) orelse .{ .line = 1, .column = 1 };
                 reporter.err(
-                    sourcePointSpan(.{ .line = edge.line, .column = edge.column }),
+                    sourcePointSpan(source),
                     "E_NO_LANG_TRAP_EDGE: MIR verifier found language trap edge {s}",
                     .{@tagName(edge.kind)},
                 );
@@ -17607,10 +17611,6 @@ const FunctionBuilder = struct {
             .trap_block = trap_block,
             .kind = kind,
             .source = source,
-            .line = span.line,
-            .column = span.column,
-            .source_offset = span.offset,
-            .source_len = span.len,
             .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
         });
     }
@@ -22251,15 +22251,16 @@ fn cfgHasStructuralError(function: Function) ?SourcePoint {
         if (!terminatorSuccessorsAreConsistent(function, block)) return blockLastSpan(function, block);
     }
     for (function.trap_edges) |edge| {
+        const source = sourcePointForSpanId(function, edge.typed_span_id) orelse return .{ .line = 0, .column = 0 };
         if (edge.from_block >= function.blocks.len or edge.trap_block >= function.blocks.len) {
-            return .{ .line = edge.line, .column = edge.column };
+            return source;
         }
         const from = function.blocks[edge.from_block];
-        if (!successorListed(from, edge.trap_block)) return .{ .line = edge.line, .column = edge.column };
+        if (!successorListed(from, edge.trap_block)) return source;
         const trap_block = function.blocks[edge.trap_block];
         switch (trap_block.terminator) {
-            .trap_ => |trap_kind| if (trap_kind != edge.kind) return .{ .line = edge.line, .column = edge.column },
-            else => return .{ .line = edge.line, .column = edge.column },
+            .trap_ => |trap_kind| if (trap_kind != edge.kind) return source,
+            else => return source,
         }
     }
     return null;

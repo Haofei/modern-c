@@ -400,6 +400,7 @@ fn verifyTerminator(function: *const mir.Function, block: mir.Block) !void {
 
 fn verifyTrapEdges(function: *const mir.Function) !void {
     for (function.trap_edges) |edge| {
+        _ = spanIdentity(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
         if (edge.from_block >= function.blocks.len or edge.trap_block >= function.blocks.len) return error.InvalidTrapEdge;
         if (!successorListed(function.blocks[edge.from_block], edge.trap_block)) return error.InvalidTrapEdge;
         switch (function.blocks[edge.trap_block].terminator) {
@@ -571,18 +572,16 @@ fn terminatorPlan(function: *const mir.Function, terminator: mir.Terminator) Ter
 
 fn buildTrapEdges(allocator: std.mem.Allocator, function: *const mir.Function) ![]const TrapEdgePlan {
     const edges = try allocator.alloc(TrapEdgePlan, function.trap_edges.len);
-    for (function.trap_edges, 0..) |edge, index| edges[index] = .{
-        .from_block = function.blocks[edge.from_block].typed_id,
-        .trap_block = function.blocks[edge.trap_block].typed_id,
-        .kind = edge.kind,
-        .source = edge.source,
-        .location = .{ .span_id = edge.typed_span_id, .source = .{
-            .line = edge.line,
-            .column = edge.column,
-            .offset = edge.source_offset,
-            .len = edge.source_len,
-        } },
-    };
+    for (function.trap_edges, 0..) |edge, index| {
+        const span = spanIdentity(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
+        edges[index] = .{
+            .from_block = function.blocks[edge.from_block].typed_id,
+            .trap_block = function.blocks[edge.trap_block].typed_id,
+            .kind = edge.kind,
+            .source = edge.source,
+            .location = .{ .span_id = edge.typed_span_id, .source = span.source },
+        };
+    }
     return edges;
 }
 
