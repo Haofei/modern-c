@@ -1209,7 +1209,17 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
         for (decl_artifacts) |artifact| switch (artifact) {
             .global => |global| if (std.mem.eql(u8, global.signature.name.text, name)) {
                 const types = declarations.signature_types orelse return null;
-                return signatureTypeExpr(scope.bindings.allocator, types, global.signature.type_id, global.signature.name.span) catch null;
+                return signatureTypeExpr(scope.bindings.allocator, types, global.signature.type_id, global.signature.name.span) catch |err| switch (err) {
+                    error.OutOfMemory => {
+                        scope.recordOom();
+                        return null;
+                    },
+                    // An invalid signature shape must not be treated as an
+                    // inferred global type. The checked-program boundary
+                    // rejects it before codegen; this best-effort query
+                    // remains unknown rather than manufacturing a type.
+                    else => return null,
+                };
             },
             else => {},
         };
