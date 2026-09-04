@@ -39,6 +39,36 @@ test "owned executable body is complete for scalar locals calls and returns" {
     }
 }
 
+test "executable statements and terminators resolve source only through SpanId" {
+    const source =
+        \\fn identity(value: u32) -> u32 { return value; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "executable_statement_span.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source_parser = parser.Parser.init(source, &reporter);
+    const parsed = try source_parser.parseModule(arena.allocator());
+    defer parsed.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var module = try mir.buildFromDecls(std.testing.allocator, parsed.decls);
+    defer module.deinit();
+
+    const function = &module.functions[0];
+    try executable.verify(function);
+
+    const saved_statement_span = function.executable_body.statements[0].span_id;
+    function.executable_body.statements[0].span_id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    function.executable_body.statements[0].span_id = saved_statement_span;
+
+    const saved_terminator_span = function.executable_body.terminators[0].span_id;
+    function.executable_body.terminators[0].span_id = mir_model.SpanId.fromIndex(function.span_identities.len);
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    function.executable_body.terminators[0].span_id = saved_terminator_span;
+    try executable.verify(function);
+}
+
 test "negated integer literals retain their semantic storage type" {
     const source =
         \\fn inferred_suffix() -> i8 { let value = -1_i8; return value; }

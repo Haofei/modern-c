@@ -1760,7 +1760,6 @@ pub const ExecutableCleanupAction = struct {
 pub const ExecutableStatement = struct {
     id: InstId,
     block_id: BlockId,
-    source: SourcePoint,
     span_id: SpanId = .invalid,
     operation: Operation,
 
@@ -2191,7 +2190,6 @@ pub const ExecutableForStepTerminator = struct {
 
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
-    source: SourcePoint = .{ .line = 0, .column = 0 },
     span_id: SpanId = .invalid,
     /// Cleanup stack live on entry to this block, in registration order.
     /// The verifier uses it to check joins and loop back-edges without

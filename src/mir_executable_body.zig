@@ -40,11 +40,17 @@ pub fn explicitUnsupported(function: *const mir.Function) ?ExplicitUnsupported {
         },
         .unsupported_opaque_asm => blk: {
             for (body.statements) |statement_value| if (statement_value.operation == .unsupported)
-                break :blk .{ .kind = .asm_stmt, .source = statement_value.source };
+                break :blk .{ .kind = .asm_stmt, .source = sourceForSpan(function, statement_value.span_id) orelse return null };
             break :blk null;
         },
         else => null,
     };
+}
+
+fn sourceForSpan(function: *const mir.Function, id: mir.SpanId) ?mir.SourcePoint {
+    if (!id.isValid() or id.index() >= function.span_identities.len) return null;
+    const identity = function.span_identities[id.index()];
+    return if (identity.id.eql(id)) identity.source else null;
 }
 
 pub fn expression(body: *const mir.ExecutableBody, id: mir.ExprId) ?*const mir.ExecutableExpression {
@@ -235,7 +241,7 @@ pub fn verify(function: *const mir.Function) !void {
 
     for (body.statements, 0..) |statement_value, index| {
         if (!statement_value.id.isValid() or statement_value.id.index() != index or !blockExists(function, statement_value.block_id)) return error.InvalidStatementIdentity;
-        try verifySpan(function, statement_value.span_id, statement_value.source);
+        try verifySpanId(function, statement_value.span_id);
         try verifyStatement(function, statement_value);
     }
 
@@ -1592,7 +1598,7 @@ fn mutableLocalDeclaration(
 
 fn verifyTerminator(function: *const mir.Function, terminator: mir.ExecutableTerminator) !void {
     const body = &function.executable_body;
-    if (terminator.span_id.isValid()) try verifySpan(function, terminator.span_id, terminator.source);
+    if (terminator.span_id.isValid()) try verifySpanId(function, terminator.span_id);
     switch (terminator.operation) {
         .fallthrough, .trap_, .unreachable_ => {},
         .return_ => {

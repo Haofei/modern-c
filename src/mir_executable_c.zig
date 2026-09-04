@@ -24,6 +24,10 @@ pub const RenderError = error{
 
 pub const EmitOptions = struct {
     source_path: ?[]const u8 = null,
+    /// Source coordinates belong to the enclosing verified function. Statement
+    /// and terminator MIR keeps only SpanId, so the renderer resolves any
+    /// presentation-only line directive through this table.
+    span_identities: []const mir.SpanIdentity = &.{},
     stub_asm: bool = false,
 };
 
@@ -95,7 +99,7 @@ pub fn emitBodyWithOptions(
             if (!statement.block_id.eql(terminator.block_id)) continue;
             try emitStatement(allocator, out, body, statement, indent + 1, options);
         }
-        try emitTerminator(allocator, out, body, terminator, indent + 1, options.source_path);
+        try emitTerminator(allocator, out, body, terminator, indent + 1, options);
     }
 }
 
@@ -173,17 +177,17 @@ fn emitStatement(
     switch (statement.operation) {
         .defer_register => return,
         .cleanup_run => |actions| {
-            try emitExecutableCleanupActions(allocator, out, body, actions, indent, options.source_path);
+            try emitExecutableCleanupActions(allocator, out, body, actions, indent, options);
             return;
         },
         else => {},
     }
-    try prepareStatementExpressions(allocator, out, body, statement, indent, options.source_path);
+    try prepareStatementExpressions(allocator, out, body, statement, indent, options);
     if (statementRepresentationGuard(statement)) |guard| {
-        try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
-        try emitRepresentationGuard(allocator, out, body, guard, indent);
+        try writeSourceLineDirectiveForSpan(allocator, out, options, statement.span_id);
+        try emitStatementRepresentationGuard(allocator, out, body, guard, indent);
     }
-    try writeSourceLineDirective(allocator, out, options.source_path, statement.source);
+    try writeSourceLineDirectiveForSpan(allocator, out, options, statement.span_id);
     switch (statement.operation) {
         .local_init => |local| {
             try writeIndent(allocator, out, indent);
@@ -366,7 +370,7 @@ fn emitExecutableCleanupActions(
     body: *const mir.ExecutableBody,
     actions: []const mir.CleanupActionId,
     indent: usize,
-    source_path: ?[]const u8,
+    options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
     for (actions) |id| {
         const action = cleanupActionById(body, id) orelse return error.InvalidBlock;
@@ -379,11 +383,11 @@ fn emitExecutableCleanupActions(
         // A block-form defer has its own source span in addition to the spans
         // of the expressions inside it. Preserve that registration origin in
         // the generated map even though registration has no runtime work.
-        try writeSourceLineDirective(allocator, out, source_path, registration.source);
+        try writeSourceLineDirectiveForSpan(allocator, out, options, action.span_id);
         try writeIndent(allocator, out, indent + 1);
         try out.appendSlice(allocator, "/* canonical defer cleanup */\n");
         for (action.roots) |root| {
-            try prepareExpressionSet(allocator, out, body, registration.*, root, indent + 1, source_path);
+            try prepareExpressionSet(allocator, out, body, registration.*, root, indent + 1, options);
         }
         try writeIndent(allocator, out, indent);
         try out.appendSlice(allocator, "}\n");
@@ -533,13 +537,13 @@ fn emitTerminator(
     body: *const mir.ExecutableBody,
     terminator: mir.ExecutableTerminator,
     indent: usize,
-    source_path: ?[]const u8,
+    options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (terminator.operation) {
         .fallthrough => return error.UnsupportedOperation,
         .jump => |target| {
             if (!hasBlock(body, target)) return error.InvalidBlock;
-            try emitExecutableCleanupActions(allocator, out, body, terminator.exit_cleanup_actions, indent, source_path);
+            try emitExecutableCleanupActions(allocator, out, body, terminator.exit_cleanup_actions, indent, options);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "goto mc_bb_{d};\n", .{target.raw});
         },
@@ -586,7 +590,7 @@ fn emitTerminator(
         // terminator only closes paths whose statement stream has no explicit
         // return operation.
         .return_ => {
-            try emitExecutableCleanupActions(allocator, out, body, terminator.exit_cleanup_actions, indent, source_path);
+            try emitExecutableCleanupActions(allocator, out, body, terminator.exit_cleanup_actions, indent, options);
             if (terminator.exit_cleanup_actions.len != 0) {
                 if (returnStatementForBlock(body, terminator.block_id)) |statement| {
                     if (statement.operation.return_ != null) {
@@ -607,12 +611,12 @@ fn emitTerminator(
         },
         .trap_ => |kind| {
             const helper = trapHelper(kind) orelse return error.UnsupportedOperation;
-            try writeSourceLineDirective(allocator, out, source_path, terminator.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, terminator.span_id);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "{s}();\n", .{helper});
         },
         .unreachable_ => {
-            try writeSourceLineDirective(allocator, out, source_path, terminator.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, terminator.span_id);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "mc_trap_Unreachable();\n");
         },
@@ -4382,9 +4386,9 @@ fn prepareStatementExpressions(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
     indent: usize,
-    source_path: ?[]const u8,
+    options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    return prepareExpressionSet(allocator, out, body, statement, null, indent, source_path);
+    return prepareExpressionSet(allocator, out, body, statement, null, indent, options);
 }
 
 fn prepareExpressionSet(
@@ -4394,7 +4398,7 @@ fn prepareExpressionSet(
     statement: mir.ExecutableStatement,
     root: ?mir.ExprId,
     indent: usize,
-    source_path: ?[]const u8,
+    options: EmitOptions,
 ) (RenderError || std.mem.Allocator.Error)!void {
     // ExprIds are emitted by the producer in source evaluation order and the
     // verified body requires operands to precede their consumer under one
@@ -4405,7 +4409,7 @@ fn prepareExpressionSet(
         if (root) |selected| if (!expressionDependsOn(body, selected, expression.id, 0)) continue;
         if (expressionDeferredByLazyLogical(body, statement.id, root, expression.id)) continue;
         if (lazyLogical(expression)) |logical| {
-            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
             try emitExpression(allocator, out, body, logical.left, 0);
@@ -4414,7 +4418,7 @@ fn prepareExpressionSet(
             try out.appendSlice(allocator, if (logical.op == .logical_and) "if (" else "if (!(");
             try out.print(allocator, "mc_exec_tmp_{d}", .{expression.id.raw});
             try out.appendSlice(allocator, if (logical.op == .logical_and) ") {\n" else ")) {\n");
-            try prepareExpressionSet(allocator, out, body, statement, logical.right, indent + 1, source_path);
+            try prepareExpressionSet(allocator, out, body, statement, logical.right, indent + 1, options);
             try writeIndent(allocator, out, indent + 1);
             try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
             try emitExpression(allocator, out, body, logical.right, 0);
@@ -4436,7 +4440,7 @@ fn prepareExpressionSet(
         if (functionSymbolExpressionSupported(body, expression) or
             globalAggregateIndexBaseSupported(body, expression)) continue;
         if (representationGuard(expression)) |guard| {
-            try writeSourceLineDirective(allocator, out, source_path, guard.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
             try emitRepresentationGuard(allocator, out, body, guard, indent);
         }
         if (tryUnwrapTrapEdge(body, expression) != null) {
@@ -4445,7 +4449,7 @@ fn prepareExpressionSet(
                 else => return error.InvalidExpression,
             };
             const operand_expression = expressionById(body, operand) orelse return error.InvalidExpression;
-            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (");
             try emitExpression(allocator, out, body, operand, 0);
@@ -4461,12 +4465,12 @@ fn prepareExpressionSet(
             const operation = expression.operation.try_propagate;
             const operand = operation.operand;
             if (!tryPropagateSupported(body, expression, operand)) return error.InvalidExpression;
-            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (!");
             try emitExpression(allocator, out, body, operand, 0);
             try out.appendSlice(allocator, ".is_ok) {\n");
-            try emitExecutableCleanupActions(allocator, out, body, operation.error_cleanup_actions, indent + 1, source_path);
+            try emitExecutableCleanupActions(allocator, out, body, operation.error_cleanup_actions, indent + 1, options);
             try writeIndent(allocator, out, indent + 1);
             try out.appendSlice(allocator, "return ");
             try emitExpression(allocator, out, body, operand, 0);
@@ -4477,7 +4481,7 @@ fn prepareExpressionSet(
         if (expression.operation == .try_map_error) {
             const operation = expression.operation.try_map_error;
             if (!tryMapErrorSupported(body, expression, operation)) return error.InvalidExpression;
-            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (!");
             try emitExpression(allocator, out, body, operation.operand, 0);
@@ -4498,7 +4502,7 @@ fn prepareExpressionSet(
                 .literal => |literal| try emitExpression(allocator, out, body, literal, 0),
             }
             try out.appendSlice(allocator, " });\n");
-            try emitExecutableCleanupActions(allocator, out, body, operation.error_cleanup_actions, indent + 1, source_path);
+            try emitExecutableCleanupActions(allocator, out, body, operation.error_cleanup_actions, indent + 1, options);
             try writeIndent(allocator, out, indent + 1);
             try out.print(allocator, "return mc_exec_propagated_{d};\n", .{expression.id.raw});
             try writeIndent(allocator, out, indent);
@@ -4506,7 +4510,7 @@ fn prepareExpressionSet(
         }
         switch (expression.operation) {
             .binary => |binary| if (binary.arithmetic == .unchecked) {
-                try writeSourceLineDirective(allocator, out, source_path, expression.source);
+                try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
                 try writeIndent(allocator, out, indent);
                 try out.print(allocator, "/* MC_MIR_RANGE no_overflow region={} op={s} */\n", .{
                     binary.contract_region_id orelse return error.InvalidExpression,
@@ -4519,13 +4523,13 @@ fn prepareExpressionSet(
                 });
             },
             .mmio_write => |write| if (write.ordering == .release) {
-                try writeSourceLineDirective(allocator, out, source_path, expression.source);
+                try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
                 try writeIndent(allocator, out, indent);
                 try out.appendSlice(allocator, "mc_barrier_release_before();\n");
             },
             else => {},
         }
-        try writeSourceLineDirective(allocator, out, source_path, expression.source);
+        try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
         try writeIndent(allocator, out, indent);
         if (expressionNeedsTemporary(expression)) {
             if (isSliceType(expression.result_ty) or expression.result_ty == .value) {
@@ -4537,7 +4541,7 @@ fn prepareExpressionSet(
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
         if (mmioMapTrapEdge(body, expression) != null) {
-            try writeSourceLineDirective(allocator, out, source_path, expression.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_NullUnwrap();\n", .{expression.id.raw});
         }
@@ -4549,7 +4553,7 @@ fn prepareExpressionSet(
             else => {},
         }
         if (resultRepresentationGuard(expression)) |guard| {
-            try writeSourceLineDirective(allocator, out, source_path, guard.source);
+            try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
             try writeIndent(allocator, out, indent);
             switch (guard.kind) {
                 .nonnull_pointer => try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw}),
@@ -4700,9 +4704,13 @@ fn resultRepresentationGuard(expression: mir.ExecutableExpression) ?ResultRepres
     };
 }
 
-fn statementRepresentationGuard(statement: mir.ExecutableStatement) ?RepresentationGuard {
+const StatementRepresentationGuard = struct {
+    place: mir.PlaceId,
+};
+
+fn statementRepresentationGuard(statement: mir.ExecutableStatement) ?StatementRepresentationGuard {
     return switch (statement.operation) {
-        .store => |store| if (store.representation_span_id.isValid()) .{ .place = store.place, .source = statement.source } else null,
+        .store => |store| if (store.representation_span_id.isValid()) .{ .place = store.place } else null,
         else => null,
     };
 }
@@ -4727,6 +4735,16 @@ fn emitRepresentationGuard(
     try out.appendSlice(allocator, " == NULL) mc_trap_InvalidRepresentation();\n");
 }
 
+fn emitStatementRepresentationGuard(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    guard: StatementRepresentationGuard,
+    indent: usize,
+) (RenderError || std.mem.Allocator.Error)!void {
+    try emitRepresentationGuard(allocator, out, body, .{ .place = guard.place, .source = .{ .line = 0, .column = 0 } }, indent);
+}
+
 fn writeSourceLineDirective(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -4745,6 +4763,18 @@ fn writeSourceLineDirective(
         else => try out.append(allocator, ch),
     };
     try out.appendSlice(allocator, "\"\n");
+}
+
+fn writeSourceLineDirectiveForSpan(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    options: EmitOptions,
+    span_id: mir.SpanId,
+) std.mem.Allocator.Error!void {
+    if (!span_id.isValid() or span_id.index() >= options.span_identities.len) return;
+    const identity = options.span_identities[span_id.index()];
+    if (!identity.id.eql(span_id)) return;
+    try writeSourceLineDirective(allocator, out, options.source_path, identity.source);
 }
 
 fn emitPreparedArguments(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, arguments: []const mir.ExprId) (RenderError || std.mem.Allocator.Error)!void {
@@ -5659,10 +5689,10 @@ test "executable C renderer emits typed CFG labels and branches" {
         .{ .id = expr_x, .block_id = block_true, .owner_statement = statement_true_return, .source = .{ .line = 4, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
     };
     var statements = [_]mir.ExecutableStatement{
-        .{ .id = statement_guard, .block_id = block_entry, .source = .{ .line = 1, .column = 1 }, .operation = .{ .guard = .{ .kind = .if_, .condition = expr_flag } } },
-        .{ .id = statement_true_local, .block_id = block_true, .source = .{ .line = 2, .column = 1 }, .operation = .{ .local_init = .{ .local = local_x, .ty = .{ .integer = "u32" }, .value = expr_one, .mutable = true } } },
-        .{ .id = statement_true_return, .block_id = block_true, .source = .{ .line = 2, .column = 2 }, .operation = .{ .return_ = expr_x } },
-        .{ .id = statement_false_return, .block_id = block_false, .source = .{ .line = 3, .column = 1 }, .operation = .{ .return_ = expr_two } },
+        .{ .id = statement_guard, .block_id = block_entry, .operation = .{ .guard = .{ .kind = .if_, .condition = expr_flag } } },
+        .{ .id = statement_true_local, .block_id = block_true, .operation = .{ .local_init = .{ .local = local_x, .ty = .{ .integer = "u32" }, .value = expr_one, .mutable = true } } },
+        .{ .id = statement_true_return, .block_id = block_true, .operation = .{ .return_ = expr_x } },
+        .{ .id = statement_false_return, .block_id = block_false, .operation = .{ .return_ = expr_two } },
     };
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = block_entry, .operation = .{ .branch = .{ .condition = expr_flag, .true_block = block_true, .false_block = block_false } } },
@@ -5698,6 +5728,49 @@ test "executable C renderer emits typed CFG labels and branches" {
     , output.items);
 }
 
+test "executable C renderer resolves statement and terminator lines through SpanId" {
+    const span_id = mir.SpanId.fromIndex(0);
+    const spans = [_]mir.SpanIdentity{.{
+        .id = span_id,
+        .source = .{ .line = 17, .column = 1 },
+    }};
+    var statements = [_]mir.ExecutableStatement{.{
+        .id = mir.InstId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .span_id = span_id,
+        .operation = .{ .return_ = null },
+    }};
+    var terminators = [_]mir.ExecutableTerminator{.{
+        .block_id = mir.BlockId.fromIndex(0),
+        .span_id = span_id,
+        .operation = .return_,
+    }};
+    const body: mir.ExecutableBody = .{
+        .statements = &statements,
+        .terminators = &terminators,
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try emitBodyWithOptions(std.testing.allocator, &output, &body, 0, .{
+        .source_path = "statement_span.mc",
+        .span_identities = &spans,
+    });
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 17 \"statement_span.mc\"") != null);
+
+    output.clearRetainingCapacity();
+    var trap_terminators = [_]mir.ExecutableTerminator{.{
+        .block_id = mir.BlockId.fromIndex(0),
+        .span_id = span_id,
+        .operation = .unreachable_,
+    }};
+    const trap_body: mir.ExecutableBody = .{ .terminators = &trap_terminators };
+    try emitBodyWithOptions(std.testing.allocator, &output, &trap_body, 0, .{
+        .source_path = "statement_span.mc",
+        .span_identities = &spans,
+    });
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 17 \"statement_span.mc\"") != null);
+}
+
 test "executable C renderer stages call arguments left to right" {
     const next_symbol = mir.SymbolId.fromIndex(0);
     const combine_symbol = mir.SymbolId.fromIndex(1);
@@ -5724,7 +5797,7 @@ test "executable C renderer stages call arguments left to right" {
         .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .source = source_combined, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
     };
     var statements = [_]mir.ExecutableStatement{
-        .{ .id = return_statement, .block_id = entry, .source = source_first, .operation = .{ .return_ = combined } },
+        .{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = combined } },
     };
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
@@ -5767,7 +5840,7 @@ test "executable C renderer snapshots reads before a later effect" {
         .{ .id = mutate, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = mutate_call } },
         .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = combined } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = combined } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{ .locals = &locals, .symbols = &symbols, .expressions = &expressions, .statements = &statements, .terminators = &terminators };
     var output: std.ArrayList(u8) = .empty;
@@ -5799,7 +5872,7 @@ test "executable C renderer rejects implicit CFG and emits short circuit effects
         .{ .id = rhs, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = true } } },
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = lhs, .right = rhs } } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const logical_body: mir.ExecutableBody = .{ .expressions = &expressions, .statements = &statements, .terminators = &terminators };
     try std.testing.expect(canEmitBody(&logical_body));
@@ -5840,7 +5913,6 @@ test "executable C renderer admits assert only with its exact statement trap edg
     var statements = [_]mir.ExecutableStatement{.{
         .id = statement,
         .block_id = entry,
-        .source = source,
         .operation = .{ .guard = .{ .kind = .assert_, .condition = condition } },
     }};
     var edges = [_]mir.ExecutableTrapEdge{.{
@@ -5915,7 +5987,7 @@ test "executable C renderer admits checked arithmetic with exact overflow edges"
         .{ .owner = .{ .expression = sub }, .from_block = entry, .trap_block = sub_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
         .{ .owner = .{ .expression = mul }, .from_block = entry, .trap_block = mul_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = mul } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = mul } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
         .{ .block_id = add_trap, .operation = .{ .trap_ = .IntegerOverflow } },
@@ -5955,7 +6027,7 @@ test "executable C renderer rejects checked arithmetic edge drift" {
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = left, .right = right, .arithmetic = .checked } } },
     };
     var edge = [_]mir.ExecutableTrapEdge{.{ .owner = .{ .expression = result }, .from_block = entry, .trap_block = trap, .kind = .IntegerOverflow, .source = .checked_arithmetic }};
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
         .{ .block_id = trap, .operation = .{ .trap_ = .IntegerOverflow } },
@@ -6012,8 +6084,8 @@ test "executable C renderer emits plain global load and preserves plain local st
         .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = u32_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .plain, .alignment = 4 } } } },
     };
     var statements = [_]mir.ExecutableStatement{
-        .{ .id = store_statement, .block_id = entry, .source = source, .operation = .{ .store = .{ .place = local_place, .value = value, .ty = u32_ty, .access = .{ .kind = .plain, .alignment = 4 } } } },
-        .{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = loaded } },
+        .{ .id = store_statement, .block_id = entry, .operation = .{ .store = .{ .place = local_place, .value = value, .ty = u32_ty, .access = .{ .kind = .plain, .alignment = 4 } } } },
+        .{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = loaded } },
     };
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
@@ -6054,8 +6126,8 @@ test "executable C renderer emits exact race-unordered scalar helpers" {
         .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = f64_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
     };
     var statements = [_]mir.ExecutableStatement{
-        .{ .id = store_statement, .block_id = entry, .source = source, .operation = .{ .store = .{ .place = global_place, .value = value, .ty = f64_ty, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
-        .{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = loaded } },
+        .{ .id = store_statement, .block_id = entry, .operation = .{ .store = .{ .place = global_place, .value = value, .ty = f64_ty, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
+        .{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = loaded } },
     };
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     var body: mir.ExecutableBody = .{
@@ -6136,7 +6208,7 @@ test "executable C renderer emits classified restricted casts in value order" {
         .{ .id = signed_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = i8_ty, .operation = .{ .local = signed_local } },
         .{ .id = signed_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = i64_ty, .operation = .{ .cast = .{ .operand = signed_value, .kind = .signed_widen } } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = signed_cast } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = signed_cast } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .parameters = &parameters,
@@ -6175,7 +6247,7 @@ test "executable C renderer rejects restricted cast fact drift" {
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = operand, .kind = .unsigned_resize } } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .parameters = &parameters,
@@ -6245,7 +6317,7 @@ test "executable C renderer emits selected typed builtins in operand order" {
         .{ .id = conversion_operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = conversion_local } },
         .{ .id = conversion_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = conversion_call } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = conversion_result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = conversion_result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .parameters = &parameters,
@@ -6287,7 +6359,7 @@ test "executable C renderer emits scalar bitcast as a bit preserving builtin" {
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .parameters = &parameters,
@@ -6327,7 +6399,7 @@ test "executable C renderer rejects scalar bitcast fact mutations" {
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .parameters = &parameters,
@@ -6375,7 +6447,7 @@ test "executable C renderer rejects selected builtin fact mutations" {
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
         .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .parameters = &parameters,
@@ -6427,7 +6499,7 @@ test "executable C renderer emits canonical float payloads bit exactly" {
         .{ .id = nan32, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x7FC01234 } } } },
         .{ .id = nan64, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f64_bits = 0xFFF8000000001234 } } } },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = nan64 } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = nan64 } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .expressions = &expressions,
@@ -6456,7 +6528,7 @@ test "executable C renderer rejects canonical float type tag drift" {
         .result_ty = .{ .float = "f32" },
         .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x3FC00000 } } },
     }};
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = value } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = value } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
     const body: mir.ExecutableBody = .{
         .expressions = &expressions,
@@ -6511,7 +6583,7 @@ fn expectCheckedIntegerBinaryTrapSet(
         };
         terminators[index + 1] = .{ .block_id = trap_block, .operation = .{ .trap_ = spec.kind } };
     }
-    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .source = source, .operation = .{ .return_ = result } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var body: mir.ExecutableBody = .{
         .complete = true,
         .expressions = &expressions,
@@ -6613,7 +6685,7 @@ test "executable C renderer guards single parameter scalar deref with exact repr
         .{ .owner = .{ .expression = value_id }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
         .{ .owner = .{ .expression = value_id }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = value_id } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = value_id } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
         .{ .block_id = trap, .operation = .{ .trap_ = .InvalidRepresentation } },
@@ -6705,7 +6777,7 @@ test "executable C renderer guards address of parameter deref and returns origin
         } },
     }};
     var edges = [_]mir.ExecutableTrapEdge{.{ .owner = .{ .expression = value_id }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check }};
-    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .operation = .{ .return_ = value_id } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = value_id } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
         .{ .block_id = trap, .operation = .{ .trap_ = .InvalidRepresentation } },
@@ -6775,7 +6847,6 @@ test "executable C renderer guards statement-owned parameter scalar store with e
     var statements = [_]mir.ExecutableStatement{.{
         .id = store_statement,
         .block_id = entry,
-        .source = source,
         .operation = .{ .store = .{
             .place = place_id,
             .value = value_id,
@@ -6897,7 +6968,7 @@ test "executable C renderer validates a slice once with an exact representation 
         .{ .owner = .{ .expression = mir.ExprId.fromIndex(1) }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
         .{ .owner = .{ .expression = mir.ExprId.fromIndex(1) }, .from_block = entry, .trap_block = trap, .kind = .InvalidRepresentation, .source = .representation_check },
     };
-    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .source = source, .span_id = mir.SpanId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
+    var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .span_id = mir.SpanId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
     var terminators = [_]mir.ExecutableTerminator{
         .{ .block_id = entry, .operation = .return_ },
         .{ .block_id = trap, .operation = .{ .trap_ = .InvalidRepresentation } },

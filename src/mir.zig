@@ -8967,7 +8967,6 @@ const FunctionBuilder = struct {
                 place.projection_count >= mir_model.max_executable_projections or !self.executablePlaceComplete(place.*)) complete = false;
         }
         for (self.executable_statements.items) |*statement| {
-            statement.span_id = self.span_ids.get(statement.source) orelse .invalid;
             if (!statement.span_id.isValid()) complete = false;
             switch (statement.operation) {
                 .local_init => |*local| {
@@ -9114,11 +9113,10 @@ const FunctionBuilder = struct {
                 },
                 .unreachable_ => .unreachable_,
             };
-            const terminator_source = executableTerminatorSource(block.id, operation, trap_edges, span_identities);
+            const terminator_span_id = executableTerminatorSpanId(block.id, operation, trap_edges, span_identities);
             try self.executable_terminators.append(self.allocator, .{
                 .block_id = BlockId.fromIndex(block.id),
-                .source = terminator_source.source,
-                .span_id = terminator_source.span_id,
+                .span_id = terminator_span_id,
                 .entry_cleanup_stack = if (block.id < self.executable_block_cleanup_entries.items.len)
                     self.executable_block_cleanup_entries.items[block.id]
                 else
@@ -10815,21 +10813,21 @@ const FunctionBuilder = struct {
         return null;
     }
 
-    fn executableTerminatorSource(
+    fn executableTerminatorSpanId(
         block_id: usize,
         operation: @FieldType(ExecutableTerminator, "operation"),
         trap_edges: []const TrapEdge,
         span_identities: []const SpanIdentity,
-    ) struct { source: SourcePoint, span_id: SpanId } {
-        if (operation != .trap_) return .{ .source = .{ .line = 0, .column = 0 }, .span_id = .invalid };
+    ) SpanId {
+        if (operation != .trap_) return .invalid;
         for (trap_edges) |edge| {
             if (edge.trap_block != block_id or !edge.typed_span_id.isValid() or
                 edge.typed_span_id.index() >= span_identities.len) continue;
             const identity = span_identities[edge.typed_span_id.index()];
             if (!identity.id.eql(edge.typed_span_id)) continue;
-            return .{ .source = identity.source, .span_id = identity.id };
+            return identity.id;
         }
-        return .{ .source = .{ .line = 0, .column = 0 }, .span_id = .invalid };
+        return .invalid;
     }
 
     fn executableAssertGuardComplete(
@@ -13644,7 +13642,6 @@ const FunctionBuilder = struct {
         try self.executable_statements.append(self.allocator, .{
             .id = InstId.fromIndex(self.executable_statements.items.len),
             .block_id = BlockId.fromIndex(self.current),
-            .source = source,
             .span_id = try self.internSpanId(source),
             .operation = operation,
         });

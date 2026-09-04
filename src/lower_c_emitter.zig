@@ -1565,6 +1565,7 @@ pub const CEmitter = struct {
             for (fn_mir.pointer_provenance_facts) |provenance_fact| try self.emitMirPointerProvenanceConsumedComment(provenance_fact);
             try mir_executable_c.emitBodyWithOptions(self.allocator, self.out, body, self.indent, .{
                 .source_path = self.source_path,
+                .span_identities = fn_mir.span_identities,
                 .stub_asm = self.stub_asm,
             });
         }
