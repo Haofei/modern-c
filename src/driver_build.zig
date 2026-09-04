@@ -47,7 +47,6 @@ pub fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
         .out = &raw_c,
         .opts = lower_opts,
     }) catch |err| switch (err) {

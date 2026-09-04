@@ -80,7 +80,6 @@ pub fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -134,7 +133,6 @@ pub fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_sourc
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
         .out = &generated_c,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -194,7 +192,6 @@ pub fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_sour
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata.codegen(),
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -233,7 +230,7 @@ pub fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []c
     try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
-    lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts.codegen(), &typed_mir, &output, names.items) catch |err| switch (err) {
+    lower_c.appendLayoutAssertsWithMirArtifacts(allocator, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-layout: a struct named in --structs= was not found in {s}\n", .{path});
             return error.EmitLayoutFailed;
@@ -268,7 +265,7 @@ pub fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []
     try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
-    lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts.codegen(), &typed_mir, &output, names.items) catch |err| switch (err) {
+    lower_c.appendStructDeclsWithMirArtifacts(allocator, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-c-struct: a struct named in --structs= was not found in {s}\n", .{path});
             return error.EmitCStructFailed;

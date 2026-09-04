@@ -109,17 +109,6 @@ pub const EarlyDeclarationArtifacts = struct {
     pub const empty = EarlyDeclarationArtifacts{
         .source_map_artifacts = &.{},
     };
-
-    pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
-        _ = self;
-        return .{};
-    }
-};
-
-/// Ordinary codegen no longer accepts declaration payloads. The empty marker
-/// remains only until `LowerRequest` itself is reduced to `VerifiedProgram`.
-pub const CodegenDeclarationArtifacts = struct {
-    pub const empty = CodegenDeclarationArtifacts{};
 };
 
 fn declOrigin(decl: ast.Decl) []const u8 {

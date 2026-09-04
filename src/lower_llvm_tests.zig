@@ -31,7 +31,6 @@ test "LLVM derives type aliases from module signature facts" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_type_alias_facts.mc",
@@ -63,7 +62,6 @@ test "LLVM derives enums from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_enum_facts.mc",
@@ -95,7 +93,6 @@ test "LLVM derives packed bits from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_packed_bits_facts.mc",
@@ -126,7 +123,6 @@ test "LLVM derives overlay unions from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_overlay_union_facts.mc",
@@ -157,7 +153,6 @@ test "LLVM derives tagged unions from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_tagged_union_facts.mc",
@@ -188,7 +183,6 @@ test "LLVM derives structs from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_struct_facts.mc",
@@ -1635,7 +1629,6 @@ test "LLVM conditional statement returns lower from MIR" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_mir_fallback_poison.mc",
@@ -5359,7 +5352,7 @@ fn appendLlvmCheckedMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl
 fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, module_mir);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
 test "LLVM emits a verified body without function declaration artifacts" {
@@ -5375,7 +5368,6 @@ test "LLVM emits a verified body without function declaration artifacts" {
 
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        .empty,
         &module_mir,
         &output,
         "llvm_missing_declaration_facts.mc",
@@ -5416,7 +5408,6 @@ test "LLVM renders mutable scalar globals from verified initializer plans" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_mutable_scalar_global_plan.mc",
@@ -5446,7 +5437,6 @@ test "LLVM emits direct scalar global copies from verified initializer plans" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_scalar_global_copy_plan.mc",
@@ -5489,7 +5479,6 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_zero_global_plan.mc",
@@ -5515,7 +5504,6 @@ test "LLVM renders pure array literals from syntax-free aggregate plans" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_aggregate_global_plan.mc",
@@ -5544,7 +5532,6 @@ test "LLVM emits direct global-address plans without AST initializer artifacts" 
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_global_address_initializer_plan.mc",
@@ -5575,7 +5562,6 @@ test "LLVM emits function-symbol global and array plans without AST initializer 
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_function_symbol_global_plan.mc",
@@ -5619,7 +5605,6 @@ test "LLVM emits copied verified aggregate and relocation global plans without A
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_global_copy_initializer_plans.mc",
@@ -5657,7 +5642,6 @@ test "LLVM emits decoded string-byte global plans without AST initializer artifa
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_string_bytes_global_plan.mc",
@@ -5691,7 +5675,6 @@ test "LLVM emits named struct global literals from syntax-free plans" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_named_struct_global_plan.mc",
@@ -5725,7 +5708,6 @@ test "LLVM emits nested array and struct function-symbol global plans" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         "llvm_nested_aggregate_global_plan.mc",
@@ -5761,7 +5743,6 @@ test "LLVM fails closed when a scalar const-global fact is missing" {
         error.InvalidMirGlobalInitializerFacts,
         lower_llvm.appendLlvmCheckedMirArtifacts(
             std.testing.allocator,
-            artifacts.codegen(),
             &module_mir,
             &output,
             "llvm_missing_scalar_const_global_fact.mc",
@@ -5792,7 +5773,6 @@ test "LLVM fails closed when a scalar const-global fact is stale" {
         error.InvalidMirGlobalInitializerFacts,
         lower_llvm.appendLlvmCheckedMirArtifacts(
             std.testing.allocator,
-            artifacts.codegen(),
             &module_mir,
             &output,
             "llvm_stale_scalar_const_global_fact.mc",

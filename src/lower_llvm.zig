@@ -5,8 +5,6 @@ const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const codegen_request = @import("codegen_request.zig");
 const error_from = @import("error_from.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
-const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
@@ -283,12 +281,11 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.program, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, request.program, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendLlvmCheckedMirArtifacts(
     allocator: std.mem.Allocator,
-    artifacts: CodegenDeclArtifacts,
     module_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -305,12 +302,11 @@ pub fn appendLlvmCheckedMirArtifacts(
         error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
         else => return err,
     };
-    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, artifacts, program, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, program, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
-    early_metadata: CodegenDeclArtifacts,
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -359,7 +355,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
-        .codegen_artifacts = early_metadata,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
         .local_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
@@ -439,7 +434,6 @@ const LlvmEmitter = struct {
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
-    codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     local_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,

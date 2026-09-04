@@ -47,7 +47,7 @@ EXACT_BACKEND_COUNTS = {
     # these only when the count decreases or a deliberate migration patch
     # moves one of these edges behind verified MIR facts.
     '@import("ast_bridge.zig")': 40,
-    '@import("declaration_artifacts.zig")': 4,
+    '@import("declaration_artifacts.zig")': 2,
     '@import("eval.zig")': 0,
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
@@ -56,9 +56,11 @@ EXACT_BACKEND_COUNTS = {
     # deleting the obsolete LLVM AST global-initializer fallback removed three
     # backend AST-shape references. This ratchet may only decrease.
     "ast_bridge.": 2663,
-    "declaration_artifacts.": 11,
+    # Ordinary codegen no longer carries declaration artifacts. Remaining
+    # references belong to the isolated source-map request and collection path.
+    "declaration_artifacts.": 5,
     "EarlyDeclarationArtifacts": 0,
-    "CodegenDeclarationArtifacts": 3,
+    "CodegenDeclarationArtifacts": 0,
     '@import("attr_syntax.zig")': 0,
     '@import("codegen_attrs.zig")': 2,
     '@import("ast_query.zig")': 0,

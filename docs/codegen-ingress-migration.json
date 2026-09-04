@@ -42,6 +42,11 @@
     }
   },
   "normalized_fact_anchors": {
+    "src/codegen_request.zig": {
+      "declaration_artifacts: CgDeclArtifacts": 0,
+      "declaration_artifacts: declaration_artifacts.CodegenDeclarationArtifacts": 0,
+      "source_map_artifacts: []const SourceMapArtifact": 1
+    },
     "src/declaration_artifacts.zig": {
       "has_explicit_abi: bool": 0,
       "backend_name: ?[]const u8": 0,

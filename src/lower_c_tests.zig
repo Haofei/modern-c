@@ -20,7 +20,7 @@ fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *st
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, &module_mir);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
 
 fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
@@ -38,7 +38,7 @@ fn appendCProfileWithSourcePathDeclsTest(allocator: std.mem.Allocator, decls: []
 fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, module_mir);
     defer artifacts.deinit(allocator);
-    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
+    try lower_c.appendCProfileWithMirArtifacts(allocator, module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 test "lower-c emits a verified body without function declaration artifacts" {
@@ -54,7 +54,6 @@ test "lower-c emits a verified body without function declaration artifacts" {
 
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        .empty,
         &module_mir,
         &output,
         .kernel,
@@ -104,7 +103,6 @@ test "lower-c derives type aliases from module signature facts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -137,7 +135,6 @@ test "lower-c derives enums from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -169,7 +166,6 @@ test "lower-c derives packed bits from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -200,7 +196,6 @@ test "lower-c derives overlay unions from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -231,7 +226,6 @@ test "lower-c derives tagged unions from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -262,7 +256,6 @@ test "lower-c derives structs from checked module facts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -286,7 +279,6 @@ test "lower-c scalar const globals do not retain an AST initializer dependency" 
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -311,7 +303,6 @@ test "lower-c renders mutable scalar globals from verified initializer plans" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -341,7 +332,6 @@ test "lower-c emits direct scalar global copies from verified initializer plans"
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -383,7 +373,6 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -408,7 +397,6 @@ test "lower-c renders pure array literals from syntax-free aggregate plans" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -436,7 +424,7 @@ test "lower-c renders named struct global literals from syntax-free plans" {
     defer artifacts.deinit(std.testing.allocator);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_named_struct_global_plan.mc", .{}, false, null);
+    try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, &module_mir, &output, .kernel, "c_named_struct_global_plan.mc", .{}, false, null);
     try expectContains(output.items, "config = { .retries = 3, .mode = Mode_ready, .label = ((char const *)mc_str_config_0), .source = &backing };");
 }
 
@@ -459,7 +447,7 @@ test "lower-c renders nested array and struct function-symbol global plans" {
     defer artifacts.deinit(std.testing.allocator);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_nested_aggregate_global_plan.mc", .{}, false, null);
+    try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, &module_mir, &output, .kernel, "c_nested_aggregate_global_plan.mc", .{}, false, null);
     try expectContains(output.items, "greeting = ((char const *)mc_str_greeting_0);");
     try expectContains(output.items, "config = { .entries = { { .label = ((char const *)mc_str_greeting_0), .op = add }, { .label = ((char const *)mc_str_greeting_0), .op = mul } }, .source = &backing };");
 }
@@ -482,7 +470,6 @@ test "lower-c fails closed when a scalar const-global fact is missing" {
         error.InvalidMirGlobalInitializerFacts,
         lower_c.appendCProfileWithMirArtifacts(
             std.testing.allocator,
-            artifacts.codegen(),
             &module_mir,
             &output,
             .kernel,
@@ -512,7 +499,6 @@ test "lower-c fails closed when a scalar const-global fact is stale" {
         error.InvalidMirGlobalInitializerFacts,
         lower_c.appendCProfileWithMirArtifacts(
             std.testing.allocator,
-            artifacts.codegen(),
             &module_mir,
             &output,
             .kernel,
@@ -1092,7 +1078,6 @@ test "lower-c omits nullable pointer null globals from AST artifacts" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -1122,7 +1107,6 @@ test "lower-c emits direct global-address plans without AST initializer artifact
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -1152,7 +1136,6 @@ test "lower-c emits function-symbol global and array plans without AST initializ
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -1195,7 +1178,6 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -1232,7 +1214,6 @@ test "lower-c emits decoded string-byte global plans without AST initializer art
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,
@@ -6135,7 +6116,6 @@ test "lower-c conditional statement returns lower from MIR" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
         std.testing.allocator,
-        artifacts.codegen(),
         &module_mir,
         &output,
         .kernel,

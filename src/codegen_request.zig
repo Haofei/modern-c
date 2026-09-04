@@ -1,23 +1,15 @@
 const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir_model.zig");
-const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
-const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
+const SourceMapArtifact = @import("declaration_artifacts.zig").SourceMapArtifact;
 const verified_program = @import("verified_program.zig");
 
 /// Backend lowering request.
 ///
-/// `declaration_artifacts` is the transitional ordinary-codegen artifact
-/// boundary: lowerers still need declaration-derived data for
-/// not-yet-normalized early metadata and comptime mechanics, but source-map row
-/// artifacts and function-body syntax fallbacks are not bundled into that
-/// declaration view.
 pub const LowerRequest = struct {
     program: verified_program.VerifiedProgram,
-    declaration_artifacts: CgDeclArtifacts,
     out: *std.ArrayList(u8),
     opts: codegen_options.LowerOptions,
 };
@@ -129,7 +121,7 @@ fn functionHasDynamicTraitRepresentation(function: mir.Function) bool {
 }
 
 test "codegen requests keep source map mechanics out of ordinary lowering" {
-    try std.testing.expect(@hasField(LowerRequest, "declaration_artifacts"));
+    try std.testing.expect(!@hasField(LowerRequest, "declaration_artifacts"));
     try std.testing.expect(!@hasField(LowerRequest, "function_bodies"));
     try std.testing.expect(!@hasField(LowerRequest, "source_map_artifacts"));
     try std.testing.expect(!@hasField(EmitMapRequest, "declaration_artifacts"));

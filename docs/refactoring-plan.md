@@ -83,11 +83,10 @@ from returning.
 | P1 | MIR compatibility projections | active | Canonical typed IDs replace AST/source/string double-writes one domain at a time; each removed field is ratcheted at zero. |
 | P1 | Per-file module identity | complete | No combined source or textual inclusion path exists; spans and definitions retain per-file identity. |
 | P1 | Minimal CheckedProgram | complete | Syntax-free callable/global/signature facts are admitted before verified MIR without adding a second expression IR. |
-| P1 | Final backend request | blocked by types | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
+| P1 | Final backend request | complete | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
 
-Active work proceeds in dependency order: delete remaining MIR compatibility
-projections, then close `LowerRequest`. Advanced language forms stay frozen
-during this cutover.
+Active work proceeds by deleting remaining MIR compatibility projections.
+Advanced language forms stay frozen during this cutover.
 
 The callable ingress is closed: `CallableEmissionFact` owns render-only
 callable details while `CheckedCallableFact` and `SignatureTypeTable` own its
