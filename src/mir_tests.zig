@@ -15275,8 +15275,12 @@ test "executable MIR scalar switch owns normalized case values and targets" {
 
 test "MIR bind thunk facts resolve targets through SymbolId only" {
     const source =
-        \\fn add_scalar(env: u32, value: u32) -> u32 { return env + value; }
-        \\fn make() -> closure(u32) -> u32 { return bind(3, add_scalar); }
+        \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
+        \\fn make() -> closure(u32) -> u32 {
+        \\    var env: u32 = 3;
+        \\    let callback: closure(u32) -> u32 = bind(&env, add);
+        \\    return callback;
+        \\}
     ;
     var parsed = try test_support.parseModule("mir_bind_thunk_symbol_id.mc", source);
     defer parsed.deinit();
