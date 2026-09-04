@@ -119,7 +119,6 @@ const genericChildType = lower_c_shape.genericChildType;
 const isVoidLiteralExpr = lower_c_shape.isVoidLiteralExpr;
 const isPointerLikeGlobalType = lower_c_shape.isPointerLikeGlobalType;
 const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
-const staticCInitializer = lower_c_const.staticCInitializer;
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
 const appendCSignedIntValue = lower_c_const.appendCSignedIntValue;

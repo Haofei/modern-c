@@ -52,10 +52,10 @@ EXACT_BACKEND_COUNTS = {
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
-    # Global initializers now lower only from admitted initializer plans;
-    # deleting the obsolete LLVM AST global-initializer fallback removed three
-    # backend AST-shape references. This ratchet may only decrease.
-    "ast_bridge.": 2663,
+    # Global initializers now lower only from admitted initializer plans.
+    # The obsolete LLVM global-initializer fallback and dead C literal-shape
+    # probes are deleted; this ratchet may only decrease.
+    "ast_bridge.": 2661,
     # Ordinary codegen no longer carries declaration artifacts. Remaining
     # references belong to the isolated source-map request and collection path.
     "declaration_artifacts.": 5,

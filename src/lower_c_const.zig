@@ -11,22 +11,6 @@ const LocalInfo = lower_c_model.LocalInfo;
 const intTypeRange = lower_c_type.intTypeRange;
 pub const parseI128Literal = numeric.parseI128Literal;
 
-pub fn isArrayLiteralExpr(expr: ast_bridge.Expr) bool {
-    return switch (expr.kind) {
-        .array_literal => true,
-        .grouped => |inner| isArrayLiteralExpr(inner.*),
-        else => false,
-    };
-}
-
-pub fn isStructLiteralExpr(expr: ast_bridge.Expr) bool {
-    return switch (expr.kind) {
-        .struct_literal => true,
-        .grouped => |inner| isStructLiteralExpr(inner.*),
-        else => false,
-    };
-}
-
 pub fn isDirectStaticCInitializer(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .unary => |node| node.op == .neg and isNegativeStaticCOperand(node.expr.*),
@@ -152,25 +136,6 @@ pub fn appendCFloatLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8)
         if (ch != '_') try out.append(allocator, ch);
     }
     if (as_f32) try out.appendSlice(allocator, "f");
-}
-
-pub fn appendCFloatValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f64, as_f32: bool) !void {
-    const narrowed: f64 = if (as_f32) @floatCast(@as(f32, @floatCast(value))) else value;
-    if (std.math.isNan(narrowed)) {
-        try out.appendSlice(allocator, if (as_f32) "__builtin_nanf(\"\")" else "__builtin_nan(\"\")");
-        return;
-    }
-    if (std.math.isInf(narrowed)) {
-        if (narrowed < 0) try out.append(allocator, '-');
-        try out.appendSlice(allocator, if (as_f32) "__builtin_inff()" else "__builtin_inf()");
-        return;
-    }
-    if (narrowed == 0 and std.math.signbit(narrowed)) {
-        try out.appendSlice(allocator, if (as_f32) "-0.0f" else "-0.0");
-        return;
-    }
-    try out.print(allocator, "{d}", .{narrowed});
-    if (as_f32) try out.append(allocator, 'f');
 }
 
 /// Render a frontend-owned floating constant without requiring callers to
