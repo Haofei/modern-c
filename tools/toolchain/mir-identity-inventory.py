@@ -112,6 +112,11 @@ def main() -> int:
     if "source:" in model[start:end]:
         fail("src/mir_model.zig ExecutableCleanupAction duplicates source identity beside SpanId")
 
+    start = model.index("pub const BindThunkFact = struct {")
+    end = model.index("\n};", start)
+    if "target_fn:" in model[start:end]:
+        fail("src/mir_model.zig BindThunkFact duplicates target spelling beside SymbolId")
+
     start = model.index("pub const TrapEdge = struct {")
     end = model.index("\n};", start)
     trap_edge = model[start:end]

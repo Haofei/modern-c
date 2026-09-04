@@ -652,7 +652,7 @@ pub const CEmitter = struct {
         // to predeclare scalar-env thunks before function bodies are emitted.
         for (self.mir_module.functions) |fn_mir| {
             if (fn_mir.is_extern) continue;
-            for (fn_mir.bind_thunk_facts) |fact| try self.collectBindThunkFact(fact);
+            for (fn_mir.bind_thunk_facts) |fact| try self.collectBindThunkFact(fn_mir, fact);
             for (fn_mir.executable_body.expressions) |expression| switch (expression.operation) {
                 .closure_bind => |bind| if (bind.capture_encoding == .integer) {
                     const target = executableSymbolSpelling(&fn_mir.executable_body, bind.target) orelse
@@ -3347,12 +3347,13 @@ pub const CEmitter = struct {
         };
     }
 
-    fn collectBindThunkFact(self: *CEmitter, fact: mir.BindThunkFact) !void {
-        const info = self.functions.get(fact.target_fn) orelse return;
+    fn collectBindThunkFact(self: *CEmitter, owner: mir.Function, fact: mir.BindThunkFact) !void {
+        const target = mir.targetOwnerSpelling(owner, fact.typed_target_fn_symbol_id) orelse return error.UnsupportedCEmission;
+        const info = self.functions.get(target) orelse return;
         if (info.params.len == 0 or info.is_extern) return;
         if (self.signatureTypeIsPointerLike(info.params[0].type_id)) return;
-        const name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_envthunk_{s}", .{fact.target_fn});
-        if (!self.bind_thunks.contains(name)) try self.bind_thunks.put(name, .{ .fname = fact.target_fn, .info = info });
+        const name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_envthunk_{s}", .{target});
+        if (!self.bind_thunks.contains(name)) try self.bind_thunks.put(name, .{ .fname = target, .info = info });
     }
 
     // Emit `bind(&env, f)` as a closure compound literal. `f` names a function whose

@@ -3416,7 +3416,6 @@ pub const CallTargetFact = struct {
 };
 
 pub const BindThunkFact = struct {
-    target_fn: []const u8,
     typed_target_fn_symbol_id: SymbolId = .invalid,
     target_span_id: SpanId = .invalid,
     target_param_count: usize = 0,

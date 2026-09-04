@@ -4486,7 +4486,7 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
 pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThunkFacts}!void {
     for (module.functions) |function| for (function.bind_thunk_facts) |fact| {
         if (!bindThunkFactIdentitiesValid(function, fact)) return error.InvalidMirBindThunkFacts;
-        const target = functionByNameForBind(module, fact.target_fn) orelse return error.InvalidMirBindThunkFacts;
+        const target = functionByTargetOwnerForBind(module, function, fact.typed_target_fn_symbol_id) orelse return error.InvalidMirBindThunkFacts;
         if (target.param_count != fact.target_param_count or !typeIdMatchesValueType(function, fact.target_return_ty, target.return_ty)) return error.InvalidMirBindThunkFacts;
         if (fact.target_param_count != fact.closure_param_count + 1 or !fact.target_return_ty.eql(fact.closure_return_ty)) return error.InvalidMirBindThunkFacts;
         if (!bindFactHasTargetType(function, fact) or !bindFactHasCallTarget(function, fact) or !bindFactHasCaptureAccess(function, fact) or !bindFactHasClosureLocal(function, fact)) return error.InvalidMirBindThunkFacts;
@@ -4494,8 +4494,8 @@ pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThu
 }
 
 fn bindThunkFactIdentitiesValid(function: Function, fact: BindThunkFact) bool {
-    if (fact.target_fn.len == 0 or !fact.typed_target_fn_symbol_id.isValid() or !fact.target_span_id.isValid() or !fact.target_return_ty.isValid() or !fact.capture_value_id.isValid() or !fact.capture_span_id.isValid() or !fact.capture_operand_span_id.isValid() or !fact.capture_ty.isValid() or !fact.target_capture_ty.isValid() or !fact.closure_value_id.isValid() or !fact.closure_span_id.isValid() or !fact.closure_ty.isValid() or !fact.closure_return_ty.isValid()) return false;
-    if (fact.typed_target_fn_symbol_id.index() >= function.target_owner_identities.len or !std.mem.eql(u8, function.target_owner_identities[fact.typed_target_fn_symbol_id.index()].spelling, fact.target_fn)) return false;
+    if (!fact.typed_target_fn_symbol_id.isValid() or !fact.target_span_id.isValid() or !fact.target_return_ty.isValid() or !fact.capture_value_id.isValid() or !fact.capture_span_id.isValid() or !fact.capture_operand_span_id.isValid() or !fact.capture_ty.isValid() or !fact.target_capture_ty.isValid() or !fact.closure_value_id.isValid() or !fact.closure_span_id.isValid() or !fact.closure_ty.isValid() or !fact.closure_return_ty.isValid()) return false;
+    if (targetOwnerSpelling(function, fact.typed_target_fn_symbol_id) == null) return false;
     if (!spanIdMatchesSource(function, fact.closure_span_id, fact.source) or !spanIdValid(function, fact.target_span_id) or !spanIdValid(function, fact.capture_span_id) or !spanIdValid(function, fact.capture_operand_span_id)) return false;
     if (!valueIdValid(function, fact.capture_value_id) or !valueIdValid(function, fact.closure_value_id)) return false;
     if (!typeIdValid(function, fact.target_return_ty) or !typeIdValid(function, fact.capture_ty) or !typeIdValid(function, fact.target_capture_ty) or !typeIdValid(function, fact.closure_ty) or !typeIdValid(function, fact.closure_return_ty)) return false;
@@ -4559,7 +4559,8 @@ fn bindFactHasClosureLocal(function: Function, fact: BindThunkFact) bool {
     return count == 1;
 }
 
-fn functionByNameForBind(module: Module, name: []const u8) ?Function {
+fn functionByTargetOwnerForBind(module: Module, owner_function: Function, target_owner_id: SymbolId) ?Function {
+    const name = targetOwnerSpelling(owner_function, target_owner_id) orelse return null;
     var found: ?Function = null;
     for (module.functions) |function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -18032,7 +18033,6 @@ const FunctionBuilder = struct {
             else => return,
         }
         try self.bind_thunk_facts.append(self.allocator, .{
-            .target_fn = target_fn,
             .typed_target_fn_symbol_id = try self.internTargetOwnerId(target_fn),
             .target_span_id = try self.internSpanId(self.sourcePoint(call.args[1].span)),
             .target_param_count = target.params.len,

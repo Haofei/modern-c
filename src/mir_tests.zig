@@ -15272,3 +15272,28 @@ test "executable MIR scalar switch owns normalized case values and targets" {
         mir_executable_body.verify(&module_mir.functions[0]),
     );
 }
+
+test "MIR bind thunk facts resolve targets through SymbolId only" {
+    const source =
+        \\fn add_scalar(env: u32, value: u32) -> u32 { return env + value; }
+        \\fn make() -> closure(u32) -> u32 { return bind(3, add_scalar); }
+    ;
+    var parsed = try test_support.parseModule("mir_bind_thunk_symbol_id.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    try mir.validateBindThunkFactsForLowering(module_mir);
+    const function = functionByNameMut(&module_mir, "make") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.bind_thunk_facts.len);
+    const saved_target = function.bind_thunk_facts[0].typed_target_fn_symbol_id;
+    function.bind_thunk_facts[0].typed_target_fn_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+    function.bind_thunk_facts[0].typed_target_fn_symbol_id = saved_target;
+
+    const saved_identity = function.target_owner_identities[saved_target.index()].id;
+    function.target_owner_identities[saved_target.index()].id = .invalid;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+    function.target_owner_identities[saved_target.index()].id = saved_identity;
+    try mir.validateBindThunkFactsForLowering(module_mir);
+}
