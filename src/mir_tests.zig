@@ -10379,6 +10379,19 @@ test "MIR dump exposes elided bounds facts" {
     try std.testing.expect(index_fn.elided_bounds.len >= 1);
     try std.testing.expect(slice_fn.elided_bounds.len >= 1);
     try std.testing.expect(div_fn.elided_bounds.len >= 1);
+    for (index_fn.elided_bounds) |span_id| {
+        try std.testing.expect(span_id.isValid());
+        try std.testing.expect(mir.sourcePointForSpanId(index_fn, span_id) != null);
+    }
+    for (slice_fn.elided_bounds) |span_id| {
+        try std.testing.expect(span_id.isValid());
+        try std.testing.expect(mir.sourcePointForSpanId(slice_fn, span_id) != null);
+    }
+    for (div_fn.elided_bounds) |span_id| {
+        try std.testing.expect(span_id.isValid());
+        try std.testing.expect(mir.sourcePointForSpanId(div_fn, span_id) != null);
+    }
+    try mir.validateLoweringAdmission(typed_mir);
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
@@ -10388,6 +10401,34 @@ test "MIR dump exposes elided bounds facts" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=read_const_index check=bounds_elided recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=read_const_slice check=bounds_elided recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=divide_const_nonzero check=bounds_elided recorded=true") != null);
+}
+
+test "MIR elided bounds admission rejects invalid and duplicate SpanIds" {
+    const source =
+        \\fn read_const_index() -> u32 {
+        \\    let arr: [2]u32 = .{ 10, 20 };
+        \\    return arr[1];
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_elided_bounds_admission.mc", source);
+    defer parsed.deinit();
+
+    var invalid = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{ .optimize = true });
+    defer invalid.deinit();
+    const invalid_function = functionByNameMut(&invalid, "read_const_index") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(invalid_function.elided_bounds.len != 0);
+    invalid_function.elided_bounds[0] = SpanId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirElidedBounds, mir.validateLoweringAdmission(invalid));
+
+    var duplicate = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{ .optimize = true });
+    defer duplicate.deinit();
+    const duplicate_function = functionByNameMut(&duplicate, "read_const_index") orelse return error.TestUnexpectedResult;
+    const spans = try std.testing.allocator.alloc(SpanId, duplicate_function.elided_bounds.len + 1);
+    @memcpy(spans[0..duplicate_function.elided_bounds.len], duplicate_function.elided_bounds);
+    spans[duplicate_function.elided_bounds.len] = spans[0];
+    std.testing.allocator.free(duplicate_function.elided_bounds);
+    duplicate_function.elided_bounds = spans;
+    try std.testing.expectError(error.InvalidMirElidedBounds, mir.validateLoweringAdmission(duplicate));
 }
 
 test "MIR dump emits non-elided bounds facts" {

@@ -248,7 +248,8 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             });
             try appendSourcePointForDigest(allocator, out, source);
         }
-        for (function.elided_bounds) |source| {
+        for (function.elided_bounds) |span_id| {
+            const source = mir.sourcePointForSpanId(function, span_id) orelse return error.InvalidMirElidedBounds;
             try out.print(allocator, "elided_bounds fn={s} ", .{function.name});
             try appendSourcePointForDigest(allocator, out, source);
         }

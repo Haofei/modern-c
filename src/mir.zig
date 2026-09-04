@@ -1864,7 +1864,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .ownership_events = try allocator.alloc(OwnershipEvent, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
-                        .elided_bounds = try allocator.alloc(SourcePoint, 0),
+                        .elided_bounds = try allocator.alloc(SpanId, 0),
                     });
                     param_types_unowned = false;
                     ffi_contracts_unowned = false;
@@ -3496,11 +3496,12 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 },
             );
         }
-        for (function.elided_bounds) |fact| {
+        for (function.elided_bounds) |span_id| {
+            const source = sourcePointForSpanId(function, span_id) orelse return error.InvalidMirElidedBounds;
             try out.print(
                 allocator,
-                "mir elided_bounds_fact fn={s} check=bounds_elided recorded=true line={} column={}\n",
-                .{ function.name, fact.line, fact.column },
+                "mir elided_bounds_fact fn={s} check=bounds_elided recorded=true line={} column={} typed_span_id={}\n",
+                .{ function.name, source.line, source.column, span_id.index() },
             );
         }
     }
@@ -5248,6 +5249,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirFloatFacts,
     InvalidMirRangeFacts,
     InvalidMirBoundsFacts,
+    InvalidMirElidedBounds,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
     InvalidMirExecutableBody,
@@ -5268,6 +5270,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateFloatFactsForLowering(module);
     try validateRangeFactsForLowering(module);
     try validateBoundsFactsForLowering(module);
+    try validateElidedBoundsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateBindThunkFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
@@ -5283,6 +5286,19 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
+}
+
+/// Optimizer elision records are semantic SpanIds, not source-coordinate
+/// projections. Each must resolve through the owning function and appear once.
+pub fn validateElidedBoundsForLowering(module: Module) error{InvalidMirElidedBounds}!void {
+    for (module.functions) |function| {
+        for (function.elided_bounds, 0..) |span_id, index| {
+            if (!spanIdValid(function, span_id)) return error.InvalidMirElidedBounds;
+            for (function.elided_bounds[0..index]) |prior| {
+                if (prior.eql(span_id)) return error.InvalidMirElidedBounds;
+            }
+        }
+    }
 }
 
 fn validateInstructionSpanIdentitiesForLowering(module: Module) error{InvalidMirInstructionIdentities}!void {
@@ -8247,7 +8263,7 @@ const FunctionBuilder = struct {
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
     field_path_allocations: std.ArrayList([]const u8),
-    elided_bounds: std.ArrayList(SourcePoint),
+    elided_bounds: std.ArrayList(SpanId),
     executable_parameters: std.ArrayList(ExecutableParameter),
     executable_locals: std.ArrayList(ExecutableLocalIdentity),
     executable_symbols: std.ArrayList(SymbolIdentity),
@@ -16999,10 +17015,10 @@ const FunctionBuilder = struct {
                 // now contain the access. Off by default, so the standard MIR is unchanged.
                 const elide_bounds = self.optimize and self.indexProvablyInBounds(node.base.*, node.index.*);
                 if (elide_bounds) {
-                    // Record the operand source point so both backends can skip the emitted
+                    // Record the operand SpanId so both backends can skip the emitted
                     // runtime bounds check for exactly this access (they consume the optimized
                     // MIR rather than re-deriving the proof).
-                    try self.elided_bounds.append(self.allocator, .{ .line = node.index.span.line, .column = node.index.span.column });
+                    try self.elided_bounds.append(self.allocator, try self.internSpanId(self.sourcePoint(node.index.span)));
                 } else {
                     try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
@@ -17060,7 +17076,7 @@ const FunctionBuilder = struct {
                 // unchanged.
                 const elide_slice = self.optimize and self.sliceProvablyInBounds(node.base.*, node.start.*, node.end.*);
                 if (elide_slice) {
-                    try self.elided_bounds.append(self.allocator, .{ .line = expr.span.line, .column = expr.span.column });
+                    try self.elided_bounds.append(self.allocator, try self.internSpanId(self.sourcePoint(expr.span)));
                 } else {
                     try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
@@ -17695,10 +17711,10 @@ const FunctionBuilder = struct {
                 // divide by zero; for a signed dividend it also cannot hit the only checked
                 // overflow (`INT_MIN / -1`) unless the divisor is `-1`. When the divisor is
                 // proven safe both the `DivideByZero` and the signed `IntegerOverflow` checks
-                // are dead, so the trap edges are dropped and the divisor source point recorded
+                // are dead, so the trap edges are dropped and the divisor SpanId recorded
                 // for the backends to skip the emitted check(s).
                 if (self.optimize and self.divModProvablySafe(node)) {
-                    try self.elided_bounds.append(self.allocator, .{ .line = node.right.span.line, .column = node.right.span.column });
+                    try self.elided_bounds.append(self.allocator, try self.internSpanId(self.sourcePoint(node.right.span)));
                 } else {
                     try self.addTrapEdge(.DivideByZero, .checked_arithmetic, span);
                     try self.attachExecutableTrapEdge(span, .DivideByZero, .checked_arithmetic);

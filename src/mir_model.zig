@@ -3961,12 +3961,12 @@ pub const Function = struct {
     executable_body: ExecutableBody = .{ .complete = false },
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
-    // OPT (annex E): operand source points of checks the optimizer proved dead and elided
+    // OPT (annex E): opaque spans of checks the optimizer proved dead and elided
     // (`--optimize`) - a constant in-range array index's `Bounds` check, or an unsigned
-    // division by a non-zero literal's `DivideByZero` check. Source points are unique per
-    // location, so each backend site matches only its own kind. The backends key off these to
-    // skip the emitted runtime check. Empty unless optimization is on, so the MIR is unchanged.
-    elided_bounds: []SourcePoint,
+    // division by a non-zero literal's `DivideByZero` check. The IDs resolve through this
+    // function's span table, so codegen never treats raw coordinates as semantic keys.
+    // Empty unless optimization is on, so the MIR is unchanged.
+    elided_bounds: []SpanId,
 };
 
 /// Syntax-free semantic summary shared by checking, MIR admission, and future

@@ -6298,19 +6298,15 @@ pub const CEmitter = struct {
         return false;
     }
 
-    // OPT (annex E): true when the optimizer proved the check at this operand source point
+    // OPT (annex E): true when the optimizer proved the check at this operand SpanId
     // dead (a constant in-range index's Bounds check, or an unsigned div-by-literal's
     // DivideByZero check) and recorded it in the optimized MIR's `elided_bounds`. Without
     // `--optimize` the list is empty, so this is always false and the check is emitted — the
     // backend consumes the optimized MIR rather than re-deriving the proof.
     fn mirCheckElided(self: *CEmitter, span: ast_bridge.Span) bool {
-        const function_name = self.current_function orelse return false;
-        for (self.mir_module.functions) |function| {
-            if (!std.mem.eql(u8, function.name, function_name)) continue;
-            for (function.elided_bounds) |pt| {
-                if (pt.line == span.line and pt.column == span.column) return true;
-            }
-        }
+        const function = self.currentMirFunction() orelse return false;
+        const span_id = mir.spanIdAtSource(function.*, mir.sourcePointFromSpan(span)) orelse return false;
+        for (function.elided_bounds) |candidate| if (candidate.eql(span_id)) return true;
         return false;
     }
 

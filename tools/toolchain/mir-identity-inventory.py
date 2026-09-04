@@ -286,6 +286,9 @@ def main() -> int:
     require_not_contains("src/mir_model.zig", "pub const TypeKey = union(enum)")
     require_not_contains("src/mir.zig", "TypeKey.fromValueType")
     require_not_contains("src/mir_model.zig", "target_owner: ?[]const u8")
+    require_not_contains("src/mir_model.zig", "elided_bounds: []SourcePoint")
+    require_contains("src/mir_model.zig", "elided_bounds: []SpanId")
+    require_contains("src/mir.zig", "pub fn validateElidedBoundsForLowering")
 
     for needle in (
         "const BlockId = mir.BlockId;",
@@ -319,6 +322,7 @@ def main() -> int:
         'test "MIR representation admission requires typed result identity"',
         'test "MIR representation admission rejects typed value identity drift"',
         'test "MIR float facts are the complete typed authority for float literals"',
+        'test "MIR elided bounds admission rejects invalid and duplicate SpanIds"',
         'test "MIR records canonical type ownership facts"',
         'test "MIR type ownership fact admission rejects symbol and duplicate drift"',
         'test "MIR ownership events are admitted and dumped through typed MIR"',

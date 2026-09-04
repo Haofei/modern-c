@@ -548,7 +548,7 @@ BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "pub const BoundsFact = struct",
         "bounds_facts: []BoundsFact",
         "range_facts: []RangeFact",
-        "elided_bounds: []SourcePoint",
+        "elided_bounds: []SpanId",
     ],
     "src/mir.zig": [
         '"mir range_fact',
@@ -746,7 +746,7 @@ ANCHORS: dict[str, list[str]] = {
         "integer_facts: []IntegerFact",
         "pointer_provenance_facts: []PointerProvenanceFact",
         "representation_facts: []RepresentationFact",
-        "elided_bounds: []SourcePoint",
+        "elided_bounds: []SpanId",
     ],
     "src/mir.zig": [
         "pub fn appendDumpOpt",

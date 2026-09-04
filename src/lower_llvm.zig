@@ -7160,21 +7160,15 @@ const LlvmEmitter = struct {
         };
     }
 
-    // OPT (annex E): true when the optimizer recorded this operand's source point in
+    // OPT (annex E): true when the optimizer recorded this operand's SpanId in
     // `elided_bounds` (only under `--optimize`) — a proven-in-range constant index's Bounds
-    // check, or an unsigned div-by-literal's DivideByZero check. Source points are unique per
-    // location within a function; the same file-local line/column can appear in another
-    // function when sources are combined from multiple files. Without the flag the list is
+    // check, or an unsigned div-by-literal's DivideByZero check. Without the flag the list is
     // empty and the check is emitted — the backend consumes the optimized MIR, not re-derived
     // proof.
     fn mirCheckElided(self: *LlvmEmitter, span: ast_bridge.Span) bool {
-        const function_name = self.current_function orelse return false;
-        for (self.mir_module.functions) |function| {
-            if (!std.mem.eql(u8, function.name, function_name)) continue;
-            for (function.elided_bounds) |pt| {
-                if (pt.line == span.line and pt.column == span.column) return true;
-            }
-        }
+        const function = self.currentMirFunction() orelse return false;
+        const span_id = mir.spanIdAtSource(function.*, mir.sourcePointFromSpan(span)) orelse return false;
+        for (function.elided_bounds) |candidate| if (candidate.eql(span_id)) return true;
         return false;
     }
 
