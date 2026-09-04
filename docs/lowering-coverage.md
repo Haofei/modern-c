@@ -100,9 +100,9 @@ reaches on the LLVM side:
   `emitConversionOutOfRange`, and `emitTryConversion`.
 - **Variadic ABI paths** — `emitVaArg`, `emitAarch64VaArg`,
   `emitVaListCursorArg`, and related va_list cursor helpers.
-- **Reflection / global address / packed bits / DMA** — examples include
-  `comptimeFieldOffset`, `globalAddressInitializer`, `packedBitsComptimeValue`,
-  and `dmaBufInfo`.
+- **Reflection / planned global addresses / packed bits / DMA** — examples
+  include `comptimeFieldOffset`, `AggregateInitializerPlan`,
+  `packedBitsComptimeValue`, and `dmaBufInfo`.
 - **Inline asm and reduce helpers** — `emitAsmStmt`, `emitPreciseAsmStmt`,
   `emitReduceCall`, `emitReduceFloat`, and `emitReduceSumChecked`.
 
