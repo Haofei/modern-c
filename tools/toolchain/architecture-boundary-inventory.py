@@ -46,7 +46,7 @@ EXACT_BACKEND_COUNTS = {
     # so new codegen syntax/eval/artifact ingress fails immediately.  Update
     # these only when the count decreases or a deliberate migration patch
     # moves one of these edges behind verified MIR facts.
-    '@import("ast_bridge.zig")': 40,
+    '@import("ast_bridge.zig")': 39,
     '@import("declaration_artifacts.zig")': 2,
     '@import("eval.zig")': 0,
     # The bounded atomic-load slice aliases its transitional type payload in
@@ -55,7 +55,7 @@ EXACT_BACKEND_COUNTS = {
     # Global initializers now lower only from admitted initializer plans.
     # The obsolete LLVM global-initializer fallback and dead C literal-shape
     # probes are deleted; this ratchet may only decrease.
-    "ast_bridge.": 2101,
+    "ast_bridge.": 1368,
     # Ordinary codegen no longer carries declaration artifacts. Remaining
     # references belong to the isolated source-map request and collection path.
     "declaration_artifacts.": 5,
@@ -181,8 +181,8 @@ EXACT_FILE_COUNTS = {
     ("src/mir_facts_view.zig", "targetTypeFactAtOwnedCurrentSpan"): 1,
     ("src/lower_c_emitter.zig", "targetTypeFactAtWithModuleFallback"): 0,
     ("src/lower_c_emitter.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
-    ("src/lower_c_emitter.zig", "targetTypeFactAtCurrentSpan"): 1,
-    ("src/lower_c_emitter.zig", "targetTypeFactAtOwnedCurrentSpan"): 1,
+    ("src/lower_c_emitter.zig", "targetTypeFactAtCurrentSpan"): 0,
+    ("src/lower_c_emitter.zig", "targetTypeFactAtOwnedCurrentSpan"): 0,
     ("src/lower_llvm.zig", "targetTypeFactAtWithModuleFallback"): 0,
     ("src/lower_llvm.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
     ("src/lower_llvm.zig", "targetTypeFactAtCurrentSpan"): 0,
