@@ -77,18 +77,15 @@ MIR symbol identities instead of a general source-spelling table. Backend
 entrypoints can decide whether to emit weak/default trap and sanitizer hook
 bodies, but cannot perform arbitrary source-name queries through a spelling
 view. `VerifiedProgram` no longer stores a general `ast.Module` or raw
-declaration slice. Declaration-list mechanics now go through collected
-`EarlyDeclarationArtifacts`, carried by `LowerRequest` instead of being stored
-on `VerifiedProgram`. Source-map row syntax enumeration is isolated in
-`declaration_artifacts.zig`; `EmitMapRequest` carries collected
-`SourceMapArtifact` values rather than a declaration view or wrapper module. The early metadata artifact boundary
-now pre-collects const fn/global/type/aggregate categories while still carrying
-ordered declaration artifacts for C declaration collection. It still carries
-declaration slices for not-yet-normalized comptime and LLVM callable/global
-mechanics, but the remaining syntax-shaped ingress is named and exact-gated by
-the inventory. Per-backend `moduleDefinesHook` helpers and spelling-view
-prelude queries are exact-zero gated, and the AST is no longer the authority
-for runtime hook suppression.
+declaration slice. Ordinary `LowerRequest` carries only the verified program,
+output, and options; it carries no `EarlyDeclarationArtifacts`. Source-map row
+syntax enumeration remains isolated in `declaration_artifacts.zig` at the
+driver boundary: the separate `EmitMapRequest` carries collected
+`SourceMapArtifact` values rather than a declaration view or wrapper module.
+That source-map-only mechanics bridge cannot select ordinary codegen semantics.
+Per-backend `moduleDefinesHook` helpers and spelling-view prelude queries are
+exact-zero gated, and the AST is no longer the authority for runtime hook
+suppression.
 
 Artifact metadata consumers are also converging on the shared
 `artifact_model.ArtifactBundle` contract instead of local header checks.

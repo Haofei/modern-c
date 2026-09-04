@@ -118,13 +118,14 @@ It then exposes:
 `CheckedProgram` is not a full Typed HIR. It contains no AST or expression tree;
 typed MIR remains the only executable body representation.
 
-Collected `EarlyDeclarationArtifacts` and
-`declaration_artifacts.SourceMapArtifact` values remain a temporary mechanics
-bridge for declaration ordering and source-map output. They are not semantic
-authority and are not stored on `VerifiedProgram`. `driver_codegen_inputs.zig`
-is the only driver-owned compatibility edge that may assemble those artifacts
-next to `VerifiedProgram` construction; `main.zig` and backend lowerers must not
-call declaration collectors directly.
+`EarlyDeclarationArtifacts` are a driver-only mechanics bridge for collecting
+source-map rows. They are not semantic authority, are not stored on
+`VerifiedProgram`, and are never carried by ordinary `LowerRequest`.
+`EmitMapRequest` alone carries the resulting
+`declaration_artifacts.SourceMapArtifact` rows for source-map output.
+`driver_codegen_inputs.zig` is the only driver-owned compatibility edge that
+may assemble those rows next to `VerifiedProgram` construction; `main.zig` and
+backend lowerers must not call declaration collectors directly.
 
 Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcmap` use `artifact_model.ArtifactBundle`; backend lowering only receives the source digest through `LowerOptions`.
 

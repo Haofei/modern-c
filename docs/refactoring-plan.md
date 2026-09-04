@@ -62,9 +62,11 @@ counts. `codegen-ingress-migration-test` must pass in every core tier; migration
 patches should lower those budgets instead of adding new compatibility paths.
 
 The machine-readable completion evidence for these bounded review goals lives
-in `docs/review-goal-status.json`. Their completion does not claim that all
-backend declaration syntax ingress or internal MIR compatibility projections
-have been removed.
+in `docs/review-goal-status.json`. The completed MIR compatibility-projections
+row is deliberately narrow: it covers persistent AST payloads and
+typed-vs-legacy identity mirrors, not structural `ValueType`+`TypeId`
+validation pairs, presentation spelling tables, or source/string-only legacy
+facts with no typed mirror.
 
 ## Current queue
 
@@ -80,13 +82,13 @@ from returning.
 | P0 | Type declarations | complete | Struct, enum, tagged union, overlay union, packed bits, and aliases use checked facts; `TransitionalTypeDeclArtifact` is deleted. |
 | P1 | Trait/dynamic declaration ingress | complete | Qualified codegen rejects dynamic traits before lowering and retains no trait-method AST artifact. |
 | P1 | Backend comptime provider | complete | Comptime evaluation finishes before request construction; `ComptimeFunctionDeclarations` and backend `eval` imports are deleted. |
-| P1 | MIR compatibility projections | active | Canonical typed IDs replace AST/source/string double-writes one domain at a time; each removed field is ratcheted at zero. |
+| P1 | MIR compatibility projections | complete | Persistent AST payloads and typed-vs-legacy identity mirrors are physically absent and ratcheted at zero. This does not claim removal of structural `ValueType`+`TypeId` validation pairs, presentation spelling, or source/string-only facts without a typed mirror. |
 | P1 | Per-file module identity | complete | No combined source or textual inclusion path exists; spans and definitions retain per-file identity. |
 | P1 | Minimal CheckedProgram | complete | Syntax-free callable/global/signature facts are admitted before verified MIR without adding a second expression IR. |
 | P1 | Final backend request | complete | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
 
-Active work proceeds by deleting remaining MIR compatibility projections.
-Advanced language forms stay frozen during this cutover.
+All ten bounded review cutovers are complete. Advanced language forms remain
+frozen until a separately scoped language/core change is approved.
 
 The callable ingress is closed: `CallableEmissionFact` owns render-only
 callable details while `CheckedCallableFact` and `SignatureTypeTable` own its

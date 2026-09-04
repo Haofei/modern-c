@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/review-goal-status.json",
-  "purpose": "Machine-readable closure record for the completed compiler-architecture review goals: remove codegen AST body fallback, establish a minimal syntax-free CheckedProgram, then cut over to a bounded real module graph.",
+  "purpose": "Machine-readable closure record for the completed compiler-architecture review goals: remove codegen AST body fallback, establish a minimal syntax-free CheckedProgram, cut over to a bounded real module graph, and retire persistent MIR compatibility projections.",
   "policy": {
     "scope": "language/compiler architecture only",
     "not_scope": "production readiness, kernel productization, package registry, LSP product work",
@@ -28,11 +28,11 @@
         },
         {
           "file": "src/lower_c_emitter.zig",
-          "needle": "fn emitVerifiedMirFunction(self: *CEmitter, function: anytype"
+          "needle": "fn emitVerifiedMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: anytype) !bool"
         },
         {
           "file": "src/lower_llvm.zig",
-          "needle": "fn emitExecutableMirFunction(self: *LlvmEmitter, function: anytype"
+          "needle": "fn emitExecutableMirFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool"
         }
       ],
       "retired_evidence": [
@@ -155,6 +155,56 @@
         {
           "file": "src/loader.zig",
           "needle": "loadCombinedSource"
+        }
+      ]
+    },
+    {
+      "id": "mir-compatibility-projections",
+      "priority": "P1",
+      "status": "complete",
+      "requested_end_state": "Persistent MIR AST payloads and typed-vs-legacy identity mirrors are removed. This goal does not claim removal of structural ValueType-plus-TypeId validation pairs, presentation spelling tables, or source/string-only legacy facts that have no typed mirror.",
+      "completion_evidence": [
+        {
+          "file": "src/mir_model.zig",
+          "needle": "target_type_id: SignatureTypeId = .invalid,"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "elided_bounds: []SpanId,"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "successors: []BlockId,"
+        },
+        {
+          "file": "tools/toolchain/mir-identity-inventory.py",
+          "needle": "if \"typed_id\" in block or \"typed_successors\" in block:"
+        }
+      ],
+      "retired_evidence": [
+        {
+          "file": "src/mir_model.zig",
+          "needle": "target_ty: ast.TypeExpr"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "target_owner: ?[]const u8"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "elided_bounds: []SourcePoint"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "typed_id: BlockId"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "typed_successors: []BlockId"
+        },
+        {
+          "file": "src/mir_model.zig",
+          "needle": "pub const TypeKey = union(enum)"
         }
       ]
     }

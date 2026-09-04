@@ -83,8 +83,8 @@ def main() -> int:
         require(data.get("schema_version") == 1, "schema_version must be 1")
         require(data.get("source_of_truth") == "docs/review-goal-status.json", "source_of_truth mismatch")
         goals = data.get("goals")
-        require(isinstance(goals, list) and len(goals) == 3, "goals must contain exactly the three closed review goals")
-        expected_ids = ["function-body-fallback", "minimal-checked-program", "real-module-graph"]
+        require(isinstance(goals, list) and len(goals) == 4, "goals must contain exactly the four closed review goals")
+        expected_ids = ["function-body-fallback", "minimal-checked-program", "real-module-graph", "mir-compatibility-projections"]
         actual_ids = [goal.get("id") for goal in goals]
         require(actual_ids == expected_ids, f"goal order mismatch: expected {expected_ids}, got {actual_ids}")
         failures: list[str] = []
