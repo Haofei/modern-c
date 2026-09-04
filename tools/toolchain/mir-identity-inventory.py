@@ -116,6 +116,8 @@ def main() -> int:
     end = model.index("\n};", start)
     if "target_fn:" in model[start:end]:
         fail("src/mir_model.zig BindThunkFact duplicates target spelling beside SymbolId")
+    if "source:" in model[start:end]:
+        fail("src/mir_model.zig BindThunkFact duplicates source identity beside SpanId")
 
     start = model.index("pub const TrapEdge = struct {")
     end = model.index("\n};", start)

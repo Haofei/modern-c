@@ -4496,7 +4496,7 @@ pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThu
 fn bindThunkFactIdentitiesValid(function: Function, fact: BindThunkFact) bool {
     if (!fact.typed_target_fn_symbol_id.isValid() or !fact.target_span_id.isValid() or !fact.target_return_ty.isValid() or !fact.capture_value_id.isValid() or !fact.capture_span_id.isValid() or !fact.capture_operand_span_id.isValid() or !fact.capture_ty.isValid() or !fact.target_capture_ty.isValid() or !fact.closure_value_id.isValid() or !fact.closure_span_id.isValid() or !fact.closure_ty.isValid() or !fact.closure_return_ty.isValid()) return false;
     if (targetOwnerSpelling(function, fact.typed_target_fn_symbol_id) == null) return false;
-    if (!spanIdMatchesSource(function, fact.closure_span_id, fact.source) or !spanIdValid(function, fact.target_span_id) or !spanIdValid(function, fact.capture_span_id) or !spanIdValid(function, fact.capture_operand_span_id)) return false;
+    if (!spanIdValid(function, fact.closure_span_id) or !spanIdValid(function, fact.target_span_id) or !spanIdValid(function, fact.capture_span_id) or !spanIdValid(function, fact.capture_operand_span_id)) return false;
     if (!valueIdValid(function, fact.capture_value_id) or !valueIdValid(function, fact.closure_value_id)) return false;
     if (!typeIdValid(function, fact.target_return_ty) or !typeIdValid(function, fact.capture_ty) or !typeIdValid(function, fact.target_capture_ty) or !typeIdValid(function, fact.closure_ty) or !typeIdValid(function, fact.closure_return_ty)) return false;
     const capture_ty = typeForId(function, fact.capture_ty) orelse return false;
@@ -18047,7 +18047,6 @@ const FunctionBuilder = struct {
             .closure_ty = try self.internTypeId(closure_ty),
             .closure_param_count = closure_signature.params.len,
             .closure_return_ty = try self.internTypeId(valueTypeFromTypeAlias(closure_signature.ret.*, self.enums, self.structs, self.packed_bits, self.aliases)),
-            .source = self.sourcePoint(expr.span),
         });
     }
 

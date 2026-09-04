@@ -15299,5 +15299,15 @@ test "MIR bind thunk facts resolve targets through SymbolId only" {
     function.target_owner_identities[saved_target.index()].id = .invalid;
     try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
     function.target_owner_identities[saved_target.index()].id = saved_identity;
+
+    const saved_span = function.bind_thunk_facts[0].closure_span_id;
+    function.bind_thunk_facts[0].closure_span_id = .invalid;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+    function.bind_thunk_facts[0].closure_span_id = saved_span;
+
+    const saved_span_identity = function.span_identities[saved_span.index()].id;
+    function.span_identities[saved_span.index()].id = .invalid;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+    function.span_identities[saved_span.index()].id = saved_span_identity;
     try mir.validateBindThunkFactsForLowering(module_mir);
 }

@@ -3430,7 +3430,6 @@ pub const BindThunkFact = struct {
     closure_ty: TypeId = .invalid,
     closure_param_count: usize = 0,
     closure_return_ty: TypeId = .invalid,
-    source: SourcePoint,
 };
 
 pub const DropGlueFact = struct {
