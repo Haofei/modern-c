@@ -47,15 +47,15 @@ EXACT_BACKEND_COUNTS = {
     # these only when the count decreases or a deliberate migration patch
     # moves one of these edges behind verified MIR facts.
     '@import("ast_bridge.zig")': 40,
-    '@import("declaration_artifacts.zig")': 5,
+    '@import("declaration_artifacts.zig")': 4,
     '@import("eval.zig")': 7,
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
     # Float literal lowering now consumes typed FloatFact identity instead of
     # a target-type AST payload, removing one backend syntax reference.
-    "ast_bridge.": 2712,
-    "declaration_artifacts.": 17,
+    "ast_bridge.": 2679,
+    "declaration_artifacts.": 11,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
     '@import("attr_syntax.zig")': 0,
@@ -134,9 +134,9 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "return collectFromSyntaxDecls(allocator, syntax_decls)"): 0,
     ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
     ("src/declaration_artifacts.zig", "function_artifacts: []const FunctionArtifact"): 0,
-    # Ordinary callable emission is module-owned MIR data.  Only residual
-    # global compatibility payloads cross this boundary.
-    ("src/declaration_artifacts.zig", "decl_artifacts: []const GlobalArtifact"): 2,
+    # Callable and global emission are module-owned MIR data; declaration
+    # artifacts retain source-map mechanics only.
+    ("src/declaration_artifacts.zig", "decl_artifacts: []const GlobalArtifact"): 0,
     ("src/declaration_artifacts.zig", "global_artifacts: []const ast.GlobalDecl"): 0,
     ("src/declaration_artifacts.zig", "global_artifacts: []const GlobalArtifact"): 0,
     ("src/declaration_artifacts.zig", "trait_artifacts: []const TraitArtifact"): 0,
@@ -155,7 +155,7 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "pub const TransitionalTypeDeclArtifact = union(enum)"): 0,
     ("src/declaration_artifacts.zig", "pub const FunctionArtifact = struct"): 0,
     ("src/declaration_artifacts.zig", "    fn_decl: ast.FnDecl,"): 0,
-    ("src/declaration_artifacts.zig", "pub const GlobalArtifact = struct"): 1,
+    ("src/declaration_artifacts.zig", "pub const GlobalArtifact = struct"): 0,
     ("src/declaration_artifacts.zig", "pub const TraitArtifact = union(enum)"): 0,
     ("src/declaration_artifacts.zig", "pub const TraitDeclArtifact = struct"): 0,
     ("src/declaration_artifacts.zig", "pub const ImplTraitArtifact = struct"): 0,

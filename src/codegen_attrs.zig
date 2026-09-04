@@ -5,25 +5,9 @@
 //! syntax attribute helpers.
 
 const std = @import("std");
-const ast_bridge = @import("ast_bridge.zig");
 const mir = @import("mir_model.zig");
 
 pub const FunctionRenderAttrs = mir.FunctionRenderAttrs;
-
-pub const GlobalSignatureFacts = struct {
-    name: ast_bridge.Ident,
-    value_ty: mir.ValueType,
-    /// Module-owned recursive declaration shape; never source syntax.
-    type_id: mir.SignatureTypeId = .invalid,
-    is_const: bool,
-    exported: bool,
-    is_extern: bool,
-};
-
-pub const GlobalInitFacts = struct {
-    body_id: mir.BodyId = .invalid,
-    init: ?ast_bridge.Expr,
-};
 
 pub fn emitCFunctionRenderAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: FunctionRenderAttrs) !void {
     try emitCLinkageFunctionAttrs(allocator, out, attrs);

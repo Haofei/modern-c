@@ -2,7 +2,6 @@
 //! Backends consume these through `codegen_request`, not raw declaration slices.
 
 const ast = @import("ast.zig");
-const codegen_attrs = @import("codegen_attrs.zig");
 const mir = @import("mir_model.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
@@ -20,15 +19,11 @@ pub const ComptimeFunctionDeclarations = struct {
 
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
-    /// Residual global initializer compatibility payloads only. Callable
-    /// declarations are module-owned CallableEmissionFact rows.
-    decl_artifacts: []const GlobalArtifact,
     comptime_functions: ComptimeFunctionDeclarations,
     source_map_artifacts: []const SourceMapArtifact,
 
     fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype, typed_mir: *const mir.Module) !EarlyDeclarationArtifacts {
-        var decl_artifacts: std.ArrayList(GlobalArtifact) = .empty;
-        errdefer decl_artifacts.deinit(allocator);
+        _ = typed_mir;
         var comptime_functions: std.ArrayList(ast.FnDecl) = .empty;
         errdefer comptime_functions.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
@@ -47,13 +42,10 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .global_decl => |global| {
-                    const checked = globalByName(typed_mir, global.name.text);
-                    // Admitted initializer plans own the declaration payload.
-                    // Keep the source-map row, but never retain an AST-shaped
-                    // global merely to emit a scalar fact or zeroed storage.
-                    if (checked == null or typed_mir.checkedGlobalInitializer(checked.?) == null) {
-                        try decl_artifacts.append(allocator, GlobalArtifact.fromDecl(global, checked));
-                    }
+                    _ = global;
+                    // VerifiedProgram admission owns the required-plan check.
+                    // This boundary retains source-map mechanics only, so it
+                    // cannot mask a malformed MIR row with a source fallback.
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .type_alias => {
@@ -108,15 +100,12 @@ pub const EarlyDeclarationArtifacts = struct {
             }
         }
 
-        const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_decl_artifacts);
         const owned_comptime_functions = try comptime_functions.toOwnedSlice(allocator);
         errdefer allocator.free(owned_comptime_functions);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_source_map_artifacts);
 
         return .{
-            .decl_artifacts = owned_decl_artifacts,
             .comptime_functions = .{ .functions = owned_comptime_functions },
             .source_map_artifacts = owned_source_map_artifacts,
         };
@@ -132,21 +121,18 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.decl_artifacts);
         allocator.free(self.comptime_functions.functions);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
 
     pub const empty = EarlyDeclarationArtifacts{
-        .decl_artifacts = &.{},
         .comptime_functions = .empty,
         .source_map_artifacts = &.{},
     };
 
     pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
         return .{
-            .decl_artifacts = self.decl_artifacts,
             .comptime_functions = self.comptime_functions,
         };
     }
@@ -159,13 +145,11 @@ pub const EarlyDeclarationArtifacts = struct {
 /// C/LLVM lowering from growing accidental source-map syntax ingress while the
 /// remaining declaration-shaped payload is migrated into verified MIR facts.
 pub const CodegenDeclarationArtifacts = struct {
-    decl_artifacts: []const GlobalArtifact,
     // Borrowed frontend comptime provider.  It crosses the compatibility
     // request only so existing backend setup can initialize eval.
     comptime_functions: ComptimeFunctionDeclarations = .empty,
 
     pub const empty = CodegenDeclarationArtifacts{
-        .decl_artifacts = &.{},
         .comptime_functions = .empty,
     };
 };
@@ -176,37 +160,6 @@ fn declOrigin(decl: ast.Decl) []const u8 {
         else => {},
     };
     return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
-}
-
-pub const GlobalArtifact = struct {
-    signature: codegen_attrs.GlobalSignatureFacts,
-    initializer: codegen_attrs.GlobalInitFacts,
-
-    pub fn fromDecl(global: ast.GlobalDecl, checked: ?mir.CheckedGlobalFact) GlobalArtifact {
-        return .{
-            .signature = .{
-                .name = global.name,
-                .value_ty = if (checked) |fact| fact.ty else .unknown,
-                .type_id = if (checked) |fact| fact.signature_type_id else .invalid,
-                .is_const = global.is_const,
-                .exported = global.exported,
-                .is_extern = global.is_extern,
-            },
-            .initializer = .{
-                .body_id = if (checked) |fact| fact.initializer_body_id else .invalid,
-                .init = global.init,
-            },
-        };
-    }
-};
-
-fn globalByName(module: *const mir.Module, name: []const u8) ?mir.CheckedGlobalFact {
-    for (module.checked_globals) |global| {
-        if (!global.symbol_id.isValid() or global.symbol_id.index() >= module.symbol_identities.len) continue;
-        const identity = module.symbol_identities[global.symbol_id.index()];
-        if (identity.id.eql(global.symbol_id) and std.mem.eql(u8, identity.spelling, name)) return global;
-    }
-    return null;
 }
 
 pub const SourceMapArtifact = union(enum) {
@@ -338,7 +291,6 @@ test "declaration artifacts collect from resolved declaration stream" {
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer from_resolved.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 0), from_resolved.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 3), from_resolved.source_map_artifacts.len);
 }
 
@@ -363,6 +315,5 @@ test "declaration artifacts omit folded scalar const globals but retain source-m
     var artifacts = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls, &module_mir);
     defer artifacts.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 2), artifacts.source_map_artifacts.len);
 }

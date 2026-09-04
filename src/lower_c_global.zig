@@ -3,56 +3,17 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
-const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
-const mir = @import("mir_model.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const GlobalElementInfo = lower_c_model.GlobalElementInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
-const FnInfo = lower_c_model.FnInfo;
 const LocalInfo = lower_c_model.LocalInfo;
 
-const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
-const isArrayLiteralExpr = lower_c_const.isArrayLiteralExpr;
-const isStructLiteralExpr = lower_c_const.isStructLiteralExpr;
-const staticCInitializer = lower_c_const.staticCInitializer;
-const staticCInitializerRef = lower_c_const.staticCInitializerRef;
-// The global emitter receives this only as a backend-local materialization of
-// a SignatureTypeId. Keep the alias tied to the existing C emission model,
-// never to MIR's syntax-free instruction payload.
-const BackendLocalTypeExpr = @TypeOf(@as(lower_c_model.ArrayInfo, undefined).element_ty);
-
-pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
-pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
-pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, body_id: mir.BodyId, value_ty: mir.ValueType) anyerror!?[]const u8;
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
-pub const EmitExprWithTargetForOwnerFn = *const fn (ctx: *anyopaque, owner: ?[]const u8, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
 pub const EmitExprWithLocalsFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitConstGlobalInitializerFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!bool;
-pub const IsAggregateGlobalTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool;
 pub const GlobalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!GlobalInfo;
-
-pub const EmitContext = struct {
-    allocator: std.mem.Allocator,
-    scratch: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    static_initializers: *std.StringHashMap(ast_bridge.Expr),
-    functions: *std.StringHashMap(FnInfo),
-    emit_ctx: *anyopaque,
-    write_line_directive: WriteLineDirectiveFn,
-    emit_declarator: EmitDeclaratorFn,
-    const_global_c_value: ConstGlobalCValueFn,
-    emit_expr: EmitExprFn,
-    emit_expr_with_target: EmitExprWithTargetFn,
-    emit_expr_with_target_for_owner: EmitExprWithTargetForOwnerFn,
-    emit_const_global_initializer: EmitConstGlobalInitializerFn,
-    is_aggregate_global_type: IsAggregateGlobalTypeFn,
-};
 
 pub const ArrayAccessEmitContext = struct {
     allocator: std.mem.Allocator,
@@ -68,78 +29,6 @@ pub const AccessContext = struct {
     emit_ctx: *anyopaque,
     global_info_from_type: GlobalInfoFromTypeFn,
 };
-
-/// `global_ty` is a backend-local transient materialized from the module-owned
-/// SignatureTypeTable. It is never stored in the declaration artifact.
-pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact, rendered_type: []const u8, global_ty: BackendLocalTypeExpr) !void {
-    const sig = global.signature;
-    const init_facts = global.initializer;
-    try ctx.write_line_directive(ctx.emit_ctx, sig.name.span);
-    // `extern global NAME: T;` — a declaration only (storage lives in another unit).
-    if (sig.is_extern) {
-        try ctx.out.print(ctx.allocator, "#undef {s}\n", .{sig.name.text});
-        try ctx.out.appendSlice(ctx.allocator, "extern ");
-        try ctx.out.print(ctx.allocator, "{s} {s}", .{ rendered_type, sig.name.text });
-        try ctx.out.appendSlice(ctx.allocator, ";\n\n");
-        return;
-    }
-    // A user global is a real definition and must win over any same-named macro a
-    // system header leaked on hosted builds (e.g. ARG_MAX / PATH_MAX / NAME_MAX from
-    // <limits.h>) — otherwise its declaration and every read expand the macro and
-    // fail to compile. `#undef` of a non-macro is a legal no-op, so this is safe for
-    // the common (non-colliding) case.
-    try ctx.out.print(ctx.allocator, "#undef {s}\n", .{sig.name.text});
-    // `export global` gets EXTERNAL linkage (no `static`) so other compilation units —
-    // e.g. a vendored C engine linking against `stdout`/`stderr` data symbols this
-    // runtime provides — resolve it by name. Plain `global` stays file-local `static`.
-    try ctx.out.appendSlice(ctx.allocator, if (sig.exported) "MC_UNUSED " else "static MC_UNUSED ");
-    try ctx.out.print(ctx.allocator, "{s} {s}", .{ rendered_type, sig.name.text });
-    // Scalar const values are verified MIR facts keyed by the initializer
-    // BodyId. Their C rendering must not depend on retaining an AST
-    // initializer payload in the declaration artifact.
-    if (sig.is_const and init_facts.body_id.isValid()) {
-        if (try ctx.const_global_c_value(ctx.emit_ctx, init_facts.body_id, sig.value_ty)) |text| {
-            try ctx.out.print(ctx.allocator, " = {s};\n\n", .{text});
-            return;
-        }
-    }
-    if (init_facts.init) |initializer| {
-        // A `const` global (section 22) emits its folded compile-time value,
-        // so initializers like `MAX * 2` that reference earlier const
-        // globals lower to a plain C constant.
-        if (staticCInitializerRef(initializer, ctx.static_initializers, ctx.functions, ctx.scratch)) |static_initializer| {
-            try ctx.out.appendSlice(ctx.allocator, " = ");
-            if (try emitStaticCInitializer(ctx.allocator, ctx.out, static_initializer.expr)) {
-                // Emitted directly.
-            } else {
-                try ctx.emit_expr_with_target_for_owner(ctx.emit_ctx, static_initializer.owner, static_initializer.expr, global_ty);
-            }
-            try ctx.static_initializers.put(sig.name.text, static_initializer.expr);
-        } else if (isArrayLiteralExpr(initializer)) {
-            try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global_ty);
-            try ctx.static_initializers.put(sig.name.text, initializer);
-        } else if (isStructLiteralExpr(initializer)) {
-            try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global_ty);
-            try ctx.static_initializers.put(sig.name.text, initializer);
-        } else if (try ctx.emit_const_global_initializer(ctx.emit_ctx, global_ty, initializer)) {
-            try ctx.out.appendSlice(ctx.allocator, ";\n\n");
-            return;
-        } else if (global_ty.kind == .array) {
-            try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global array initializer */");
-            return error.UnsupportedCEmission;
-        } else {
-            try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global initializer */");
-            return error.UnsupportedCEmission;
-        }
-    } else if (ctx.is_aggregate_global_type(ctx.emit_ctx, global_ty)) {
-        try ctx.out.appendSlice(ctx.allocator, " = {0}");
-    } else {
-        try ctx.out.appendSlice(ctx.allocator, " = 0");
-    }
-    try ctx.out.appendSlice(ctx.allocator, ";\n\n");
-}
 
 pub fn appendGlobalLoadExpr(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, global: GlobalInfo) !void {
     if (global.aggregate) {

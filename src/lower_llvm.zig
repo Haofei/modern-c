@@ -330,6 +330,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         program.typed_mir.signature_types,
         program.typed_mir.type_aliases,
         program.typed_mir.structs,
+        program.typed_mir.checked_globals,
         program.typed_mir.symbol_identities,
     );
     const ksan = checks.ksan;
@@ -376,7 +377,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .codegen_artifacts = early_metadata,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
-        .global_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
         .local_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .pointer_local_provenance = std.StringHashMap(mir.PointerProvenance).init(allocator),
@@ -419,7 +419,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .reflect_ctx = &reflect_env,
         .domains = &ctx.const_global_domains,
     });
-    try ctx.collectGlobalArtifacts();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     try ctx.emitCollectedGlobals();
     try ctx.emitCollectedCallableDeclarations();
@@ -470,7 +469,6 @@ const LlvmEmitter = struct {
     codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
-    global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
     local_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     // Proven storage class per pointer-typed local: .global_storage entries feed
@@ -554,7 +552,6 @@ const LlvmEmitter = struct {
         self.backend_names.deinit();
         self.global_types.deinit();
         self.global_is_const.deinit();
-        self.global_initializers.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
         self.pointer_local_provenance.deinit();
@@ -779,41 +776,24 @@ const LlvmEmitter = struct {
         if (checked.kind != .extern_function) if (fact.backend_name) |backend_name| try self.backend_names.put(name, backend_name);
     }
 
-    fn collectGlobalArtifacts(self: *LlvmEmitter) !void {
-        for (self.codegen_artifacts.decl_artifacts) |global| try self.collectGlobal(global);
-    }
-
-    /// Admitted global plans are complete semantic global rows. Seed lookup
-    /// and comptime state before folding residual aggregate/relocation
-    /// artifacts, without recreating AST-shaped global payloads.
+    /// Seed lookup and comptime state from every checked global row. Extern
+    /// declarations have no initializer plan, but still need the same
+    /// syntax-free type and linkage facts as definitions.
     fn collectCheckedPlannedGlobals(self: *LlvmEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
-            // Residual aggregate/relocation lowering can take the address of
-            // this scalar. Retain only a backend-local materialization of the
-            // module-owned signature shape, never the initializer AST.
             const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
             try self.global_types.put(name, ty);
             try self.global_is_const.put(name, global.is_const);
+            if (global.is_const) {
+                if (eval.comptimeTypeBitWidth(ty)) |bits| try self.const_global_widths.put(name, bits);
+            }
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
                 .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
             }
         }
-    }
-
-    fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        const sig = global.signature;
-        const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
-        _ = try self.llvmType(ty);
-        if (!std.mem.eql(u8, try self.llvmSignatureType(sig.type_id), try self.llvmType(ty))) return error.UnsupportedLlvmEmission;
-        try self.global_types.put(sig.name.text, ty);
-        try self.global_is_const.put(sig.name.text, sig.is_const);
-        if (sig.is_const) {
-            if (eval.comptimeTypeBitWidth(ty)) |bits| try self.const_global_widths.put(sig.name.text, bits);
-        }
-        if (global.initializer.init) |expr| try self.global_initializers.put(sig.name.text, expr);
     }
 
     fn aggregateReturnPointerFieldKey(self: *LlvmEmitter, fn_name: []const u8, field_path: []const u8) ![]const u8 {
@@ -867,58 +847,6 @@ const LlvmEmitter = struct {
         self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
     }
 
-    fn emitGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        const sig = global.signature;
-        const init_facts = global.initializer;
-        const previous_function = self.current_function;
-        self.current_function = sig.name.text;
-        defer self.current_function = previous_function;
-        const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
-        const initializer_mir = self.globalInitializerMir(init_facts.body_id);
-        const body = if (initializer_mir) |function| &function.executable_body else &mir.ExecutableBody{};
-        const llvm_ty = if (sig.value_ty == .value)
-            try self.llvmSignatureType(sig.type_id)
-        else
-            mir_executable_llvm.renderType(self.scratch.allocator(), body, sig.value_ty, null) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(sig.type_id),
-                else => return err,
-            };
-        if (!std.mem.eql(u8, llvm_ty, try self.llvmSignatureType(sig.type_id))) return error.UnsupportedLlvmEmission;
-        // `extern global NAME: T;` — a declaration only; storage lives in another unit.
-        if (sig.is_extern) {
-            try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ sig.name.text, llvm_ty });
-            return;
-        }
-        const kind: []const u8 = if (sig.is_const) "constant" else "global";
-        // Mirror the C backend's `static` vs external split (lower_c.zig emitGlobal): a plain
-        // `global`/`const` stays module-private (LLVM `internal` linkage), so two separately
-        // compiled units may each define the same name (e.g. `PAGE`) without a link-time
-        // duplicate-symbol error. Only `export global` keeps default (external) linkage.
-        const visibility: []const u8 = if (sig.exported) "" else "internal ";
-        const init = if (self.mir_module.globalInitializerFact(init_facts.body_id)) |fact|
-            try self.scalarConstGlobalInitializer(fact)
-        else if (init_facts.body_id.isValid() and mir.valueTypeRequiresScalarGlobalInitializerFact(sig.value_ty))
-            return error.UnsupportedLlvmEmission
-        else if (init_facts.init) |expr|
-            if (sig.is_const)
-                try self.emitConstAggregateGlobalInitializer(expr, ty)
-            else
-                try self.emitGlobalInitializer(expr, ty)
-        else
-            try self.zeroInitializer(ty);
-        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ sig.name.text, visibility, kind, llvm_ty, init });
-    }
-
-    fn globalInitializerMir(self: *const LlvmEmitter, body_id: mir.BodyId) ?mir.Function {
-        if (!body_id.isValid()) return null;
-        for (self.mir_module.functions, 0..) |function, index| {
-            if (index >= self.mir_module.checked_callables.len) continue;
-            const checked = self.mir_module.checked_callables[index];
-            if (checked.kind == .global_initializer and checked.body_id.eql(body_id)) return function;
-        }
-        return null;
-    }
-
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
             const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
@@ -934,7 +862,15 @@ const LlvmEmitter = struct {
                 .function_symbol => |plan| try self.emitCheckedFunctionSymbolGlobal(global, plan),
             }
         }
-        for (self.codegen_artifacts.decl_artifacts) |global| try self.emitGlobal(global);
+        for (self.mir_module.checked_globals) |global| {
+            if (!global.is_extern) continue;
+            try self.emitCheckedExternGlobal(global);
+        }
+    }
+
+    fn emitCheckedExternGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
+        try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ name, try self.llvmSignatureType(global.signature_type_id) });
     }
 
     fn emitCheckedScalarGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, fact: mir.GlobalInitializerFact) !void {
@@ -1257,13 +1193,7 @@ const LlvmEmitter = struct {
             };
         }
         switch (expr.kind) {
-            .ident => |ident| {
-                if (!self.isFnPointerType(semantic_ty)) {
-                    if (self.global_initializers.get(ident.text)) |initializer| {
-                        return try self.emitGlobalInitializerForOwner(ident.text, initializer, semantic_ty);
-                    }
-                }
-            },
+            .ident => {},
             .cast => |node| {
                 _ = self.mirTargetTypeFactAt(.explicit_cast_source, expr.span) orelse return error.UnsupportedLlvmEmission;
                 const target_fact = self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return error.UnsupportedLlvmEmission;
@@ -1415,13 +1345,6 @@ const LlvmEmitter = struct {
         );
     }
 
-    fn emitGlobalInitializerForOwner(self: *LlvmEmitter, owner: []const u8, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const previous_function = self.current_function;
-        self.current_function = owner;
-        defer self.current_function = previous_function;
-        return try self.emitGlobalInitializer(expr, ty);
-    }
-
     fn globalConstIndexValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
         if (self.foldConstGlobalValue(expr, null)) |value| {
             return switch (value) {
@@ -1430,10 +1353,6 @@ const LlvmEmitter = struct {
             };
         }
         return switch (expr.kind) {
-            .ident => |ident| if (self.global_initializers.get(ident.text)) |initializer|
-                self.globalConstIndexValue(initializer)
-            else
-                null,
             .grouped => |inner| self.globalConstIndexValue(inner.*),
             else => null,
         };
@@ -1970,7 +1889,7 @@ const LlvmEmitter = struct {
                     const identity = mir_executable_body.symbol(&fn_mir.executable_body, id) orelse return false;
                     // Executable MIR global places are admitted against the
                     // checked global table.  In particular, const scalar
-                    // globals intentionally have no AST GlobalArtifact.
+                    // Global declarations are admitted through checked facts.
                     if (identity.kind != .global or self.checkedGlobalType(identity.spelling) == null) return false;
                 },
             }

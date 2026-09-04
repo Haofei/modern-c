@@ -76,7 +76,7 @@ from returning.
 |---|---|---|---|
 | P0 | Function-body fallback | complete | Both backends consume only verified executable MIR; legacy body emitters and fallback request payloads are absent. |
 | P0 | Function/body type payloads | complete | Callable signatures and body declaration-shape dependencies are `SignatureTypeId`s; no body `ast.TypeExpr` fact exists. |
-| P0 | Global declarations | active | Every admitted global has a syntax-free initializer plan; `GlobalArtifact` and `GlobalInitFacts.init` are deleted. |
+| P0 | Global declarations | complete | Every non-extern global is admitted only with a syntax-free initializer plan and matching fact; `GlobalArtifact`, declaration-artifact global payloads, and `GlobalInitFacts` are deleted. |
 | P0 | Type declarations | complete | Struct, enum, tagged union, overlay union, packed bits, and aliases use checked facts; `TransitionalTypeDeclArtifact` is deleted. |
 | P1 | Trait/dynamic declaration ingress | complete | Qualified codegen rejects dynamic traits before lowering and retains no trait-method AST artifact. |
 | P1 | Backend comptime provider | blocked by globals | Comptime evaluation finishes before request construction; `ComptimeFunctionDeclarations` and backend `eval` imports are deleted. |

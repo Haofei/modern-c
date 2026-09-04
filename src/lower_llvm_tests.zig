@@ -26,7 +26,6 @@ test "LLVM derives type aliases from module signature facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -59,7 +58,6 @@ test "LLVM derives enums from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -92,7 +90,6 @@ test "LLVM derives packed bits from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -124,7 +121,6 @@ test "LLVM derives overlay unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -156,7 +152,6 @@ test "LLVM derives tagged unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -188,7 +183,6 @@ test "LLVM derives structs from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -5418,7 +5412,6 @@ test "LLVM renders mutable scalar globals from verified initializer plans" {
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5449,7 +5442,6 @@ test "LLVM emits direct scalar global copies from verified initializer plans" {
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5493,7 +5485,6 @@ test "LLVM renders no-init scalar and array globals from verified zero plans" {
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5520,7 +5511,6 @@ test "LLVM renders pure array literals from syntax-free aggregate plans" {
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5550,7 +5540,6 @@ test "LLVM emits direct global-address plans without AST initializer artifacts" 
     try std.testing.expect(module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5582,7 +5571,6 @@ test "LLVM emits function-symbol global and array plans without AST initializer 
     try std.testing.expect(module_mir.checkedFunctionSymbolGlobal(module_mir.checked_globals[0]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5627,7 +5615,6 @@ test "LLVM emits copied verified aggregate and relocation global plans without A
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5666,7 +5653,6 @@ test "LLVM emits decoded string-byte global plans without AST initializer artifa
     try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[2]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5701,7 +5687,6 @@ test "LLVM emits named struct global literals from syntax-free plans" {
     try std.testing.expect(module_mir.checkedGlobalInitializer(module_mir.checked_globals[1]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(
@@ -5736,7 +5721,6 @@ test "LLVM emits nested array and struct function-symbol global plans" {
     try mir.validateLoweringAdmission(module_mir);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(

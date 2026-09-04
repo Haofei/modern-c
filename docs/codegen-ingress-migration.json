@@ -28,7 +28,7 @@
     "src/codegen_attrs.zig": {
       "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
       "ty: ?ast_bridge.TypeExpr": 0,
-      "init: ?ast_bridge.Expr": 1,
+      "init: ?ast_bridge.Expr": 0,
       "TraitDeclFacts": 0,
       "ImplTraitFacts": 0
     },
@@ -50,16 +50,16 @@
       "render_attrs: attr_syntax.FunctionRenderAttrs": 0,
       "const attr_syntax = @import(\"attr_syntax.zig\")": 0,
       "render_attrs: codegen_attrs.FunctionRenderAttrs": 0,
-      "const codegen_attrs = @import(\"codegen_attrs.zig\")": 1,
+      "const codegen_attrs = @import(\"codegen_attrs.zig\")": 0,
       "signature: codegen_attrs.FunctionSignatureFacts": 0,
       "body_facts: codegen_attrs.FunctionBodyFacts": 0,
       ".is_const = fn_decl.is_const": 0,
-      "CallableEmissionFact": 1,
-      "signature: codegen_attrs.GlobalSignatureFacts": 1,
-      "initializer: codegen_attrs.GlobalInitFacts": 1,
-      "checkedGlobalInitializer(checked.?)": 1,
-      ".signature = .{": 1,
-      ".initializer = .{": 1
+      "CallableEmissionFact": 0,
+      "signature: codegen_attrs.GlobalSignatureFacts": 0,
+      "initializer: codegen_attrs.GlobalInitFacts": 0,
+      "checkedGlobalInitializer(checked.?)": 0,
+      ".signature = .{": 0,
+      ".initializer = .{": 0
     },
     "src/lower_c_emitter.zig": {
       "function.backend_attrs": 0,
@@ -171,7 +171,7 @@
       "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
       "pub fn transitionalReturnType(self: FunctionSignatureFacts) ?ast_bridge.TypeExpr": 0,
       "return_type_id: mir.SignatureTypeId = .invalid": 0,
-      "type_id: mir.SignatureTypeId = .invalid": 1,
+      "type_id: mir.SignatureTypeId = .invalid": 0,
       "has_definition: bool": 0,
       "backend_name: ?[]const u8": 0,
       "c_abi: bool": 0,
@@ -188,14 +188,14 @@
   "backend_artifact_consumers": {
     "src/lower_c_emitter.zig": {
       "declaration_artifacts.FunctionArtifact": 0,
-      "declaration_artifacts.GlobalArtifact": 2,
+      "declaration_artifacts.GlobalArtifact": 0,
       "declaration_artifacts.TraitDeclArtifact": 0,
       "declaration_artifacts.ImplTraitArtifact": 0,
       "declaration_artifacts.TypeDeclArtifact": 0
     },
     "src/lower_llvm.zig": {
       "declaration_artifacts.FunctionArtifact": 0,
-      "declaration_artifacts.GlobalArtifact": 2,
+      "declaration_artifacts.GlobalArtifact": 0,
       "declaration_artifacts.TraitDeclArtifact": 0,
       "declaration_artifacts.ImplTraitArtifact": 0,
       "declaration_artifacts.TypeDeclArtifact": 0

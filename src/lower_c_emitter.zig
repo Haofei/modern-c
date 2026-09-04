@@ -139,7 +139,6 @@ const packedBitsGlobalBase = lower_c_access.packedBitsGlobalBase;
 const packedBitsMaskLiteral = lower_c_access.packedBitsMaskLiteral;
 const globalArrayElementAccess = lower_c_access.globalArrayElementAccess;
 const appendLineDirective = lower_c_map.appendLineDirective;
-const emitGlobalDecl = lower_c_global.emitGlobal;
 const appendGlobalLoadExpr = lower_c_global.appendGlobalLoadExpr;
 const appendGlobalStorePrefix = lower_c_global.appendGlobalStorePrefix;
 const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
@@ -267,7 +266,6 @@ pub const CEmitter = struct {
     globals: std.StringHashMap(GlobalInfo),
     emitted_string_backings: std.AutoHashMap(mir.StringBackingId, void),
     codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
-    static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
     // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
@@ -356,7 +354,6 @@ pub const CEmitter = struct {
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
             .emitted_string_backings = std.AutoHashMap(mir.StringBackingId, void).init(allocator),
-            .static_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
             .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .backend_names = std.StringHashMap([]const u8).init(allocator),
@@ -435,7 +432,6 @@ pub const CEmitter = struct {
         self.const_global_domains.deinit();
         self.const_fns.deinit();
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
-        self.static_initializers.deinit();
         self.globals.deinit();
     }
 
@@ -454,10 +450,9 @@ pub const CEmitter = struct {
         try self.collectStructFacts();
         try self.collectCallableEmissionFacts();
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
-        try self.collectEarlyDeclarationMetadata(early_metadata);
+        try self.collectEarlyDeclarationMetadata();
         try self.collectCheckedPlannedGlobals();
         try self.collectConstGlobals();
-        try self.collectGlobalArtifacts(early_metadata);
         try self.collectBindThunks();
     }
 
@@ -467,6 +462,7 @@ pub const CEmitter = struct {
             self.mir_module.signature_types,
             self.mir_module.type_aliases,
             self.mir_module.structs,
+            self.mir_module.checked_globals,
             self.mir_module.symbol_identities,
         );
     }
@@ -569,19 +565,19 @@ pub const CEmitter = struct {
         }
     }
 
-    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
+    pub fn collectEarlyDeclarationMetadata(self: *CEmitter) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
         try eval.collectConstFunctionsFromDeclarations(self.comptime_declarations.?, &self.const_fns);
-        for (artifacts.decl_artifacts) |global| {
-            const sig = global.signature;
-            if (!sig.is_const) continue;
-            const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
+        for (self.mir_module.checked_globals) |global| {
+            if (!global.is_const) continue;
+            const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+            const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
             const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-            try self.const_global_widths.put(sig.name.text, bits);
+            try self.const_global_widths.put(name, bits);
         }
     }
 
@@ -595,37 +591,23 @@ pub const CEmitter = struct {
         });
     }
 
-    /// Seed backend lookup/comptime state from admitted global plans before
-    /// evaluating residual aggregate/relocation artifacts. Planned rows have
-    /// no `GlobalArtifact` payload; their type is materialized solely from
-    /// the module-owned SignatureTypeTable.
+    /// Seed backend lookup/comptime state from checked global facts. Every
+    /// global, including an extern declaration, is represented here without
+    /// retaining an AST initializer or declaration payload.
     fn collectCheckedPlannedGlobals(self: *CEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
             const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
             var info = try self.globalInfoFromType(ty);
             info.is_const = global.is_const;
             try self.globals.put(name, info);
+            try self.collectTypeArtifacts(ty);
+            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             switch (fact.plan) {
                 .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
                 .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
             }
         }
-    }
-
-    pub fn collectGlobalArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) anyerror!void {
-        for (artifacts.decl_artifacts) |global| try self.collectGlobalDeclArtifact(global);
-    }
-
-    fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        const sig = global.signature;
-        const ty = try self.signatureTypeExpr(sig.type_id, sig.name.span);
-        if (!std.mem.eql(u8, try self.cSignatureType(sig.type_id), try self.cTypeFor(ty, .typedef_name))) return error.UnsupportedCEmission;
-        var info = try self.globalInfoFromType(ty);
-        info.is_const = sig.is_const;
-        try self.globals.put(sig.name.text, info);
-        try self.collectTypeArtifacts(ty);
     }
 
     fn collectStructFact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
@@ -751,7 +733,7 @@ pub const CEmitter = struct {
             try self.emitSignatureTypeDefinition(checked.signature_return_type_id);
             for (checked.signature_param_type_ids) |type_id| try self.emitSignatureTypeDefinition(type_id);
         }
-        for (self.codegen_artifacts.decl_artifacts) |global| try self.emitSignatureTypeDefinition(global.signature.type_id);
+        for (self.mir_module.checked_globals) |global| try self.emitSignatureTypeDefinition(global.signature_type_id);
         // Body-local declaration shapes arrive as syntax-free IDs.  Emit
         // their required aggregate typedefs from the same module table rather
         // than retaining AST TypeExpr payloads on MIR functions.
@@ -882,7 +864,10 @@ pub const CEmitter = struct {
                 .function_symbol => |plan| try self.emitCheckedFunctionSymbolGlobal(global, plan),
             }
         }
-        for (self.codegen_artifacts.decl_artifacts) |global| try self.emitGlobal(global);
+        for (self.mir_module.checked_globals) |global| {
+            if (!global.is_extern) continue;
+            try self.emitCheckedExternGlobal(global);
+        }
     }
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
@@ -935,29 +920,11 @@ pub const CEmitter = struct {
         return if (identity.id.eql(fact.symbol_id) and identity.kind == .function) identity.spelling else null;
     }
 
-    fn emitGlobal(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        const previous_function = self.current_function;
-        const previous_source_path = self.source_path;
-        self.current_function = global.signature.name.text;
-        self.source_path = self.sourcePathForSpan(global.signature.name.span);
-        defer {
-            self.current_function = previous_function;
-            self.source_path = previous_source_path;
-        }
-        const body = if (self.globalInitializerMir(global.initializer.body_id)) |function| &function.executable_body else &mir.ExecutableBody{};
-        const signature_ty = try self.signatureTypeExpr(global.signature.type_id, global.signature.name.span);
-        const rendered_type = try self.cSignatureType(global.signature.type_id);
-        if (global.signature.value_ty != .value) {
-            const executable_type = mir_executable_c.renderType(self.scratch.allocator(), body, global.signature.value_ty) catch |err| switch (err) {
-                // Nominal and aggregate values intentionally have no body
-                // representation without their type declaration. Their
-                // validated signature shape is the declaration authority.
-                error.UnsupportedType => null,
-                else => return err,
-            };
-            if (executable_type) |value| if (!std.mem.eql(u8, rendered_type, value)) return error.UnsupportedCEmission;
-        }
-        try emitGlobalDecl(self.globalEmitContext(), global, rendered_type, signature_ty);
+    fn emitCheckedExternGlobal(self: *CEmitter, global: mir.CheckedGlobalFact) !void {
+        const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
+        const rendered_type = try self.cSignatureType(global.signature_type_id);
+        try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
+        try self.out.print(self.allocator, "#undef {s}\nextern {s} {s};\n\n", .{ name, rendered_type, name });
     }
 
     fn emitCheckedScalarGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, fact: mir.GlobalInitializerFact) !void {
@@ -2070,25 +2037,6 @@ pub const CEmitter = struct {
         };
     }
 
-    fn globalEmitContext(self: *CEmitter) lower_c_global.EmitContext {
-        return .{
-            .allocator = self.allocator,
-            .scratch = self.scratch.allocator(),
-            .out = self.out,
-            .static_initializers = &self.static_initializers,
-            .functions = &self.functions,
-            .emit_ctx = self,
-            .write_line_directive = writeLineDirectiveForGlobal,
-            .emit_declarator = emitDeclaratorForGlobal,
-            .const_global_c_value = constGlobalCValueForGlobal,
-            .emit_expr = emitExprForGlobal,
-            .emit_expr_with_target = emitExprWithTargetForGlobal,
-            .emit_expr_with_target_for_owner = emitExprWithTargetForGlobalOwner,
-            .emit_const_global_initializer = emitConstGlobalInitializerForGlobal,
-            .is_aggregate_global_type = isAggregateGlobalTypeForGlobal,
-        };
-    }
-
     fn globalArrayAccessEmitContext(self: *CEmitter) lower_c_global.ArrayAccessEmitContext {
         return .{
             .allocator = self.allocator,
@@ -2152,49 +2100,6 @@ pub const CEmitter = struct {
     fn arrayLenTextForNames(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenTextForExpr(expr);
-    }
-
-    fn writeLineDirectiveForGlobal(ctx: *anyopaque, span: ast_bridge.Span) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.writeLineDirective(span);
-    }
-
-    fn emitDeclaratorForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.emitDeclarator(ty, name);
-    }
-
-    fn constGlobalCValueForGlobal(ctx: *anyopaque, body_id: mir.BodyId, value_ty: mir.ValueType) anyerror!?[]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.constGlobalCValue(body_id, value_ty);
-    }
-
-    fn emitExprForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.emitExpr(expr, null);
-    }
-
-    fn emitExprWithTargetForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.emitExprWithTarget(expr, null, target_ty);
-    }
-
-    fn emitExprWithTargetForGlobalOwner(ctx: *anyopaque, owner: ?[]const u8, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        const previous_function = self.current_function;
-        if (owner) |name| self.current_function = name;
-        defer self.current_function = previous_function;
-        try self.emitExprWithTarget(expr, null, target_ty);
-    }
-
-    fn emitConstGlobalInitializerForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!bool {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.emitConstGlobalInitializer(ty, expr);
-    }
-
-    fn isAggregateGlobalTypeForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.isAggregateGlobalType(ty);
     }
 
     fn writeIndentForOverlay(ctx: *anyopaque) anyerror!void {
@@ -5419,7 +5324,7 @@ pub const CEmitter = struct {
 
     fn emitStaticArrayIndexAddress(self: *CEmitter, node: anytype) anyerror!void {
         try self.out.appendSlice(self.allocator, ".elems[");
-        const static_index = staticCInitializer(node.index.*, &self.static_initializers, &self.functions, self.scratch.allocator()) orelse node.index.*;
+        const static_index = node.index.*;
         if (!try emitStaticCInitializer(self.allocator, self.out, static_index)) try self.emitExpr(static_index, null);
         try self.out.appendSlice(self.allocator, "]");
     }

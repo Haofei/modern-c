@@ -1685,6 +1685,20 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 .plan = .nullable_null,
                             });
                         }
+                        // A typed literal storage zero is a complete
+                        // initializer. Record the existing syntax-free
+                        // `.zero` plan rather than leaving the old AST global
+                        // emitter to recover it. Pointer `null` stays on its
+                        // more precise nullable plan above.
+                        if (!checked_global.has_initializer_plan and directStorageZeroInitializer(initializer)) {
+                            checked_global.has_initializer_plan = true;
+                            try global_initializer_facts.append(allocator, .{
+                                .global_symbol_id = checked_global.symbol_id,
+                                .initializer_body_id = checked_global.initializer_body_id,
+                                .value_ty = checked_global.ty,
+                                .plan = .zero,
+                            });
+                        }
                         if (!checked_global.has_initializer_plan) {
                             if (try directStringBytesGlobalInitializerPlan(
                                 allocator,
@@ -2092,6 +2106,15 @@ fn foldMutableScalarGlobalInitializer(
             break :blk constScalarValueFromComptime(value);
         },
         .trap, .unknown => null,
+    };
+}
+
+fn directStorageZeroInitializer(initializer: ast.Expr) bool {
+    return switch (initializer.kind) {
+        .int_literal => |literal| (numeric.parseIntegerLiteral(literal) orelse return false) == 0,
+        .null_literal => true,
+        .grouped => |inner| directStorageZeroInitializer(inner.*),
+        else => false,
     };
 }
 
@@ -5273,14 +5296,18 @@ fn validateInstructionSpanIdentitiesForLowering(module: Module) error{InvalidMir
     };
 }
 
-/// A global initializer plan is authoritative only when its module-level
-/// shape checks succeed.  In particular, aliases need the module's type-alias
-/// rows to prove that a nullable `null` is pointer-niche storage.  Reject an
-/// invalid plan before declaration artifacts can retain the AST fallback.
+/// Every non-extern global definition must have exactly one admitted
+/// initializer plan. Extern declarations deliberately have no storage plan.
+/// This is the fail-closed boundary now that codegen retains no AST global
+/// initializer fallback.
 fn validateGlobalInitializerFactsForLowering(module: Module) error{InvalidMirGlobalInitializerFacts}!void {
     for (module.checked_globals) |global| {
-        if (!global.has_initializer_plan) continue;
-        if (module.checkedGlobalInitializer(global) == null) return error.InvalidMirGlobalInitializerFacts;
+        const fact = module.checkedGlobalInitializer(global);
+        if (global.is_extern) {
+            if (global.has_initializer_plan or fact != null) return error.InvalidMirGlobalInitializerFacts;
+            continue;
+        }
+        if (!global.has_initializer_plan or fact == null) return error.InvalidMirGlobalInitializerFacts;
     }
 }
 

@@ -5,7 +5,6 @@ const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const ComptimeFunctionDeclarations = declaration_artifacts.ComptimeFunctionDeclarations;
-const GlobalArtifact = declaration_artifacts.GlobalArtifact;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
 const mir = @import("mir_model.zig");
@@ -622,7 +621,6 @@ pub const ComptimeDeclarations = struct {
     type_aliases: []const ast.TypeAlias = &.{},
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
-    decl_artifacts: ?[]const GlobalArtifact = null,
     /// Borrowed module-owned signature graph. It exists only to materialize
     /// transient expected types while folding retained initializer syntax.
     signature_types: ?mir.SignatureTypeTable = null,
@@ -632,6 +630,10 @@ pub const ComptimeDeclarations = struct {
     /// Complete ordinary-aggregate declaration ingress for artifact-backed
     /// codegen and const evaluation.
     struct_facts: []const mir.StructFact = &.{},
+    /// Checked global signature rows are borrowed from the module and used
+    /// only for transient const-eval type materialization. They never retain
+    /// a global initializer AST payload.
+    checked_globals: []const mir.CheckedGlobalFact = &.{},
     symbol_identities: []const mir.SymbolIdentity = &.{},
     comptime_functions: ComptimeFunctionDeclarations = .empty,
 
@@ -644,7 +646,6 @@ pub const ComptimeDeclarations = struct {
 
     pub fn fromCodegenArtifacts(artifacts: CgDeclArtifacts) ComptimeDeclarations {
         return .{
-            .decl_artifacts = artifacts.decl_artifacts,
             .comptime_functions = artifacts.comptime_functions,
         };
     }
@@ -660,11 +661,13 @@ pub const ComptimeDeclarations = struct {
         signature_types: mir.SignatureTypeTable,
         type_alias_facts: []const mir.TypeAliasFact,
         struct_facts: []const mir.StructFact,
+        checked_globals: []const mir.CheckedGlobalFact,
         symbol_identities: []const mir.SymbolIdentity,
     ) ComptimeDeclarations {
         var declarations = fromCodegenArtifactsWithSignatureTypes(artifacts, signature_types);
         declarations.type_alias_facts = type_alias_facts;
         declarations.struct_facts = struct_facts;
+        declarations.checked_globals = checked_globals;
         declarations.symbol_identities = symbol_identities;
         return declarations;
     }
@@ -968,10 +971,6 @@ fn collectConstGlobalsFromDeclItemsWithScope(
         }
         return;
     }
-    if (declarations.decl_artifacts) |decl_artifacts| {
-        for (decl_artifacts) |global| try collectConstGlobalArtifact(allocator, &scope, global, out, options);
-        return;
-    }
     for (declarations.globals) |global| try collectConstGlobal(allocator, &scope, global, out, options);
 }
 
@@ -1003,27 +1002,6 @@ fn collectConstGlobal(
         else => {},
     }
     if (scope.hasOom()) return error.OutOfMemory;
-}
-
-fn collectConstGlobalArtifact(
-    allocator: std.mem.Allocator,
-    scope: *ComptimeScope,
-    global: GlobalArtifact,
-    out: *std.StringHashMap(ComptimeValue),
-    options: CollectConstGlobalsOptions,
-) !void {
-    const sig = global.signature;
-    const init_facts = global.initializer;
-    const types = scope.declarations.?.signature_types orelse return error.InvalidSignatureType;
-    const ty = try signature_type_materializer.typeExpr(scope.bindings.allocator, types, sig.type_id, sig.name.span);
-    return collectConstGlobal(allocator, scope, .{
-        .name = sig.name,
-        .ty = ty,
-        .init = init_facts.init,
-        .is_const = sig.is_const,
-        .exported = sig.exported,
-        .is_extern = sig.is_extern,
-    }, out, options);
 }
 
 fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeValue {
@@ -1131,7 +1109,7 @@ fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr 
         }
         return null;
     }
-    if (declarations.decl_artifacts != null) {
+    if (declarations.signature_types != null) {
         const types = declarations.signature_types orelse return null;
         for (declarations.type_alias_facts) |fact| {
             if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= declarations.symbol_identities.len) return null;
@@ -1165,25 +1143,18 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
         }
         return null;
     }
-    if (declarations.decl_artifacts) |decl_artifacts| {
-        for (decl_artifacts) |global| {
-            if (std.mem.eql(u8, global.signature.name.text, name)) {
-                const types = declarations.signature_types orelse return null;
-                return signature_type_materializer.typeExpr(scope.bindings.allocator, types, global.signature.type_id, global.signature.name.span) catch |err| switch (err) {
-                    error.OutOfMemory => {
-                        scope.recordOom();
-                        return null;
-                    },
-                    // An invalid signature shape must not be treated as an
-                    // inferred global type. The checked-program boundary
-                    // rejects it before codegen; this best-effort query
-                    // remains unknown rather than manufacturing a type.
-                    else => return null,
-                };
-            }
-        }
-        return null;
-    }
+    if (declarations.signature_types) |types| for (declarations.checked_globals) |global| {
+        if (!global.symbol_id.isValid() or global.symbol_id.index() >= declarations.symbol_identities.len) continue;
+        const identity = declarations.symbol_identities[global.symbol_id.index()];
+        if (!identity.id.eql(global.symbol_id) or identity.kind != .global or !std.mem.eql(u8, identity.spelling, name)) continue;
+        return signature_type_materializer.typeExpr(scope.bindings.allocator, types, global.signature_type_id, .{ .offset = 0, .len = 0, .line = 0, .column = 0 }) catch |err| switch (err) {
+            error.OutOfMemory => {
+                scope.recordOom();
+                return null;
+            },
+            else => return null,
+        };
+    };
     for (declarations.globals) |global| {
         if (std.mem.eql(u8, global.name.text, name)) return global.ty;
     }

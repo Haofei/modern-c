@@ -4626,7 +4626,10 @@ pub const Module = struct {
             .atomic_init => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 atomicInitializerPlanMatchesGlobal(plan, self, global)) fact else null,
-            .zero => if (!global.initializer_body_id.isValid() and !fact.initializer_body_id.isValid()) fact else null,
+            // `.zero` is used both for an omitted initializer and an
+            // explicitly checked literal zero. In either case its body
+            // identity must agree exactly with the global row.
+            .zero => if (global.initializer_body_id.eql(fact.initializer_body_id)) fact else null,
             .aggregate => |plan| if (global.initializer_body_id.isValid() and
                 global.initializer_body_id.eql(fact.initializer_body_id) and
                 aggregateInitializerPlanMatchesModule(plan, self, global, global.signature_type_id)) fact else null,

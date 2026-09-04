@@ -94,8 +94,14 @@ pub const CheckedProgram = struct {
                         return error.InvalidGlobalInitializerFact;
                 },
                 .zero => {
-                    if (fact.initializer_body_id.isValid() or global.initializer_body_id.isValid())
-                        return error.InvalidGlobalInitializerFact;
+                    if (!global.initializer_body_id.eql(fact.initializer_body_id)) return error.InvalidGlobalInitializerFact;
+                    if (fact.initializer_body_id.isValid()) {
+                        if (fact.initializer_body_id.index() >= callables.len) return error.InvalidGlobalInitializerFact;
+                        const callable = callables[fact.initializer_body_id.index()];
+                        if (callable.kind != .global_initializer or !callable.body_id.eql(fact.initializer_body_id) or
+                            !callable.symbol_id.eql(global.symbol_id))
+                            return error.InvalidGlobalInitializerFact;
+                    }
                 },
                 .aggregate => |plan| {
                     if (!fact.initializer_body_id.isValid() or fact.initializer_body_id.index() >= callables.len)
@@ -199,7 +205,10 @@ pub const CheckedProgram = struct {
 };
 
 fn requiresGlobalInitializerFact(global: mir.CheckedGlobalFact) bool {
-    return !global.is_extern and global.has_initializer_plan;
+    // Code generation has no AST initializer fallback.  Every definition
+    // must therefore carry an admitted initializer plan and its matching
+    // fact; only extern declarations deliberately have neither.
+    return !global.is_extern;
 }
 
 fn globalInitializerFactForGlobal(facts: []const mir.GlobalInitializerFact, global: mir.CheckedGlobalFact) ?mir.GlobalInitializerFact {

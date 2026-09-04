@@ -1722,6 +1722,28 @@ test "CheckedProgram requires an admitted mutable scalar global initializer plan
     );
 }
 
+test "CheckedProgram rejects a non-extern global with no initializer plan" {
+    const source = "global COUNT: u32 = 1 + 2;";
+    var parsed = try test_support.parseCheckedModule("missing_global_initializer_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const saved = module_mir.checked_globals[0].has_initializer_plan;
+    defer module_mir.checked_globals[0].has_initializer_plan = saved;
+    module_mir.checked_globals[0].has_initializer_plan = false;
+    try std.testing.expectError(
+        error.InvalidGlobalInitializerFact,
+        checked_program.CheckedProgram.init(
+            module_mir.checked_callables,
+            module_mir.checked_globals,
+            module_mir.signature_types,
+            module_mir.global_initializer_facts,
+        ),
+    );
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "CheckedProgram admits direct scalar global copies without source initializer syntax" {
     const source =
         \\global SEED: u32 = 7;

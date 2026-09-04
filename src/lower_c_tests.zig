@@ -99,7 +99,6 @@ test "lower-c derives type aliases from module signature facts" {
     defer artifacts.deinit(std.testing.allocator);
     // The scalar const global, type alias, and function all have syntax-free
     // fact paths, so no ordinary declaration artifact remains.
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -133,7 +132,6 @@ test "lower-c derives enums from checked module facts" {
     defer artifacts.deinit(std.testing.allocator);
     // Enum declaration and callable syntax are both absent from codegen
     // artifacts in this fixture.
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -166,7 +164,6 @@ test "lower-c derives packed bits from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -198,7 +195,6 @@ test "lower-c derives overlay unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -230,7 +226,6 @@ test "lower-c derives tagged unions from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -262,7 +257,6 @@ test "lower-c derives structs from checked module facts" {
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -288,7 +282,6 @@ test "lower-c scalar const globals do not retain an AST initializer dependency" 
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -314,7 +307,6 @@ test "lower-c renders mutable scalar globals from verified initializer plans" {
     try std.testing.expectEqual(@as(usize, 1), module_mir.global_initializer_facts.len);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -345,8 +337,6 @@ test "lower-c emits direct scalar global copies from verified initializer plans"
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
     // Every initializer in this family is carried by the verified scalar plan;
-    // no GlobalArtifact can retain its source AST expression.
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -389,7 +379,6 @@ test "lower-c renders no-init scalar and array globals from verified zero plans"
     };
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -415,7 +404,6 @@ test "lower-c renders pure array literals from syntax-free aggregate plans" {
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -446,7 +434,6 @@ test "lower-c renders named struct global literals from syntax-free plans" {
     try std.testing.expect(module_mir.checkedGlobalInitializer(module_mir.checked_globals[1]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_named_struct_global_plan.mc", .{}, false, null);
@@ -470,7 +457,6 @@ test "lower-c renders nested array and struct function-symbol global plans" {
     try mir.validateLoweringAdmission(module_mir);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, artifacts.codegen(), &module_mir, &output, .kernel, "c_nested_aggregate_global_plan.mc", .{}, false, null);
@@ -1101,7 +1087,6 @@ test "lower-c omits nullable pointer null globals from AST artifacts" {
     try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1133,7 +1118,6 @@ test "lower-c emits direct global-address plans without AST initializer artifact
     try std.testing.expect(module_mir.checkedGlobalAddressGlobal(module_mir.checked_globals[1]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -1164,7 +1148,6 @@ test "lower-c emits function-symbol global and array plans without AST initializ
     try std.testing.expect(module_mir.checkedFunctionSymbolGlobal(module_mir.checked_globals[0]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -1208,7 +1191,6 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -1246,7 +1228,6 @@ test "lower-c emits decoded string-byte global plans without AST initializer art
     try std.testing.expect(module_mir.checkedStringBytesGlobal(module_mir.checked_globals[2]) != null);
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(
@@ -7744,7 +7725,6 @@ test "lower-c atomic init requires MIR identity and complete types" {
     defer complete.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &complete);
     defer artifacts.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), artifacts.decl_artifacts.len);
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null);
@@ -15017,7 +14997,7 @@ test "lower-c rejects non-static global initializers instead of zeroing" {
     try std.testing.expect(hasTestDiagnosticCode(parsed.reporter, "E_GLOBAL_INITIALIZER_NOT_STATIC"));
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.decls(), &output));
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, appendCDeclsTest(std.testing.allocator, parsed.decls(), &output));
 }
 
 test "lower-c preserves two MMIO reads before a short-circuit edge" {
