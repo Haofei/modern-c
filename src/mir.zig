@@ -8499,7 +8499,7 @@ const FunctionBuilder = struct {
                 else => {},
             }
             const executable_local = try builder.internExecutableLocal(param.name.text);
-            const parameter_source = builder.sourcePoint(param.name.span);
+            const parameter_span_id = try builder.internSpanId(builder.sourcePoint(param.name.span));
             const callable_signature = try builder.executableCallableSignature(param.ty);
             const dyn_trait_symbol_id = if (dynTraitNameFromTypeAlias(param.ty, aliases)) |trait_name|
                 try builder.internExecutableTraitSymbol(trait_name)
@@ -8527,8 +8527,7 @@ const FunctionBuilder = struct {
                 .dma_payload_ty = dma_payload_ty orelse .unknown,
                 .dma_payload_type_id = if (dma_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
                 .dma_mode = dma_mode,
-                .source = parameter_source,
-                .span_id = try builder.internSpanId(parameter_source),
+                .span_id = parameter_span_id,
             });
             try builder.addInstr(.param, param.name.text, param_ty, param.name.span);
             try builder.local_types.put(param.name.text, param_ty);
@@ -8943,7 +8942,6 @@ const FunctionBuilder = struct {
         try self.resolveExecutableBoundsTrapEdges(trap_edges);
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
         for (self.executable_parameters.items) |*parameter| {
-            parameter.span_id = self.span_ids.get(parameter.source) orelse .invalid;
             parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
             if (!parameter.span_id.isValid() or !parameter.type_id.isValid()) complete = false;
         }
@@ -8963,7 +8961,6 @@ const FunctionBuilder = struct {
                 !executableExpressionComplete(self, expression.*, contract_regions, range_facts)) complete = false;
         }
         for (self.executable_places.items) |*place| {
-            place.span_id = self.span_ids.get(place.source) orelse .invalid;
             place.root_type_id = self.type_ids.get(place.root_ty) orelse .invalid;
             place.type_id = self.type_ids.get(place.ty) orelse .invalid;
             if (!place.span_id.isValid() or !place.root_type_id.isValid() or !place.type_id.isValid() or
@@ -13880,7 +13877,6 @@ const FunctionBuilder = struct {
             // expression, which can append another place. Assign this place's
             // identity only after all recursive construction is complete.
             .id = .invalid,
-            .source = self.sourcePoint(expr.span),
             .span_id = try self.internSpanId(self.sourcePoint(expr.span)),
             .root = undefined,
             .ty = place_ty,

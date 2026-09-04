@@ -147,7 +147,7 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.parameters) |parameter| {
         try verifyLocal(body, parameter.local);
-        try verifySpan(function, parameter.span_id, parameter.source);
+        try verifySpanId(function, parameter.span_id);
         try verifyType(function, parameter.type_id, parameter.ty, body.complete);
         if (parameter.callable_signature) |signature| {
             if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid() or parameter.atomic_payload_type_id.isValid() or
@@ -215,7 +215,7 @@ pub fn verify(function: *const mir.Function) !void {
 
     for (body.places, 0..) |value, index| {
         if (!value.id.isValid() or value.id.index() != index or value.projection_count > mir.max_executable_projections) return error.InvalidPlaceIdentity;
-        try verifySpan(function, value.span_id, value.source);
+        try verifySpanId(function, value.span_id);
         try verifyType(function, value.root_type_id, value.root_ty, body.complete);
         try verifyType(function, value.type_id, value.ty, body.complete);
         switch (value.root) {

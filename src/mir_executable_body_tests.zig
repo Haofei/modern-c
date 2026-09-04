@@ -94,6 +94,15 @@ test "callable parameter signatures are verified executable facts" {
     try std.testing.expectEqual(mir_model.ValueType.value, parameter.ty);
     try std.testing.expect(parameter.callable_signature != null);
 
+    // Executable parameters retain only the opaque SpanId. The verifier must
+    // reject a stale ID through Function.span_identities without a raw source
+    // point compatibility copy.
+    const saved_span_id = parameter.span_id;
+    parameter.span_id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    parameter.span_id = saved_span_id;
+    try executable.verify(function);
+
     const original = parameter.callable_signature.?;
     parameter.callable_signature.?.parameter_count = mir_model.max_executable_operands + 1;
     try std.testing.expectError(error.InvalidFunctionSignature, executable.verify(function));
@@ -389,6 +398,14 @@ test "single parameter pointer deref owns typed place and race access" {
 
     const read = &module.functions[0];
     const read_place = &read.executable_body.places[0];
+    // Places also use an opaque span reference; there is no source-point
+    // duplicate on the canonical executable body.
+    const saved_place_span_id = read_place.span_id;
+    read_place.span_id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(read));
+    read_place.span_id = saved_place_span_id;
+    try executable.verify(read);
+
     const saved_root_type_id = read_place.root_type_id;
     const saved_leaf_type_id = read_place.type_id;
     read_place.root_type_id = saved_leaf_type_id;

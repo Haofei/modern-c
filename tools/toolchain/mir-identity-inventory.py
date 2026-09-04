@@ -102,6 +102,9 @@ def main() -> int:
     if "representation_source:" in model[executable_expression_start:executable_expression_end]:
         fail("src/mir_model.zig executable operations duplicate representation source beside SpanId")
 
+    require_not_contains("src/mir_model.zig", "pub const ExecutablePlace = struct {\n    id: PlaceId,\n    source: SourcePoint,")
+    require_not_contains("src/mir_model.zig", "    dma_mode: ?ExecutableDmaBufferMode = null,\n    source: SourcePoint,\n    span_id: SpanId = .invalid,\n};")
+
     executable_statement_start = model.index("pub const ExecutableStatement = struct {")
     executable_statement_end = model.index("/// Prove that `local` is initialized exactly once", executable_statement_start)
     if "representation_source:" in model[executable_statement_start:executable_statement_end]:

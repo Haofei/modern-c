@@ -5997,15 +5997,15 @@ test "executable C renderer emits plain global load and preserves plain local st
     const return_statement = mir.InstId.fromIndex(1);
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = input_local, .ty = u32_ty, .source = source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = input_local, .ty = u32_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{
         .{ .id = input_local, .spelling = "input" },
         .{ .id = target_local, .spelling = "target" },
     };
     var symbols = [_]mir.SymbolIdentity{.{ .id = global_symbol, .spelling = "global_count", .kind = .global, .mutable = false }};
     var places = [_]mir.ExecutablePlace{
-        .{ .id = global_place, .source = source, .root = .{ .symbol = global_symbol } },
-        .{ .id = local_place, .source = source, .root = .{ .local = target_local } },
+        .{ .id = global_place, .root = .{ .symbol = global_symbol } },
+        .{ .id = local_place, .root = .{ .local = target_local } },
     };
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = value, .block_id = entry, .owner_statement = store_statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = input_local } },
@@ -6046,9 +6046,9 @@ test "executable C renderer emits exact race-unordered scalar helpers" {
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = input_local, .spelling = "input" }};
-    var parameters = [_]mir.ExecutableParameter{.{ .local = input_local, .ty = f64_ty, .source = source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = input_local, .ty = f64_ty }};
     var symbols = [_]mir.SymbolIdentity{.{ .id = global_symbol, .spelling = "shared_value", .kind = .global, .mutable = true }};
-    var places = [_]mir.ExecutablePlace{.{ .id = global_place, .source = source, .root = .{ .symbol = global_symbol } }};
+    var places = [_]mir.ExecutablePlace{.{ .id = global_place, .root = .{ .symbol = global_symbol } }};
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = value, .block_id = entry, .owner_statement = store_statement, .source = source, .result_ty = f64_ty, .operation = .{ .local = input_local } },
         .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = f64_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
@@ -6119,9 +6119,9 @@ test "executable C renderer emits classified restricted casts in value order" {
     const i8_ty: mir.ValueType = .{ .integer = "i8" };
     const i64_ty: mir.ValueType = .{ .integer = "i64" };
     var parameters = [_]mir.ExecutableParameter{
-        .{ .local = identity_local, .ty = u32_ty, .source = source },
-        .{ .local = unsigned_local, .ty = u8_ty, .source = source },
-        .{ .local = signed_local, .ty = i8_ty, .source = source },
+        .{ .local = identity_local, .ty = u32_ty },
+        .{ .local = unsigned_local, .ty = u8_ty },
+        .{ .local = signed_local, .ty = i8_ty },
     };
     var locals = [_]mir.ExecutableLocalIdentity{
         .{ .id = identity_local, .spelling = "same" },
@@ -6169,7 +6169,7 @@ test "executable C renderer rejects restricted cast fact drift" {
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u8_ty: mir.ValueType = .{ .integer = "u8" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty, .source = source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
     var expressions = [_]mir.ExecutableExpression{
         .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
@@ -6218,10 +6218,10 @@ test "executable C renderer emits selected typed builtins in operand order" {
     const u64_ty: mir.ValueType = .{ .integer = "u64" };
     const paddr_ty: mir.ValueType = .{ .address = .paddr };
     var parameters = [_]mir.ExecutableParameter{
-        .{ .local = phys_local, .ty = u64_ty, .source = source },
-        .{ .local = wrap_left_local, .ty = u32_ty, .source = source },
-        .{ .local = wrap_right_local, .ty = u32_ty, .source = source },
-        .{ .local = conversion_local, .ty = u8_ty, .source = source },
+        .{ .local = phys_local, .ty = u64_ty },
+        .{ .local = wrap_left_local, .ty = u32_ty },
+        .{ .local = wrap_right_local, .ty = u32_ty },
+        .{ .local = conversion_local, .ty = u8_ty },
     };
     var locals = [_]mir.ExecutableLocalIdentity{
         .{ .id = phys_local, .spelling = "physical_bits" },
@@ -6279,7 +6279,7 @@ test "executable C renderer emits scalar bitcast as a bit preserving builtin" {
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f32_ty: mir.ValueType = .{ .float = "f32" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty, .source = source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
     var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .argument_count = 1 };
     call.arguments[0] = operand;
@@ -6319,7 +6319,7 @@ test "executable C renderer rejects scalar bitcast fact mutations" {
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const u64_ty: mir.ValueType = .{ .integer = "u64" };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty, .source = source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
     var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .argument_count = 1 };
     call.arguments[0] = operand;
@@ -6367,7 +6367,7 @@ test "executable C renderer rejects selected builtin fact mutations" {
     const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u8_ty: mir.ValueType = .{ .integer = "u8" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty, .source = source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
     var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .argument_count = 1 };
     call.arguments[0] = operand;
@@ -6581,14 +6581,12 @@ test "executable C renderer guards single parameter scalar deref with exact repr
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
     const source: mir.SourcePoint = .{ .line = 1, .column = 39, .offset = 38, .len = 7 };
-    const pointer_source: mir.SourcePoint = .{ .line = 1, .column = 39, .offset = 38, .len = 1 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = pointer_local, .ty = pointer_ty, .source = pointer_source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = pointer_local, .ty = pointer_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = pointer_local, .spelling = "pointer" }};
     var places = [_]mir.ExecutablePlace{.{
         .id = place_id,
-        .source = source,
         .root = .{ .local = pointer_local },
         .root_ty = pointer_ty,
         .ty = u32_ty,
@@ -6680,13 +6678,11 @@ test "executable C renderer guards address of parameter deref and returns origin
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
     const source: mir.SourcePoint = .{ .line = 1, .column = 48, .offset = 47, .len = 7 };
-    const pointer_source: mir.SourcePoint = .{ .line = 1, .column = 49, .offset = 48, .len = 1 };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
-    var parameters = [_]mir.ExecutableParameter{.{ .local = pointer_local, .ty = pointer_ty, .source = pointer_source }};
+    var parameters = [_]mir.ExecutableParameter{.{ .local = pointer_local, .ty = pointer_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = pointer_local, .spelling = "pointer" }};
     var places = [_]mir.ExecutablePlace{.{
         .id = place_id,
-        .source = source,
         .root = .{ .local = pointer_local },
         .root_ty = pointer_ty,
         .ty = .{ .integer = "u32" },
@@ -6746,12 +6742,11 @@ test "executable C renderer guards statement-owned parameter scalar store with e
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
     const source: mir.SourcePoint = .{ .line = 1, .column = 51, .offset = 50, .len = 17 };
-    const pointer_source: mir.SourcePoint = .{ .line = 1, .column = 51, .offset = 50, .len = 7 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     var parameters = [_]mir.ExecutableParameter{
-        .{ .local = pointer_local, .ty = pointer_ty, .source = pointer_source },
-        .{ .local = value_local, .ty = u32_ty, .source = source },
+        .{ .local = pointer_local, .ty = pointer_ty },
+        .{ .local = value_local, .ty = u32_ty },
     };
     var locals = [_]mir.ExecutableLocalIdentity{
         .{ .id = pointer_local, .spelling = "pointer" },
@@ -6759,7 +6754,6 @@ test "executable C renderer guards statement-owned parameter scalar store with e
     };
     var places = [_]mir.ExecutablePlace{.{
         .id = place_id,
-        .source = source,
         .root = .{ .local = pointer_local },
         .root_ty = pointer_ty,
         .ty = u32_ty,
@@ -6875,7 +6869,6 @@ test "executable C renderer validates a slice once with an exact representation 
         .local = mir.LocalId.fromIndex(0),
         .ty = slice_ty,
         .type_id = mir.TypeId.fromIndex(0),
-        .source = source,
         .span_id = mir.SpanId.fromIndex(0),
     }};
     var expressions = [_]mir.ExecutableExpression{

@@ -1660,7 +1660,6 @@ fn executableExpressionOwnsTrap(trap_edges: []const ExecutableTrapEdge, id: Expr
 
 pub const ExecutablePlace = struct {
     id: PlaceId,
-    source: SourcePoint,
     span_id: SpanId = .invalid,
     /// A place can start at stable storage or at a previously evaluated
     /// pointer value.  `value` is deliberately narrow: the executable-body
@@ -1890,7 +1889,6 @@ pub const ExecutableParameter = struct {
     dma_payload_ty: ValueType = .unknown,
     dma_payload_type_id: TypeId = .invalid,
     dma_mode: ?ExecutableDmaBufferMode = null,
-    source: SourcePoint,
     span_id: SpanId = .invalid,
 };
 
