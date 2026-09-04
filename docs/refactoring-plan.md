@@ -55,11 +55,11 @@ inspection HIR remains a dump tool and is not promoted into the pipeline.
 | 1 | CheckedProgram + executable MIR body identity | `CheckedProgram` is syntax-free and executable function bodies no longer use legacy AST fallback emitters. |
 | 2 | Per-file source/module cutover | The loader no longer builds a combined textual source; parsing and source identity are per-file. |
 
-`docs/codegen-ingress-migration.json` is the working migration ledger for Phase
-2. It records the remaining AST-shaped declaration payloads still carried beside
-`VerifiedProgram`, normalized facts already split out, and C/LLVM consumer
-counts. `codegen-ingress-migration-test` must pass in every core tier; migration
-patches should lower those budgets instead of adding new compatibility paths.
+`docs/codegen-ingress-migration.json` is the closure ledger for the retired
+AST-shaped declaration ingress beside `VerifiedProgram`. Its zero budgets and
+syntax-free fact anchors prevent C/LLVM codegen from regaining those payloads.
+`codegen-ingress-migration-test` must pass in every core tier; future changes
+must preserve those zero budgets instead of adding compatibility paths.
 
 The machine-readable completion evidence for these bounded review goals lives
 in `docs/review-goal-status.json`. The completed MIR compatibility-projections

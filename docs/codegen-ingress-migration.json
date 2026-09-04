@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/codegen-ingress-migration.json",
-  "purpose": "Ratcheted migration budget for the remaining AST-shaped declaration payloads beside VerifiedProgram into C/LLVM codegen. Completed function-body fallback telemetry is intentionally retired.",
+  "purpose": "Closure ledger for retired AST-shaped declaration payloads beside VerifiedProgram and their syntax-free C/LLVM replacements. Completed function-body fallback telemetry is intentionally retired.",
   "policy": {
     "direction": "counts may decrease without replacement; increases require a deliberate migration-plan update",
     "stable_goal": "LowerRequest carries VerifiedProgram plus syntax-free typed tables; backend render-only attributes are removed or isolated behind verified emit plans",
