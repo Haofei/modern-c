@@ -1,8 +1,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const array_len = @import("array_len.zig");
-const eval = @import("eval.zig");
+const numeric = @import("numeric.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const type_layout = @import("layout.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
@@ -39,10 +38,6 @@ pub const ReflectEnv = struct {
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     tagged_unions: *const std.StringHashMap(TaggedUnionInfo),
     struct_types: *const std.StringHashMap(StructInfo),
-    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
-    const_globals: *const std.StringHashMap(eval.ComptimeValue),
-    const_global_widths: *const std.StringHashMap(u16),
-    const_global_domains: *const std.StringHashMap(eval.DomainWidth),
 };
 
 pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast_bridge.Expr) ?i128 {
@@ -74,35 +69,37 @@ pub fn reflectionTypeArg(node: anytype) ?ast_bridge.TypeExpr {
 }
 
 pub fn arrayLenValue(env: *const ReflectEnv, expr: ast_bridge.Expr) ?u64 {
-    if (array_len.parseArrayLenWithReflect(expr, env.const_fns, env.const_globals, comptimeReflectThunk, @constCast(env))) |len| return @intCast(len);
-    var fb_arena: ?std.heap.ArenaAllocator = null;
-    defer if (fb_arena) |*a| a.deinit();
-    const fold_alloc = eval.tryFoldScratch() orelse blk: {
-        fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        break :blk fb_arena.?.allocator();
-    };
-    defer if (fb_arena == null) eval.releaseFoldScratch();
-    var scope = eval.ComptimeScope.init(fold_alloc);
-    defer scope.deinit();
-    if (!seedConstFoldScope(env, &scope)) return null;
-    return switch (eval.foldComptimeExpr(&scope, expr)) {
-        .value => |value| switch (value) {
-            .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
-            else => null,
+    _ = env;
+    return directArrayLenValue(expr);
+}
+
+/// Signatures reaching a backend were admitted with a concrete array length.
+/// This deliberately accepts only direct arithmetic literals; named constants
+/// and calls are frontend const-eval, never a backend declaration provider.
+fn directArrayLenValue(expr: ast_bridge.Expr) ?u64 {
+    return switch (expr.kind) {
+        .int_literal => |literal| numeric.parseUsizeLiteral(literal),
+        .char_literal => |literal| if (numeric.parseCharLiteral(literal)) |value|
+            if (value <= std.math.maxInt(u64)) @intCast(value) else null
+        else
+            null,
+        .grouped => |inner| directArrayLenValue(inner.*),
+        .binary => |node| blk: {
+            const left = directArrayLenValue(node.left.*) orelse break :blk null;
+            const right = directArrayLenValue(node.right.*) orelse break :blk null;
+            break :blk switch (node.op) {
+                .add => std.math.add(u64, left, right) catch null,
+                .sub => std.math.sub(u64, left, right) catch null,
+                .mul => std.math.mul(u64, left, right) catch null,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .mod => if (right == 0) null else @mod(left, right),
+                .shl => if (right >= @bitSizeOf(u64)) null else std.math.shl(u64, left, right),
+                .shr => if (right >= @bitSizeOf(u64)) null else left >> @intCast(right),
+                else => null,
+            };
         },
         else => null,
     };
-}
-
-pub fn seedConstFoldScope(env: *const ReflectEnv, scope: *eval.ComptimeScope) bool {
-    scope.funcs = env.const_fns;
-    scope.globals = env.const_globals;
-    scope.global_domains = env.const_global_domains;
-    scope.reflect = comptimeReflectThunk;
-    scope.reflect_ctx = @constCast(env);
-    var widths = env.const_global_widths.iterator();
-    while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*) catch return false;
-    return true;
 }
 
 pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, field: []const u8) ?i128 {

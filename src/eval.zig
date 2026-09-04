@@ -2,9 +2,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
-const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
-const ComptimeFunctionDeclarations = declaration_artifacts.ComptimeFunctionDeclarations;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
 const mir = @import("mir_model.zig");
@@ -635,7 +632,6 @@ pub const ComptimeDeclarations = struct {
     /// a global initializer AST payload.
     checked_globals: []const mir.CheckedGlobalFact = &.{},
     symbol_identities: []const mir.SymbolIdentity = &.{},
-    comptime_functions: ComptimeFunctionDeclarations = .empty,
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
         // Compatibility adapter for older frontend call sites. It keeps the
@@ -643,56 +639,11 @@ pub const ComptimeDeclarations = struct {
         // backend lowering state.
         return .{ .legacy_decls = decls };
     }
-
-    pub fn fromCodegenArtifacts(artifacts: CgDeclArtifacts) ComptimeDeclarations {
-        return .{
-            .comptime_functions = artifacts.comptime_functions,
-        };
-    }
-
-    pub fn fromCodegenArtifactsWithSignatureTypes(artifacts: CgDeclArtifacts, signature_types: mir.SignatureTypeTable) ComptimeDeclarations {
-        var declarations = fromCodegenArtifacts(artifacts);
-        declarations.signature_types = signature_types;
-        return declarations;
-    }
-
-    pub fn fromCodegenArtifactsWithTypeFacts(
-        artifacts: CgDeclArtifacts,
-        signature_types: mir.SignatureTypeTable,
-        type_alias_facts: []const mir.TypeAliasFact,
-        struct_facts: []const mir.StructFact,
-        checked_globals: []const mir.CheckedGlobalFact,
-        symbol_identities: []const mir.SymbolIdentity,
-    ) ComptimeDeclarations {
-        var declarations = fromCodegenArtifactsWithSignatureTypes(artifacts, signature_types);
-        declarations.type_alias_facts = type_alias_facts;
-        declarations.struct_facts = struct_facts;
-        declarations.checked_globals = checked_globals;
-        declarations.symbol_identities = symbol_identities;
-        return declarations;
-    }
 };
 
 pub fn deinitComptimeFunctionMap(allocator: std.mem.Allocator, funcs: *std.StringHashMap(ComptimeFunction)) void {
     var it = funcs.valueIterator();
     while (it.next()) |function| function.deinit(allocator);
-}
-
-pub fn collectConstFunctionsFromDeclarations(
-    declarations: ComptimeDeclarations,
-    out: *std.StringHashMap(ComptimeFunction),
-) !void {
-    if (declarations.legacy_decls) |decls| {
-        for (decls) |decl| switch (decl.kind) {
-            .fn_decl => |function| if (function.is_const and !out.contains(function.name.text)) try out.put(function.name.text, try ComptimeFunction.fromFnDecl(out.allocator, function)),
-            else => {},
-        };
-        return;
-    }
-    for (declarations.comptime_functions.functions) |function| {
-        if (!function.is_const or out.contains(function.name.text)) continue;
-        try out.put(function.name.text, try ComptimeFunction.fromFnDecl(out.allocator, function));
-    }
 }
 
 // The declared bit-width of an integer type expression, or null for non-integer

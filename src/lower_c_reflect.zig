@@ -2,7 +2,6 @@ const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
-const eval = @import("eval.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const type_layout = @import("layout.zig");
 const lower_c_const = @import("lower_c_const.zig");
@@ -34,8 +33,6 @@ pub const ReflectEnv = struct {
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
-    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
-    const_globals: *const std.StringHashMap(eval.ComptimeValue),
 };
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
@@ -184,7 +181,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: us
             return null;
         },
         .array => |node| {
-            const len = constArrayLenValue(node.len, env.const_fns, env.const_globals, comptimeReflectThunk, @constCast(env)) orelse return null;
+            const len = constArrayLenValue(node.len) orelse return null;
             const elem = comptimeSizeOf(env, node.child.*, depth + 1) orelse return null;
             return comptimeArraySize(len, elem);
         },

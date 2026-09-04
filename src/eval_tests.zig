@@ -3,8 +3,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const eval = @import("eval.zig");
 const layout = @import("layout.zig");
-const test_artifact_support = @import("test_artifact_support.zig");
-const test_support = @import("test_support.zig");
 
 const ComptimeScope = eval.ComptimeScope;
 const ComptimeFunction = eval.ComptimeFunction;
@@ -40,33 +38,6 @@ fn testBitcastCall(a: std.mem.Allocator, target_name: []const u8, arg: ast.Expr)
         .type_args = try a.dupe(ast.TypeExpr, &.{testType(target_name)}),
         .args = try a.dupe(ast.Expr, &.{arg}),
     } } };
-}
-
-test "const function collection uses the frontend comptime declaration provider" {
-    var parsed = try test_support.parseModule("eval_comptime_provider.mc",
-        \\const fn twice(x: u32) -> u32 { return x + x; }
-    );
-    defer parsed.deinit();
-
-    var module_mir = try @import("mir.zig").buildFromDecls(std.testing.allocator, parsed.decls());
-    defer module_mir.deinit();
-    var early = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls(), &module_mir);
-    defer early.deinit(std.testing.allocator);
-
-    // An empty ordinary codegen body view is irrelevant: const-function
-    // discovery is owned entirely by the frontend provider.
-    const declarations = eval.ComptimeDeclarations.fromCodegenArtifacts(early.codegen());
-    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
-    defer {
-        eval.deinitComptimeFunctionMap(std.testing.allocator, &funcs);
-        funcs.deinit();
-    }
-    try eval.collectConstFunctionsFromDeclarations(declarations, &funcs);
-
-    try std.testing.expect(funcs.get("twice") != null);
-    const function = funcs.get("twice").?;
-    try std.testing.expect(function.body != null);
-    try std.testing.expectEqual(@as(usize, 1), early.comptime_functions.functions.len);
 }
 
 test "foldComptimeExpr folds the comptime scalar subset" {

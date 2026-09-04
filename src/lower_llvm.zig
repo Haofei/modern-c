@@ -5,7 +5,6 @@ const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const codegen_request = @import("codegen_request.zig");
 const error_from = @import("error_from.zig");
-const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -125,7 +124,6 @@ const MirSubjectType = struct {
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const assignmentIdent = lower_llvm_query.assignmentIdent;
-const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
 const memberCallee = lower_llvm_query.memberCallee;
@@ -325,14 +323,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     codegen_request.rejectExperimentalDynamicTraits(program, reporter) catch |err| switch (err) {
         error.ExperimentalDynamicTraitCodegen => return error.UnsupportedLlvmEmission,
     };
-    const comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithTypeFacts(
-        early_metadata,
-        program.typed_mir.signature_types,
-        program.typed_mir.type_aliases,
-        program.typed_mir.structs,
-        program.typed_mir.checked_globals,
-        program.typed_mir.symbol_identities,
-    );
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -360,11 +350,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
-        .const_fns = std.StringHashMap(eval.ComptimeFunction).init(allocator),
-        .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
-        .const_global_widths = std.StringHashMap(u16).init(allocator),
-        .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
-        .comptime_declarations = comptime_declarations,
         .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast_bridge.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -411,14 +396,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectTaggedUnionFacts();
     try ctx.collectStructFacts();
     try ctx.collectCallableEmissionFacts();
-    try ctx.collectConstFunctions(comptime_declarations);
     try ctx.collectCheckedPlannedGlobals();
-    var reflect_env = ctx.reflectEnv();
-    try eval.collectConstGlobalsFromDeclarationsWithOptions(allocator, comptime_declarations, &ctx.const_fns, &ctx.const_globals, .{
-        .reflect = lower_llvm_reflect.comptimeReflectThunk,
-        .reflect_ctx = &reflect_env,
-        .domains = &ctx.const_global_domains,
-    });
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     try ctx.emitCollectedGlobals();
     try ctx.emitCollectedCallableDeclarations();
@@ -445,11 +423,6 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
-    const_fns: std.StringHashMap(eval.ComptimeFunction) = undefined,
-    const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
-    const_global_widths: std.StringHashMap(u16) = undefined,
-    const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
-    comptime_declarations: eval.ComptimeDeclarations,
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast_bridge.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
@@ -537,10 +510,6 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
-        self.const_fns.deinit();
-        self.const_global_widths.deinit();
-        self.const_global_domains.deinit();
-        eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.type_aliases.deinit();
         self.enum_types.deinit();
         self.packed_bits.deinit();
@@ -570,10 +539,6 @@ const LlvmEmitter = struct {
         self.debug_locations.deinit(self.allocator);
         self.debug_locals.deinit(self.allocator);
         self.scratch.deinit();
-    }
-
-    fn collectConstFunctions(self: *LlvmEmitter, comptime_facts: eval.ComptimeDeclarations) !void {
-        try eval.collectConstFunctionsFromDeclarations(comptime_facts, &self.const_fns);
     }
 
     /// This AST-shaped cache is derived only from the module-owned alias
@@ -785,14 +750,7 @@ const LlvmEmitter = struct {
             const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
             try self.global_types.put(name, ty);
             try self.global_is_const.put(name, global.is_const);
-            if (global.is_const) {
-                if (eval.comptimeTypeBitWidth(ty)) |bits| try self.const_global_widths.put(name, bits);
-            }
-            const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
-            switch (fact.plan) {
-                .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
-            }
+            _ = self.mir_module.checkedGlobalInitializer(global) orelse continue;
         }
     }
 
@@ -1154,9 +1112,6 @@ const LlvmEmitter = struct {
             else => if (view_narrow_target) |fact| fact.target_ty else ty,
         };
         const resolved_ty = self.resolveAliasType(semantic_ty);
-        if (self.foldConstGlobalValue(expr, semantic_ty)) |value| {
-            return try self.comptimeValueInitializer(value, semantic_ty);
-        }
         if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| {
             if (syntax_bridge.callExpr(expr)) |call| {
                 if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
@@ -1293,17 +1248,6 @@ const LlvmEmitter = struct {
         };
     }
 
-    /// `const` scalar globals must already have a verified scalar fact before
-    /// codegen.  Aggregate and enum forms retain their bounded transitional
-    /// AST evaluator until a recursive const-value table replaces them.
-    fn emitConstAggregateGlobalInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) ![]const u8 {
-        if (self.foldConstGlobalValue(expr, ty)) |value| switch (value) {
-            .tag, .array, .@"struct" => return try self.comptimeValueInitializer(value, ty),
-            .void, .int, .uint, .float, .boolean, .bytes => return error.UnsupportedLlvmEmission,
-        };
-        return self.emitGlobalInitializer(expr, ty);
-    }
-
     fn globalAddressInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.global_types.contains(ident.text))
@@ -1346,44 +1290,12 @@ const LlvmEmitter = struct {
     }
 
     fn globalConstIndexValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
-        if (self.foldConstGlobalValue(expr, null)) |value| {
-            return switch (value) {
-                .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
-                else => null,
-            };
-        }
         return switch (expr.kind) {
+            .int_literal => |literal| numeric.parseUsizeLiteral(literal),
+            .char_literal => |literal| numeric.parseCharLiteral(literal),
             .grouped => |inner| self.globalConstIndexValue(inner.*),
             else => null,
         };
-    }
-
-    fn foldConstGlobalValue(self: *LlvmEmitter, expr: ast_bridge.Expr, expected_ty: ?ast_bridge.TypeExpr) ?eval.ComptimeValue {
-        var fb_arena: ?std.heap.ArenaAllocator = null;
-        defer if (fb_arena) |*a| a.deinit();
-        const fold_alloc = eval.tryFoldScratch() orelse blk: {
-            fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            break :blk fb_arena.?.allocator();
-        };
-        defer if (fb_arena == null) eval.releaseFoldScratch();
-        var scope = eval.ComptimeScope.init(fold_alloc);
-        defer scope.deinit();
-        var reflect_env = self.reflectEnv();
-        if (!self.seedConstFoldScope(&scope, &reflect_env)) return null;
-        const folded = if (expected_ty) |ty|
-            eval.foldComptimeExprExpected(&scope, expr, ty)
-        else
-            eval.foldComptimeExpr(&scope, expr);
-        return switch (folded) {
-            .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
-            else => null,
-        };
-    }
-
-    fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) bool {
-        if (!lower_llvm_reflect.seedConstFoldScope(reflect_env, scope)) return false;
-        scope.declarations = self.comptime_declarations;
-        return true;
     }
 
     fn reflectEnv(self: *LlvmEmitter) LlvmReflectEnv {
@@ -1394,66 +1306,6 @@ const LlvmEmitter = struct {
             .overlay_unions = &self.overlay_unions,
             .tagged_unions = &self.tagged_unions,
             .struct_types = &self.struct_types,
-            .const_fns = &self.const_fns,
-            .const_globals = &self.const_globals,
-            .const_global_widths = &self.const_global_widths,
-            .const_global_domains = &self.const_global_domains,
-        };
-    }
-
-    fn comptimeValueInitializer(self: *LlvmEmitter, value: eval.ComptimeValue, target_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const resolved = self.resolveAliasType(target_ty);
-        return switch (value) {
-            .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
-            .uint => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
-            .boolean => |b| if (b) "1" else "0",
-            .tag => |tag| blk: {
-                const enum_decl = self.enumDeclForType(resolved) orelse return error.UnsupportedLlvmEmission;
-                break :blk try self.enumCaseValueByName(enum_decl, tag);
-            },
-            .array => |items| blk: {
-                const array = switch (resolved.kind) {
-                    .array => |node| node,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                var text: std.ArrayList(u8) = .empty;
-                try text.append(self.scratch.allocator(), '[');
-                for (items, 0..) |item, i| {
-                    if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
-                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmType(array.child.*), try self.comptimeValueInitializer(item, array.child.*) });
-                }
-                try text.append(self.scratch.allocator(), ']');
-                break :blk try text.toOwnedSlice(self.scratch.allocator());
-            },
-            .@"struct" => |fields| blk: {
-                if (self.packedBitsInfoForType(resolved)) |info| break :blk try self.packedBitsComptimeValue(info, fields);
-                const struct_decl = self.structDeclForType(resolved) orelse return error.UnsupportedLlvmEmission;
-                var text: std.ArrayList(u8) = .empty;
-                try text.appendSlice(self.scratch.allocator(), "{ ");
-                for (struct_decl.fields, 0..) |field, i| {
-                    if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
-                    const field_value = comptimeStructFieldValue(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
-                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmType(field.ty), try self.comptimeValueInitializer(field_value, field.ty) });
-                }
-                try text.appendSlice(self.scratch.allocator(), " }");
-                break :blk try text.toOwnedSlice(self.scratch.allocator());
-            },
-            // Preserve the exact source-width IEEE representation. Widening an
-            // f32 through a host f64 quiets signaling NaNs, so materialize the
-            // constant from its raw integer bits instead.
-            .float => |f| blk: {
-                const tname = switch (resolved.kind) {
-                    .name => |n| n.text,
-                    else => "",
-                };
-                if (std.mem.eql(u8, tname, "f32")) {
-                    const bits: u32 = @bitCast(f.asF32());
-                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i32 {d} to float)", .{bits});
-                }
-                const bits: u64 = if (f.width == 64) f.bits else @bitCast(f.asF64());
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i64 {d} to double)", .{bits});
-            },
-            .void, .bytes => error.UnsupportedLlvmEmission,
         };
     }
 
@@ -10369,19 +10221,6 @@ const LlvmEmitter = struct {
 
     fn staticPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast_bridge.StructLiteralField) ?[]const u8 {
         return self.packedBitsLiteralValue(info, fields) catch null;
-    }
-
-    fn packedBitsComptimeValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const eval.ComptimeStructField) ![]const u8 {
-        var value: u64 = 0;
-        for (fields) |field| {
-            const bit_index = self.packedBitsFieldIndex(info, field.name) orelse return error.UnsupportedLlvmEmission;
-            const enabled = switch (field.value) {
-                .boolean => |enabled| enabled,
-                else => return error.UnsupportedLlvmEmission,
-            };
-            if (enabled) value |= packedBitsMask(bit_index);
-        }
-        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
     fn resolveAliasType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {

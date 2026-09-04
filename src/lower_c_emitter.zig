@@ -4,7 +4,6 @@ const ast_bridge = @import("ast_bridge.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
-const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -125,11 +124,10 @@ const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
 const staticCInitializer = lower_c_const.staticCInitializer;
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
-const appendCComptimeFloat = lower_c_const.appendCComptimeFloat;
 const appendCSignedIntValue = lower_c_const.appendCSignedIntValue;
+const constArrayLenValue = lower_c_const.constArrayLenValue;
 const constIntValue = lower_c_const.constIntValue;
 const constBinaryProvenNoOverflow = lower_c_const.constBinaryProvenNoOverflow;
-const constArrayLenValue = lower_c_const.constArrayLenValue;
 const cloneLocals = lower_c_access.cloneLocals;
 const arrayElemsFieldForExpr = lower_c_access.arrayElemsFieldForExpr;
 const localIndexElementType = lower_c_access.localIndexElementType;
@@ -272,14 +270,6 @@ pub const CEmitter = struct {
     // Emitted as a C `__asm__("Y")` label so the object symbol is renamed without touching
     // any C-level call site.
     backend_names: std.StringHashMap([]const u8),
-    // `const fn` bodies and folded `const` global values, for folding comptime
-    // const-fn calls / named constants in fixed-array lengths (section 22
-    // comptime↔type feedback).
-    const_fns: std.StringHashMap(eval.ComptimeFunction),
-    const_globals: std.StringHashMap(eval.ComptimeValue),
-    const_global_widths: std.StringHashMap(u16),
-    const_global_domains: std.StringHashMap(eval.DomainWidth),
-    comptime_declarations: ?eval.ComptimeDeclarations = null,
     structs: std.StringHashMap(ast_bridge.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
@@ -357,10 +347,6 @@ pub const CEmitter = struct {
             .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .backend_names = std.StringHashMap([]const u8).init(allocator),
-            .const_fns = std.StringHashMap(eval.ComptimeFunction).init(allocator),
-            .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
-            .const_global_widths = std.StringHashMap(u16).init(allocator),
-            .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
             .structs = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -428,10 +414,6 @@ pub const CEmitter = struct {
 
     fn deinitDeclCollections(self: *CEmitter) void {
         self.emitted_string_backings.deinit();
-        self.const_global_widths.deinit();
-        self.const_global_domains.deinit();
-        self.const_fns.deinit();
-        eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.globals.deinit();
     }
 
@@ -449,22 +431,8 @@ pub const CEmitter = struct {
         try self.collectTaggedUnionFacts();
         try self.collectStructFacts();
         try self.collectCallableEmissionFacts();
-        self.setComptimeDeclarationsFromArtifacts(early_metadata);
-        try self.collectEarlyDeclarationMetadata();
         try self.collectCheckedPlannedGlobals();
-        try self.collectConstGlobals();
         try self.collectBindThunks();
-    }
-
-    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) void {
-        self.comptime_declarations = eval.ComptimeDeclarations.fromCodegenArtifactsWithTypeFacts(
-            artifacts,
-            self.mir_module.signature_types,
-            self.mir_module.type_aliases,
-            self.mir_module.structs,
-            self.mir_module.checked_globals,
-            self.mir_module.symbol_identities,
-        );
     }
 
     /// Materialize legacy helper input from the single module-owned alias
@@ -565,32 +533,6 @@ pub const CEmitter = struct {
         }
     }
 
-    pub fn collectEarlyDeclarationMetadata(self: *CEmitter) !void {
-        // Pre-pass: collect const/comptime metadata and pre-register nominal type
-        // names up front, so fixed-array lengths, reflection queries, and type-name
-        // mangling resolve during the artifact-collection pass below. Const global
-        // widths stay in this early pass because later type artifact collection can
-        // consult the reflection environment.
-        try eval.collectConstFunctionsFromDeclarations(self.comptime_declarations.?, &self.const_fns);
-        for (self.mir_module.checked_globals) |global| {
-            if (!global.is_const) continue;
-            const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
-            const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
-            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-            try self.const_global_widths.put(name, bits);
-        }
-    }
-
-    pub fn collectConstGlobals(self: *CEmitter) !void {
-        var reflect_env = self.reflectEnv();
-        const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
-        try eval.collectConstGlobalsFromDeclarationsWithOptions(self.allocator, declarations, &self.const_fns, &self.const_globals, .{
-            .reflect = lower_c_reflect.comptimeReflectThunk,
-            .reflect_ctx = &reflect_env,
-            .domains = &self.const_global_domains,
-        });
-    }
-
     /// Seed backend lookup/comptime state from checked global facts. Every
     /// global, including an extern declaration, is represented here without
     /// retaining an AST initializer or declaration payload.
@@ -603,10 +545,7 @@ pub const CEmitter = struct {
             try self.globals.put(name, info);
             try self.collectTypeArtifacts(ty);
             const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
-            switch (fact.plan) {
-                .scalar => if (global.is_const) try self.const_globals.put(name, mir.comptimeValueFromGlobalInitializerFact(fact)),
-                .zero, .atomic_init, .aggregate, .enum_case, .nullable_null, .string_bytes, .global_address, .function_symbol => {},
-            }
+            _ = fact;
         }
     }
 
@@ -1225,54 +1164,6 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitConstGlobalInitializer(self: *CEmitter, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) !bool {
-        if (syntax_bridge.callExpr(expr)) |call| {
-            if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
-                try self.out.appendSlice(self.allocator, " = ");
-                try self.emitExprWithTarget(expr, null, ty);
-                return true;
-            }
-        }
-        const value = self.foldConstGlobalValue(expr, ty) orelse return false;
-        try self.out.appendSlice(self.allocator, " = ");
-        try self.emitComptimeValueInitializer(value, ty);
-        return true;
-    }
-
-    fn foldConstGlobalValue(self: *CEmitter, expr: ast_bridge.Expr, expected_ty: ?ast_bridge.TypeExpr) ?eval.ComptimeValue {
-        var fb_arena: ?std.heap.ArenaAllocator = null;
-        defer if (fb_arena) |*a| a.deinit();
-        const fold_alloc = eval.tryFoldScratch() orelse blk: {
-            fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            break :blk fb_arena.?.allocator();
-        };
-        defer if (fb_arena == null) eval.releaseFoldScratch();
-        var scope = eval.ComptimeScope.init(fold_alloc);
-        defer scope.deinit();
-        var reflect_env = self.reflectEnv();
-        if (!self.seedConstFoldScope(&scope, &reflect_env)) return null;
-        const folded = if (expected_ty) |ty|
-            eval.foldComptimeExprExpected(&scope, expr, ty)
-        else
-            eval.foldComptimeExpr(&scope, expr);
-        return switch (folded) {
-            .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
-            else => null,
-        };
-    }
-
-    fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope, reflect_env: *ReflectEnv) bool {
-        scope.funcs = &self.const_fns;
-        scope.declarations = self.comptime_declarations;
-        scope.globals = &self.const_globals;
-        scope.global_domains = &self.const_global_domains;
-        scope.reflect = lower_c_reflect.comptimeReflectThunk;
-        scope.reflect_ctx = reflect_env;
-        var widths = self.const_global_widths.iterator();
-        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*) catch return false;
-        return true;
-    }
-
     fn reflectEnv(self: *CEmitter) ReflectEnv {
         return .{
             .type_aliases = &self.type_aliases,
@@ -1281,8 +1172,6 @@ pub const CEmitter = struct {
             .packed_bits = &self.packed_bits,
             .overlay_unions = &self.overlay_unions,
             .tagged_unions = &self.tagged_unions,
-            .const_fns = &self.const_fns,
-            .const_globals = &self.const_globals,
         };
     }
 
@@ -1305,58 +1194,6 @@ pub const CEmitter = struct {
     fn cTypeForReflect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
-    }
-
-    fn comptimeSizeOf(self: *CEmitter, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
-        var env = self.reflectEnv();
-        return lower_c_reflect.comptimeSizeOf(&env, ty, depth);
-    }
-
-    fn emitComptimeValueInitializer(self: *CEmitter, value: eval.ComptimeValue, target_ty: ast_bridge.TypeExpr) anyerror!void {
-        const resolved = self.resolveAliasType(target_ty);
-        switch (value) {
-            .int => |n| try self.emitComptimeIntInitializer(n),
-            .uint => |n| try lower_c_const.appendCIntValue(self.allocator, self.out, n),
-            .boolean => |b| try self.out.appendSlice(self.allocator, if (b) "1" else "0"),
-            .tag => |tag| {
-                const enum_name = self.enumNameForType(resolved) orelse return error.UnsupportedCEmission;
-                try self.out.print(self.allocator, "{s}_{s}", .{ enum_name, tag });
-            },
-            .array => |items| try self.emitComptimeArrayInitializer(items, resolved),
-            .@"struct" => |fields| try self.emitComptimeStructInitializer(fields, resolved),
-            .float => |f| try appendCComptimeFloat(self.allocator, self.out, f, switch (resolved.kind) {
-                .name => |name| std.mem.eql(u8, name.text, "f32"),
-                else => false,
-            }),
-            // A byte-string ComptimeValue baked as a C initializer is not yet supported.
-            .void, .bytes => return error.UnsupportedCEmission,
-        }
-    }
-
-    fn emitComptimeArrayInitializer(self: *CEmitter, items: []const eval.ComptimeValue, resolved: ast_bridge.TypeExpr) anyerror!void {
-        const child_ty = resolvedArrayChildType(resolved) orelse return error.UnsupportedCEmission;
-        try self.out.appendSlice(self.allocator, "{ .elems = { ");
-        for (items, 0..) |item, i| {
-            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.emitComptimeValueInitializer(item, child_ty);
-        }
-        try self.out.appendSlice(self.allocator, " } }");
-    }
-
-    fn emitComptimeStructInitializer(self: *CEmitter, fields: []const eval.ComptimeStructField, resolved: ast_bridge.TypeExpr) anyerror!void {
-        const struct_decl = self.structDeclForResolvedTarget(resolved) orelse return error.UnsupportedCEmission;
-        try self.out.appendSlice(self.allocator, "{ ");
-        for (fields, 0..) |field, i| {
-            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const field_ty = structFieldType(struct_decl, field.name) orelse return error.UnsupportedCEmission;
-            try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name)});
-            try self.emitComptimeValueInitializer(field.value, field_ty);
-        }
-        try self.out.appendSlice(self.allocator, " }");
-    }
-
-    fn emitComptimeIntInitializer(self: *CEmitter, n: i128) !void {
-        try appendCSignedIntValue(self.allocator, self.out, n);
     }
 
     fn nextTempName(self: *CEmitter) ![]const u8 {
@@ -6715,8 +6552,7 @@ pub const CEmitter = struct {
             else => return null,
         };
         if (!isPointerLikeGlobalType(self.resolveAliasType(array.child.*))) return null;
-        var reflect_env = self.reflectEnv();
-        _ = constArrayLenValue(array.len, &self.const_fns, &self.const_globals, lower_c_reflect.comptimeReflectThunk, &reflect_env) orelse return null;
+        _ = constArrayLenValue(array.len) orelse return null;
         return array.child.*;
     }
 
@@ -7844,17 +7680,8 @@ pub const CEmitter = struct {
     }
 
     fn constArrayLen(self: *CEmitter, expr: ast_bridge.Expr) ?usize {
-        var reflect_env = lower_c_reflect.ReflectEnv{
-            .structs = &self.structs,
-            .packed_bits = &self.packed_bits,
-            .overlay_unions = &self.overlay_unions,
-            .tagged_unions = &self.tagged_unions,
-            .enums = &self.enums,
-            .type_aliases = &self.type_aliases,
-            .const_fns = &self.const_fns,
-            .const_globals = &self.const_globals,
-        };
-        const len = constArrayLenValue(expr, &self.const_fns, &self.const_globals, lower_c_reflect.comptimeReflectThunk, &reflect_env) orelse return null;
+        _ = self;
+        const len = constArrayLenValue(expr) orelse return null;
         return std.math.cast(usize, len);
     }
 
@@ -8423,8 +8250,7 @@ pub const CEmitter = struct {
     }
 
     fn arrayLenTextForExpr(self: *CEmitter, expr: ast_bridge.Expr) ![]const u8 {
-        var reflect_env = self.reflectEnv();
-        const value = constArrayLenValue(expr, &self.const_fns, &self.const_globals, lower_c_reflect.comptimeReflectThunk, &reflect_env) orelse return error.UnsupportedCEmission;
+        const value = constArrayLenValue(expr) orelse return error.UnsupportedCEmission;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 

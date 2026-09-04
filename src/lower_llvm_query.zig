@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const eval = @import("eval.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_type = @import("lower_llvm_type.zig");
 
@@ -71,13 +70,6 @@ pub fn isUninitExpr(expr: ast_bridge.Expr) bool {
         .grouped => |inner| isUninitExpr(inner.*),
         else => false,
     };
-}
-
-pub fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: []const u8) ?eval.ComptimeValue {
-    for (fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.value;
-    }
-    return null;
 }
 
 pub fn taggedUnionConstructorName(callee: ast_bridge.Expr) ?[]const u8 {

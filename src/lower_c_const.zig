@@ -2,9 +2,7 @@
 
 const std = @import("std");
 
-const array_len = @import("array_len.zig");
 const ast_bridge = @import("ast_bridge.zig");
-const eval = @import("eval.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const numeric = @import("numeric.zig");
@@ -175,15 +173,6 @@ pub fn appendCFloatValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     if (as_f32) try out.append(allocator, 'f');
 }
 
-pub fn appendCComptimeFloat(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    value: eval.ComptimeFloat,
-    as_f32: bool,
-) !void {
-    try appendCFloatBits(allocator, out, value.bits, value.width, as_f32);
-}
-
 /// Render a frontend-owned floating constant without requiring callers to
 /// retain the evaluator's value representation.
 pub fn appendCFloatBits(
@@ -298,6 +287,30 @@ pub fn constBinaryProvenNoOverflow(node: anytype, target_name: []const u8, local
     return result >= @as(i256, range.min) and result <= @as(i256, range.max);
 }
 
-pub fn constArrayLenValue(expr: ast_bridge.Expr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
-    return array_len.parseArrayLenWithReflect(expr, funcs, globals, reflect, reflect_ctx);
+/// Backend-side types are materialized from `SignatureTypeTable`, whose array
+/// lengths are already concrete. Do not invoke frontend const evaluation here.
+pub fn constArrayLenValue(expr: ast_bridge.Expr) ?usize {
+    return switch (expr.kind) {
+        .int_literal => |literal| numeric.parseUsizeLiteral(literal),
+        .char_literal => |literal| if (numeric.parseCharLiteral(literal)) |value|
+            if (value <= std.math.maxInt(usize)) @intCast(value) else null
+        else
+            null,
+        .grouped => |inner| constArrayLenValue(inner.*),
+        .binary => |node| blk: {
+            const left = constArrayLenValue(node.left.*) orelse break :blk null;
+            const right = constArrayLenValue(node.right.*) orelse break :blk null;
+            break :blk switch (node.op) {
+                .add => std.math.add(usize, left, right) catch null,
+                .sub => std.math.sub(usize, left, right) catch null,
+                .mul => std.math.mul(usize, left, right) catch null,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .mod => if (right == 0) null else @mod(left, right),
+                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
+                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
+                else => null,
+            };
+        },
+        else => null,
+    };
 }

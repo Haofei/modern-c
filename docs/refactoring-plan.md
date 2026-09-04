@@ -79,22 +79,21 @@ from returning.
 | P0 | Global declarations | complete | Every non-extern global is admitted only with a syntax-free initializer plan and matching fact; `GlobalArtifact`, declaration-artifact global payloads, and `GlobalInitFacts` are deleted. |
 | P0 | Type declarations | complete | Struct, enum, tagged union, overlay union, packed bits, and aliases use checked facts; `TransitionalTypeDeclArtifact` is deleted. |
 | P1 | Trait/dynamic declaration ingress | complete | Qualified codegen rejects dynamic traits before lowering and retains no trait-method AST artifact. |
-| P1 | Backend comptime provider | blocked by globals | Comptime evaluation finishes before request construction; `ComptimeFunctionDeclarations` and backend `eval` imports are deleted. |
+| P1 | Backend comptime provider | complete | Comptime evaluation finishes before request construction; `ComptimeFunctionDeclarations` and backend `eval` imports are deleted. |
 | P1 | MIR compatibility projections | active | Canonical typed IDs replace AST/source/string double-writes one domain at a time; each removed field is ratcheted at zero. |
 | P1 | Per-file module identity | complete | No combined source or textual inclusion path exists; spans and definitions retain per-file identity. |
 | P1 | Minimal CheckedProgram | complete | Syntax-free callable/global/signature facts are admitted before verified MIR without adding a second expression IR. |
-| P1 | Final backend request | blocked by globals/types/comptime | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
+| P1 | Final backend request | blocked by types | `LowerRequest` contains only `VerifiedProgram`, output, and emission options; declaration artifacts are absent. |
 
-Active work proceeds in dependency order: finish globals, remove the backend
-comptime provider, delete remaining MIR compatibility projections, then close
-`LowerRequest`. Advanced language forms stay frozen during this cutover.
+Active work proceeds in dependency order: delete remaining MIR compatibility
+projections, then close `LowerRequest`. Advanced language forms stay frozen
+during this cutover.
 
 The callable ingress is closed: `CallableEmissionFact` owns render-only
 callable details while `CheckedCallableFact` and `SignatureTypeTable` own its
 signature. `FunctionArtifact`, `FunctionSignatureFacts`, and the callable arm
-of `DeclArtifact` are deleted. The only remaining callable AST compatibility
-provider is `ComptimeFunctionDeclarations`, which is restricted to const
-evaluation and is tracked by the separate backend-comptime cutover.
+of `DeclArtifact` are deleted. Comptime evaluation is frontend-only; ordinary
+codegen no longer receives a declaration provider for it.
 
 ## Patch rules
 

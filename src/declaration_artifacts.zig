@@ -6,26 +6,12 @@ const mir = @import("mir_model.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
-/// Frontend-owned declarations that are callable while evaluating comptime
-/// expressions. Its AST bodies are authority for const evaluation, not
-/// ordinary code generation.
-pub const ComptimeFunctionDeclarations = struct {
-    functions: []const ast.FnDecl,
-
-    pub const empty = ComptimeFunctionDeclarations{
-        .functions = &.{},
-    };
-};
-
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
-    comptime_functions: ComptimeFunctionDeclarations,
     source_map_artifacts: []const SourceMapArtifact,
 
     fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype, typed_mir: *const mir.Module) !EarlyDeclarationArtifacts {
         _ = typed_mir;
-        var comptime_functions: std.ArrayList(ast.FnDecl) = .empty;
-        errdefer comptime_functions.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
@@ -33,12 +19,10 @@ pub const EarlyDeclarationArtifacts = struct {
             const decl = item.decl;
             _ = ordinal;
             switch (decl.kind) {
-                .fn_decl => |fn_decl| {
-                    if (fn_decl.is_const) try comptime_functions.append(allocator, fn_decl);
+                .fn_decl => {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
-                .extern_fn => |fn_decl| {
-                    if (fn_decl.is_const) try comptime_functions.append(allocator, fn_decl);
+                .extern_fn => {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .global_decl => |global| {
@@ -100,13 +84,10 @@ pub const EarlyDeclarationArtifacts = struct {
             }
         }
 
-        const owned_comptime_functions = try comptime_functions.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_comptime_functions);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_source_map_artifacts);
 
         return .{
-            .comptime_functions = .{ .functions = owned_comptime_functions },
             .source_map_artifacts = owned_source_map_artifacts,
         };
     }
@@ -121,37 +102,24 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.comptime_functions.functions);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
 
     pub const empty = EarlyDeclarationArtifacts{
-        .comptime_functions = .empty,
         .source_map_artifacts = &.{},
     };
 
     pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
-        return .{
-            .comptime_functions = self.comptime_functions,
-        };
+        _ = self;
+        return .{};
     }
 };
 
-/// Transitional ordinary-codegen artifact view.
-///
-/// Source-map row mechanics are deliberately excluded from `LowerRequest`; only
-/// `EmitMapRequest` receives `SourceMapArtifact` rows. This keeps ordinary
-/// C/LLVM lowering from growing accidental source-map syntax ingress while the
-/// remaining declaration-shaped payload is migrated into verified MIR facts.
+/// Ordinary codegen no longer accepts declaration payloads. The empty marker
+/// remains only until `LowerRequest` itself is reduced to `VerifiedProgram`.
 pub const CodegenDeclarationArtifacts = struct {
-    // Borrowed frontend comptime provider.  It crosses the compatibility
-    // request only so existing backend setup can initialize eval.
-    comptime_functions: ComptimeFunctionDeclarations = .empty,
-
-    pub const empty = CodegenDeclarationArtifacts{
-        .comptime_functions = .empty,
-    };
+    pub const empty = CodegenDeclarationArtifacts{};
 };
 
 fn declOrigin(decl: ast.Decl) []const u8 {

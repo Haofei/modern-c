@@ -6,20 +6,16 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const eval = @import("eval.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
-const lower_c_reflect = @import("lower_c_reflect.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const GlobalInfo = lower_c_model.GlobalInfo;
 const MmioField = lower_c_model.MmioField;
-const OverlayLayout = lower_c_model.OverlayLayout;
 const cType = lower_c_type.cType;
-const constArrayLenValue = lower_c_const.constArrayLenValue;
 const intLiteralText = lower_c_expr.intLiteralText;
 const typeName = type_bridge.typeName;
 const widthBits = lower_c_op.widthBits;
@@ -169,30 +165,6 @@ pub fn mmioFieldFromType(ty: ast_bridge.TypeExpr) ?MmioField {
         const value_type = if (generic.args.len > 1) typeName(generic.args[1]) orelse width else width;
         return .{ .value_type = value_type, .width = width };
     }
-    return null;
-}
-
-pub fn overlayFieldLayout(
-    ty: ast_bridge.TypeExpr,
-    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
-    const_globals: *const std.StringHashMap(eval.ComptimeValue),
-    reflect_env: *lower_c_reflect.ReflectEnv,
-) ?OverlayLayout {
-    switch (ty.kind) {
-        .array => |node| {
-            const child = overlayFieldLayout(node.child.*, const_fns, const_globals, reflect_env) orelse return null;
-            const len = constArrayLenValue(node.len, const_fns, const_globals, lower_c_reflect.comptimeReflectThunk, reflect_env) orelse return null;
-            return .{ .size = child.size * len, .alignment = child.alignment };
-        },
-        .qualified => |node| return overlayFieldLayout(node.child.*, const_fns, const_globals, reflect_env),
-        else => {},
-    }
-    const name = typeName(ty) orelse return null;
-    if (std.mem.eql(u8, name, "bool")) return .{ .size = 1, .alignment = 1 };
-    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return .{ .size = 1, .alignment = 1 };
-    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return .{ .size = 2, .alignment = 2 };
-    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return .{ .size = 4, .alignment = 4 };
-    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return .{ .size = 8, .alignment = 8 };
     return null;
 }
 

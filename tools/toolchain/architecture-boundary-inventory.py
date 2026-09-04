@@ -48,13 +48,13 @@ EXACT_BACKEND_COUNTS = {
     # moves one of these edges behind verified MIR facts.
     '@import("ast_bridge.zig")': 40,
     '@import("declaration_artifacts.zig")': 4,
-    '@import("eval.zig")': 7,
+    '@import("eval.zig")': 0,
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
     # may only lower this count.
     # Float literal lowering now consumes typed FloatFact identity instead of
     # a target-type AST payload, removing one backend syntax reference.
-    "ast_bridge.": 2679,
+    "ast_bridge.": 2666,
     "declaration_artifacts.": 11,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
