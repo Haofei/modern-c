@@ -131,7 +131,7 @@
       "fn emitExecutableMirFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact": 1,
       "fn emitExternFunction(self: *LlvmEmitter, function: anytype)": 0,
       "fn emitExternFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact)": 1,
-      "fn collectCheckedPlannedGlobals(self: *LlvmEmitter)": 1,
+      "fn collectCheckedPlannedGlobals(self: *LlvmEmitter)": 0,
       "fn emitCheckedScalarGlobal(self: *LlvmEmitter": 1,
       "fn llvmAggregateGlobalInitializer": 1,
       "fn structFact(self: *const LlvmEmitter": 1,

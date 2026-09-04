@@ -28,11 +28,11 @@
         },
         {
           "file": "src/lower_c_emitter.zig",
-          "needle": "fn emitVerifiedMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: anytype) !bool"
+          "needle": "fn emitVerifiedMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact"
         },
         {
           "file": "src/lower_llvm.zig",
-          "needle": "fn emitExecutableMirFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool"
+          "needle": "fn emitExecutableMirFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact"
         }
       ],
       "retired_evidence": [

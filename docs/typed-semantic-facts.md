@@ -354,16 +354,14 @@ signature table and never recover it from the instruction.
 ### Grouped expression result authority
 
 User-source grouped expressions carry their own span-identified
-`expression_result` row. C's `operandEmitType` and LLVM's `exprType` consume
-that outer fact; recursive inspection of the inner expression is only a
-stale-fact check. Compiler-generated zero-span groupings retain the bounded
-construction-derived fallback because they cannot be keyed to source facts.
-The MIR, C, and LLVM regressions remove or retarget exactly the `(value)` row,
-so neither backend can restore outer result typing from the grouped AST.
+`expression_result` row. C's `operandEmitType` consumes that outer fact;
+recursive inspection of the inner expression is only a stale-fact check.
+Compiler-generated zero-span groupings retain the bounded construction-derived
+fallback because they cannot be keyed to source facts. The MIR and C
+regressions remove or retarget exactly the `(value)` row, so the C backend
+cannot restore outer result typing from the grouped AST.
 
-This is a bounded closure inside `c-expression-type-inference` and
-`llvm-expression-type-inference`, not closure of broader computed-expression
-typing.
+This is a bounded closure inside `c-expression-type-inference`, not closure of broader computed-expression typing.
 
 The same rule now covers grouped direct calls and C's grouped result-category
 queries for arrays, slices, enums, tagged unions, `Result`, nullable values,
@@ -991,15 +989,7 @@ now consumes `.phys_result` through `physResultTypeForEmission`. C semantic
 escape emission now admits `reveal` / `assume_noalias_unchecked` source/result
 rows through `semanticEscapeTypesForEmission` wrappers. C bitcast value-temp,
 local-init, and inferred-local lowering now admit source/target rows through
-`bitcastTypesForEmission`. LLVM raw-memory and varargs call classification now
-consume their complete target-type rows through `rawAddressTypesForEmission`
-and `vaCallTypesForEmission`, and LLVM semantic-escape emission/query paths now
-consume source/result rows through `semanticEscapeTypesForEmission` wrappers
-instead of concrete direct fact reads. LLVM bitcast emission/query paths now
-consume source/target rows through `bitcastTypesForEmission` /
-`bitcastTypesForQuery`. LLVM physical-address emission/query paths now consume
-`.phys_result` through `physResultTypeForEmission` /
-`physResultTypeForQuery`.
+`bitcastTypesForEmission`. The canonical LLVM renderer now consumes executable MIR directly; the AST-specific raw-memory, varargs, semantic-escape, bitcast, and physical-address query helpers are deleted.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|
@@ -1010,9 +1000,6 @@ consume source/target rows through `bitcastTypesForEmission` /
 | `c-bounds-range-consumption` | `src/lower_c_emitter.zig` `requireMirBoundsFact`, `hasMirNoOverflowRangeFact`, `mirCheckElided` | C bounds checks, unchecked arithmetic, check elision | MIR-owned for current range/bounds/check-elision subset. | Missing/stale facts keep checks or reject prebuilt MIR. |
 | `c-pointer-provenance-consumption` | `src/lower_c_emitter.zig` MIR provenance consumers and deref lowering | C pointer-mediated race lowering | MIR-owned for narrow direct subset; registered conservative fallback for broader scalar leaves. | Missing facts keep provenance unknown and use race-tolerant scalar lowering where supported. |
 | `c-direct-global-race-helpers` | `src/lower_c_global.zig` direct global load/store helpers | C direct global scalar/array/member access | Registered direct-global backend inference. | Unsupported scalar helper widths fail closed; aggregate leaves recurse only through supported shapes. |
-| `llvm-pointer-provenance-consumption` | `src/lower_llvm.zig` MIR-or-local-proof provenance consumers and race-tolerant deref lowering | LLVM pointer-mediated race lowering | MIR-owned for direct facts; one registered local-only proof remains outside MIR. | Missing facts default scalar derefs to unordered atomic unless positive local/raw/MMIO proof exists. |
-| `llvm-expression-type-inference` | `src/lower_llvm.zig` `exprType` / `derefPointeeType`; shared `src/ast_query.zig` expression/call-shape queries | LLVM expression, call, deref, constructor, and MMIO emission | Registered backend inference. Closure bind and Result constructors now require MIR identities and contextual target types; constructors, contextual coercions/literals/aggregates, reduction elements/results, enum raw source/results, arithmetic-domain source/payload/result/interval types, const-get base/results/indexes, DMA buffer/payload/results, raw-many offset receiver/element/results, MMIO-map source/payload/results, MMIO register struct/storage/value/results, raw-memory address/payload/results, varargs cursor/payload/results, byte-view source/results, reflection target/results, conversion/bitcast/semantic-escape operations, atomic-init grouped payload/results, atomic/MaybeUninit member payloads, physical-address results, explicit casts, implicit single-pointer/slice const narrowing, qualified tagged-union constructors, enum variant paths, bounded direct function/data address results, and member/index/slice/dereference and unary/binary result queries obtain their migrated semantic types from MIR facts. Explicit source-cast expression typing now requires the cast's own complete `expression_result` to match `explicit_cast_target`, matching C's fail-closed cast result rule. Source identifier expression typing now requires the identifier's own complete `expression_result`, using LLVM's local/global/function tables only to reject stale rows; direct address-of-deref pointer operands reuse that path before LLVM derives pointee mutability for `&ptr.*`. Source member/index comparison operands now read their own complete `expression_result` directly in the comparison classifier instead of relying on a broader expression-type fallback. Source unary and binary expression typing now read their own complete `expression_result` directly; only generated zero-span nodes retain operand-derived result inference. Source float, char, string, enum, null, and struct literal expression typing reads MIR target facts; source void literal expression typing reads the MIR `expression_result`. Non-call source expression statements now also require their own `expression_result`, with `exprType` used only to reject stale facts before value emission. Switch and if-let source subjects share one `requireMirSubjectType` admission path for MIR fact lookup, stale-fact comparison, and nullable representation validation. LLVM `try` operand admission now shares the target-type emission helper: source operands require the `.try_operand` fact, and `exprType` only rejects stale rows. Binary inferred-local admission now requires a complete `expression_result` and checks it against the operand-derived expected type before comparing it to the owned `inferred_local` fact. Data-address facts remain limited to the established local/mutable-global place family; other address shapes retain their registered fallback boundary. Reduction result construction is determined by the MIR call identity and element fact; enum `.raw()` no longer derives receiver or repr types from LLVM-local expression/enum lookup; arithmetic-domain calls no longer resolve aliases or rebuild `wrap`/`Duration`/`Result` types; `const_get` no longer invokes LLVM-local expression/array/length inference; DMA calls no longer invoke LLVM-local `exprType`/`dmaBufInfo` or rebuild the slice result; raw-many `.offset` no longer derives receiver or element types through LLVM-local `exprType` and alias resolution; MMIO map/register calls no longer derive semantic types through LLVM-local type arguments, receiver expressions, or field metadata lookup; raw-memory calls no longer derive semantic types from LLVM-local type arguments or hard-coded address types; varargs calls no longer recover cursor or result types through LLVM-local `exprType`; byte-view calls no longer derive object/slice types through LLVM-local `exprType` or a synthesized slice; reflection calls no longer hand the AST call to LLVM-local reflection type extraction; atomic/MaybeUninit member call-info no longer derives payloads from receiver types; atomic initialization no longer uses AST spelling to derive identity, payload, or result type in local or global paths. Direct calls require MIR result/fixed-argument facts, function-pointer/closure calls require the complete MIR callee signature, and inferred-local grouped-call typing now goes through the same `exprType`/grouped `expression_result` path; `expectedTyForCallArg`, the direct `fn_sigs` return fallback, and the extra inferred-local call-return fallback are retired. Broader expression typing remains open. | Unsupported or unknown shapes return null/unsupported. Missing/stale target-type or migrated call-target facts reject prebuilt MIR before emission. |
-| `llvm-bounds-range-consumption` | `src/lower_llvm.zig` `requireMirBoundsFact`, `requireMirNoOverflowRangeFact`, `mirCheckElided` | LLVM bounds checks, unchecked arithmetic, check elision | MIR-owned for current range/bounds/check-elision subset. | Missing/stale facts keep checks or reject prebuilt MIR. |
 | `llvm-representation-fact-consumption` | `src/mir.zig` representation validator; `src/verified_program.zig` admission before backend entry | LLVM representation-sensitive lowering | MIR-owned for current representation facts. | Missing/stale representation facts reject prebuilt MIR before lowering. |
 | `mir-pointer-provenance-producers` | `src/mir.zig` pointer-provenance producers and invalidators | C/LLVM pointer-provenance consumers | MIR-owned for direct local, aggregate-field, fixed-array, invalidation, and aggregate-return-adjacent subsets. | Unsupported producers emit unknown/no fact; consumers must remain conservative. |
 | `mir-aggregate-return-producers` | `src/mir.zig` aggregate-return pointer fact collector and bounded path cap | C/LLVM aggregate-return pointer-field consumers | MIR-owned for named bounded return shapes. | Unsupported CFG/aggregate shapes emit no fact and must stay conservative. |
@@ -1041,7 +1028,7 @@ at entry instead of treating the AST as a second representation authority.
 
 ### Backend AST-inference budget
 
-Current backend AST-inference budget: **7 registered families**.
+Current backend AST-inference budget: **5 registered families**.
 
 This is a shrinking budget. These families are allowed only because their
 current behavior is named, anchored, and paired with a fail-closed policy. A new
@@ -1100,12 +1087,10 @@ and other generated numeric fallback shapes now fail closed.
 | `c-abi-aggregate-lowering` | Backend AST inference budget | Internal aggregate construction consumes typed layout/ABI facts or rejects unsupported forms; explicit C ABI/export aggregate values are an inventory-gated diagnostic boundary until target ABI facts exist. |
 | `c-direct-global-race-helpers` | Backend AST inference budget | Direct global race-helper routing is represented by typed memory/race facts or by an accepted direct-global backend policy. |
 | `c-pointer-provenance-consumption` | Backend AST inference budget | Broader scalar-leaf conservative fallback is fully covered by typed provenance facts or an accepted default policy. |
-| `llvm-pointer-provenance-consumption` | Backend AST inference budget | The remaining LLVM local-only proof is migrated to MIR facts or explicitly accepted as a local emission proof, not semantic inference. |
-| `llvm-expression-type-inference` | Backend AST inference budget | LLVM expression type decisions that affect lowering are provided by typed facts/MIR or rejected when absent. |
 
 ### T3 final backend inference dispositions
 
-T3 closes the classification question for the finite seven-family backend
+T3 closes the classification question for the finite five-family backend
 budget. It does not declare every family MIR-owned or freeze future migration.
 It requires every residual path to have one auditable terminal behavior today:
 consume a fact, lower conservatively, use a documented target-only policy, or
@@ -1118,11 +1103,9 @@ diagnose unsupported input. No row may remain an unclassified cleanup item.
 | `c-abi-aggregate-lowering` | `diagnosed-unsupported` | Explicit C ABI/export by-value aggregates without target classification produce `E_EXTERN_STRUCT_BY_VALUE`; internal construction remains target mechanics around resolved layout. |
 | `c-direct-global-race-helpers` | `accepted-target-policy` | Only the documented scalar-width and recursive aggregate helper matrix is admitted; unsupported leaves fail emission. |
 | `c-pointer-provenance-consumption` | `conservative-fallback` | Missing positive provenance selects race-tolerant scalar/recursive aggregate lowering or rejects an unsupported leaf. |
-| `llvm-pointer-provenance-consumption` | `conservative-fallback` | Missing positive provenance selects unordered atomic scalar/recursive aggregate lowering or rejects an unsupported leaf; alias maps cannot create provenance. |
-| `llvm-expression-type-inference` | `conservative-or-diagnosed` | Migrated source shapes require MIR facts; unknown or unsupported shapes return no type or reject emission. |
 
 `semantic-facts-inventory.py` requires the disposition keys to match the budget
-exactly and anchors every row. Adding an eighth family therefore requires an
+exactly and anchors every row. Adding a sixth family therefore requires an
 explicit policy in the same patch; removing one requires reducing both sets.
 
 ### T4 backend semantic-authority audit
@@ -1134,7 +1117,7 @@ semantic-facts inventory.
 
 | Authority class | Meaning | Modules |
 |---|---|---|
-| Registered semantic family | The module contains one or more residual semantic decisions governed by the seven-family budget and its final T3 disposition. It may also consume facts or perform mechanics. | `ast_query`; C aggregate/emitter/expression/global/inference/info/layout/shape/target/type modules; LLVM main/lookup/query/shape modules. |
+| Registered semantic family | The module contains one or more residual semantic decisions governed by the five-family budget and its final T3 disposition. It may also consume facts or perform mechanics. | `ast_query`; C aggregate/emitter/expression/global/inference/info/layout/shape/target/type modules. |
 | MIR/fact consumer | Lowering selection is entered through the registered MIR identities, types, provenance, range, bounds, or representation facts anchored by the family inventory. AST access validates spelling, arity, layout, or emission operands after selection. | C entry/access/arithmetic/atomic/builtin/call/collect/conversion/domain/memory/MMIO/reflection/special/switch/try modules; LLVM atomic/reflection modules. |
 | Mechanics-only | The module encodes names, text, target syntax, CFG emission, aliases, attributes, runtime declarations, already-selected operations, module-pipeline ordering, or backend data models. It is not allowed to introduce a new lowering-affecting semantic classification without moving to a registered family or MIR/fact consumer class. | Remaining inventoried C/LLVM backend modules, including `lower_c_module`. |
 

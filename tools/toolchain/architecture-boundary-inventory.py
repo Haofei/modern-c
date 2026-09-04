@@ -55,7 +55,7 @@ EXACT_BACKEND_COUNTS = {
     # Global initializers now lower only from admitted initializer plans.
     # The obsolete LLVM global-initializer fallback and dead C literal-shape
     # probes are deleted; this ratchet may only decrease.
-    "ast_bridge.": 2661,
+    "ast_bridge.": 2101,
     # Ordinary codegen no longer carries declaration artifacts. Remaining
     # references belong to the isolated source-map request and collection path.
     "declaration_artifacts.": 5,
@@ -185,8 +185,8 @@ EXACT_FILE_COUNTS = {
     ("src/lower_c_emitter.zig", "targetTypeFactAtOwnedCurrentSpan"): 1,
     ("src/lower_llvm.zig", "targetTypeFactAtWithModuleFallback"): 0,
     ("src/lower_llvm.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
-    ("src/lower_llvm.zig", "targetTypeFactAtCurrentSpan"): 1,
-    ("src/lower_llvm.zig", "targetTypeFactAtOwnedCurrentSpan"): 1,
+    ("src/lower_llvm.zig", "targetTypeFactAtCurrentSpan"): 0,
+    ("src/lower_llvm.zig", "targetTypeFactAtOwnedCurrentSpan"): 0,
     ("src/backend.zig", "pub fn init("): 0,
     ("src/backend.zig", "pub fn initFromDecls("): 0,
     ("src/verified_program.zig", "pub fn init("): 1,
