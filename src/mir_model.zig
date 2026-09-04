@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
 const type_layout = @import("layout.zig");
 const semantic_ids = @import("semantic_ids.zig");
 
