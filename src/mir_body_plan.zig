@@ -368,20 +368,14 @@ fn verifyIdentityTables(function: *const mir.Function) !void {
 
 fn verifyBlocks(function: *const mir.Function) !void {
     for (function.blocks, 0..) |block, ordinal| {
-        if (block.id != ordinal or !block.typed_id.isValid()) return error.InvalidBlockIdentity;
+        if (!block.id.isValid() or block.id.index() != ordinal) return error.InvalidBlockIdentity;
         for (function.blocks[0..ordinal]) |prior| {
-            if (prior.typed_id.eql(block.typed_id)) return error.DuplicateBlockIdentity;
+            if (prior.id.eql(block.id)) return error.DuplicateBlockIdentity;
         }
-        if (block.typed_successors.len != 0) {
-            if (block.typed_successors.len != block.successors.len) return error.InconsistentTypedSuccessor;
-            for (block.successors, block.typed_successors) |successor, typed_successor| {
-                if (successor >= function.blocks.len) return error.InvalidSuccessor;
-                if (!typed_successor.isValid() or !typed_successor.eql(function.blocks[successor].typed_id)) {
-                    return error.InconsistentTypedSuccessor;
-                }
-            }
+        for (block.successors) |successor| {
+            if (!successor.isValid() or successor.index() >= function.blocks.len or
+                !function.blocks[successor.index()].id.eql(successor)) return error.InvalidSuccessor;
         }
-        for (block.successors) |successor| if (successor >= function.blocks.len) return error.InvalidSuccessor;
         try verifyTerminator(function, block);
     }
 }
@@ -401,9 +395,10 @@ fn verifyTerminator(function: *const mir.Function, block: mir.Block) !void {
 fn verifyTrapEdges(function: *const mir.Function) !void {
     for (function.trap_edges) |edge| {
         _ = spanIdentity(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
-        if (edge.from_block >= function.blocks.len or edge.trap_block >= function.blocks.len) return error.InvalidTrapEdge;
-        if (!successorListed(function.blocks[edge.from_block], edge.trap_block)) return error.InvalidTrapEdge;
-        switch (function.blocks[edge.trap_block].terminator) {
+        if (!edge.from_block.isValid() or !edge.trap_block.isValid() or
+            edge.from_block.index() >= function.blocks.len or edge.trap_block.index() >= function.blocks.len) return error.InvalidTrapEdge;
+        if (!successorListed(function.blocks[edge.from_block.index()], edge.trap_block)) return error.InvalidTrapEdge;
+        switch (function.blocks[edge.trap_block.index()].terminator) {
             .trap_ => |kind| if (kind != edge.kind) return error.InvalidTrapEdge,
             else => return error.InvalidTrapEdge,
         }
@@ -496,13 +491,9 @@ fn buildBlocks(allocator: std.mem.Allocator, function: *const mir.Function) ![]c
         for (block.instructions, 0..) |instruction, index| instructions[index] = instructionPlan(function, instruction);
         const successors = try allocator.alloc(mir.BlockId, block.successors.len);
         errdefer allocator.free(successors);
-        if (block.typed_successors.len != 0) {
-            @memcpy(successors, block.typed_successors);
-        } else {
-            for (block.successors, 0..) |successor, index| successors[index] = function.blocks[successor].typed_id;
-        }
+        @memcpy(successors, block.successors);
         blocks[ordinal] = .{
-            .id = block.typed_id,
+            .id = block.id,
             .ordinal = ordinal,
             .kind = block.kind,
             .instructions = instructions,
@@ -555,13 +546,13 @@ fn instructionPlan(function: *const mir.Function, instruction: mir.Instruction) 
     };
 }
 
-fn terminatorPlan(function: *const mir.Function, terminator: mir.Terminator) TerminatorPlan {
+fn terminatorPlan(_: *const mir.Function, terminator: mir.Terminator) TerminatorPlan {
     return switch (terminator) {
         .fallthrough => .fallthrough,
-        .jump => |target| .{ .jump = function.blocks[target].typed_id },
+        .jump => |target| .{ .jump = target },
         .branch => |branch| .{ .branch = .{
-            .true_block = function.blocks[branch.true_block].typed_id,
-            .false_block = function.blocks[branch.false_block].typed_id,
+            .true_block = branch.true_block,
+            .false_block = branch.false_block,
         } },
         .return_ => |ty| .{ .return_ = ty },
         .trap_ => |kind| .{ .trap_ = kind },
@@ -575,8 +566,8 @@ fn buildTrapEdges(allocator: std.mem.Allocator, function: *const mir.Function) !
     for (function.trap_edges, 0..) |edge, index| {
         const span = spanIdentity(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
         edges[index] = .{
-            .from_block = function.blocks[edge.from_block].typed_id,
-            .trap_block = function.blocks[edge.trap_block].typed_id,
+            .from_block = edge.from_block,
+            .trap_block = edge.trap_block,
             .kind = edge.kind,
             .source = edge.source,
             .location = .{ .span_id = edge.typed_span_id, .source = span.source },
@@ -673,7 +664,7 @@ fn blockExists(function: *const mir.Function, id: mir.BlockId) bool {
 
 fn blockById(function: *const mir.Function, id: mir.BlockId) ?mir.Block {
     if (!id.isValid()) return null;
-    for (function.blocks) |block| if (block.typed_id.eql(id)) return block;
+    for (function.blocks) |block| if (block.id.eql(id)) return block;
     return null;
 }
 
@@ -685,17 +676,17 @@ fn normalSuccessorCount(function: *const mir.Function, block: mir.Block) usize {
     return count;
 }
 
-fn normalSuccessorListed(function: *const mir.Function, block: mir.Block, target: usize) bool {
+fn normalSuccessorListed(function: *const mir.Function, block: mir.Block, target: mir.BlockId) bool {
     return successorListed(block, target) and !isTrapSuccessor(function, block.id, target);
 }
 
-fn isTrapSuccessor(function: *const mir.Function, from: usize, target: usize) bool {
-    for (function.trap_edges) |edge| if (edge.from_block == from and edge.trap_block == target) return true;
+fn isTrapSuccessor(function: *const mir.Function, from: mir.BlockId, target: mir.BlockId) bool {
+    for (function.trap_edges) |edge| if (edge.from_block.eql(from) and edge.trap_block.eql(target)) return true;
     return false;
 }
 
-fn successorListed(block: mir.Block, target: usize) bool {
-    for (block.successors) |successor| if (successor == target) return true;
+fn successorListed(block: mir.Block, target: mir.BlockId) bool {
+    for (block.successors) |successor| if (successor.eql(target)) return true;
     return false;
 }
 
@@ -754,11 +745,11 @@ test "MIR body plan normalizes typed CFG, identities, and cleanup edges" {
     }
 }
 
-test "MIR body plan verifier rejects inconsistent typed successor" {
+test "MIR body plan verifier rejects invalid successor" {
     var fixture = Fixture{};
     fixture.init();
-    fixture.entry_typed_successors[0] = mir.BlockId.fromIndex(2);
-    try std.testing.expectError(error.InconsistentTypedSuccessor, verify(&fixture.function));
+    fixture.entry_successors[0] = mir.BlockId.fromIndex(2);
+    try std.testing.expectError(error.InvalidTerminator, verify(&fixture.function));
 }
 
 test "MIR body plan verifier rejects invalid value identity" {
@@ -779,8 +770,7 @@ test "MIR body plan verifier rejects stale cleanup action reference" {
 
 const Fixture = struct {
     instruction: [1]mir.Instruction = undefined,
-    entry_successors: [2]usize = .{ 1, 2 },
-    entry_typed_successors: [2]mir.BlockId = .{ mir.BlockId.fromIndex(1), mir.BlockId.fromIndex(2) },
+    entry_successors: [2]mir.BlockId = .{ mir.BlockId.fromIndex(1), mir.BlockId.fromIndex(2) },
     blocks: [3]mir.Block = undefined,
     type_identities: [1]mir.TypeIdentity = .{.{ .id = mir.TypeId.fromIndex(0), .spelling = "u32" }},
     span_identities: [1]mir.SpanIdentity = .{.{ .id = mir.SpanId.fromIndex(0), .source = point() }},
@@ -801,16 +791,14 @@ const Fixture = struct {
         }};
         self.blocks = .{
             .{
-                .id = 0,
-                .typed_id = mir.BlockId.fromIndex(0),
+                .id = mir.BlockId.fromIndex(0),
                 .kind = "entry",
                 .instructions = self.instruction[0..],
                 .successors = self.entry_successors[0..],
-                .typed_successors = self.entry_typed_successors[0..],
-                .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } },
+                .terminator = .{ .branch = .{ .true_block = mir.BlockId.fromIndex(1), .false_block = mir.BlockId.fromIndex(2) } },
             },
-            .{ .id = 1, .typed_id = mir.BlockId.fromIndex(1), .kind = "return", .instructions = &.{}, .successors = &.{}, .typed_successors = &.{}, .terminator = .{ .return_ = .{ .integer = "u32" } } },
-            .{ .id = 2, .typed_id = mir.BlockId.fromIndex(2), .kind = "unreachable", .instructions = &.{}, .successors = &.{}, .typed_successors = &.{}, .terminator = .unreachable_ },
+            .{ .id = mir.BlockId.fromIndex(1), .kind = "return", .instructions = &.{}, .successors = &.{}, .terminator = .{ .return_ = .{ .integer = "u32" } } },
+            .{ .id = mir.BlockId.fromIndex(2), .kind = "unreachable", .instructions = &.{}, .successors = &.{}, .terminator = .unreachable_ },
         };
         self.cleanup_actions = .{.{
             .kind = .auto_drop,

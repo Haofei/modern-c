@@ -3,6 +3,7 @@ const std = @import("std");
 const mir_model = @import("mir_model.zig");
 
 const Block = mir_model.Block;
+const BlockId = mir_model.BlockId;
 const Function = mir_model.Function;
 const Instruction = mir_model.Instruction;
 const ValueType = mir_model.ValueType;
@@ -70,7 +71,7 @@ fn blockHasDominatingCheck(function: Function, block_index: usize, before_index:
 
     var saw_predecessor = false;
     for (function.blocks, 0..) |candidate, predecessor_index| {
-        if (!successorListed(candidate, block_index)) continue;
+        if (!successorListed(candidate, BlockId.fromIndex(block_index))) continue;
         saw_predecessor = true;
         if (!blockHasDominatingCheck(function, predecessor_index, candidate.instructions.len, expected_kind, expected_value_id, visiting)) return false;
     }
@@ -116,9 +117,9 @@ pub fn checkTraps(ty: ValueType) bool {
     };
 }
 
-fn successorListed(block: Block, target: usize) bool {
+fn successorListed(block: Block, target: BlockId) bool {
     for (block.successors) |successor| {
-        if (successor == target) return true;
+        if (successor.eql(target)) return true;
     }
     return false;
 }
@@ -131,9 +132,9 @@ test "dominating representation lookup rejects invalid instruction coordinates" 
             .detail = "p",
         },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{.{
-        .id = 0,
+        .id = BlockId.fromIndex(0),
         .kind = "entry",
         .instructions = instructions[0..],
         .successors = successors[0..],

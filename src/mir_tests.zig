@@ -2297,14 +2297,12 @@ test "MIR block model carries typed block identity" {
     try std.testing.expect(main_fn.typed_symbol_id.isValid());
     try std.testing.expect(main_fn.typed_symbol_id.eql(main_symbol.id));
     try std.testing.expect(main_fn.blocks.len > 0);
-    for (main_fn.blocks) |block| {
-        try std.testing.expect(block.typed_id.isValid());
-        try std.testing.expectEqual(block.id, block.typed_id.index());
-        try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);
-        try std.testing.expectEqual(block.successors.len, block.typed_successors.len);
-        for (block.successors, 0..) |successor, index| {
-            try std.testing.expect(block.typed_successors[index].isValid());
-            try std.testing.expectEqual(successor, block.typed_successors[index].index());
+    for (main_fn.blocks, 0..) |block, index| {
+        try std.testing.expect(block.id.isValid());
+        try std.testing.expectEqual(BlockId.fromIndex(index), block.id);
+        for (block.successors) |successor| {
+            try std.testing.expect(successor.isValid());
+            try std.testing.expect(successor.index() < main_fn.blocks.len);
         }
     }
 }
@@ -9939,13 +9937,13 @@ test "MIR CFG loop control uses explicit jump successors" {
     const function = typed_mir.functions[0];
     var jump_blocks: usize = 0;
     for (function.blocks) |block| {
-        for (block.successors) |successor| try std.testing.expect(successor < function.blocks.len);
+        for (block.successors) |successor| try std.testing.expect(successor.isValid() and successor.index() < function.blocks.len);
         switch (block.terminator) {
             .jump => |target| {
                 jump_blocks += 1;
                 var listed = false;
                 for (block.successors) |successor| {
-                    if (successor == target) listed = true;
+                    if (successor.eql(target)) listed = true;
                 }
                 try std.testing.expect(listed);
             },
@@ -9959,17 +9957,17 @@ test "MIR CFG loop control uses explicit jump successors" {
 
 test "MIR verifier rejects malformed CFG structure" {
     var instructions = [_]Instruction{};
-    var successors = [_]usize{99};
+    var successors = [_]BlockId{BlockId.fromIndex(99)};
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
     var blocks = [_]Block{
         .{
-            .id = 0,
+            .id = BlockId.fromIndex(0),
             .kind = "entry",
             .instructions = instructions[0..],
             .successors = successors[0..],
-            .terminator = .{ .jump = 99 },
+            .terminator = .{ .jump = BlockId.fromIndex(99) },
         },
     };
     var functions = [_]Function{
@@ -10000,13 +9998,13 @@ test "MIR verifier rejects malformed CFG structure" {
 
 test "MIR verifier rejects block id mismatch in CFG" {
     var instructions = [_]Instruction{};
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
     var blocks = [_]Block{
         .{
-            .id = 7,
+            .id = BlockId.fromIndex(7),
             .kind = "entry",
             .instructions = instructions[0..],
             .successors = successors[0..],
@@ -10043,35 +10041,30 @@ test "MIR verifier rejects block id mismatch in CFG" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=bad_block_id pass=cfg finding=malformed_cfg") != null);
 }
 
-test "MIR verifier rejects typed successor drift in CFG" {
+test "MIR verifier rejects invalid typed successor in CFG" {
     var instructions = [_]Instruction{};
-    var entry_successors = [_]usize{1};
-    var entry_typed_successors = [_]BlockId{BlockId.fromIndex(2)};
-    var empty_successors = [_]usize{};
+    var entry_successors = [_]BlockId{BlockId.fromIndex(2)};
+    var empty_successors = [_]BlockId{};
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
     var blocks = [_]Block{
         .{
-            .id = 0,
-            .typed_id = BlockId.fromIndex(0),
+            .id = BlockId.fromIndex(0),
             .kind = "entry",
             .instructions = instructions[0..],
             .successors = entry_successors[0..],
-            .typed_successors = entry_typed_successors[0..],
-            .terminator = .{ .jump = 1 },
+            .terminator = .{ .jump = BlockId.fromIndex(1) },
         },
         .{
-            .id = 1,
-            .typed_id = BlockId.fromIndex(1),
+            .id = BlockId.fromIndex(1),
             .kind = "target",
             .instructions = instructions[0..],
             .successors = empty_successors[0..],
             .terminator = .{ .return_ = .void },
         },
         .{
-            .id = 2,
-            .typed_id = BlockId.fromIndex(2),
+            .id = BlockId.fromIndex(2),
             .kind = "wrong",
             .instructions = instructions[0..],
             .successors = empty_successors[0..],
@@ -10105,18 +10098,18 @@ test "MIR verifier rejects typed successor drift in CFG" {
 
 test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
     var instructions = [_]Instruction{};
-    var successors = [_]usize{1};
-    var trap_successors = [_]usize{};
+    var successors = [_]BlockId{BlockId.fromIndex(1)};
+    var trap_successors = [_]BlockId{};
     var blocks = [_]Block{
         .{
-            .id = 0,
+            .id = BlockId.fromIndex(0),
             .kind = "entry",
             .instructions = instructions[0..],
             .successors = successors[0..],
             .terminator = .fallthrough,
         },
         .{
-            .id = 1,
+            .id = BlockId.fromIndex(1),
             .kind = "trap",
             .instructions = instructions[0..],
             .successors = trap_successors[0..],
@@ -10127,7 +10120,7 @@ test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
         .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
     };
     var trap_edges = [_]TrapEdge{
-        .{ .from_block = 0, .trap_block = 1, .kind = .IntegerOverflow, .source = .checked_arithmetic, .typed_span_id = SpanId.fromIndex(0) },
+        .{ .from_block = BlockId.fromIndex(0), .trap_block = BlockId.fromIndex(1), .kind = .IntegerOverflow, .source = .checked_arithmetic, .typed_span_id = SpanId.fromIndex(0) },
     };
     var contract_regions = [_]ContractRegion{};
     var range_facts = [_]RangeFact{};
@@ -13203,9 +13196,9 @@ test "MIR verifier rejects missing representation check" {
     var span_identities = [_]mir.SpanIdentity{
         .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13243,9 +13236,9 @@ test "MIR verifier rejects missing representation check on indirect call" {
     var span_identities = [_]mir.SpanIdentity{
         .{ .id = SpanId.fromIndex(0), .source = .{ .line = 1, .column = 1 } },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13279,9 +13272,9 @@ test "MIR verifier rejects missing representation check on typed load" {
     var instructions = [_]Instruction{
         .{ .kind = .typed_load, .result_ty = .{ .closed_enum = "Irq" }, .detail = "irq" },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13322,15 +13315,15 @@ test "MIR verifier requires representation checks to dominate sensitive returns"
     var join_instructions = [_]Instruction{
         .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value" },
     };
-    var entry_successors = [_]usize{ 1, 2 };
-    var then_successors = [_]usize{3};
-    var else_successors = [_]usize{3};
-    var join_successors = [_]usize{};
+    var entry_successors = [_]BlockId{ BlockId.fromIndex(1), BlockId.fromIndex(2) };
+    var then_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var else_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var join_successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
-        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .{ .return_ = ptr_ty } },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = BlockId.fromIndex(1), .false_block = BlockId.fromIndex(2) } } },
+        .{ .id = BlockId.fromIndex(1), .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(2), .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(3), .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .{ .return_ = ptr_ty } },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13368,15 +13361,15 @@ test "MIR verifier rejects representation return when one predecessor lacks chec
     var join_instructions = [_]Instruction{
         .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value" },
     };
-    var entry_successors = [_]usize{ 1, 2 };
-    var then_successors = [_]usize{3};
-    var else_successors = [_]usize{3};
-    var join_successors = [_]usize{};
+    var entry_successors = [_]BlockId{ BlockId.fromIndex(1), BlockId.fromIndex(2) };
+    var then_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var else_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var join_successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
-        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .{ .return_ = ptr_ty } },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = BlockId.fromIndex(1), .false_block = BlockId.fromIndex(2) } } },
+        .{ .id = BlockId.fromIndex(1), .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(2), .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(3), .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .{ .return_ = ptr_ty } },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13417,15 +13410,15 @@ test "MIR verifier matches representation identity across predecessor paths" {
     var join_instructions = [_]Instruction{
         .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0) },
     };
-    var entry_successors = [_]usize{ 1, 2 };
-    var then_successors = [_]usize{3};
-    var else_successors = [_]usize{3};
-    var join_successors = [_]usize{};
+    var entry_successors = [_]BlockId{ BlockId.fromIndex(1), BlockId.fromIndex(2) };
+    var then_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var else_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var join_successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
-        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = BlockId.fromIndex(1), .false_block = BlockId.fromIndex(2) } } },
+        .{ .id = BlockId.fromIndex(1), .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(2), .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(3), .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13467,15 +13460,15 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
     var join_instructions = [_]Instruction{
         .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .typed_value_id = ValueId.fromIndex(0) },
     };
-    var entry_successors = [_]usize{ 1, 2 };
-    var then_successors = [_]usize{3};
-    var else_successors = [_]usize{3};
-    var join_successors = [_]usize{};
+    var entry_successors = [_]BlockId{ BlockId.fromIndex(1), BlockId.fromIndex(2) };
+    var then_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var else_successors = [_]BlockId{BlockId.fromIndex(3)};
+    var join_successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
-        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
-        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = BlockId.fromIndex(1), .false_block = BlockId.fromIndex(2) } } },
+        .{ .id = BlockId.fromIndex(1), .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(2), .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = BlockId.fromIndex(3) } },
+        .{ .id = BlockId.fromIndex(3), .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13516,9 +13509,9 @@ test "MIR verifier requires representation checks to dominate non-return typed u
         .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer" },
         .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "assignment" },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13551,9 +13544,9 @@ test "MIR verifier rejects missing representation check on non-return typed use"
     var instructions = [_]Instruction{
         .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg" },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};
@@ -13589,9 +13582,9 @@ test "MIR verifier rejects representation check for the wrong value identity" {
         .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .typed_value_id = ValueId.fromIndex(0) },
         .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .typed_value_id = ValueId.fromIndex(1) },
     };
-    var successors = [_]usize{};
+    var successors = [_]BlockId{};
     var blocks = [_]Block{
-        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .{ .return_ = ptr_ty } },
+        .{ .id = BlockId.fromIndex(0), .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .{ .return_ = ptr_ty } },
     };
     var trap_edges = [_]TrapEdge{};
     var contract_regions = [_]ContractRegion{};

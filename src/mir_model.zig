@@ -3195,8 +3195,8 @@ pub fn executableCheckedSliceValueRoot(
 
 pub const Terminator = union(enum) {
     fallthrough,
-    jump: usize,
-    branch: struct { true_block: usize, false_block: usize },
+    jump: BlockId,
+    branch: struct { true_block: BlockId, false_block: BlockId },
     return_: ValueType,
     trap_: TrapKind,
     unreachable_,
@@ -3216,8 +3216,8 @@ pub const Terminator = union(enum) {
 };
 
 pub const TrapEdge = struct {
-    from_block: usize,
-    trap_block: usize,
+    from_block: BlockId,
+    trap_block: BlockId,
     kind: TrapKind,
     source: TrapSource,
     /// Sole source identity. Coordinates are materialized from the owning
@@ -3878,12 +3878,10 @@ pub const ValueIdentity = struct {
 };
 
 pub const Block = struct {
-    id: usize,
-    typed_id: BlockId = .invalid,
+    id: BlockId,
     kind: []const u8,
     instructions: []Instruction,
-    successors: []usize,
-    typed_successors: []BlockId = &.{},
+    successors: []BlockId,
     terminator: Terminator,
 };
 
@@ -4709,7 +4707,6 @@ pub const Module = struct {
             for (function.blocks) |block| {
                 self.allocator.free(block.instructions);
                 self.allocator.free(block.successors);
-                if (block.typed_successors.len != 0) self.allocator.free(block.typed_successors);
             }
             self.allocator.free(function.blocks);
             self.allocator.free(function.trap_edges);

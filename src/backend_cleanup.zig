@@ -327,8 +327,7 @@ test "cleanup edge plan comes directly from MIR cleanup cfg" {
     };
     var blocks = [_]mir.Block{
         .{
-            .id = 0,
-            .typed_id = mir.BlockId.fromIndex(0),
+            .id = mir.BlockId.fromIndex(0),
             .kind = "entry",
             .instructions = instructions[0..],
             .successors = &.{},

@@ -41,8 +41,8 @@ codegen fallback or qualified lowering path.
 
 The typed MIR identity migration has started with `BlockId`: `src/mir_model.zig`
 defines the typed ID family (`SourceId`, `NodeId`, `SymbolId`, `TypeId`,
-`ValueId`, `BlockId`, and `SpanId`), built MIR blocks carry a `typed_id` plus
-typed successor mirrors, built MIR functions carry `typed_symbol_id` entries
+`ValueId`, `BlockId`, and `SpanId`), built MIR blocks carry canonical typed
+block and successor IDs, built MIR functions carry `typed_symbol_id` entries
 backed by a module-owned `SymbolIdentity` table, representation-sensitive instructions and
 `RepresentationFact` rows double-write typed `ValueId` identities, each function
 also double-writes typed `TypeId` result identities for representation-sensitive

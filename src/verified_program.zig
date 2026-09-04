@@ -118,22 +118,18 @@ test "VerifiedProgram exposes narrow runtime hook facts" {
     signature_shapes[0] = .{ .name = try std.testing.allocator.dupe(u8, "void") };
     const blocks = try std.testing.allocator.alloc(mir.Block, 1);
     blocks[0] = .{
-        .id = 0,
-        .typed_id = mir.BlockId.fromIndex(0),
+        .id = mir.BlockId.fromIndex(0),
         .kind = "entry",
         .instructions = &.{},
         .successors = &.{},
-        .typed_successors = &.{},
         .terminator = .{ .return_ = .void },
     };
     const hook_blocks = try std.testing.allocator.alloc(mir.Block, 1);
     hook_blocks[0] = .{
-        .id = 0,
-        .typed_id = mir.BlockId.fromIndex(0),
+        .id = mir.BlockId.fromIndex(0),
         .kind = "entry",
         .instructions = &.{},
         .successors = &.{},
-        .typed_successors = &.{},
         .terminator = .{ .return_ = .void },
     };
     const functions = try std.testing.allocator.alloc(mir.Function, 2);

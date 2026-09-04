@@ -81,12 +81,19 @@ def main() -> int:
         "symbol_identities: []SymbolIdentity = &.{},",
         "span_identities: []SpanIdentity = &.{},",
         "type_identities: []TypeIdentity = &.{},",
-        "typed_id: BlockId = .invalid,",
-        "typed_successors: []BlockId = &.{},",
+        "id: BlockId = .invalid,",
+        "successors: []BlockId,",
     ):
         require_contains("src/mir_model.zig", needle)
 
     model = read("src/mir_model.zig")
+    block_start = model.index("pub const Block = struct {")
+    block_end = model.index("\n};", block_start)
+    block = model[block_start:block_end]
+    if "id: BlockId" not in block or "successors: []BlockId" not in block:
+        fail("src/mir_model.zig Block must own canonical typed IDs")
+    if "typed_id" in block or "typed_successors" in block:
+        fail("src/mir_model.zig Block retains compatibility identity mirrors")
     instruction_start = model.index("pub const Instruction = struct {")
     instruction_end = model.index("\n\npub const ", instruction_start)
     if "target_ty:" in model[instruction_start:instruction_end]:
@@ -197,10 +204,9 @@ def main() -> int:
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         "pub const OwnershipEvent = mir_model.OwnershipEvent;",
-        ".typed_id = BlockId.fromIndex(block.id),",
-        ".typed_successors = typed_successors,",
-        "if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(function, block);",
-        "if (block.typed_successors.len != 0) {",
+        ".id = block.id,",
+        ".successors = try block.successors.toOwnedSlice(self.allocator),",
+        "if (!block.id.isValid() or block.id.index() != block_index) return blockLastSpan(function, block);",
         "pub const SymbolIdentity = mir_model.SymbolIdentity;",
         "pub const SourceIdentity = mir_model.SourceIdentity;",
         "pub const TypeIdentity = mir_model.TypeIdentity;",
@@ -322,7 +328,7 @@ def main() -> int:
         'test "MIR target-type admission rejects target owner fact identity drift"',
         'test "MIR target-type admission rejects target result type identity drift"',
         'test "MIR target-type admission rejects target span identity drift"',
-        'test "MIR verifier rejects typed successor drift in CFG"',
+        'test "MIR verifier rejects invalid typed successor in CFG"',
         "try std.testing.expect(main_fn.typed_symbol_id.eql(main_symbol.id));",
         "module_mir.functions[0].typed_symbol_id = SymbolId.fromIndex(4096);",
         "type_drift_fn.blocks[0].instructions[0].typed_result_ty = TypeId.fromIndex(4096);",
@@ -350,8 +356,8 @@ def main() -> int:
         "try std.testing.expectEqual(@as(usize, 0), plain_function.ownership_events.len);",
         "try std.testing.expectEqual(mir.TypeOwnershipKind.affine, ticket.kind);",
         "try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateTypeOwnershipFactsForLowering(symbol_drift));",
-        "try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);",
-        "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
+        "try std.testing.expectEqual(BlockId.fromIndex(index), block.id);",
+        "try std.testing.expect(successor.isValid());",
         "try std.testing.expect(read_fn.representation_facts[0].typed_span_id.eql(read_load_span_identity.id));",
         "try std.testing.expect(result_fact.typed_span_id.eql(result_span.id));",
         "typed_result_ty_id={}",

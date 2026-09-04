@@ -247,7 +247,7 @@ pub fn verify(function: *const mir.Function) !void {
 
     if (body.terminators.len != function.blocks.len) return error.InvalidTerminatorIdentity;
     for (body.terminators, 0..) |terminator, index| {
-        if (!terminator.block_id.eql(function.blocks[index].typed_id)) return error.InvalidTerminatorIdentity;
+        if (!terminator.block_id.eql(function.blocks[index].id)) return error.InvalidTerminatorIdentity;
         try verifyTerminator(function, terminator);
     }
 
@@ -1202,7 +1202,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
         if (!owner_info.block_id.eql(edge.from_block) or !owner_info.span_id.eql(edge.span_id)) return error.InvalidTrapEdge;
         const source_block = blockById(function, edge.from_block) orelse return error.InvalidTrapEdge;
         var has_successor = false;
-        for (source_block.typed_successors) |successor| if (successor.eql(edge.trap_block)) {
+        for (source_block.successors) |successor| if (successor.eql(edge.trap_block)) {
             has_successor = true;
             break;
         };
@@ -1214,7 +1214,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
         }
         var legacy_matches: usize = 0;
         for (function.trap_edges) |legacy| {
-            if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
+            if (legacy.from_block.eql(edge.from_block) and legacy.trap_block.eql(edge.trap_block) and
                 legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(owner_info.span_id)) legacy_matches += 1;
         }
         if (legacy_matches != 1) return error.InvalidTrapEdge;
@@ -1228,7 +1228,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
         for (function.trap_edges) |legacy| {
             var matches: usize = 0;
             for (body.trap_edges) |edge| {
-                if (legacy.from_block == edge.from_block.index() and legacy.trap_block == edge.trap_block.index() and
+                if (legacy.from_block.eql(edge.from_block) and legacy.trap_block.eql(edge.trap_block) and
                     legacy.kind == edge.kind and legacy.source == edge.source and legacy.typed_span_id.eql(edge.span_id)) matches += 1;
             }
             if (matches == 0 and (tryPropagationProjectionMatches(function, legacy) or
@@ -1248,7 +1248,7 @@ fn tryPropagationProjectionMatches(function: *const mir.Function, legacy: mir.Tr
     const body = &function.executable_body;
     var match: ?*const mir.ExecutableExpression = null;
     for (body.expressions) |*value| {
-        if (!value.block_id.eql(mir.BlockId.fromIndex(legacy.from_block)) or
+        if (!value.block_id.eql(legacy.from_block) or
             !value.span_id.eql(legacy.typed_span_id) or
             (value.operation != .try_propagate and value.operation != .try_map_error))
             continue;
@@ -1271,9 +1271,9 @@ fn tryPropagationProjectionMatches(function: *const mir.Function, legacy: mir.Tr
 
 fn terminalTrapProjectionMatches(function: *const mir.Function, legacy: mir.TrapEdge) bool {
     const body = &function.executable_body;
-    const source = executableTerminator(body, mir.BlockId.fromIndex(legacy.from_block)) orelse return false;
-    const target = executableTerminator(body, mir.BlockId.fromIndex(legacy.trap_block)) orelse return false;
-    const trap_block = mir.BlockId.fromIndex(legacy.trap_block);
+    const source = executableTerminator(body, legacy.from_block) orelse return false;
+    const target = executableTerminator(body, legacy.trap_block) orelse return false;
+    const trap_block = legacy.trap_block;
     const reaches_trap = switch (source.operation) {
         .jump => |block| block.eql(trap_block),
         .switch_ => |switch_| reaches: {
@@ -2683,13 +2683,13 @@ fn verifyType(function: *const mir.Function, id: mir.TypeId, ty: mir.ValueType, 
 
 fn blockExists(function: *const mir.Function, id: mir.BlockId) bool {
     if (!id.isValid()) return false;
-    for (function.blocks) |block| if (block.typed_id.eql(id)) return true;
+    for (function.blocks) |block| if (block.id.eql(id)) return true;
     return false;
 }
 
 fn blockById(function: *const mir.Function, id: mir.BlockId) ?*const mir.Block {
     if (!id.isValid()) return null;
-    for (function.blocks) |*block| if (block.typed_id.eql(id)) return block;
+    for (function.blocks) |*block| if (block.id.eql(id)) return block;
     return null;
 }
 

@@ -129,15 +129,10 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
             try out.print(allocator, "target_owner_identity fn={s} id={} spelling={s}\n", .{ function.name, typedIndexOrMax(identity.id), identity.spelling });
         }
         for (function.blocks) |block| {
-            try out.print(allocator, "block fn={s} id={} typed_id={} kind={s} terminator={s} successors=", .{ function.name, block.id, typedIndexOrMax(block.typed_id), block.kind, block.terminator.name() });
+            try out.print(allocator, "block fn={s} id={} kind={s} terminator={s} successors=", .{ function.name, block.id.index(), block.kind, block.terminator.name() });
             for (block.successors, 0..) |successor, index| {
                 if (index != 0) try out.append(allocator, ',');
-                try out.print(allocator, "{}", .{successor});
-            }
-            try out.appendSlice(allocator, " typed_successors=");
-            for (block.typed_successors, 0..) |successor, index| {
-                if (index != 0) try out.append(allocator, ',');
-                try out.print(allocator, "{}", .{typedIndexOrMax(successor)});
+                try out.print(allocator, "{}", .{successor.index()});
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
@@ -148,7 +143,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
                     "none";
                 try out.print(allocator, "instr fn={s} block={} kind={s} result={s} typed_result={} detail={s} target_type_id={} aggregate={s} const_index={} target_owner={s} typed_target_owner={} target_index={} value_id={s} typed_value={} typed_span={} line={} column={} offset={} len={}\n", .{
                     function.name,
-                    block.id,
+                    block.id.index(),
                     @tagName(instruction.kind),
                     instruction.result_ty.name(),
                     typedIndexOrMax(instruction.typed_result_ty),
@@ -171,7 +166,7 @@ fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u
         }
         for (function.trap_edges) |edge| {
             const source = mir.sourcePointForSpanId(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
-            try out.print(allocator, "trap_edge fn={s} from={} trap={} kind={s} source={s} line={} column={} offset={} len={}\n", .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), source.line, source.column, source.offset, source.len });
+            try out.print(allocator, "trap_edge fn={s} from={} trap={} kind={s} source={s} line={} column={} offset={} len={}\n", .{ function.name, edge.from_block.index(), edge.trap_block.index(), @tagName(edge.kind), @tagName(edge.source), source.line, source.column, source.offset, source.len });
         }
         for (function.contract_regions) |region| {
             try out.print(allocator, "contract_region fn={s} id={} kind={s} begin={} end={}\n", .{ function.name, region.id, region.kind, region.begin_line, region.end_line });
@@ -497,7 +492,7 @@ const SourceMapEmitter = struct {
                 const mir_block = try std.fmt.allocPrint(
                     self.allocator,
                     "mir:{s}:block:{d}:instr:{d}:{s}",
-                    .{ function.name, block.id, instruction_index, @tagName(instruction.kind) },
+                    .{ function.name, block.id.index(), instruction_index, @tagName(instruction.kind) },
                 );
                 defer self.allocator.free(mir_block);
                 const primary_kind = sourceMapKindForMirInstruction(function, instruction) orelse continue;
@@ -609,7 +604,7 @@ const SourceMapEmitter = struct {
                 return try std.fmt.allocPrint(
                     self.allocator,
                     "mir:{s}:block:{d}:instr:{d}:{s}",
-                    .{ function.name, block.id, instruction_index, @tagName(instruction.kind) },
+                    .{ function.name, block.id.index(), instruction_index, @tagName(instruction.kind) },
                 );
             }
         }

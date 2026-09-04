@@ -308,11 +308,11 @@ pub fn buildDeferCleanupEdgeTable(
     for (function.blocks) |block| {
         const source = cleanupEdgeSourceForBlock(function, block) orelse return error.InvalidSpanReference;
         switch (block.terminator) {
-            .return_ => try appendDeferCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, actions),
+            .return_ => try appendDeferCleanupCfgEdge(allocator, &edge_list, .return_exit, block.id, null, source, actions),
             .jump => |target| {
-                const target_block: ?BlockId = if (target < function.blocks.len) function.blocks[target].typed_id else null;
-                try appendDeferCleanupCfgEdge(allocator, &edge_list, .break_exit, block.typed_id, target_block, source, actions);
-                try appendDeferCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.typed_id, target_block, source, actions);
+                const target_block: ?BlockId = if (target.isValid() and target.index() < function.blocks.len) function.blocks[target.index()].id else null;
+                try appendDeferCleanupCfgEdge(allocator, &edge_list, .break_exit, block.id, target_block, source, actions);
+                try appendDeferCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.id, target_block, source, actions);
             },
             .fallthrough, .branch, .trap_, .unreachable_, .switch_ => {},
         }
@@ -3235,11 +3235,11 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             try out.print(
                 allocator,
                 "mir block fn={s} id={} kind={s} terminator={s} successors=",
-                .{ function.name, block.id, block.kind, block.terminator.name() },
+                .{ function.name, block.id.index(), block.kind, block.terminator.name() },
             );
             for (block.successors, 0..) |successor, i| {
                 if (i != 0) try out.append(allocator, ',');
-                try out.print(allocator, "{}", .{successor});
+                try out.print(allocator, "{}", .{successor.index()});
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
@@ -3250,39 +3250,39 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index={} value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), target_owner, index, value_id, source.line, source.column },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), target_owner, index, value_id, source.line, source.column },
                     );
                 } else if (instruction.typed_target_owner_id) |owner_id| {
                     const owner = targetOwnerSpelling(function, owner_id) orelse "<invalid>";
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index=none value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), owner, value_id, source.line, source.column },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), owner, value_id, source.line, source.column },
                     );
                 } else if (instruction.const_index) |index| {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} const_index={} value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), index, value_id, source.line, source.column },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), index, value_id, source.line, source.column },
                     );
                 } else if (instruction.contract_region_id) |region_id| {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id={} line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, region_id, source.line, source.column },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, region_id, source.line, source.column },
                     );
                 } else {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, source.line, source.column },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, source.line, source.column },
                     );
                 }
                 if (instruction.typed_callee_span_id.isValid()) {
                     try out.print(
                         allocator,
                         "mir call_identity fn={s} block={} kind={s} detail={s} callee_span_id={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_callee_span_id.index() },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.typed_callee_span_id.index() },
                     );
                 }
                 if (instruction.typed_left_operand_span_id.isValid()) {
@@ -3293,7 +3293,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     try out.print(
                         allocator,
                         "mir operand_identity fn={s} block={} kind={s} detail={s} left_span_id={} right_span_id={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_left_operand_span_id.index(), right_id },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.typed_left_operand_span_id.index(), right_id },
                     );
                 }
                 if (instruction.typed_switch_pattern_count != 0) {
@@ -3303,12 +3303,12 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                             .wildcard => try out.print(
                                 allocator,
                                 "mir switch_pattern fn={s} block={} index={} kind=wildcard\n",
-                                .{ function.name, block.id, pattern_index },
+                                .{ function.name, block.id.index(), pattern_index },
                             ),
                             .scalar => |scalar| try out.print(
                                 allocator,
                                 "mir switch_pattern fn={s} block={} index={} kind=scalar negative={} magnitude={}\n",
-                                .{ function.name, block.id, pattern_index, scalar.negative, scalar.magnitude },
+                                .{ function.name, block.id.index(), pattern_index, scalar.negative, scalar.magnitude },
                             ),
                         }
                     }
@@ -3320,7 +3320,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                             "mir aggregate_operand fn={s} block={} index={} span_id={} field_index={}\n",
                             .{
                                 function.name,
-                                block.id,
+                                block.id.index(),
                                 operand_index,
                                 operand_span_id.index(),
                                 instruction.typed_aggregate_field_indices[operand_index],
@@ -3332,7 +3332,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     try out.print(
                         allocator,
                         "mir place_identity fn={s} block={} kind={s} detail={s} base_span_id={} field_index={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_base_operand_span_id.index(), instruction.member_field_index.? },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), instruction.detail, instruction.typed_base_operand_span_id.index(), instruction.member_field_index.? },
                     );
                 }
                 if (instruction.typed_index_operand_span_id.isValid()) {
@@ -3341,7 +3341,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         "mir index_identity fn={s} block={} base_span_id={} index_span_id={} constant_index={} static_bound={}\n",
                         .{
                             function.name,
-                            block.id,
+                            block.id.index(),
                             instruction.typed_base_operand_span_id.index(),
                             instruction.typed_index_operand_span_id.index(),
                             instruction.constant_index_value orelse std.math.maxInt(usize),
@@ -3355,7 +3355,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     try out.print(
                         allocator,
                         "mir statement_operand_identity fn={s} block={} kind={s} target_span_id={} value_span_id={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), target_id, value_id_index },
+                        .{ function.name, block.id.index(), @tagName(instruction.kind), target_id, value_id_index },
                     );
                 }
                 if (instruction.typed_callee_root_value_id.isValid()) {
@@ -3364,7 +3364,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     try out.print(
                         allocator,
                         "mir indirect_callee_place fn={s} block={} root_value_id={} root_span_id={} owner_id={} field_index={s}\n",
-                        .{ function.name, block.id, instruction.typed_callee_root_value_id.index(), instruction.typed_callee_root_span_id.index(), instruction.typed_target_owner_id.?.index(), field_index },
+                        .{ function.name, block.id.index(), instruction.typed_callee_root_value_id.index(), instruction.typed_callee_root_span_id.index(), instruction.typed_target_owner_id.?.index(), field_index },
                     );
                 }
             }
@@ -3374,7 +3374,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             try out.print(
                 allocator,
                 "mir trap_edge fn={s} from={} trap_block={} kind={s} source={s} explicit=true line={} column={} typed_span_id={}\n",
-                .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), source.line, source.column, if (edge.typed_span_id.isValid()) edge.typed_span_id.index() else std.math.maxInt(usize) },
+                .{ function.name, edge.from_block.index(), edge.trap_block.index(), @tagName(edge.kind), @tagName(edge.source), source.line, source.column, if (edge.typed_span_id.isValid()) edge.typed_span_id.index() else std.math.maxInt(usize) },
             );
         }
         for (function.representation_facts) |fact| {
@@ -4787,11 +4787,11 @@ pub fn buildOwnershipCleanupEdgeTable(
     for (function.blocks) |block| {
         const source = cleanupEdgeSourceForBlock(function, block) orelse return error.InvalidSpanReference;
         switch (block.terminator) {
-            .return_ => try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, action_refs.items, &plan),
+            .return_ => try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .return_exit, block.id, null, source, action_refs.items, &plan),
             .jump => |target| {
-                const target_block: ?BlockId = if (target < function.blocks.len) function.blocks[target].typed_id else null;
-                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .break_exit, block.typed_id, target_block, source, action_refs.items, &plan);
-                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.typed_id, target_block, source, action_refs.items, &plan);
+                const target_block: ?BlockId = if (target.isValid() and target.index() < function.blocks.len) function.blocks[target.index()].id else null;
+                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .break_exit, block.id, target_block, source, action_refs.items, &plan);
+                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.id, target_block, source, action_refs.items, &plan);
             },
             .fallthrough, .branch, .trap_, .unreachable_, .switch_ => {},
         }
@@ -5126,8 +5126,8 @@ fn blockCanReach(function: Function, from: usize, target: usize, remaining: usiz
     if (from == target) return true;
     if (remaining == 0 or from >= function.blocks.len) return false;
     for (function.blocks[from].successors) |successor| {
-        if (successor >= function.blocks.len) continue;
-        if (blockCanReach(function, successor, target, remaining - 1)) return true;
+        if (!successor.isValid() or successor.index() >= function.blocks.len) continue;
+        if (blockCanReach(function, successor.index(), target, remaining - 1)) return true;
     }
     return false;
 }
@@ -6192,10 +6192,10 @@ fn sameRepresentationValueType(left: ValueType, right: ValueType) bool {
 }
 
 const MutableBlock = struct {
-    id: usize,
+    id: BlockId,
     kind: []const u8,
     instructions: std.ArrayList(Instruction) = .empty,
-    successors: std.ArrayList(usize) = .empty,
+    successors: std.ArrayList(BlockId) = .empty,
     terminator: Terminator = .fallthrough,
 };
 
@@ -8357,7 +8357,7 @@ const FunctionBuilder = struct {
     fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, module_symbol_ids: *const std.StringHashMap(SymbolId), summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
-        try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
+        try blocks.append(allocator, .{ .id = BlockId.fromIndex(0), .kind = "entry" });
 
         var builder = FunctionBuilder{
             .allocator = allocator,
@@ -8542,7 +8542,7 @@ const FunctionBuilder = struct {
     fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, module_symbol_ids: *const std.StringHashMap(SymbolId), summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
-        try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
+        try blocks.append(allocator, .{ .id = BlockId.fromIndex(0), .kind = "global_init" });
 
         var builder = FunctionBuilder{
             .allocator = allocator,
@@ -8729,26 +8729,16 @@ const FunctionBuilder = struct {
             for (blocks.items) |block| {
                 self.allocator.free(block.instructions);
                 self.allocator.free(block.successors);
-                if (block.typed_successors.len != 0) self.allocator.free(block.typed_successors);
             }
             blocks.deinit(self.allocator);
         }
 
         for (self.blocks.items) |*block| {
-            const legacy_successors = try block.successors.toOwnedSlice(self.allocator);
-            errdefer self.allocator.free(legacy_successors);
-            const typed_successors = try self.allocator.alloc(BlockId, legacy_successors.len);
-            errdefer self.allocator.free(typed_successors);
-            for (legacy_successors, 0..) |successor, index| {
-                typed_successors[index] = BlockId.fromIndex(successor);
-            }
             try blocks.append(self.allocator, .{
                 .id = block.id,
-                .typed_id = BlockId.fromIndex(block.id),
                 .kind = block.kind,
                 .instructions = try block.instructions.toOwnedSlice(self.allocator),
-                .successors = legacy_successors,
-                .typed_successors = typed_successors,
+                .successors = try block.successors.toOwnedSlice(self.allocator),
                 .terminator = block.terminator,
             });
         }
@@ -9055,9 +9045,10 @@ const FunctionBuilder = struct {
         try self.resolveExecutableRepresentationTrapEdges(trap_edges, call_target_facts, legacy_blocks);
         if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
         for (self.blocks.items) |block| {
-            const operation: @FieldType(ExecutableTerminator, "operation") = if (self.executable_for_each_terminators.get(block.id)) |for_each|
+            const block_index = block.id.index();
+            const operation: @FieldType(ExecutableTerminator, "operation") = if (self.executable_for_each_terminators.get(block_index)) |for_each|
                 .{ .for_each = for_each }
-            else if (self.executable_for_step_terminators.get(block.id)) |for_step|
+            else if (self.executable_for_step_terminators.get(block_index)) |for_step|
                 .{ .for_step = for_step }
             else switch (block.terminator) {
                 .fallthrough => fallthrough: {
@@ -9065,24 +9056,24 @@ const FunctionBuilder = struct {
                     // Structured conditionals create a synthetic continuation block even
                     // when every arm terminates.  Once it has no incoming CFG edge it is
                     // semantically unreachable, not an incomplete non-void fallthrough.
-                    if (block.id != 0 and block.successors.items.len == 0 and
-                        !self.executableBlockHasPredecessor(block.id))
+                    if (block_index != 0 and block.successors.items.len == 0 and
+                        !self.executableBlockHasPredecessor(block_index))
                     {
                         break :fallthrough .unreachable_;
                     }
                     complete = false;
                     break :fallthrough .fallthrough;
                 },
-                .jump => |target| .{ .jump = BlockId.fromIndex(target) },
+                .jump => |target| .{ .jump = target },
                 .branch => |branch| branch_op: {
-                    const condition = executableGuardForBlock(self.executable_statements.items, BlockId.fromIndex(block.id)) orelse {
+                    const condition = executableGuardForBlock(self.executable_statements.items, block.id) orelse {
                         complete = false;
-                        break :branch_op .{ .branch = .{ .condition = .invalid, .true_block = BlockId.fromIndex(branch.true_block), .false_block = BlockId.fromIndex(branch.false_block) } };
+                        break :branch_op .{ .branch = .{ .condition = .invalid, .true_block = branch.true_block, .false_block = branch.false_block } };
                     };
-                    break :branch_op .{ .branch = .{ .condition = condition, .true_block = BlockId.fromIndex(branch.true_block), .false_block = BlockId.fromIndex(branch.false_block) } };
+                    break :branch_op .{ .branch = .{ .condition = condition, .true_block = branch.true_block, .false_block = branch.false_block } };
                 },
                 .switch_ => switch_op: {
-                    const subject = executableGuardForBlock(self.executable_statements.items, BlockId.fromIndex(block.id)) orelse {
+                    const subject = executableGuardForBlock(self.executable_statements.items, block.id) orelse {
                         complete = false;
                         break :switch_op .{ .switch_ = .{ .subject = .invalid } };
                     };
@@ -9093,11 +9084,11 @@ const FunctionBuilder = struct {
                             .false_block = BlockId.fromIndex(branch.false_block),
                         } };
                     }
-                    if (block.id >= legacy_blocks.len) {
+                    if (block_index >= legacy_blocks.len) {
                         complete = false;
                         break :switch_op .{ .switch_ = .{ .subject = subject } };
                     }
-                    const switch_value = self.executableTypedSwitch(legacy_blocks[block.id], legacy_blocks, subject) orelse {
+                    const switch_value = self.executableTypedSwitch(legacy_blocks[block_index], legacy_blocks, subject) orelse {
                         complete = false;
                         break :switch_op .{ .switch_ = .{ .subject = subject } };
                     };
@@ -9115,13 +9106,13 @@ const FunctionBuilder = struct {
             };
             const terminator_span_id = executableTerminatorSpanId(block.id, operation, trap_edges, span_identities);
             try self.executable_terminators.append(self.allocator, .{
-                .block_id = BlockId.fromIndex(block.id),
+                .block_id = block.id,
                 .span_id = terminator_span_id,
-                .entry_cleanup_stack = if (block.id < self.executable_block_cleanup_entries.items.len)
-                    self.executable_block_cleanup_entries.items[block.id]
+                .entry_cleanup_stack = if (block_index < self.executable_block_cleanup_entries.items.len)
+                    self.executable_block_cleanup_entries.items[block_index]
                 else
                     &.{},
-                .exit_cleanup_actions = self.executable_terminator_cleanups.get(block.id) orelse &.{},
+                .exit_cleanup_actions = self.executable_terminator_cleanups.get(block_index) orelse &.{},
                 .operation = operation,
             });
         }
@@ -10459,7 +10450,7 @@ const FunctionBuilder = struct {
         if (legacy.kind != .Unwrap or legacy.source != .unwrap) return false;
         var matched = false;
         for (self.executable_expressions.items) |expression| {
-            if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block)) or
+            if (!expression.block_id.eql(legacy.from_block) or
                 !expression.span_id.eql(legacy.typed_span_id) or
                 (expression.operation != .try_propagate and expression.operation != .try_map_error))
                 continue;
@@ -10483,7 +10474,7 @@ const FunctionBuilder = struct {
 
             var owner: ?ExprId = null;
             for (self.executable_expressions.items) |expression| {
-                if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block)) or
+                if (!expression.block_id.eql(legacy.from_block) or
                     !expression.span_id.eql(legacy.typed_span_id)) continue;
                 const requirements = switch (expression.operation) {
                     .unary => |unary| mir_model.executableCheckedUnaryTrapRequirements(unary.op, expression.result_ty),
@@ -10512,8 +10503,8 @@ const FunctionBuilder = struct {
             const owner_id = owner orelse continue;
             try self.executable_trap_edges.append(self.allocator, .{
                 .owner = .{ .expression = owner_id },
-                .from_block = BlockId.fromIndex(legacy.from_block),
-                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .from_block = legacy.from_block,
+                .trap_block = legacy.trap_block,
                 .kind = legacy.kind,
                 .source = legacy.source,
                 .span_id = legacy.typed_span_id,
@@ -10541,7 +10532,7 @@ const FunctionBuilder = struct {
             var owner: ?mir_model.ExecutableTrapOwner = null;
             var ambiguous = false;
             for (self.executable_expressions.items) |expression| {
-                if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                if (!expression.block_id.eql(legacy.from_block)) continue;
                 const owns_edge = switch (expression.operation) {
                     .index => |operation| operation.checked and expression.span_id.eql(legacy.typed_span_id),
                     .range_slice => |operation| operation.checked and expression.span_id.eql(legacy.typed_span_id),
@@ -10557,7 +10548,7 @@ const FunctionBuilder = struct {
                 owner = .{ .expression = expression.id };
             }
             if (!ambiguous) for (self.executable_statements.items) |statement| {
-                if (!statement.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                if (!statement.block_id.eql(legacy.from_block)) continue;
                 const owns_edge = switch (statement.operation) {
                     .store => |store| self.executableCheckedIndexProjectionSpanMatches(store.place, legacy.typed_span_id),
                     else => false,
@@ -10572,8 +10563,8 @@ const FunctionBuilder = struct {
             if (ambiguous or owner == null) continue;
             try self.executable_trap_edges.append(self.allocator, .{
                 .owner = owner.?,
-                .from_block = BlockId.fromIndex(legacy.from_block),
-                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .from_block = legacy.from_block,
+                .trap_block = legacy.trap_block,
                 .kind = legacy.kind,
                 .source = legacy.source,
                 .span_id = legacy.typed_span_id,
@@ -10619,7 +10610,7 @@ const FunctionBuilder = struct {
             var owner: ?mir_model.ExecutableTrapOwner = null;
             var ambiguous = false;
             for (self.executable_expressions.items) |expression| {
-                if (!expression.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                if (!expression.block_id.eql(legacy.from_block)) continue;
                 const owns_edge = switch (expression.operation) {
                     .representation_check => expression.span_id.eql(legacy.typed_span_id),
                     .load => |load| load.representation_span_id.eql(legacy.typed_span_id) and
@@ -10644,7 +10635,7 @@ const FunctionBuilder = struct {
                 owner = .{ .expression = expression.id };
             }
             if (!ambiguous) for (self.executable_statements.items) |statement| {
-                if (!statement.block_id.eql(BlockId.fromIndex(legacy.from_block))) continue;
+                if (!statement.block_id.eql(legacy.from_block)) continue;
                 const owns_edge = switch (statement.operation) {
                     .store => |store| store.representation_span_id.eql(legacy.typed_span_id) and
                         self.executableRepresentationPlaceCandidate(store.place, true),
@@ -10664,8 +10655,8 @@ const FunctionBuilder = struct {
             }
             try self.executable_trap_edges.append(self.allocator, .{
                 .owner = owner.?,
-                .from_block = BlockId.fromIndex(legacy.from_block),
-                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .from_block = legacy.from_block,
+                .trap_block = legacy.trap_block,
                 .kind = legacy.kind,
                 .source = legacy.source,
                 .span_id = legacy.typed_span_id,
@@ -10707,8 +10698,8 @@ const FunctionBuilder = struct {
         edge: mir_model.ExecutableTrapEdge,
         legacy: TrapEdge,
     ) bool {
-        if (!edge.from_block.eql(BlockId.fromIndex(legacy.from_block)) or
-            !edge.trap_block.eql(BlockId.fromIndex(legacy.trap_block)) or
+        if (!edge.from_block.eql(legacy.from_block) or
+            !edge.trap_block.eql(legacy.trap_block) or
             edge.kind != legacy.kind or edge.source != legacy.source or
             !edge.span_id.eql(legacy.typed_span_id)) return false;
         const OwnerIdentity = struct { block_id: BlockId, span_id: SpanId };
@@ -10767,12 +10758,16 @@ const FunctionBuilder = struct {
         call_target_facts: []const CallTargetFact,
         legacy_blocks: []const Block,
     ) bool {
-        if (legacy.from_block >= legacy_blocks.len or legacy.trap_block >= legacy_blocks.len) return false;
-        const source = legacy_blocks[legacy.from_block];
-        const target = legacy_blocks[legacy.trap_block];
+        if (!legacy.from_block.isValid() or !legacy.trap_block.isValid() or
+            legacy.from_block.index() >= legacy_blocks.len or legacy.trap_block.index() >= legacy_blocks.len) return false;
+        const source = legacy_blocks[legacy.from_block.index()];
+        const target = legacy_blocks[legacy.trap_block.index()];
         const reaches_trap = switch (source.terminator) {
-            .jump => |block| block == legacy.trap_block,
-            .switch_ => std.mem.indexOfScalar(usize, source.successors, legacy.trap_block) != null,
+            .jump => |block| block.eql(legacy.trap_block),
+            .switch_ => blk: {
+                for (source.successors) |successor| if (successor.eql(legacy.trap_block)) break :blk true;
+                break :blk false;
+            },
             else => false,
         };
         if (!reaches_trap) return false;
@@ -10792,7 +10787,7 @@ const FunctionBuilder = struct {
 
     fn executableTrapKindForBlock(
         self: *const FunctionBuilder,
-        block_id: usize,
+        block_id: BlockId,
         legacy_kind: TrapKind,
         legacy_edges: []const TrapEdge,
         call_target_facts: []const CallTargetFact,
@@ -10800,7 +10795,7 @@ const FunctionBuilder = struct {
         _ = self;
         if (legacy_kind != .ExplicitTrap) return legacy_kind;
         for (legacy_edges) |edge| {
-            if (edge.trap_block != block_id or edge.kind != .ExplicitTrap or edge.source != .explicit_trap) continue;
+            if (!edge.trap_block.eql(block_id) or edge.kind != .ExplicitTrap or edge.source != .explicit_trap) continue;
             var match: ?TrapKind = null;
             for (call_target_facts) |fact| {
                 if (!fact.typed_span_id.eql(edge.typed_span_id)) continue;
@@ -10814,14 +10809,14 @@ const FunctionBuilder = struct {
     }
 
     fn executableTerminatorSpanId(
-        block_id: usize,
+        block_id: BlockId,
         operation: @FieldType(ExecutableTerminator, "operation"),
         trap_edges: []const TrapEdge,
         span_identities: []const SpanIdentity,
     ) SpanId {
         if (operation != .trap_) return .invalid;
         for (trap_edges) |edge| {
-            if (edge.trap_block != block_id or !edge.typed_span_id.isValid() or
+            if (!edge.trap_block.eql(block_id) or !edge.typed_span_id.isValid() or
                 edge.typed_span_id.index() >= span_identities.len) continue;
             const identity = span_identities[edge.typed_span_id.index()];
             if (!identity.id.eql(edge.typed_span_id)) continue;
@@ -10867,7 +10862,7 @@ const FunctionBuilder = struct {
     fn executableBlockHasPredecessor(self: *const FunctionBuilder, target: usize) bool {
         for (self.blocks.items) |candidate| {
             for (candidate.successors.items) |successor| {
-                if (successor == target) return true;
+            if (successor.eql(BlockId.fromIndex(target))) return true;
             }
         }
         return false;
@@ -10875,7 +10870,7 @@ const FunctionBuilder = struct {
 
     fn executableBooleanBranch(self: *const FunctionBuilder, dispatch: MutableBlock) ?struct { true_block: usize, false_block: usize } {
         for (self.executable_boolean_branches.items) |branch| {
-            if (branch.dispatch_block == dispatch.id) return .{
+            if (branch.dispatch_block == dispatch.id.index()) return .{
                 .true_block = branch.true_block,
                 .false_block = branch.false_block,
             };
@@ -10900,8 +10895,8 @@ const FunctionBuilder = struct {
         // explicit wildcard arm.
         var has_explicit_default = false;
         for (dispatch.successors) |successor| {
-            if (successor >= legacy_blocks.len) return null;
-            for (legacy_blocks[successor].instructions) |instruction| {
+            if (!successor.isValid() or successor.index() >= legacy_blocks.len) return null;
+            for (legacy_blocks[successor.index()].instructions) |instruction| {
                 if (instruction.kind == .expr and instruction.result_ty == .branch and
                     std.mem.eql(u8, instruction.detail, "_"))
                 {
@@ -10911,8 +10906,8 @@ const FunctionBuilder = struct {
             }
         }
         for (dispatch.successors) |successor| {
-            if (successor >= legacy_blocks.len) return null;
-            const target = legacy_blocks[successor];
+            if (!successor.isValid() or successor.index() >= legacy_blocks.len) return null;
+            const target = legacy_blocks[successor.index()];
             var marker: ?Instruction = null;
             for (target.instructions) |instruction| {
                 if (instruction.kind == .expr and instruction.result_ty == .branch) {
@@ -10924,12 +10919,12 @@ const FunctionBuilder = struct {
                 if (target.terminator != .trap_) return null;
                 if (has_explicit_default) continue;
                 if (result.default_block.isValid()) return null;
-                result.default_block = BlockId.fromIndex(successor);
+                result.default_block = successor;
                 continue;
             };
             if (std.mem.eql(u8, arm.detail, "_")) {
                 if (result.default_block.isValid()) return null;
-                result.default_block = BlockId.fromIndex(successor);
+                result.default_block = successor;
                 continue;
             }
             if (arm.typed_switch_pattern_count != 0) {
@@ -10941,12 +10936,12 @@ const FunctionBuilder = struct {
                             .{ .unsigned = scalar.magnitude },
                         .wildcard => {
                             if (result.default_block.isValid()) return null;
-                            result.default_block = BlockId.fromIndex(successor);
+                            result.default_block = successor;
                             continue;
                         },
                         .unused => return null,
                     };
-                    if (!appendExecutableSwitchCase(&result, value, BlockId.fromIndex(successor))) return null;
+                    if (!appendExecutableSwitchCase(&result, value, successor)) return null;
                 }
                 continue;
             }
@@ -10956,7 +10951,7 @@ const FunctionBuilder = struct {
                 .signed_integer => |integer| .{ .signed = integer },
                 else => return null,
             };
-            if (!appendExecutableSwitchCase(&result, value, BlockId.fromIndex(successor))) return null;
+            if (!appendExecutableSwitchCase(&result, value, successor)) return null;
         }
         if (result.case_count == 0 or !result.default_block.isValid()) return null;
         return result;
@@ -14701,7 +14696,7 @@ const FunctionBuilder = struct {
                 if (self.executableLoopTarget(label)) |target| {
                     try self.setExecutableTerminatorCleanup(target.cleanup_depth);
                     try self.addSuccessor(self.current, target.break_block);
-                    self.setTerminator(.{ .jump = target.break_block });
+                    self.setTerminator(.{ .jump = BlockId.fromIndex(target.break_block) });
                 } else {
                     self.executable_supported = false;
                     self.setTerminator(.unreachable_);
@@ -14714,7 +14709,7 @@ const FunctionBuilder = struct {
                 if (self.executableLoopTarget(label)) |target| {
                     try self.setExecutableTerminatorCleanup(target.cleanup_depth);
                     try self.addSuccessor(self.current, target.continue_block);
-                    self.setTerminator(.{ .jump = target.continue_block });
+                    self.setTerminator(.{ .jump = BlockId.fromIndex(target.continue_block) });
                 } else {
                     self.executable_supported = false;
                     self.setTerminator(.unreachable_);
@@ -14846,7 +14841,7 @@ const FunctionBuilder = struct {
         const after_id = if (node.else_block == null) else_id else try self.addBlock("if_after");
         try self.addSuccessor(dispatch_id, then_id);
         try self.addSuccessor(dispatch_id, else_id);
-        self.blocks.items[dispatch_id].terminator = .{ .branch = .{ .true_block = then_id, .false_block = else_id } };
+        self.blocks.items[dispatch_id].terminator = .{ .branch = .{ .true_block = BlockId.fromIndex(then_id), .false_block = BlockId.fromIndex(else_id) } };
 
         self.current = then_id;
         const narrowed_binding = self.ifLetNarrowedBinding(node);
@@ -14930,7 +14925,7 @@ const FunctionBuilder = struct {
         }
         if (!then_term) {
             try self.addSuccessor(self.current, after_id);
-            self.setTerminator(.{ .jump = after_id });
+            self.setTerminator(.{ .jump = BlockId.fromIndex(after_id) });
         }
 
         if (node.else_block) |else_block| {
@@ -14938,7 +14933,7 @@ const FunctionBuilder = struct {
             const else_term = try self.buildBlock(else_block);
             if (!else_term) {
                 try self.addSuccessor(self.current, after_id);
-                self.setTerminator(.{ .jump = after_id });
+                self.setTerminator(.{ .jump = BlockId.fromIndex(after_id) });
             }
         }
 
@@ -15371,7 +15366,7 @@ const FunctionBuilder = struct {
             }
             if (!terminated) {
                 try self.addSuccessor(self.current, after_id);
-                self.setTerminator(.{ .jump = after_id });
+                self.setTerminator(.{ .jump = BlockId.fromIndex(after_id) });
             }
             // Drop this arm's guard facts before the next arm (invalidations of outer facts made
             // inside the arm intentionally persist — the arm may have run, so a later use of an
@@ -15937,7 +15932,7 @@ const FunctionBuilder = struct {
         if (node.kind == .@"while") {
             const id = try self.addBlock("loop_header");
             try self.addSuccessor(preheader_id, id);
-            self.blocks.items[preheader_id].terminator = .{ .jump = id };
+            self.blocks.items[preheader_id].terminator = .{ .jump = BlockId.fromIndex(id) };
             self.current = id;
             header_id = id;
         }
@@ -16030,7 +16025,7 @@ const FunctionBuilder = struct {
         if (node.kind == .@"for") {
             header_id = try self.addBlock("loop_header");
             try self.addSuccessor(preheader_id, header_id);
-            self.blocks.items[preheader_id].terminator = .{ .jump = header_id };
+            self.blocks.items[preheader_id].terminator = .{ .jump = BlockId.fromIndex(header_id) };
             self.current = header_id;
         }
         const body_id = try self.addBlock("loop_body");
@@ -16039,9 +16034,9 @@ const FunctionBuilder = struct {
         try self.addSuccessor(header_id, body_id);
         try self.addSuccessor(header_id, after_id);
         self.blocks.items[header_id].terminator = if (node.kind == .@"while")
-            .{ .branch = .{ .true_block = body_id, .false_block = after_id } }
+            .{ .branch = .{ .true_block = BlockId.fromIndex(body_id), .false_block = BlockId.fromIndex(after_id) } }
         else
-            .{ .branch = .{ .true_block = body_id, .false_block = after_id } };
+            .{ .branch = .{ .true_block = BlockId.fromIndex(body_id), .false_block = BlockId.fromIndex(after_id) } };
         if (node.kind == .@"for") {
             const iterable_local = for_iterable_local orelse {
                 self.executable_supported = false;
@@ -16075,7 +16070,7 @@ const FunctionBuilder = struct {
                 .header_block = BlockId.fromIndex(header_id),
             });
             try self.addSuccessor(step_id, header_id);
-            self.blocks.items[step_id].terminator = .{ .jump = header_id };
+            self.blocks.items[step_id].terminator = .{ .jump = BlockId.fromIndex(header_id) };
         }
 
         self.current = body_id;
@@ -16151,7 +16146,7 @@ const FunctionBuilder = struct {
             // iteration. Jumping directly to body_id would turn `while` into
             // a one-shot condition followed by an infinite body loop.
             try self.addSuccessor(self.current, step_id);
-            self.setTerminator(.{ .jump = step_id });
+            self.setTerminator(.{ .jump = BlockId.fromIndex(step_id) });
         }
         self.current = after_id;
         return false;
@@ -17667,8 +17662,8 @@ const FunctionBuilder = struct {
         self.current = from;
         try self.addSuccessor(from, trap_block);
         try self.trap_edges.append(self.allocator, .{
-            .from_block = from,
-            .trap_block = trap_block,
+            .from_block = BlockId.fromIndex(from),
+            .trap_block = BlockId.fromIndex(trap_block),
             .kind = kind,
             .source = source,
             .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
@@ -17687,8 +17682,8 @@ const FunctionBuilder = struct {
             .unreachable_expr => edge.kind == trap.kind,
             else => false,
         };
-        if (edge.from_block != self.current or edge.source != trap.source or !edge_kind_valid or
-            edge.trap_block >= self.blocks.items.len)
+        if (!edge.from_block.eql(BlockId.fromIndex(self.current)) or edge.source != trap.source or !edge_kind_valid or
+            !edge.trap_block.isValid() or edge.trap_block.index() >= self.blocks.items.len)
         {
             self.executable_supported = false;
             self.setTerminator(.unreachable_);
@@ -17850,14 +17845,14 @@ const FunctionBuilder = struct {
             return;
         }
         const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
-        if (legacy.kind != kind or legacy.source != source or legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) {
+        if (legacy.kind != kind or legacy.source != source or !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id)) {
             self.executable_supported = false;
             return;
         }
         try self.executable_trap_edges.append(self.allocator, .{
             .owner = if (owner) |owner_id| .{ .expression = owner_id } else .{ .statement = statement_owner.? },
-            .from_block = BlockId.fromIndex(legacy.from_block),
-            .trap_block = BlockId.fromIndex(legacy.trap_block),
+            .from_block = legacy.from_block,
+            .trap_block = legacy.trap_block,
             .kind = kind,
             .source = source,
             .span_id = span_id,
@@ -17910,15 +17905,15 @@ const FunctionBuilder = struct {
         const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
         if (guard.kind != .assert_ or !statement.span_id.eql(span_id) or
             legacy.kind != .Assert or legacy.source != .assert_stmt or
-            legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id))
+            !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id))
         {
             self.executable_supported = false;
             return;
         }
         try self.executable_trap_edges.append(self.allocator, .{
             .owner = .{ .statement = statement_id },
-            .from_block = BlockId.fromIndex(legacy.from_block),
-            .trap_block = BlockId.fromIndex(legacy.trap_block),
+            .from_block = legacy.from_block,
+            .trap_block = legacy.trap_block,
             .kind = .Assert,
             .source = .assert_stmt,
             .span_id = span_id,
@@ -17956,7 +17951,7 @@ const FunctionBuilder = struct {
             return;
         };
         const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
-        if (legacy.kind != kind or legacy.source != source or legacy.from_block != self.current or
+        if (legacy.kind != kind or legacy.source != source or !legacy.from_block.eql(BlockId.fromIndex(self.current)) or
             !legacy.typed_span_id.eql(span_id))
         {
             self.executable_supported = false;
@@ -17964,8 +17959,8 @@ const FunctionBuilder = struct {
         }
         try self.executable_trap_edges.append(self.allocator, .{
             .owner = .{ .expression = owner_id },
-            .from_block = BlockId.fromIndex(legacy.from_block),
-            .trap_block = BlockId.fromIndex(legacy.trap_block),
+            .from_block = legacy.from_block,
+            .trap_block = legacy.trap_block,
             .kind = kind,
             .source = source,
             .span_id = span_id,
@@ -17974,7 +17969,7 @@ const FunctionBuilder = struct {
 
     fn addBlock(self: *FunctionBuilder, kind: []const u8) !usize {
         const id = self.blocks.items.len;
-        try self.blocks.append(self.allocator, .{ .id = id, .kind = kind });
+        try self.blocks.append(self.allocator, .{ .id = BlockId.fromIndex(id), .kind = kind });
         const entry = try self.ownExecutableCleanupIds(self.active_executable_cleanups.items);
         try self.executable_block_cleanup_entries.append(self.allocator, entry);
         return id;
@@ -17982,9 +17977,9 @@ const FunctionBuilder = struct {
 
     fn addSuccessor(self: *FunctionBuilder, from: usize, to: usize) !void {
         for (self.blocks.items[from].successors.items) |existing| {
-            if (existing == to) return;
+            if (existing.eql(BlockId.fromIndex(to))) return;
         }
-        try self.blocks.items[from].successors.append(self.allocator, to);
+        try self.blocks.items[from].successors.append(self.allocator, BlockId.fromIndex(to));
     }
 
     fn addInstr(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span) !void {
@@ -18282,8 +18277,8 @@ const FunctionBuilder = struct {
         if (from == target) return true;
         if (remaining == 0 or from >= self.blocks.items.len) return false;
         for (self.blocks.items[from].successors.items) |successor| {
-            if (successor >= self.blocks.items.len) continue;
-            if (self.mutableBlockCanReach(successor, target, remaining - 1)) return true;
+            if (!successor.isValid() or successor.index() >= self.blocks.items.len) continue;
+            if (self.mutableBlockCanReach(successor.index(), target, remaining - 1)) return true;
         }
         return false;
     }
@@ -19056,11 +19051,11 @@ const FunctionBuilder = struct {
             if (expression.operation == .representation_check and expression.span_id.eql(span_id)) {
                 const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
                 if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
-                    legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+                    !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id)) return;
                 try self.executable_trap_edges.append(self.allocator, .{
                     .owner = .{ .expression = expression.id },
-                    .from_block = BlockId.fromIndex(legacy.from_block),
-                    .trap_block = BlockId.fromIndex(legacy.trap_block),
+                    .from_block = legacy.from_block,
+                    .trap_block = legacy.trap_block,
                     .kind = legacy.kind,
                     .source = legacy.source,
                     .span_id = span_id,
@@ -19072,11 +19067,11 @@ const FunctionBuilder = struct {
                 if (call.kind != .raw_ptr or !call.representation_span_id.eql(span_id)) continue;
                 const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
                 if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
-                    legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+                    !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id)) return;
                 try self.executable_trap_edges.append(self.allocator, .{
                     .owner = .{ .expression = expression.id },
-                    .from_block = BlockId.fromIndex(legacy.from_block),
-                    .trap_block = BlockId.fromIndex(legacy.trap_block),
+                    .from_block = legacy.from_block,
+                    .trap_block = legacy.trap_block,
                     .kind = legacy.kind,
                     .source = legacy.source,
                     .span_id = span_id,
@@ -19122,11 +19117,11 @@ const FunctionBuilder = struct {
                     !parameter_index_address)) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
-                legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+                !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id)) return;
             try self.executable_trap_edges.append(self.allocator, .{
                 .owner = .{ .expression = expression.id },
-                .from_block = BlockId.fromIndex(legacy.from_block),
-                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .from_block = legacy.from_block,
+                .trap_block = legacy.trap_block,
                 .kind = legacy.kind,
                 .source = legacy.source,
                 .span_id = span_id,
@@ -19150,11 +19145,11 @@ const FunctionBuilder = struct {
                 !self.executableMemoryAccessComplete(place, store.ty, store.access, true)) continue;
             const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
             if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
-                legacy.from_block != self.current or !legacy.typed_span_id.eql(span_id)) return;
+                !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id)) return;
             try self.executable_trap_edges.append(self.allocator, .{
                 .owner = .{ .statement = statement.id },
-                .from_block = BlockId.fromIndex(legacy.from_block),
-                .trap_block = BlockId.fromIndex(legacy.trap_block),
+                .from_block = legacy.from_block,
+                .trap_block = legacy.trap_block,
                 .kind = legacy.kind,
                 .source = legacy.source,
                 .span_id = span_id,
@@ -22092,7 +22087,6 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     for (function.blocks) |block| {
         allocator.free(block.instructions);
         allocator.free(block.successors);
-        if (block.typed_successors.len != 0) allocator.free(block.typed_successors);
     }
     allocator.free(function.blocks);
     allocator.free(function.trap_edges);
@@ -22290,9 +22284,9 @@ fn functionFallsThrough(function: Function) ?SourcePoint {
         const block = function.blocks[id];
         if (block.successors.len == 0 and block.terminator == .fallthrough) return blockLastSpan(function, block);
         for (block.successors) |successor| {
-            if (successor >= function.blocks.len or seen_buf[successor]) continue;
-            seen_buf[successor] = true;
-            stack_buf[stack_len] = successor;
+            if (!successor.isValid() or successor.index() >= function.blocks.len or seen_buf[successor.index()]) continue;
+            seen_buf[successor.index()] = true;
+            stack_buf[stack_len] = successor.index();
             stack_len += 1;
         }
     }
@@ -22302,27 +22296,20 @@ fn functionFallsThrough(function: Function) ?SourcePoint {
 fn cfgHasStructuralError(function: Function) ?SourcePoint {
     if (function.blocks.len == 0) return null;
     for (function.blocks, 0..) |block, block_index| {
-        if (block.id != block_index) return blockLastSpan(function, block);
-        if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(function, block);
-        if (block.typed_successors.len != 0) {
-            if (block.typed_successors.len != block.successors.len) return blockLastSpan(function, block);
-            for (block.typed_successors, 0..) |successor, successor_index| {
-                if (!successor.isValid() or successor.index() != block.successors[successor_index]) return blockLastSpan(function, block);
-            }
-        }
+        if (!block.id.isValid() or block.id.index() != block_index) return blockLastSpan(function, block);
         for (block.successors) |successor| {
-            if (successor >= function.blocks.len) return blockLastSpan(function, block);
+            if (!successor.isValid() or successor.index() >= function.blocks.len or !function.blocks[successor.index()].id.eql(successor)) return blockLastSpan(function, block);
         }
         if (!terminatorSuccessorsAreConsistent(function, block)) return blockLastSpan(function, block);
     }
     for (function.trap_edges) |edge| {
         const source = sourcePointForSpanId(function, edge.typed_span_id) orelse return .{ .line = 0, .column = 0 };
-        if (edge.from_block >= function.blocks.len or edge.trap_block >= function.blocks.len) {
+        if (!edge.from_block.isValid() or !edge.trap_block.isValid() or edge.from_block.index() >= function.blocks.len or edge.trap_block.index() >= function.blocks.len) {
             return source;
         }
-        const from = function.blocks[edge.from_block];
+        const from = function.blocks[edge.from_block.index()];
         if (!successorListed(from, edge.trap_block)) return source;
-        const trap_block = function.blocks[edge.trap_block];
+        const trap_block = function.blocks[edge.trap_block.index()];
         switch (trap_block.terminator) {
             .trap_ => |trap_kind| if (trap_kind != edge.kind) return source,
             else => return source,
@@ -22354,10 +22341,10 @@ fn terminatorSuccessorsAreConsistent(function: Function, block: Block) bool {
     };
 }
 
-fn terminalTrapSuccessor(function: Function, block: Block, target: usize) bool {
-    if (block.successors.len != 1 or block.successors[0] != target) return false;
+fn terminalTrapSuccessor(function: Function, block: Block, target: BlockId) bool {
+    if (block.successors.len != 1 or !block.successors[0].eql(target)) return false;
     for (function.trap_edges) |edge| {
-        if (edge.from_block != block.id or edge.trap_block != target) continue;
+        if (!edge.from_block.eql(block.id) or !edge.trap_block.eql(target)) continue;
         return edge.source == .explicit_trap or edge.source == .unreachable_expr;
     }
     return false;
@@ -22371,20 +22358,20 @@ fn normalSuccessorCount(function: Function, block: Block) usize {
     return count;
 }
 
-fn normalSuccessorListed(function: Function, block: Block, target: usize) bool {
+fn normalSuccessorListed(function: Function, block: Block, target: BlockId) bool {
     return successorListed(block, target) and !isTrapSuccessor(function, block.id, target);
 }
 
-fn isTrapSuccessor(function: Function, from_block: usize, to_block: usize) bool {
+fn isTrapSuccessor(function: Function, from_block: BlockId, to_block: BlockId) bool {
     for (function.trap_edges) |edge| {
-        if (edge.from_block == from_block and edge.trap_block == to_block) return true;
+        if (edge.from_block.eql(from_block) and edge.trap_block.eql(to_block)) return true;
     }
     return false;
 }
 
-fn successorListed(block: Block, target: usize) bool {
+fn successorListed(block: Block, target: BlockId) bool {
     for (block.successors) |successor| {
-        if (successor == target) return true;
+        if (successor.eql(target)) return true;
     }
     return false;
 }

@@ -52,7 +52,7 @@ test "body plan keeps rejecting typed identity drift in accepted MIR" {
     return error.TestUnexpectedResult;
 }
 
-test "body plan derives omitted successor identities from verified CFG" {
+test "body plan derives successors from verified CFG" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_body_plan_cfg.mc", corpus_source);
     defer reporter.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -66,13 +66,9 @@ test "body plan derives omitted successor identities from verified CFG" {
     const function = for (module.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "branch_cleanup")) break candidate;
     } else return error.TestUnexpectedResult;
-    const successor_count = function.blocks[0].successors.len;
-    const original_typed_successors = function.blocks[0].typed_successors;
-    function.blocks[0].typed_successors = &.{};
-    defer function.blocks[0].typed_successors = original_typed_successors;
     var plan = try body_plan.build(std.testing.allocator, function);
     defer plan.deinit(std.testing.allocator);
-    try std.testing.expectEqual(successor_count, plan.blocks[0].successors.len);
+    try std.testing.expectEqual(function.blocks[0].successors.len, plan.blocks[0].successors.len);
 }
 
 const corpus_source =
