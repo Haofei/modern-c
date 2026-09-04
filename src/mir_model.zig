@@ -3433,9 +3433,7 @@ pub const BindThunkFact = struct {
 };
 
 pub const DropGlueFact = struct {
-    resource_type: []const u8,
     typed_resource_symbol_id: SymbolId = .invalid,
-    release_fn: []const u8,
     typed_release_symbol_id: SymbolId = .invalid,
     source: SourcePoint,
 };
@@ -3449,7 +3447,6 @@ pub const TypeOwnershipKind = enum {
 };
 
 pub const TypeOwnershipFact = struct {
-    type_name: []const u8,
     typed_type_symbol_id: SymbolId = .invalid,
     kind: TypeOwnershipKind,
     drop_glue_symbol_id: SymbolId = .invalid,

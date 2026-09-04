@@ -119,6 +119,16 @@ def main() -> int:
     if "source:" in model[start:end]:
         fail("src/mir_model.zig BindThunkFact duplicates source identity beside SpanId")
 
+    start = model.index("pub const DropGlueFact = struct {")
+    end = model.index("\n};", start)
+    if "resource_type:" in model[start:end] or "release_fn:" in model[start:end]:
+        fail("src/mir_model.zig DropGlueFact duplicates spelling beside SymbolId")
+
+    start = model.index("pub const TypeOwnershipFact = struct {")
+    end = model.index("\n};", start)
+    if "type_name:" in model[start:end]:
+        fail("src/mir_model.zig TypeOwnershipFact duplicates spelling beside SymbolId")
+
     start = model.index("pub const TrapEdge = struct {")
     end = model.index("\n};", start)
     trap_edge = model[start:end]
@@ -186,7 +196,7 @@ def main() -> int:
         "pub const TypeIdentity = mir_model.TypeIdentity;",
         "pub const TypeOwnershipFact = mir_model.TypeOwnershipFact;",
         "fn collectTypeOwnershipFacts(",
-        "fn dropGlueSymbolForType(drop_glue_facts: []const DropGlueFact, type_name: []const u8) SymbolId {",
+        "fn dropGlueSymbolForType(drop_glue_facts: []const DropGlueFact, resource_symbol_id: SymbolId) SymbolId {",
         "pub fn validateTypeOwnershipFactsForLowering(module: Module) error{InvalidMirTypeOwnershipFacts}!void {",
         "fn typeOwnershipSymbolIdentityValid(module: Module, fact: TypeOwnershipFact) bool {",
         "fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8) !SymbolId {",
@@ -325,7 +335,7 @@ def main() -> int:
         "try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[1].kind);",
         "try std.testing.expectEqual(@as(usize, 0), plain_function.ownership_events.len);",
         "try std.testing.expectEqual(mir.TypeOwnershipKind.affine, ticket.kind);",
-        "try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(symbol_drift));",
+        "try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateTypeOwnershipFactsForLowering(symbol_drift));",
         "try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);",
         "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
         "try std.testing.expect(read_fn.representation_facts[0].typed_span_id.eql(read_load_span_identity.id));",

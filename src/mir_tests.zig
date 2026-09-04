@@ -2420,7 +2420,9 @@ fn countOwnershipEventsByKind(function: mir.Function, kind: mir.OwnershipEventKi
 
 fn typeOwnershipByName(module: mir.Module, name: []const u8) ?mir.TypeOwnershipFact {
     for (module.type_ownership_facts) |fact| {
-        if (std.mem.eql(u8, fact.type_name, name)) return fact;
+        if (!fact.typed_type_symbol_id.isValid() or fact.typed_type_symbol_id.index() >= module.symbol_identities.len) continue;
+        const identity = module.symbol_identities[fact.typed_type_symbol_id.index()];
+        if (identity.id.eql(fact.typed_type_symbol_id) and std.mem.eql(u8, identity.spelling, name)) return fact;
     }
     return null;
 }
@@ -7936,16 +7938,12 @@ test "MIR records drop glue facts for auto-drop resources" {
     var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 2), module_mir.drop_glue_facts.len);
-    try std.testing.expectEqualStrings("Ticket", module_mir.drop_glue_facts[0].resource_type);
     try std.testing.expect(module_mir.drop_glue_facts[0].typed_resource_symbol_id.isValid());
     try std.testing.expectEqualStrings("Ticket", module_mir.symbol_identities[module_mir.drop_glue_facts[0].typed_resource_symbol_id.index()].spelling);
-    try std.testing.expectEqualStrings("close_ticket", module_mir.drop_glue_facts[0].release_fn);
     try std.testing.expect(module_mir.drop_glue_facts[0].typed_release_symbol_id.isValid());
     try std.testing.expectEqualStrings("close_ticket", module_mir.symbol_identities[module_mir.drop_glue_facts[0].typed_release_symbol_id.index()].spelling);
-    try std.testing.expectEqualStrings("Wrapper", module_mir.drop_glue_facts[1].resource_type);
     try std.testing.expect(module_mir.drop_glue_facts[1].typed_resource_symbol_id.isValid());
     try std.testing.expectEqualStrings("Wrapper", module_mir.symbol_identities[module_mir.drop_glue_facts[1].typed_resource_symbol_id.index()].spelling);
-    try std.testing.expectEqualStrings("close_wrapper", module_mir.drop_glue_facts[1].release_fn);
     try std.testing.expect(module_mir.drop_glue_facts[1].typed_release_symbol_id.isValid());
     try std.testing.expectEqualStrings("close_wrapper", module_mir.symbol_identities[module_mir.drop_glue_facts[1].typed_release_symbol_id.index()].spelling);
 
@@ -8029,7 +8027,10 @@ test "MIR type ownership fact admission rejects symbol and duplicate drift" {
     defer symbol_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), symbol_drift.type_ownership_facts.len);
     symbol_drift.type_ownership_facts[0].typed_type_symbol_id = .invalid;
-    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(symbol_drift));
+    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateTypeOwnershipFactsForLowering(symbol_drift));
+    // Cross-fact admission runs drop-glue consistency before the ownership
+    // table pass, so the broken resource-symbol join fails at that boundary.
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(symbol_drift));
 
     var drop_drift = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer drop_drift.deinit();
@@ -8070,7 +8071,7 @@ test "MIR drop glue fact admission rejects unknown and duplicate release facts" 
     var unknown = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer unknown.deinit();
     try std.testing.expectEqual(@as(usize, 1), unknown.drop_glue_facts.len);
-    unknown.drop_glue_facts[0].release_fn = "missing_close_guard";
+    unknown.drop_glue_facts[0].typed_release_symbol_id = mir.SymbolId.fromIndex(4096);
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(unknown));
 
     var release_drift = try mir.buildFromDecls(std.testing.allocator, parsed.decls());

@@ -1503,7 +1503,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             .no_lang_trap = false,
                             .irq_context = false,
                         };
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &symbol_ids, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -1783,7 +1783,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     checked.body_signature_type_ids = try body_types.finish(body);
                     var checked_body_signature_type_ids_unowned = true;
                     errdefer if (checked_body_signature_type_ids_unowned and checked.body_signature_type_ids.len != 0) allocator.free(checked.body_signature_type_ids);
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &symbol_ids, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -2896,9 +2896,7 @@ fn collectDropGlueFacts(
         const resource_type = ast_query.dropPointerReleaseParamTypeName(fn_decl) orelse continue;
         if (!ownership_facts.autoDropEligibleTypeName(resource_type, structs, aliases)) continue;
         try facts.append(allocator, .{
-            .resource_type = resource_type,
             .typed_resource_symbol_id = try internSymbolId(symbol_ids, resource_type),
-            .release_fn = fn_decl.name.text,
             .typed_release_symbol_id = try internSymbolId(symbol_ids, fn_decl.name.text),
             .source = .{
                 .line = fn_decl.name.span.line,
@@ -2941,11 +2939,11 @@ fn collectTypeOwnershipFacts(
             .affine
         else
             .copy;
+        const typed_type_symbol_id = try internSymbolId(symbol_ids, type_name);
         try facts.append(allocator, .{
-            .type_name = type_name,
-            .typed_type_symbol_id = try internSymbolId(symbol_ids, type_name),
+            .typed_type_symbol_id = typed_type_symbol_id,
             .kind = kind,
-            .drop_glue_symbol_id = dropGlueSymbolForType(drop_glue_facts, type_name),
+            .drop_glue_symbol_id = dropGlueSymbolForType(drop_glue_facts, typed_type_symbol_id),
             .thread_move = struct_decl.is_thread_move,
             .source = .{
                 .line = struct_decl.name.span.line,
@@ -2959,9 +2957,9 @@ fn collectTypeOwnershipFacts(
     return facts.toOwnedSlice(allocator);
 }
 
-fn dropGlueSymbolForType(drop_glue_facts: []const DropGlueFact, type_name: []const u8) SymbolId {
+fn dropGlueSymbolForType(drop_glue_facts: []const DropGlueFact, resource_symbol_id: SymbolId) SymbolId {
     for (drop_glue_facts) |fact| {
-        if (std.mem.eql(u8, fact.resource_type, type_name)) return fact.typed_release_symbol_id;
+        if (fact.typed_resource_symbol_id.eql(resource_symbol_id)) return fact.typed_release_symbol_id;
     }
     return .invalid;
 }
@@ -3111,18 +3109,21 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         );
     }
     for (module_mir.drop_glue_facts) |fact| {
+        const resource_type = moduleSymbolSpelling(module_mir, fact.typed_resource_symbol_id) orelse return error.InvalidMirDropGlueFacts;
+        const release_fn = moduleSymbolSpelling(module_mir, fact.typed_release_symbol_id) orelse return error.InvalidMirDropGlueFacts;
         try out.print(
             allocator,
             "mir drop_glue_fact resource_type={s} resource_symbol={} release_fn={s} release_symbol={} recorded=true line={} column={}\n",
-            .{ fact.resource_type, fact.typed_resource_symbol_id.index(), fact.release_fn, fact.typed_release_symbol_id.index(), fact.source.line, fact.source.column },
+            .{ resource_type, fact.typed_resource_symbol_id.index(), release_fn, fact.typed_release_symbol_id.index(), fact.source.line, fact.source.column },
         );
     }
     for (module_mir.type_ownership_facts) |fact| {
+        const type_name = moduleSymbolSpelling(module_mir, fact.typed_type_symbol_id) orelse return error.InvalidMirTypeOwnershipFacts;
         try out.print(
             allocator,
             "mir type_ownership type={s} symbol={} kind={s} drop_glue_symbol={} thread_move={} line={} column={}\n",
             .{
-                fact.type_name,
+                type_name,
                 fact.typed_type_symbol_id.index(),
                 @tagName(fact.kind),
                 if (fact.drop_glue_symbol_id.isValid()) fact.drop_glue_symbol_id.index() else std.math.maxInt(usize),
@@ -4607,31 +4608,29 @@ fn sameValueType(left: ValueType, right: ValueType) bool {
 
 pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlueFacts}!void {
     for (module.drop_glue_facts, 0..) |fact, index| {
-        if (fact.resource_type.len == 0 or fact.release_fn.len == 0) return error.InvalidMirDropGlueFacts;
         if (!dropGlueResourceSymbolIdentityValid(module, fact)) return error.InvalidMirDropGlueFacts;
         if (!dropGlueReleaseSymbolIdentityValid(module, fact)) return error.InvalidMirDropGlueFacts;
-        if (!moduleHasConcreteFunction(module, fact.release_fn)) return error.InvalidMirDropGlueFacts;
+        if (!moduleHasConcreteFunction(module, fact.typed_release_symbol_id)) return error.InvalidMirDropGlueFacts;
         if (!dropGlueFactHasMatchingTypeOwnershipFact(module, fact)) return error.InvalidMirDropGlueFacts;
         for (module.drop_glue_facts[0..index]) |previous| {
-            if (std.mem.eql(u8, previous.resource_type, fact.resource_type)) return error.InvalidMirDropGlueFacts;
-            if (std.mem.eql(u8, previous.release_fn, fact.release_fn)) return error.InvalidMirDropGlueFacts;
+            if (previous.typed_resource_symbol_id.eql(fact.typed_resource_symbol_id)) return error.InvalidMirDropGlueFacts;
+            if (previous.typed_release_symbol_id.eql(fact.typed_release_symbol_id)) return error.InvalidMirDropGlueFacts;
         }
     }
 }
 
 pub fn validateTypeOwnershipFactsForLowering(module: Module) error{InvalidMirTypeOwnershipFacts}!void {
     for (module.type_ownership_facts, 0..) |fact, index| {
-        if (fact.type_name.len == 0) return error.InvalidMirTypeOwnershipFacts;
         if (!typeOwnershipSymbolIdentityValid(module, fact)) return error.InvalidMirTypeOwnershipFacts;
         if (fact.drop_glue_symbol_id.isValid() and !moduleSymbolIdentityValid(module, fact.drop_glue_symbol_id)) return error.InvalidMirTypeOwnershipFacts;
         if (fact.drop_glue_symbol_id.isValid()) {
             if (fact.kind != .affine) return error.InvalidMirTypeOwnershipFacts;
             if (!typeOwnershipFactHasMatchingDropGlueFact(module, fact)) return error.InvalidMirTypeOwnershipFacts;
-        } else if (dropGlueFactForTypeName(module, fact.type_name) != null) {
+        } else if (dropGlueFactForResourceSymbol(module, fact.typed_type_symbol_id) != null) {
             return error.InvalidMirTypeOwnershipFacts;
         }
         for (module.type_ownership_facts[0..index]) |previous| {
-            if (std.mem.eql(u8, previous.type_name, fact.type_name)) return error.InvalidMirTypeOwnershipFacts;
+            if (previous.typed_type_symbol_id.eql(fact.typed_type_symbol_id)) return error.InvalidMirTypeOwnershipFacts;
         }
     }
 }
@@ -5178,31 +5177,28 @@ fn autoDropGlueSymbolForResourceSymbol(module: Module, resource_symbol_id: Symbo
     return null;
 }
 
-fn dropGlueFactForTypeName(module: Module, type_name: []const u8) ?DropGlueFact {
+fn dropGlueFactForResourceSymbol(module: Module, resource_symbol_id: SymbolId) ?DropGlueFact {
     for (module.drop_glue_facts) |fact| {
-        if (std.mem.eql(u8, fact.resource_type, type_name)) return fact;
+        if (fact.typed_resource_symbol_id.eql(resource_symbol_id)) return fact;
     }
     return null;
 }
 
 fn dropGlueFactHasMatchingTypeOwnershipFact(module: Module, fact: DropGlueFact) bool {
     for (module.type_ownership_facts) |ownership_fact| {
-        if (!std.mem.eql(u8, ownership_fact.type_name, fact.resource_type)) continue;
+        if (!ownership_fact.typed_type_symbol_id.eql(fact.typed_resource_symbol_id)) continue;
         return ownership_fact.kind == .affine and ownership_fact.drop_glue_symbol_id.eql(fact.typed_release_symbol_id);
     }
     return false;
 }
 
 fn typeOwnershipFactHasMatchingDropGlueFact(module: Module, fact: TypeOwnershipFact) bool {
-    const drop_glue_fact = dropGlueFactForTypeName(module, fact.type_name) orelse return false;
+    const drop_glue_fact = dropGlueFactForResourceSymbol(module, fact.typed_type_symbol_id) orelse return false;
     return drop_glue_fact.typed_release_symbol_id.eql(fact.drop_glue_symbol_id);
 }
 
 fn typeOwnershipSymbolIdentityValid(module: Module, fact: TypeOwnershipFact) bool {
-    if (!fact.typed_type_symbol_id.isValid()) return false;
-    const index = fact.typed_type_symbol_id.index();
-    if (index >= module.symbol_identities.len) return false;
-    return std.mem.eql(u8, module.symbol_identities[index].spelling, fact.type_name);
+    return moduleSymbolIdentityValid(module, fact.typed_type_symbol_id);
 }
 
 fn moduleSymbolIdentityValid(module: Module, symbol_id: SymbolId) bool {
@@ -5210,25 +5206,24 @@ fn moduleSymbolIdentityValid(module: Module, symbol_id: SymbolId) bool {
 }
 
 fn dropGlueResourceSymbolIdentityValid(module: Module, fact: DropGlueFact) bool {
-    if (!fact.typed_resource_symbol_id.isValid()) return false;
-    const index = fact.typed_resource_symbol_id.index();
-    if (index >= module.symbol_identities.len) return false;
-    return std.mem.eql(u8, module.symbol_identities[index].spelling, fact.resource_type);
+    return moduleSymbolIdentityValid(module, fact.typed_resource_symbol_id);
 }
 
 fn dropGlueReleaseSymbolIdentityValid(module: Module, fact: DropGlueFact) bool {
-    if (!fact.typed_release_symbol_id.isValid()) return false;
-    const index = fact.typed_release_symbol_id.index();
-    if (index >= module.symbol_identities.len) return false;
-    return std.mem.eql(u8, module.symbol_identities[index].spelling, fact.release_fn);
+    return moduleSymbolIdentityValid(module, fact.typed_release_symbol_id);
 }
 
-fn moduleHasConcreteFunction(module: Module, name: []const u8) bool {
+fn moduleHasConcreteFunction(module: Module, symbol_id: SymbolId) bool {
     for (module.functions) |function| {
-        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (!function.typed_symbol_id.eql(symbol_id)) continue;
         return !function.is_extern;
     }
     return false;
+}
+
+fn moduleSymbolSpelling(module: Module, symbol_id: SymbolId) ?[]const u8 {
+    if (!moduleSymbolIdentityValid(module, symbol_id)) return null;
+    return module.symbol_identities[symbol_id.index()].spelling;
 }
 
 pub const LoweringAdmissionError = error{
@@ -8216,6 +8211,7 @@ const FunctionBuilder = struct {
     naked: bool = false,
     drop_glue_facts: []const DropGlueFact,
     type_ownership_facts: []const TypeOwnershipFact,
+    module_symbol_ids: *const std.StringHashMap(SymbolId),
     summaries: *const std.StringHashMap(FunctionSummary),
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
@@ -8342,7 +8338,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, module_symbol_ids: *const std.StringHashMap(SymbolId), summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -8364,6 +8360,7 @@ const FunctionBuilder = struct {
             .active_unsafe = hasAttr(attrs, "naked"),
             .drop_glue_facts = drop_glue_facts,
             .type_ownership_facts = type_ownership_facts,
+            .module_symbol_ids = module_symbol_ids,
             .summaries = summaries,
             .enums = enums,
             .structs = structs,
@@ -8527,7 +8524,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, module_symbol_ids: *const std.StringHashMap(SymbolId), summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), signature_types: *SignatureTypeTableBuilder, globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), aggregate_return_pointer_facts: []const AggregateReturnPointerFact) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -8545,6 +8542,7 @@ const FunctionBuilder = struct {
             .irq_context = false,
             .drop_glue_facts = drop_glue_facts,
             .type_ownership_facts = type_ownership_facts,
+            .module_symbol_ids = module_symbol_ids,
             .summaries = summaries,
             .enums = enums,
             .structs = structs,
@@ -18136,8 +18134,13 @@ const FunctionBuilder = struct {
     }
 
     fn dropGlueIdentityForTypeName(self: *FunctionBuilder, type_name: []const u8) ?DiscardDropGlueIdentity {
+        const resource_symbol_id = self.module_symbol_ids.get(type_name) orelse return null;
+        return self.dropGlueIdentityForResourceSymbol(resource_symbol_id);
+    }
+
+    fn dropGlueIdentityForResourceSymbol(self: *FunctionBuilder, resource_symbol_id: SymbolId) ?DiscardDropGlueIdentity {
         for (self.drop_glue_facts) |fact| {
-            if (std.mem.eql(u8, fact.resource_type, type_name)) return .{
+            if (fact.typed_resource_symbol_id.eql(resource_symbol_id)) return .{
                 .resource_symbol_id = fact.typed_resource_symbol_id,
                 .release_symbol_id = fact.typed_release_symbol_id,
             };
@@ -18146,8 +18149,9 @@ const FunctionBuilder = struct {
     }
 
     fn dropGlueIdentityForReleaseFunction(self: *FunctionBuilder, release_fn: []const u8) ?DiscardDropGlueIdentity {
+        const release_symbol_id = self.module_symbol_ids.get(release_fn) orelse return null;
         for (self.drop_glue_facts) |fact| {
-            if (std.mem.eql(u8, fact.release_fn, release_fn)) return .{
+            if (fact.typed_release_symbol_id.eql(release_symbol_id)) return .{
                 .resource_symbol_id = fact.typed_resource_symbol_id,
                 .release_symbol_id = fact.typed_release_symbol_id,
             };
@@ -18162,8 +18166,9 @@ const FunctionBuilder = struct {
     }
 
     fn typeOwnershipSymbolForTypeName(self: *FunctionBuilder, type_name: []const u8) SymbolId {
+        const type_symbol_id = self.module_symbol_ids.get(type_name) orelse return .invalid;
         for (self.type_ownership_facts) |fact| {
-            if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
+            if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
             if (fact.kind == .copy) return .invalid;
             return fact.typed_type_symbol_id;
         }

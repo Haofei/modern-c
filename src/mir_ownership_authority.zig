@@ -26,16 +26,18 @@ pub const OwnershipCleanupActionRef = struct {
 };
 
 pub fn autoDropEligibleTypeName(module: *const mir.Module, type_name: []const u8) bool {
+    const type_symbol_id = moduleSymbolIdForSpelling(module, type_name) orelse return false;
     for (module.type_ownership_facts) |fact| {
-        if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
+        if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
         return fact.kind == .affine and fact.drop_glue_symbol_id.isValid();
     }
     return false;
 }
 
 pub fn autoDropEligibleTypeNameForDropGlue(module: *const mir.Module, type_name: []const u8, release_symbol_id: mir.SymbolId) bool {
+    const type_symbol_id = moduleSymbolIdForSpelling(module, type_name) orelse return false;
     for (module.type_ownership_facts) |fact| {
-        if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
+        if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
         return fact.kind == .affine and fact.drop_glue_symbol_id.isValid() and fact.drop_glue_symbol_id.eql(release_symbol_id);
     }
     return false;
@@ -63,8 +65,9 @@ pub fn autoDropLocalCleanupFromActionRef(
     if (!simpleOwnershipRootMatches(entry.place, ref.root_value_id)) return null;
     if (!entry.place.root_type_symbol_id.eql(ref.resource_type_symbol_id)) return null;
     if (!entry.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) return null;
+    const fn_name = moduleSymbolSpelling(module, drop_glue.typed_release_symbol_id) orelse return null;
     return .{
-        .fn_name = drop_glue.release_fn,
+        .fn_name = fn_name,
         .local_name = ref.local_name,
         .span = spanFromSourcePoint(ref.source),
         .cleanup_action_index = ref.cleanup_action_index,
@@ -99,8 +102,9 @@ pub fn explicitDropLocalCleanupFromActionRef(
     if (!sourceMatches(entry.source, ref.source)) return null;
     if (!entry.place.root_type_symbol_id.eql(ref.resource_type_symbol_id)) return null;
     if (!entry.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) return null;
+    const fn_name = moduleSymbolSpelling(module, drop_glue.typed_release_symbol_id) orelse return null;
     return .{
-        .fn_name = drop_glue.release_fn,
+        .fn_name = fn_name,
         .local_name = ref.local_name,
         .span = spanFromSourcePoint(ref.source),
         .cleanup_action_index = ref.cleanup_action_index,
@@ -135,11 +139,18 @@ fn dropGlueFactForSymbols(module: *const mir.Module, resource_symbol_id: mir.Sym
     return null;
 }
 
-fn dropGlueFactForReleaseFunction(module: *const mir.Module, drop_fn: []const u8) ?mir.DropGlueFact {
-    for (module.drop_glue_facts) |fact| {
-        if (std.mem.eql(u8, fact.release_fn, drop_fn)) return fact;
+fn moduleSymbolIdForSpelling(module: *const mir.Module, spelling: []const u8) ?mir.SymbolId {
+    for (module.symbol_identities) |identity| {
+        if (std.mem.eql(u8, identity.spelling, spelling)) return identity.id;
     }
     return null;
+}
+
+fn moduleSymbolSpelling(module: *const mir.Module, symbol_id: mir.SymbolId) ?[]const u8 {
+    if (!symbol_id.isValid() or symbol_id.index() >= module.symbol_identities.len) return null;
+    const identity = module.symbol_identities[symbol_id.index()];
+    if (!identity.id.eql(symbol_id)) return null;
+    return identity.spelling;
 }
 
 fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {
