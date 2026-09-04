@@ -1239,7 +1239,6 @@ pub const ExecutableExpression = struct {
     /// Statement whose evaluation owns this operation. ExprIds are dense and
     /// operands must precede their consumer within this statement.
     owner_statement: InstId,
-    source: SourcePoint,
     span_id: SpanId = .invalid,
     result_ty: ValueType,
     type_id: TypeId = .invalid,

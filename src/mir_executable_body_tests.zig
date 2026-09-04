@@ -39,7 +39,7 @@ test "owned executable body is complete for scalar locals calls and returns" {
     }
 }
 
-test "executable statements and terminators resolve source only through SpanId" {
+test "executable body nodes resolve source only through SpanId" {
     const source =
         \\fn identity(value: u32) -> u32 { return value; }
     ;
@@ -56,6 +56,11 @@ test "executable statements and terminators resolve source only through SpanId" 
 
     const function = &module.functions[0];
     try executable.verify(function);
+
+    const saved_expression_span = function.executable_body.expressions[0].span_id;
+    function.executable_body.expressions[0].span_id = .invalid;
+    try std.testing.expectError(error.InvalidSpanReference, executable.verify(function));
+    function.executable_body.expressions[0].span_id = saved_expression_span;
 
     const saved_statement_span = function.executable_body.statements[0].span_id;
     function.executable_body.statements[0].span_id = .invalid;

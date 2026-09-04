@@ -35,7 +35,7 @@ pub fn explicitUnsupported(function: *const mir.Function) ?ExplicitUnsupported {
     return switch (body.incomplete_reason) {
         .unsupported_targetless_array_literal => blk: {
             for (body.expressions) |expression_value| if (expression_value.operation == .unsupported)
-                break :blk .{ .kind = .array, .source = expression_value.source };
+                break :blk .{ .kind = .array, .source = sourceForSpan(function, expression_value.span_id) orelse return null };
             break :blk null;
         },
         .unsupported_opaque_asm => blk: {
@@ -191,7 +191,7 @@ pub fn verify(function: *const mir.Function) !void {
         if (!value.owner_statement.isValid() or value.owner_statement.index() >= body.statements.len) return error.InvalidStatementReference;
         const owner = body.statements[value.owner_statement.index()];
         if (!owner.id.eql(value.owner_statement) or !owner.block_id.eql(value.block_id)) return error.InvalidStatementReference;
-        try verifySpan(function, value.span_id, value.source);
+        try verifySpanId(function, value.span_id);
         try verifyType(function, value.type_id, value.result_ty, body.complete);
         try verifyExpression(function, value);
     }

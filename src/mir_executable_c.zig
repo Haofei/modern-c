@@ -4409,7 +4409,7 @@ fn prepareExpressionSet(
         if (root) |selected| if (!expressionDependsOn(body, selected, expression.id, 0)) continue;
         if (expressionDeferredByLazyLogical(body, statement.id, root, expression.id)) continue;
         if (lazyLogical(expression)) |logical| {
-            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
             try emitExpression(allocator, out, body, logical.left, 0);
@@ -4440,7 +4440,7 @@ fn prepareExpressionSet(
         if (functionSymbolExpressionSupported(body, expression) or
             globalAggregateIndexBaseSupported(body, expression)) continue;
         if (representationGuard(expression)) |guard| {
-            try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, guard.span_id);
             try emitRepresentationGuard(allocator, out, body, guard, indent);
         }
         if (tryUnwrapTrapEdge(body, expression) != null) {
@@ -4449,7 +4449,7 @@ fn prepareExpressionSet(
                 else => return error.InvalidExpression,
             };
             const operand_expression = expressionById(body, operand) orelse return error.InvalidExpression;
-            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (");
             try emitExpression(allocator, out, body, operand, 0);
@@ -4465,7 +4465,7 @@ fn prepareExpressionSet(
             const operation = expression.operation.try_propagate;
             const operand = operation.operand;
             if (!tryPropagateSupported(body, expression, operand)) return error.InvalidExpression;
-            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (!");
             try emitExpression(allocator, out, body, operand, 0);
@@ -4481,7 +4481,7 @@ fn prepareExpressionSet(
         if (expression.operation == .try_map_error) {
             const operation = expression.operation.try_map_error;
             if (!tryMapErrorSupported(body, expression, operation)) return error.InvalidExpression;
-            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
             try writeIndent(allocator, out, indent);
             try out.appendSlice(allocator, "if (!");
             try emitExpression(allocator, out, body, operation.operand, 0);
@@ -4510,7 +4510,7 @@ fn prepareExpressionSet(
         }
         switch (expression.operation) {
             .binary => |binary| if (binary.arithmetic == .unchecked) {
-                try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+                try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
                 try writeIndent(allocator, out, indent);
                 try out.print(allocator, "/* MC_MIR_RANGE no_overflow region={} op={s} */\n", .{
                     binary.contract_region_id orelse return error.InvalidExpression,
@@ -4523,13 +4523,13 @@ fn prepareExpressionSet(
                 });
             },
             .mmio_write => |write| if (write.ordering == .release) {
-                try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+                try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
                 try writeIndent(allocator, out, indent);
                 try out.appendSlice(allocator, "mc_barrier_release_before();\n");
             },
             else => {},
         }
-        try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+        try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
         try writeIndent(allocator, out, indent);
         if (expressionNeedsTemporary(expression)) {
             if (isSliceType(expression.result_ty) or expression.result_ty == .value) {
@@ -4541,7 +4541,7 @@ fn prepareExpressionSet(
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
         if (mmioMapTrapEdge(body, expression) != null) {
-            try writeSourceLineDirective(allocator, out, options.source_path, expression.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, expression.span_id);
             try writeIndent(allocator, out, indent);
             try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_NullUnwrap();\n", .{expression.id.raw});
         }
@@ -4553,7 +4553,7 @@ fn prepareExpressionSet(
             else => {},
         }
         if (resultRepresentationGuard(expression)) |guard| {
-            try writeSourceLineDirective(allocator, out, options.source_path, guard.source);
+            try writeSourceLineDirectiveForSpan(allocator, out, options, guard.span_id);
             try writeIndent(allocator, out, indent);
             switch (guard.kind) {
                 .nonnull_pointer => try out.print(allocator, "if (mc_exec_tmp_{d} == NULL) mc_trap_InvalidRepresentation();\n", .{expression.id.raw}),
@@ -4674,32 +4674,32 @@ fn placeDependsOn(body: *const mir.ExecutableBody, id: mir.PlaceId, candidate: m
 
 const RepresentationGuard = struct {
     place: mir.PlaceId,
-    source: mir.SourcePoint,
+    span_id: mir.SpanId,
 };
 
 fn representationGuard(expression: mir.ExecutableExpression) ?RepresentationGuard {
     return switch (expression.operation) {
-        .load => |load| if (load.representation_span_id.isValid()) .{ .place = load.place, .source = expression.source } else null,
-        .atomic_load => |load| if (load.representation_span_id.isValid()) .{ .place = load.place, .source = expression.source } else null,
-        .atomic_update => |update| if (update.representation_span_id.isValid()) .{ .place = update.place, .source = expression.source } else null,
-        .address_of => |address| if (address.representation_span_id.isValid()) .{ .place = address.place, .source = expression.source } else null,
-        .dyn_call => |call| if (call.representation_span_id.isValid()) .{ .place = call.receiver, .source = expression.source } else null,
+        .load => |load| if (load.representation_span_id.isValid()) .{ .place = load.place, .span_id = expression.span_id } else null,
+        .atomic_load => |load| if (load.representation_span_id.isValid()) .{ .place = load.place, .span_id = expression.span_id } else null,
+        .atomic_update => |update| if (update.representation_span_id.isValid()) .{ .place = update.place, .span_id = expression.span_id } else null,
+        .address_of => |address| if (address.representation_span_id.isValid()) .{ .place = address.place, .span_id = expression.span_id } else null,
+        .dyn_call => |call| if (call.representation_span_id.isValid()) .{ .place = call.receiver, .span_id = expression.span_id } else null,
         else => null,
     };
 }
 
 const ResultRepresentationGuard = struct {
-    source: mir.SourcePoint,
+    span_id: mir.SpanId,
     kind: mir.ExecutableRepresentationCheckKind,
 };
 
 fn resultRepresentationGuard(expression: mir.ExecutableExpression) ?ResultRepresentationGuard {
     return switch (expression.operation) {
         .builtin_call => |call| if (call.kind == .raw_ptr and call.representation_span_id.isValid())
-            .{ .source = expression.source, .kind = .nonnull_pointer }
+            .{ .span_id = expression.span_id, .kind = .nonnull_pointer }
         else
             null,
-        .representation_check => |check| .{ .source = expression.source, .kind = check.kind },
+        .representation_check => |check| .{ .span_id = expression.span_id, .kind = check.kind },
         else => null,
     };
 }
@@ -4742,7 +4742,7 @@ fn emitStatementRepresentationGuard(
     guard: StatementRepresentationGuard,
     indent: usize,
 ) (RenderError || std.mem.Allocator.Error)!void {
-    try emitRepresentationGuard(allocator, out, body, .{ .place = guard.place, .source = .{ .line = 0, .column = 0 } }, indent);
+    try emitRepresentationGuard(allocator, out, body, .{ .place = guard.place, .span_id = .invalid }, indent);
 }
 
 fn writeSourceLineDirective(
@@ -5683,10 +5683,10 @@ test "executable C renderer emits typed CFG labels and branches" {
     const statement_false_return = mir.InstId.fromIndex(3);
     var locals = [_]mir.ExecutableLocalIdentity{ .{ .id = local_flag, .spelling = "flag" }, .{ .id = local_x, .spelling = "x" } };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = expr_flag, .block_id = block_entry, .owner_statement = statement_guard, .source = .{ .line = 1, .column = 1 }, .result_ty = .bool, .operation = .{ .local = local_flag } },
-        .{ .id = expr_one, .block_id = block_true, .owner_statement = statement_true_local, .source = .{ .line = 2, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
-        .{ .id = expr_two, .block_id = block_false, .owner_statement = statement_false_return, .source = .{ .line = 3, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 2 } } },
-        .{ .id = expr_x, .block_id = block_true, .owner_statement = statement_true_return, .source = .{ .line = 4, .column = 1 }, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
+        .{ .id = expr_flag, .block_id = block_entry, .owner_statement = statement_guard, .result_ty = .bool, .operation = .{ .local = local_flag } },
+        .{ .id = expr_one, .block_id = block_true, .owner_statement = statement_true_local, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = expr_two, .block_id = block_false, .owner_statement = statement_false_return, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = expr_x, .block_id = block_true, .owner_statement = statement_true_return, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
     };
     var statements = [_]mir.ExecutableStatement{
         .{ .id = statement_guard, .block_id = block_entry, .operation = .{ .guard = .{ .kind = .if_, .condition = expr_flag } } },
@@ -5728,7 +5728,7 @@ test "executable C renderer emits typed CFG labels and branches" {
     , output.items);
 }
 
-test "executable C renderer resolves statement and terminator lines through SpanId" {
+test "executable C renderer resolves body lines through SpanId" {
     const span_id = mir.SpanId.fromIndex(0);
     const spans = [_]mir.SpanIdentity{.{
         .id = span_id,
@@ -5738,7 +5738,15 @@ test "executable C renderer resolves statement and terminator lines through Span
         .id = mir.InstId.fromIndex(0),
         .block_id = mir.BlockId.fromIndex(0),
         .span_id = span_id,
-        .operation = .{ .return_ = null },
+        .operation = .{ .return_ = mir.ExprId.fromIndex(0) },
+    }};
+    var expressions = [_]mir.ExecutableExpression{.{
+        .id = mir.ExprId.fromIndex(0),
+        .block_id = mir.BlockId.fromIndex(0),
+        .owner_statement = mir.InstId.fromIndex(0),
+        .span_id = span_id,
+        .result_ty = .{ .integer = "u32" },
+        .operation = .{ .literal = .{ .integer = 7 } },
     }};
     var terminators = [_]mir.ExecutableTerminator{.{
         .block_id = mir.BlockId.fromIndex(0),
@@ -5746,6 +5754,7 @@ test "executable C renderer resolves statement and terminator lines through Span
         .operation = .return_,
     }};
     const body: mir.ExecutableBody = .{
+        .expressions = &expressions,
         .statements = &statements,
         .terminators = &terminators,
     };
@@ -5779,9 +5788,6 @@ test "executable C renderer stages call arguments left to right" {
     const combined = mir.ExprId.fromIndex(2);
     const entry = mir.BlockId.fromIndex(0);
     const return_statement = mir.InstId.fromIndex(0);
-    const source_first: mir.SourcePoint = .{ .line = 1, .column = 1 };
-    const source_second: mir.SourcePoint = .{ .line = 1, .column = 2 };
-    const source_combined: mir.SourcePoint = .{ .line = 1, .column = 3 };
     var symbols = [_]mir.SymbolIdentity{
         .{ .id = next_symbol, .spelling = "next" },
         .{ .id = combine_symbol, .spelling = "combine" },
@@ -5792,9 +5798,9 @@ test "executable C renderer stages call arguments left to right" {
     combine_call.arguments[0] = first;
     combine_call.arguments[1] = second;
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = first, .block_id = entry, .owner_statement = return_statement, .source = source_first, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = first_call } },
-        .{ .id = second, .block_id = entry, .owner_statement = return_statement, .source = source_second, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = second_call } },
-        .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .source = source_combined, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
+        .{ .id = first, .block_id = entry, .owner_statement = return_statement, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = first_call } },
+        .{ .id = second, .block_id = entry, .owner_statement = return_statement, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = second_call } },
+        .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
     };
     var statements = [_]mir.ExecutableStatement{
         .{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = combined } },
@@ -5825,7 +5831,6 @@ test "executable C renderer snapshots reads before a later effect" {
     const combined = mir.ExprId.fromIndex(2);
     const entry = mir.BlockId.fromIndex(0);
     const return_statement = mir.InstId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local_x, .spelling = "x" }};
     var symbols = [_]mir.SymbolIdentity{
         .{ .id = mutate_symbol, .spelling = "mutate_x" },
@@ -5836,9 +5841,9 @@ test "executable C renderer snapshots reads before a later effect" {
     combine_call.arguments[0] = read_x;
     combine_call.arguments[1] = mutate;
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = read_x, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
-        .{ .id = mutate, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = mutate_call } },
-        .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
+        .{ .id = read_x, .block_id = entry, .owner_statement = return_statement, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = local_x } },
+        .{ .id = mutate, .block_id = entry, .owner_statement = return_statement, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = mutate_call } },
+        .{ .id = combined, .block_id = entry, .owner_statement = return_statement, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = combine_call } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = return_statement, .block_id = entry, .operation = .{ .return_ = combined } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -5866,11 +5871,10 @@ test "executable C renderer rejects implicit CFG and emits short circuit effects
     const lhs = mir.ExprId.fromIndex(0);
     const rhs = mir.ExprId.fromIndex(1);
     const result = mir.ExprId.fromIndex(2);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = lhs, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = false } } },
-        .{ .id = rhs, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = true } } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = lhs, .right = rhs } } },
+        .{ .id = lhs, .block_id = entry, .owner_statement = statement, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = false } } },
+        .{ .id = rhs, .block_id = entry, .owner_statement = statement, .result_ty = .bool, .operation = .{ .literal = .{ .boolean = true } } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = lhs, .right = rhs } } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -5901,12 +5905,10 @@ test "executable C renderer admits assert only with its exact statement trap edg
     const trap = mir.BlockId.fromIndex(1);
     const statement = mir.InstId.fromIndex(0);
     const condition = mir.ExprId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     var expressions = [_]mir.ExecutableExpression{.{
         .id = condition,
         .block_id = entry,
         .owner_statement = statement,
-        .source = source,
         .result_ty = .bool,
         .operation = .{ .literal = .{ .boolean = false } },
     }};
@@ -5973,14 +5975,13 @@ test "executable C renderer admits checked arithmetic with exact overflow edges"
     const add = mir.ExprId.fromIndex(2);
     const sub = mir.ExprId.fromIndex(3);
     const mul = mir.ExprId.fromIndex(4);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = one, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 1 } } },
-        .{ .id = two, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
-        .{ .id = add, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = one, .right = two, .arithmetic = .checked } } },
-        .{ .id = sub, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .sub, .left = add, .right = one, .arithmetic = .checked } } },
-        .{ .id = mul, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .mul, .left = sub, .right = two, .arithmetic = .checked } } },
+        .{ .id = one, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = two, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = add, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = one, .right = two, .arithmetic = .checked } } },
+        .{ .id = sub, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .sub, .left = add, .right = one, .arithmetic = .checked } } },
+        .{ .id = mul, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .mul, .left = sub, .right = two, .arithmetic = .checked } } },
     };
     var edges = [_]mir.ExecutableTrapEdge{
         .{ .owner = .{ .expression = add }, .from_block = entry, .trap_block = add_trap, .kind = .IntegerOverflow, .source = .checked_arithmetic },
@@ -6019,12 +6020,11 @@ test "executable C renderer rejects checked arithmetic edge drift" {
     const left = mir.ExprId.fromIndex(0);
     const right = mir.ExprId.fromIndex(1);
     const result = mir.ExprId.fromIndex(2);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 1 } } },
-        .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = left, .right = right, .arithmetic = .checked } } },
+        .{ .id = left, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = right, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .binary = .{ .op = .add, .left = left, .right = right, .arithmetic = .checked } } },
     };
     var edge = [_]mir.ExecutableTrapEdge{.{ .owner = .{ .expression = result }, .from_block = entry, .trap_block = trap, .kind = .IntegerOverflow, .source = .checked_arithmetic }};
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
@@ -6067,7 +6067,6 @@ test "executable C renderer emits plain global load and preserves plain local st
     const loaded = mir.ExprId.fromIndex(1);
     const store_statement = mir.InstId.fromIndex(0);
     const return_statement = mir.InstId.fromIndex(1);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = input_local, .ty = u32_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{
@@ -6080,8 +6079,8 @@ test "executable C renderer emits plain global load and preserves plain local st
         .{ .id = local_place, .root = .{ .local = target_local } },
     };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = value, .block_id = entry, .owner_statement = store_statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = input_local } },
-        .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = u32_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .plain, .alignment = 4 } } } },
+        .{ .id = value, .block_id = entry, .owner_statement = store_statement, .result_ty = u32_ty, .operation = .{ .local = input_local } },
+        .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .result_ty = u32_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .plain, .alignment = 4 } } } },
     };
     var statements = [_]mir.ExecutableStatement{
         .{ .id = store_statement, .block_id = entry, .operation = .{ .store = .{ .place = local_place, .value = value, .ty = u32_ty, .access = .{ .kind = .plain, .alignment = 4 } } } },
@@ -6115,15 +6114,14 @@ test "executable C renderer emits exact race-unordered scalar helpers" {
     const loaded = mir.ExprId.fromIndex(1);
     const store_statement = mir.InstId.fromIndex(0);
     const return_statement = mir.InstId.fromIndex(1);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = input_local, .spelling = "input" }};
     var parameters = [_]mir.ExecutableParameter{.{ .local = input_local, .ty = f64_ty }};
     var symbols = [_]mir.SymbolIdentity{.{ .id = global_symbol, .spelling = "shared_value", .kind = .global, .mutable = true }};
     var places = [_]mir.ExecutablePlace{.{ .id = global_place, .root = .{ .symbol = global_symbol } }};
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = value, .block_id = entry, .owner_statement = store_statement, .source = source, .result_ty = f64_ty, .operation = .{ .local = input_local } },
-        .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .source = source, .result_ty = f64_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
+        .{ .id = value, .block_id = entry, .owner_statement = store_statement, .result_ty = f64_ty, .operation = .{ .local = input_local } },
+        .{ .id = loaded, .block_id = entry, .owner_statement = return_statement, .result_ty = f64_ty, .operation = .{ .load = .{ .place = global_place, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
     };
     var statements = [_]mir.ExecutableStatement{
         .{ .id = store_statement, .block_id = entry, .operation = .{ .store = .{ .place = global_place, .value = value, .ty = f64_ty, .access = .{ .kind = .race_unordered, .alignment = 8 } } } },
@@ -6185,7 +6183,6 @@ test "executable C renderer emits classified restricted casts in value order" {
     const signed_cast = mir.ExprId.fromIndex(5);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u8_ty: mir.ValueType = .{ .integer = "u8" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const i8_ty: mir.ValueType = .{ .integer = "i8" };
@@ -6201,12 +6198,12 @@ test "executable C renderer emits classified restricted casts in value order" {
         .{ .id = signed_local, .spelling = "small_signed" },
     };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = identity_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = identity_local } },
-        .{ .id = identity_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = identity_value, .kind = .identity } } },
-        .{ .id = unsigned_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = unsigned_local } },
-        .{ .id = unsigned_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = unsigned_value, .kind = .unsigned_resize } } },
-        .{ .id = signed_value, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = i8_ty, .operation = .{ .local = signed_local } },
-        .{ .id = signed_cast, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = i64_ty, .operation = .{ .cast = .{ .operand = signed_value, .kind = .signed_widen } } },
+        .{ .id = identity_value, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .local = identity_local } },
+        .{ .id = identity_cast, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = identity_value, .kind = .identity } } },
+        .{ .id = unsigned_value, .block_id = entry, .owner_statement = statement, .result_ty = u8_ty, .operation = .{ .local = unsigned_local } },
+        .{ .id = unsigned_cast, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = unsigned_value, .kind = .unsigned_resize } } },
+        .{ .id = signed_value, .block_id = entry, .owner_statement = statement, .result_ty = i8_ty, .operation = .{ .local = signed_local } },
+        .{ .id = signed_cast, .block_id = entry, .owner_statement = statement, .result_ty = i64_ty, .operation = .{ .cast = .{ .operand = signed_value, .kind = .signed_widen } } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = signed_cast } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6238,14 +6235,13 @@ test "executable C renderer rejects restricted cast fact drift" {
     const result = mir.ExprId.fromIndex(1);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u8_ty: mir.ValueType = .{ .integer = "u8" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = local, .spelling = "value" }};
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = operand, .kind = .unsigned_resize } } },
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .result_ty = u8_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .cast = .{ .operand = operand, .kind = .unsigned_resize } } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6284,7 +6280,6 @@ test "executable C renderer emits selected typed builtins in operand order" {
     const conversion_result = mir.ExprId.fromIndex(6);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u8_ty: mir.ValueType = .{ .integer = "u8" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const u64_ty: mir.ValueType = .{ .integer = "u64" };
@@ -6309,13 +6304,13 @@ test "executable C renderer emits selected typed builtins in operand order" {
     var conversion_call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .argument_count = 1 };
     conversion_call.arguments[0] = conversion_operand;
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = phys_operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u64_ty, .operation = .{ .local = phys_local } },
-        .{ .id = phys_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = paddr_ty, .operation = .{ .builtin_call = phys_call } },
-        .{ .id = wrap_left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = wrap_left_local } },
-        .{ .id = wrap_right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .local = wrap_right_local } },
-        .{ .id = wrap_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = wrapping_call } },
-        .{ .id = conversion_operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = conversion_local } },
-        .{ .id = conversion_result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = conversion_call } },
+        .{ .id = phys_operand, .block_id = entry, .owner_statement = statement, .result_ty = u64_ty, .operation = .{ .local = phys_local } },
+        .{ .id = phys_result, .block_id = entry, .owner_statement = statement, .result_ty = paddr_ty, .operation = .{ .builtin_call = phys_call } },
+        .{ .id = wrap_left, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .local = wrap_left_local } },
+        .{ .id = wrap_right, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .local = wrap_right_local } },
+        .{ .id = wrap_result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .builtin_call = wrapping_call } },
+        .{ .id = conversion_operand, .block_id = entry, .owner_statement = statement, .result_ty = u8_ty, .operation = .{ .local = conversion_local } },
+        .{ .id = conversion_result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .builtin_call = conversion_call } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = conversion_result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6348,7 +6343,6 @@ test "executable C renderer emits scalar bitcast as a bit preserving builtin" {
     const result = mir.ExprId.fromIndex(1);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f32_ty: mir.ValueType = .{ .float = "f32" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = f32_ty }};
@@ -6356,8 +6350,8 @@ test "executable C renderer emits scalar bitcast as a bit preserving builtin" {
     var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .argument_count = 1 };
     call.arguments[0] = operand;
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .result_ty = f32_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6386,7 +6380,6 @@ test "executable C renderer rejects scalar bitcast fact mutations" {
     const result = mir.ExprId.fromIndex(1);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f32_ty: mir.ValueType = .{ .float = "f32" };
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
@@ -6396,8 +6389,8 @@ test "executable C renderer rejects scalar bitcast fact mutations" {
     var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .bitcast, .argument_count = 1 };
     call.arguments[0] = operand;
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .local = local } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .result_ty = f32_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6436,7 +6429,6 @@ test "executable C renderer rejects selected builtin fact mutations" {
     const result = mir.ExprId.fromIndex(1);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const u8_ty: mir.ValueType = .{ .integer = "u8" };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = local, .ty = u8_ty }};
@@ -6444,8 +6436,8 @@ test "executable C renderer rejects selected builtin fact mutations" {
     var call: @FieldType(mir.ExecutableExpression.Operation, "builtin_call") = .{ .kind = .conversion_from, .argument_count = 1 };
     call.arguments[0] = operand;
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = operand, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u8_ty, .operation = .{ .local = local } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
+        .{ .id = operand, .block_id = entry, .owner_statement = statement, .result_ty = u8_ty, .operation = .{ .local = local } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = u32_ty, .operation = .{ .builtin_call = call } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6491,13 +6483,12 @@ test "executable C renderer emits canonical float payloads bit exactly" {
     const nan64 = mir.ExprId.fromIndex(2);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f32_ty: mir.ValueType = .{ .float = "f32" };
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = negative_zero, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x80000000 } } } },
-        .{ .id = nan32, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x7FC01234 } } } },
-        .{ .id = nan64, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f64_bits = 0xFFF8000000001234 } } } },
+        .{ .id = negative_zero, .block_id = entry, .owner_statement = statement, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x80000000 } } } },
+        .{ .id = nan32, .block_id = entry, .owner_statement = statement, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x7FC01234 } } } },
+        .{ .id = nan64, .block_id = entry, .owner_statement = statement, .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f64_bits = 0xFFF8000000001234 } } } },
     };
     var statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = nan64 } }};
     var terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6519,12 +6510,10 @@ test "executable C renderer rejects canonical float type tag drift" {
     const value = mir.ExprId.fromIndex(0);
     const statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     var expressions = [_]mir.ExecutableExpression{.{
         .id = value,
         .block_id = entry,
         .owner_statement = statement,
-        .source = source,
         .result_ty = .{ .float = "f32" },
         .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x3FC00000 } } },
     }};
@@ -6562,12 +6551,11 @@ fn expectCheckedIntegerBinaryTrapSet(
     const left = mir.ExprId.fromIndex(0);
     const right = mir.ExprId.fromIndex(1);
     const result = mir.ExprId.fromIndex(2);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const ty: mir.ValueType = .{ .integer = type_name };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = ty, .operation = .{ .literal = .{ .integer = 8 } } },
-        .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = ty, .operation = .{ .literal = .{ .integer = 2 } } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = ty, .operation = .{ .binary = .{ .op = op, .left = left, .right = right, .arithmetic = .checked } } },
+        .{ .id = left, .block_id = entry, .owner_statement = statement, .result_ty = ty, .operation = .{ .literal = .{ .integer = 8 } } },
+        .{ .id = right, .block_id = entry, .owner_statement = statement, .result_ty = ty, .operation = .{ .literal = .{ .integer = 2 } } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = ty, .operation = .{ .binary = .{ .op = op, .left = left, .right = right, .arithmetic = .checked } } },
     };
     var edges: [3]mir.ExecutableTrapEdge = undefined;
     var terminators: [3]mir.ExecutableTerminator = undefined;
@@ -6652,7 +6640,6 @@ test "executable C renderer guards single parameter scalar deref with exact repr
     const return_statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 39, .offset = 38, .len = 7 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
     var parameters = [_]mir.ExecutableParameter{.{ .local = pointer_local, .ty = pointer_ty }};
@@ -6673,7 +6660,6 @@ test "executable C renderer guards single parameter scalar deref with exact repr
         .id = value_id,
         .block_id = entry,
         .owner_statement = return_statement,
-        .source = source,
         .result_ty = u32_ty,
         .operation = .{ .load = .{
             .place = place_id,
@@ -6749,7 +6735,6 @@ test "executable C renderer guards address of parameter deref and returns origin
     const return_statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 48, .offset = 47, .len = 7 };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     var parameters = [_]mir.ExecutableParameter{.{ .local = pointer_local, .ty = pointer_ty }};
     var locals = [_]mir.ExecutableLocalIdentity{.{ .id = pointer_local, .spelling = "pointer" }};
@@ -6769,7 +6754,6 @@ test "executable C renderer guards address of parameter deref and returns origin
         .id = value_id,
         .block_id = entry,
         .owner_statement = return_statement,
-        .source = source,
         .result_ty = pointer_ty,
         .operation = .{ .address_of = .{
             .place = place_id,
@@ -6813,7 +6797,6 @@ test "executable C renderer guards statement-owned parameter scalar store with e
     const store_statement = mir.InstId.fromIndex(0);
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
-    const source: mir.SourcePoint = .{ .line = 1, .column = 51, .offset = 50, .len = 17 };
     const u32_ty: mir.ValueType = .{ .integer = "u32" };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     var parameters = [_]mir.ExecutableParameter{
@@ -6840,7 +6823,6 @@ test "executable C renderer guards statement-owned parameter scalar store with e
         .id = value_id,
         .block_id = entry,
         .owner_statement = store_statement,
-        .source = source,
         .result_ty = u32_ty,
         .operation = .{ .local = value_local },
     }};
@@ -6931,7 +6913,6 @@ test "executable C renderer guards statement-owned parameter scalar store with e
 
 test "executable C renderer validates a slice once with an exact representation edge" {
     const slice_ty: mir.ValueType = .{ .pointer = .{ .kind = .slice, .mutability = .@"const", .child = "u32" } };
-    const source: mir.SourcePoint = .{ .line = 1, .column = 35, .offset = 34, .len = 2 };
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
     const return_statement = mir.InstId.fromIndex(0);
@@ -6947,7 +6928,6 @@ test "executable C renderer validates a slice once with an exact representation 
             .id = mir.ExprId.fromIndex(0),
             .block_id = entry,
             .owner_statement = return_statement,
-            .source = source,
             .span_id = mir.SpanId.fromIndex(0),
             .result_ty = slice_ty,
             .type_id = mir.TypeId.fromIndex(0),
@@ -6957,7 +6937,6 @@ test "executable C renderer validates a slice once with an exact representation 
             .id = mir.ExprId.fromIndex(1),
             .block_id = entry,
             .owner_statement = return_statement,
-            .source = source,
             .span_id = mir.SpanId.fromIndex(0),
             .result_ty = slice_ty,
             .type_id = mir.TypeId.fromIndex(0),

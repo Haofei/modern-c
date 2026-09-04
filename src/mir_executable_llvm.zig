@@ -6843,17 +6843,16 @@ fn trapHelper(kind: mir.TrapKind) ?[]const u8 {
 }
 
 test "mechanical renderer emits typed BlockId branch CFG" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .bool },
         .{ .local = mir.LocalId.fromIndex(1), .ty = .{ .integer = "u32" } },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
-        .{ .id = mir.ExprId.fromIndex(3), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .binary = .{ .op = .bit_xor, .left = mir.ExprId.fromIndex(1), .right = mir.ExprId.fromIndex(2) } } },
-        .{ .id = mir.ExprId.fromIndex(4), .block_id = mir.BlockId.fromIndex(2), .owner_statement = mir.InstId.fromIndex(2), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = mir.ExprId.fromIndex(3), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = .{ .integer = "u32" }, .operation = .{ .binary = .{ .op = .bit_xor, .left = mir.ExprId.fromIndex(1), .right = mir.ExprId.fromIndex(2) } } },
+        .{ .id = mir.ExprId.fromIndex(4), .block_id = mir.BlockId.fromIndex(2), .owner_statement = mir.InstId.fromIndex(2), .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .guard = .{ .kind = .if_, .condition = mir.ExprId.fromIndex(0) } } },
@@ -6875,7 +6874,6 @@ test "mechanical renderer emits typed BlockId branch CFG" {
 }
 
 test "mechanical renderer emits checked-free integer arithmetic and logical not" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const int_ty: mir.ValueType = .{ .integer = "u32" };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .bool },
@@ -6884,15 +6882,15 @@ test "mechanical renderer emits checked-free integer arithmetic and logical not"
         .{ .local = mir.LocalId.fromIndex(3), .ty = int_ty },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .unary = .{ .op = .logical_not, .operand = mir.ExprId.fromIndex(0) } } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(3), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(2) } },
-        .{ .id = mir.ExprId.fromIndex(4), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(2), .right = mir.ExprId.fromIndex(3) } } },
-        .{ .id = mir.ExprId.fromIndex(5), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(3) } },
-        .{ .id = mir.ExprId.fromIndex(6), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .sub, .left = mir.ExprId.fromIndex(4), .right = mir.ExprId.fromIndex(5) } } },
-        .{ .id = mir.ExprId.fromIndex(7), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .mul, .left = mir.ExprId.fromIndex(6), .right = mir.ExprId.fromIndex(3) } } },
-        .{ .id = mir.ExprId.fromIndex(8), .block_id = mir.BlockId.fromIndex(2), .owner_statement = mir.InstId.fromIndex(2), .source = source, .result_ty = int_ty, .operation = .{ .literal = .{ .integer = 0 } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .unary = .{ .op = .logical_not, .operand = mir.ExprId.fromIndex(0) } } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(3), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(2) } },
+        .{ .id = mir.ExprId.fromIndex(4), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(2), .right = mir.ExprId.fromIndex(3) } } },
+        .{ .id = mir.ExprId.fromIndex(5), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(3) } },
+        .{ .id = mir.ExprId.fromIndex(6), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .binary = .{ .op = .sub, .left = mir.ExprId.fromIndex(4), .right = mir.ExprId.fromIndex(5) } } },
+        .{ .id = mir.ExprId.fromIndex(7), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .binary = .{ .op = .mul, .left = mir.ExprId.fromIndex(6), .right = mir.ExprId.fromIndex(3) } } },
+        .{ .id = mir.ExprId.fromIndex(8), .block_id = mir.BlockId.fromIndex(2), .owner_statement = mir.InstId.fromIndex(2), .result_ty = int_ty, .operation = .{ .literal = .{ .integer = 0 } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .guard = .{ .kind = .if_, .condition = mir.ExprId.fromIndex(1) } } },
@@ -6915,7 +6913,6 @@ test "mechanical renderer emits checked-free integer arithmetic and logical not"
 }
 
 test "mechanical renderer emits lazy logical control flow" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const entry = mir.BlockId.fromIndex(0);
     const statement = mir.InstId.fromIndex(0);
     const left = mir.ExprId.fromIndex(0);
@@ -6926,9 +6923,9 @@ test "mechanical renderer emits lazy logical control flow" {
         .{ .local = mir.LocalId.fromIndex(1), .ty = .bool },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = left, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = right, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = result, .block_id = entry, .owner_statement = statement, .source = source, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = left, .right = right, .eager_safe = false } } },
+        .{ .id = left, .block_id = entry, .owner_statement = statement, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = right, .block_id = entry, .owner_statement = statement, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = result, .block_id = entry, .owner_statement = statement, .result_ty = .bool, .operation = .{ .binary = .{ .op = .logical_and, .left = left, .right = right, .eager_safe = false } } },
     };
     const statements = [_]mir.ExecutableStatement{.{ .id = statement, .block_id = entry, .operation = .{ .return_ = result } }};
     const terminators = [_]mir.ExecutableTerminator{.{ .block_id = entry, .operation = .return_ }};
@@ -6947,15 +6944,14 @@ test "mechanical renderer emits lazy logical control flow" {
 }
 
 test "mechanical renderer keeps arithmetic restricted to integer ValueType" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .{ .address = .vaddr } },
         .{ .local = mir.LocalId.fromIndex(1), .ty = .{ .address = .vaddr } },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .address = .vaddr }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .address = .vaddr }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .address = .vaddr }, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1) } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .address = .vaddr }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .address = .vaddr }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .address = .vaddr }, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1) } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
@@ -6967,12 +6963,11 @@ test "mechanical renderer keeps arithmetic restricted to integer ValueType" {
 }
 
 test "mechanical renderer resolves direct calls by SymbolId" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "next_value" }};
     const locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "renaming_does_not_select_semantics" }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = .{ .callee = mir.SymbolId.fromIndex(0) } } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .integer = "u32" }, .operation = .{ .direct_call = .{ .callee = mir.SymbolId.fromIndex(0) } } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .local_init = .{ .local = mir.LocalId.fromIndex(0), .ty = .{ .integer = "u32" }, .value = mir.ExprId.fromIndex(0), .mutable = false } } },
@@ -6988,16 +6983,15 @@ test "mechanical renderer resolves direct calls by SymbolId" {
 }
 
 test "mechanical renderer applies normalized C ABI direct-call extensions" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "c_predicate" }};
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .bool },
         .{ .local = mir.LocalId.fromIndex(1), .ty = .{ .integer = "u32" } },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .direct_call = .{
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .integer = "u32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .direct_call = .{
             .callee = mir.SymbolId.fromIndex(0),
             .arguments = .{ mir.ExprId.fromIndex(0), mir.ExprId.fromIndex(1) } ++ [_]mir.ExprId{.invalid} ** (mir.max_executable_operands - 2),
             .argument_count = 2,
@@ -7069,12 +7063,11 @@ test "mechanical renderer classifies only supported C ABI direct-call types" {
 }
 
 test "mechanical renderer consumes exact statement-owned assertion trap edge" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .bool },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .guard = .{ .kind = .assert_, .condition = mir.ExprId.fromIndex(0) } } },
@@ -7115,10 +7108,9 @@ test "mechanical renderer consumes exact statement-owned assertion trap edge" {
 }
 
 test "mechanical renderer hoists loop local alloca to the entry prologue" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "loop_local" }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(1), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .integer = "u32" }, .operation = .{ .literal = .{ .integer = 1 } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(1), .operation = .{ .local_init = .{ .local = mir.LocalId.fromIndex(0), .ty = .{ .integer = "u32" }, .value = mir.ExprId.fromIndex(0), .mutable = true } } },
@@ -7137,15 +7129,14 @@ test "mechanical renderer hoists loop local alloca to the entry prologue" {
 }
 
 test "mechanical renderer emits canonical floating comparison semantics" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = .{ .float = "f32" } },
         .{ .local = mir.LocalId.fromIndex(1), .ty = .{ .float = "f32" } },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .float = "f32" }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .float = "f32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .binary = .{ .op = .eq, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1) } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .float = "f32" }, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .float = "f32" }, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .binary = .{ .op = .eq, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1) } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
@@ -7159,13 +7150,12 @@ test "mechanical renderer emits canonical floating comparison semantics" {
 }
 
 test "mechanical renderer emits bit-exact canonical float literals" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f32_ty: mir.ValueType = .{ .float = "f32" };
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     const locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "negative_zero" }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x8000_0000 } } } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f64_bits = 0x7ff8_0000_0000_0042 } } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = f32_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0x8000_0000 } } } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f64_bits = 0x7ff8_0000_0000_0042 } } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .local_init = .{ .local = mir.LocalId.fromIndex(0), .ty = f32_ty, .value = mir.ExprId.fromIndex(0), .mutable = false } } },
@@ -7187,11 +7177,10 @@ test "mechanical renderer emits bit-exact canonical float literals" {
 }
 
 test "mechanical renderer rejects canonical float payload and type tag mismatch" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const f32_ty: mir.ValueType = .{ .float = "f32" };
     const f64_ty: mir.ValueType = .{ .float = "f64" };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0 } } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = f64_ty, .operation = .{ .literal = .{ .float = .{ .f32_bits = 0 } } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(0) } },
@@ -7213,10 +7202,9 @@ test "mechanical renderer rejects canonical float payload and type tag mismatch"
 }
 
 test "mechanical renderer rejects global value access without explicit load mode" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "global_count" }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .{ .integer = "u32" }, .operation = .{ .symbol = mir.SymbolId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .{ .integer = "u32" }, .operation = .{ .symbol = mir.SymbolId.fromIndex(0) } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(0) } },
@@ -7228,7 +7216,6 @@ test "mechanical renderer rejects global value access without explicit load mode
 }
 
 test "mechanical renderer emits signed and unsigned checked add sub mul edges" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const Case = struct {
         type_name: []const u8,
         op: mir.ExecutableBinaryOp,
@@ -7250,9 +7237,9 @@ test "mechanical renderer emits signed and unsigned checked add sub mul edges" {
             .{ .local = mir.LocalId.fromIndex(1), .ty = int_ty },
         };
         const expressions = [_]mir.ExecutableExpression{
-            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-            .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = case.op, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
+            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+            .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .binary = .{ .op = case.op, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
         };
         const trap_edges = [_]mir.ExecutableTrapEdge{.{
             .owner = .{ .expression = mir.ExprId.fromIndex(2) },
@@ -7290,7 +7277,6 @@ test "mechanical renderer emits signed and unsigned checked add sub mul edges" {
 }
 
 test "mechanical renderer guards checked div mod and shifts before unsafe operations" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const Case = struct {
         type_name: []const u8,
         op: mir.ExecutableBinaryOp,
@@ -7314,9 +7300,9 @@ test "mechanical renderer guards checked div mod and shifts before unsafe operat
             .{ .local = mir.LocalId.fromIndex(1), .ty = int_ty },
         };
         const expressions = [_]mir.ExecutableExpression{
-            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-            .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = case.op, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
+            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+            .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .binary = .{ .op = case.op, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
         };
         const requirements = mir.executableCheckedBinaryTrapRequirements(case.op, int_ty) orelse return error.TestUnexpectedResult;
         var edges: [2]mir.ExecutableTrapEdge = undefined;
@@ -7373,16 +7359,15 @@ test "mechanical renderer guards checked div mod and shifts before unsafe operat
 }
 
 test "mechanical renderer rejects checked div and shift trap requirement drift" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const int_ty: mir.ValueType = .{ .integer = "i32" };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = int_ty },
         .{ .local = mir.LocalId.fromIndex(1), .ty = int_ty },
     };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .div, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .binary = .{ .op = .div, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
     };
     var edges = [_]mir.ExecutableTrapEdge{
         .{ .owner = .{ .expression = mir.ExprId.fromIndex(2) }, .from_block = mir.BlockId.fromIndex(0), .trap_block = mir.BlockId.fromIndex(1), .kind = .DivideByZero, .source = .checked_arithmetic },
@@ -7427,16 +7412,15 @@ test "mechanical renderer rejects checked div and shift trap requirement drift" 
 }
 
 test "mechanical renderer rejects mutated checked arithmetic trap edges" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const int_ty: mir.ValueType = .{ .integer = "u32" };
     const parameters = [_]mir.ExecutableParameter{
         .{ .local = mir.LocalId.fromIndex(0), .ty = int_ty },
         .{ .local = mir.LocalId.fromIndex(1), .ty = int_ty },
     };
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
-        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(1) } },
+        .{ .id = mir.ExprId.fromIndex(2), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .binary = .{ .op = .add, .left = mir.ExprId.fromIndex(0), .right = mir.ExprId.fromIndex(1), .arithmetic = .checked } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(2) } },
@@ -7490,7 +7474,6 @@ test "mechanical renderer rejects mutated checked arithmetic trap edges" {
 }
 
 test "mechanical renderer emits plain immutable global load" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const int_ty: mir.ValueType = .{ .integer = "u32" };
     const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "constant_count", .kind = .global, .mutable = false }};
     const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .root = .{ .symbol = mir.SymbolId.fromIndex(0) } }};
@@ -7498,7 +7481,6 @@ test "mechanical renderer emits plain immutable global load" {
         .id = mir.ExprId.fromIndex(0),
         .block_id = mir.BlockId.fromIndex(0),
         .owner_statement = mir.InstId.fromIndex(0),
-        .source = source,
         .result_ty = int_ty,
         .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .plain, .alignment = 4 } } },
     }};
@@ -7520,13 +7502,12 @@ test "mechanical renderer emits plain immutable global load" {
 }
 
 test "mechanical renderer emits race-unordered mutable bool global load and store" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = .bool }};
     const symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "ready", .kind = .global, .mutable = true }};
     const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .root = .{ .symbol = mir.SymbolId.fromIndex(0) } }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = .bool, .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .race_unordered, .alignment = 1 } } } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = .bool, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .result_ty = .bool, .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .race_unordered, .alignment = 1 } } } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .store = .{ .place = mir.PlaceId.fromIndex(0), .value = mir.ExprId.fromIndex(0), .ty = .bool, .access = .{ .kind = .race_unordered, .alignment = 1 } } } },
@@ -7554,13 +7535,12 @@ test "mechanical renderer emits race-unordered mutable bool global load and stor
 }
 
 test "mechanical renderer preserves plain local stores" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const int_ty: mir.ValueType = .{ .integer = "u32" };
     const locals = [_]mir.ExecutableLocalIdentity{.{ .id = mir.LocalId.fromIndex(0), .spelling = "value" }};
     const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .root = .{ .local = mir.LocalId.fromIndex(0) } }};
     const expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .source = source, .result_ty = int_ty, .operation = .{ .literal = .{ .integer = 7 } } },
-        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(2), .source = source, .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(1), .result_ty = int_ty, .operation = .{ .literal = .{ .integer = 7 } } },
+        .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(2), .result_ty = int_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
     };
     const statements = [_]mir.ExecutableStatement{
         .{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .local_init = .{ .local = mir.LocalId.fromIndex(0), .ty = int_ty, .value = null, .mutable = true } } },
@@ -7578,14 +7558,13 @@ test "mechanical renderer preserves plain local stores" {
 }
 
 test "mechanical renderer rejects mutated scalar memory access facts" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const int_ty: mir.ValueType = .{ .integer = "u32" };
     const mutable_symbols = [_]mir.SymbolIdentity{.{ .id = mir.SymbolId.fromIndex(0), .spelling = "count", .kind = .global, .mutable = true }};
     const places = [_]mir.ExecutablePlace{.{ .id = mir.PlaceId.fromIndex(0), .root = .{ .symbol = mir.SymbolId.fromIndex(0) } }};
     const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(0) } }};
     const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
 
-    var expression: mir.ExecutableExpression = .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = int_ty, .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .race_unordered, .alignment = 2 } } } };
+    var expression: mir.ExecutableExpression = .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = int_ty, .operation = .{ .load = .{ .place = mir.PlaceId.fromIndex(0), .access = .{ .kind = .race_unordered, .alignment = 2 } } } };
     var expressions = [_]mir.ExecutableExpression{expression};
     var body: mir.ExecutableBody = .{ .symbols = @constCast(&mutable_symbols), .expressions = &expressions, .places = @constCast(&places), .statements = @constCast(&statements), .terminators = @constCast(&terminators) };
     try std.testing.expect(!supports(&body, int_ty));
@@ -7603,7 +7582,6 @@ test "mechanical renderer rejects mutated scalar memory access facts" {
 }
 
 test "mechanical renderer emits canonical restricted integer casts" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const Case = struct {
         source_name: []const u8,
         target_name: []const u8,
@@ -7624,8 +7602,8 @@ test "mechanical renderer emits canonical restricted integer casts" {
         const target_ty: mir.ValueType = .{ .integer = case.target_name };
         const parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = source_ty }};
         const expressions = [_]mir.ExecutableExpression{
-            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = source_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
-            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = target_ty, .operation = .{ .cast = .{ .operand = mir.ExprId.fromIndex(0), .kind = case.kind } } },
+            .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = source_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+            .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = target_ty, .operation = .{ .cast = .{ .operand = mir.ExprId.fromIndex(0), .kind = case.kind } } },
         };
         const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
         const terminators = [_]mir.ExecutableTerminator{.{ .block_id = mir.BlockId.fromIndex(0), .operation = .return_ }};
@@ -7646,13 +7624,12 @@ test "mechanical renderer emits canonical restricted integer casts" {
 }
 
 test "mechanical renderer rejects mutated restricted cast facts" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const source_ty: mir.ValueType = .{ .integer = "u8" };
     const target_ty: mir.ValueType = .{ .integer = "u32" };
     const parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = source_ty }};
-    var cast_expression: mir.ExecutableExpression = .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = target_ty, .operation = .{ .cast = .{ .operand = mir.ExprId.fromIndex(0), .kind = .signed_widen } } };
+    var cast_expression: mir.ExecutableExpression = .{ .id = mir.ExprId.fromIndex(1), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = target_ty, .operation = .{ .cast = .{ .operand = mir.ExprId.fromIndex(0), .kind = .signed_widen } } };
     var expressions = [_]mir.ExecutableExpression{
-        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .source = source, .result_ty = source_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
+        .{ .id = mir.ExprId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .owner_statement = mir.InstId.fromIndex(0), .result_ty = source_ty, .operation = .{ .local = mir.LocalId.fromIndex(0) } },
         cast_expression,
     };
     const statements = [_]mir.ExecutableStatement{.{ .id = mir.InstId.fromIndex(0), .block_id = mir.BlockId.fromIndex(0), .operation = .{ .return_ = mir.ExprId.fromIndex(1) } }};
@@ -7675,7 +7652,6 @@ test "mechanical renderer rejects mutated restricted cast facts" {
 
 fn renderBuiltinForTest(allocator: std.mem.Allocator, kind: mir.CallTargetKind, operand_types: []const mir.ValueType, result_ty: mir.ValueType) RenderError![]u8 {
     if (operand_types.len > mir.max_executable_operands) return error.Unsupported;
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     var parameters: [mir.max_executable_operands]mir.ExecutableParameter = undefined;
     var expressions: [mir.max_executable_operands + 1]mir.ExecutableExpression = undefined;
     var arguments = [_]mir.ExprId{mir.ExprId.invalid} ** mir.max_executable_operands;
@@ -7687,7 +7663,6 @@ fn renderBuiltinForTest(allocator: std.mem.Allocator, kind: mir.CallTargetKind, 
             .id = expression,
             .block_id = mir.BlockId.fromIndex(0),
             .owner_statement = mir.InstId.fromIndex(0),
-            .source = source,
             .result_ty = operand_ty,
             .operation = .{ .local = local },
         };
@@ -7698,7 +7673,6 @@ fn renderBuiltinForTest(allocator: std.mem.Allocator, kind: mir.CallTargetKind, 
         .id = result_id,
         .block_id = mir.BlockId.fromIndex(0),
         .owner_statement = mir.InstId.fromIndex(0),
-        .source = source,
         .result_ty = result_ty,
         .operation = .{ .builtin_call = .{
             .kind = kind,
@@ -7790,7 +7764,6 @@ test "mechanical renderer rejects mutated selected builtin types and kinds" {
 }
 
 test "mechanical renderer guards single parameter deref before race-unordered load" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 12, .offset = 11, .len = 2 };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
     const value_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{
@@ -7813,7 +7786,6 @@ test "mechanical renderer guards single parameter deref before race-unordered lo
         .id = mir.ExprId.fromIndex(0),
         .block_id = mir.BlockId.fromIndex(0),
         .owner_statement = mir.InstId.fromIndex(0),
-        .source = source,
         .span_id = mir.SpanId.fromIndex(0),
         .result_ty = value_ty,
         .type_id = mir.TypeId.fromIndex(1),
@@ -7859,7 +7831,6 @@ test "mechanical renderer guards single parameter deref before race-unordered lo
 }
 
 test "mechanical renderer guards address of parameter deref and returns the same pointer" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 10, .offset = 9, .len = 3 };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const value_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = pointer_ty, .type_id = mir.TypeId.fromIndex(0), .span_id = mir.SpanId.fromIndex(0) }};
@@ -7877,7 +7848,6 @@ test "mechanical renderer guards address of parameter deref and returns the same
         .id = mir.ExprId.fromIndex(0),
         .block_id = mir.BlockId.fromIndex(0),
         .owner_statement = mir.InstId.fromIndex(0),
-        .source = source,
         .span_id = mir.SpanId.fromIndex(0),
         .result_ty = pointer_ty,
         .type_id = mir.TypeId.fromIndex(0),
@@ -7909,7 +7879,6 @@ test "mechanical renderer guards address of parameter deref and returns the same
 }
 
 test "mechanical renderer rejects mutated parameter deref place access and trap facts" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 1 };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
     const value_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{.{ .local = mir.LocalId.fromIndex(0), .ty = pointer_ty, .type_id = mir.TypeId.fromIndex(0) }};
@@ -7926,7 +7895,6 @@ test "mechanical renderer rejects mutated parameter deref place access and trap 
         .id = mir.ExprId.fromIndex(0),
         .block_id = mir.BlockId.fromIndex(0),
         .owner_statement = mir.InstId.fromIndex(0),
-        .source = source,
         .result_ty = value_ty,
         .type_id = mir.TypeId.fromIndex(1),
         .operation = .{ .load = .{
@@ -7983,7 +7951,6 @@ test "mechanical renderer rejects mutated parameter deref place access and trap 
 }
 
 test "mechanical renderer guards statement-owned parameter deref before atomic store" {
-    const source: mir.SourcePoint = .{ .line = 1, .column = 20, .offset = 19, .len = 2 };
     const pointer_ty: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const value_ty: mir.ValueType = .{ .integer = "u32" };
     var parameters = [_]mir.ExecutableParameter{
@@ -8004,7 +7971,6 @@ test "mechanical renderer guards statement-owned parameter deref before atomic s
         .id = mir.ExprId.fromIndex(0),
         .block_id = mir.BlockId.fromIndex(0),
         .owner_statement = mir.InstId.fromIndex(0),
-        .source = source,
         .span_id = mir.SpanId.fromIndex(0),
         .result_ty = value_ty,
         .type_id = mir.TypeId.fromIndex(1),
@@ -8089,7 +8055,6 @@ test "mechanical renderer guards statement-owned parameter deref before atomic s
 
 test "mechanical renderer validates a slice once with an exact representation edge" {
     const slice_ty: mir.ValueType = .{ .pointer = .{ .kind = .slice, .mutability = .@"const", .child = "u32" } };
-    const source: mir.SourcePoint = .{ .line = 1, .column = 35, .offset = 34, .len = 2 };
     const entry = mir.BlockId.fromIndex(0);
     const trap = mir.BlockId.fromIndex(1);
     const return_statement = mir.InstId.fromIndex(0);
@@ -8104,7 +8069,6 @@ test "mechanical renderer validates a slice once with an exact representation ed
             .id = mir.ExprId.fromIndex(0),
             .block_id = entry,
             .owner_statement = return_statement,
-            .source = source,
             .span_id = mir.SpanId.fromIndex(0),
             .result_ty = slice_ty,
             .type_id = mir.TypeId.fromIndex(0),
@@ -8114,7 +8078,6 @@ test "mechanical renderer validates a slice once with an exact representation ed
             .id = mir.ExprId.fromIndex(1),
             .block_id = entry,
             .owner_statement = return_statement,
-            .source = source,
             .span_id = mir.SpanId.fromIndex(0),
             .result_ty = slice_ty,
             .type_id = mir.TypeId.fromIndex(0),

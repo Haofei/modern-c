@@ -108,6 +108,8 @@ def main() -> int:
         fail("src/mir_model.zig executable call operations duplicate callee source beside SpanId")
     if "representation_source:" in model[executable_expression_start:executable_expression_end]:
         fail("src/mir_model.zig executable operations duplicate representation source beside SpanId")
+    if "owner_statement: InstId,\n    source: SourcePoint," in model[executable_expression_start:executable_expression_end]:
+        fail("src/mir_model.zig ExecutableExpression duplicates source identity beside SpanId")
 
     require_not_contains("src/mir_model.zig", "pub const ExecutablePlace = struct {\n    id: PlaceId,\n    source: SourcePoint,")
     require_not_contains("src/mir_model.zig", "    dma_mode: ?ExecutableDmaBufferMode = null,\n    source: SourcePoint,\n    span_id: SpanId = .invalid,\n};")
