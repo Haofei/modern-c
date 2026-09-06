@@ -1,65 +1,22 @@
 const std = @import("std");
 
-const ast_bridge = @import("ast_bridge.zig");
 const diagnostics = @import("diagnostics.zig");
 const codegen_request = @import("codegen_request.zig");
 const error_from = @import("error_from.zig");
 const mir = @import("mir.zig");
 const mir_executable_body = @import("mir_executable_body.zig");
 const mir_executable_llvm = @import("mir_executable_llvm.zig");
-const mir_source_bridge = @import("mir_source_bridge.zig");
-const numeric = @import("numeric.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
-const signature_type_materializer = @import("signature_type_materializer.zig");
-const type_bridge = @import("type_bridge.zig");
+const lower_llvm_type_facts = @import("lower_llvm_type_facts.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
-const TransitionalTypeExpr = @TypeOf(@as(lower_llvm_model.ReflectionCallInfo, undefined).target_ty);
-
-/// Ephemeral syntax view for legacy LLVM rendering.  The canonical
-/// target-type fact stores only `SignatureTypeId`; this is materialized from
-/// the verified module table at the final syntax boundary.
-const MaterializedTargetTypeFact = struct {
-    kind: mir.TargetTypeKind,
-    target_ty: TransitionalTypeExpr,
-    result_ty: mir.ValueType,
-    typed_result_ty: mir.TypeId,
-    typed_span_id: mir.SpanId,
-    typed_callee_span_id: mir.SpanId,
-    typed_operand_value_id: mir.ValueId,
-    aggregate_construction: ?mir.AggregateConstructionKind,
-    target_index: ?usize,
-    typed_target_owner_id: mir.SymbolId,
-};
-
-const typeName = type_bridge.typeName;
-const isSourceSpan = mir_source_bridge.isSourceSpan;
-const isOpaqueAddressTypeName = type_bridge.isOpaqueAddressTypeName;
-const isStringLiteralTarget = type_bridge.isStringLiteralTarget;
-const isMmioStructAbi = type_bridge.isMmioStructAbi;
 
 const backend_mod = @import("backend.zig");
-const lower_llvm_lookup = @import("lower_llvm_lookup.zig");
-const lower_llvm_shape = @import("lower_llvm_shape.zig");
-
-// Phase-2c split: pure type-mapping/classification helpers moved verbatim to
-// `lower_llvm_type.zig`. Re-exported here so call sites read unchanged.
-const lower_llvm_type = @import("lower_llvm_type.zig");
-const simpleType = lower_llvm_type.simpleType;
-const isOpaqueAddressGenericName = lower_llvm_type.isOpaqueAddressGenericName;
-const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
-const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
-const typeNameEql = lower_llvm_type.typeNameEql;
-const integerBits = lower_llvm_type.integerBits;
-const isSignedInteger = lower_llvm_type.isSignedInteger;
-const intrinsicBits = lower_llvm_type.intrinsicBits;
 
 // Phase-2c split: operator/predicate spelling, trap-helper, and literal
 // normalization helpers moved verbatim to `lower_llvm_op.zig`. Re-exported
 // here so call sites read unchanged.
 const lower_llvm_op = @import("lower_llvm_op.zig");
-const normalizedIntLiteral = lower_llvm_op.normalizedIntLiteral;
-const charLiteralValue = lower_llvm_op.charLiteralValue;
 
 // LLVM module prelude emission and target metadata.
 const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
@@ -79,36 +36,11 @@ const debugLine = lower_llvm_text.debugLine;
 const escapedLlvmString = lower_llvm_text.escapedLlvmString;
 const llvmCanonicalStringBytes = lower_llvm_text.llvmCanonicalStringBytes;
 
-// LLVM backend model records used by the emitter implementation.
-const lower_llvm_reflect = @import("lower_llvm_reflect.zig");
-const LlvmReflectEnv = lower_llvm_reflect.ReflectEnv;
-
 const FnSig = lower_llvm_model.FnSig;
 const BindThunk = lower_llvm_model.BindThunk;
-const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
-const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
-const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
-const TaggedUnionInfo = lower_llvm_model.TaggedUnionInfo;
-const StructInfo = lower_llvm_model.StructInfo;
-const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
-const ReflectionCallInfo = lower_llvm_model.ReflectionCallInfo;
-const ArgValue = lower_llvm_model.ArgValue;
 const StringLiteralGlobal = lower_llvm_model.StringLiteralGlobal;
 const DebugFunction = lower_llvm_model.DebugFunction;
 const DebugLocation = lower_llvm_model.DebugLocation;
-const DebugLocal = lower_llvm_model.DebugLocal;
-const DebugBasicType = struct {
-    name: []const u8,
-    size_bits: u16,
-    encoding: []const u8,
-};
-
-fn directCallFactMatchesDeclared(fact_ty: ast_bridge.TypeExpr, declared_ty: ast_bridge.TypeExpr) bool {
-    if (std.meta.eql(fact_ty, declared_ty)) return true;
-    if (type_bridge.sameTypeSyntax(fact_ty, declared_ty)) return true;
-    return (typeNameEql(fact_ty, "void") and typeNameEql(declared_ty, "void")) or
-        (typeNameEql(fact_ty, "never") and typeNameEql(declared_ty, "never"));
-}
 
 /// Construct the `Backend` registry entry for the LLVM backend. The LLVM
 /// backend is profile-agnostic and has no source-map artifact.
@@ -193,19 +125,12 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
-        .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
-        .enum_types = std.StringHashMap(ast_bridge.EnumDecl).init(allocator),
-        .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
-        .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
-        .tagged_unions = std.StringHashMap(TaggedUnionInfo).init(allocator),
-        .struct_types = std.StringHashMap(StructInfo).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
-        .debug_locals = std.ArrayList(DebugLocal).empty,
         .source_path = source_path,
         .target_arch = target_arch,
         .reporter = reporter,
@@ -216,12 +141,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .linux_kernel = linux_kernel,
     };
     defer ctx.deinit();
-    try ctx.collectTypeAliasFacts();
-    try ctx.collectEnumFacts();
-    try ctx.collectPackedBitsFacts();
-    try ctx.collectOverlayUnionFacts();
-    try ctx.collectTaggedUnionFacts();
-    try ctx.collectStructFacts();
     try ctx.collectCallableEmissionFacts();
     try ctx.emitCollectedGlobals();
     try ctx.emitCollectedCallableDeclarations();
@@ -248,12 +167,6 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
-    type_aliases: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
-    enum_types: std.StringHashMap(ast_bridge.EnumDecl) = undefined,
-    packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
-    overlay_unions: std.StringHashMap(OverlayUnionInfo) = undefined,
-    tagged_unions: std.StringHashMap(TaggedUnionInfo) = undefined,
-    struct_types: std.StringHashMap(StructInfo) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
     // closure's env slot is `ptr`, so the scalar is widened via `inttoptr` and the
@@ -267,13 +180,14 @@ const LlvmEmitter = struct {
     string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
     debug_functions: std.ArrayList(DebugFunction) = undefined,
     debug_locations: std.ArrayList(DebugLocation) = undefined,
-    debug_locals: std.ArrayList(DebugLocal) = undefined,
     debug_next_id: usize = 6,
     need_dbg_declare: bool = false,
     need_dbg_value: bool = false,
     current_debug_scope: ?usize = null,
-    current_debug_span: ?ast_bridge.Span = null,
-    current_return_ty: ?TransitionalTypeExpr = null,
+    // Debug locations are output metadata, not AST syntax. Keep them in the
+    // diagnostics representation so LLVM does not need the AST-to-MIR source
+    // bridge merely to select a useful error location.
+    current_debug_span: ?diagnostics.Span = null,
     current_function: ?[]const u8 = null,
     current_params: ?[]const lower_llvm_model.FnParam = null,
     source_path: []const u8,
@@ -306,165 +220,13 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
-        self.type_aliases.deinit();
-        self.enum_types.deinit();
-        self.packed_bits.deinit();
-        self.overlay_unions.deinit();
-        self.tagged_unions.deinit();
-        self.struct_types.deinit();
         self.fn_sigs.deinit();
         self.bind_thunks.deinit();
         self.backend_names.deinit();
         self.string_literals.deinit(self.allocator);
         self.debug_functions.deinit(self.allocator);
         self.debug_locations.deinit(self.allocator);
-        self.debug_locals.deinit(self.allocator);
         self.scratch.deinit();
-    }
-
-    /// This AST-shaped cache is derived only from the module-owned alias
-    /// fact table for legacy aggregate/body helpers.
-    fn collectTypeAliasFacts(self: *LlvmEmitter) !void {
-        for (self.mir_module.type_aliases) |fact| {
-            const identity = self.typeAliasIdentity(fact) orelse return error.UnsupportedLlvmEmission;
-            const target = try signature_type_materializer.typeExpr(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                fact.target_type_id,
-                .{ .offset = 0, .len = 0, .line = 0, .column = 0 },
-            );
-            if (self.type_aliases.contains(identity.spelling)) return error.UnsupportedLlvmEmission;
-            try self.type_aliases.put(identity.spelling, target);
-        }
-    }
-
-    /// Enum AST views are derived solely from checked module facts for the
-    /// remaining legacy expression helpers. No declaration artifact carries
-    /// an enum AST ingress.
-    fn collectEnumFacts(self: *LlvmEmitter) !void {
-        for (self.mir_module.enums) |fact| {
-            const enum_decl = try signature_type_materializer.enumDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            try self.collectEnum(enum_decl);
-        }
-    }
-
-    /// Packed-bits rendering views are derived from module-owned checked
-    /// facts. No declaration artifact carries a packed-bits AST payload.
-    fn collectPackedBitsFacts(self: *LlvmEmitter) !void {
-        for (self.mir_module.packed_bits) |fact| {
-            const packed_bits = try signature_type_materializer.packedBitsDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            try self.collectPackedBits(packed_bits);
-        }
-    }
-
-    /// Overlay storage and field layouts are admitted module facts. The
-    /// temporary AST view is only for legacy expression rendering.
-    fn collectOverlayUnionFacts(self: *LlvmEmitter) !void {
-        for (self.mir_module.overlay_unions) |fact| {
-            const overlay_union = try signature_type_materializer.overlayUnionDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            try self.collectOverlayUnionFact(overlay_union, fact);
-        }
-    }
-
-    /// Tagged-union rendering views are derived from checked module facts;
-    /// the stored layout is the frontend's canonical aggregate-layout result.
-    fn collectTaggedUnionFacts(self: *LlvmEmitter) !void {
-        for (self.mir_module.tagged_unions) |fact| {
-            const tagged_union = try signature_type_materializer.taggedUnionDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            try self.collectTaggedUnionFact(tagged_union, fact);
-        }
-    }
-
-    fn collectStructFacts(self: *LlvmEmitter) !void {
-        for (self.mir_module.structs) |fact| {
-            const struct_decl = try signature_type_materializer.structDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            if (struct_decl.type_params.len != 0) continue;
-            try self.struct_types.put(struct_decl.name.text, .{
-                .decl = struct_decl,
-                .storage_size = fact.storage_size,
-                .storage_alignment = fact.storage_alignment,
-            });
-        }
-        for (self.mir_module.structs) |fact| {
-            const struct_decl = try signature_type_materializer.structDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            try self.collectStructFact(struct_decl, fact);
-        }
-    }
-
-    fn collectStructFact(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, fact: mir.StructFact) !void {
-        if (struct_decl.type_params.len != 0) return;
-        if (struct_decl.abi) |abi| {
-            if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
-        }
-        for (struct_decl.fields) |field| {
-            if (isMmioStructAbi(struct_decl)) {
-                _ = self.mmioFieldInfo(field) orelse return error.UnsupportedLlvmEmission;
-            } else {
-                _ = try self.llvmType(field.ty);
-            }
-        }
-        try self.struct_types.put(struct_decl.name.text, .{ .decl = struct_decl, .storage_size = fact.storage_size, .storage_alignment = fact.storage_alignment });
-    }
-
-    fn collectEnum(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl) !void {
-        const repr = enumReprType(enum_decl);
-        if (self.integerBitsOf(repr) == null) return error.UnsupportedLlvmEmission;
-        for (enum_decl.cases) |case| _ = try self.enumCaseValue(enum_decl, case);
-        try self.enum_types.put(enum_decl.name.text, enum_decl);
-    }
-
-    fn collectPackedBits(self: *LlvmEmitter, packed_bits: ast_bridge.PackedBitsDecl) !void {
-        if (self.integerBitsOf(packed_bits.repr) == null) return error.UnsupportedLlvmEmission;
-        try self.packed_bits.put(packed_bits.name.text, .{
-            .repr = packed_bits.repr,
-            .fields = packed_bits.fields,
-        });
-    }
-
-    fn collectOverlayUnionFact(self: *LlvmEmitter, overlay_union: ast_bridge.OverlayUnionDecl, fact: mir.OverlayUnionFact) !void {
-        if (overlay_union.fields.len != fact.fields.len) return error.UnsupportedLlvmEmission;
-        try self.overlay_unions.put(overlay_union.name.text, .{
-            .fields = overlay_union.fields,
-            .size = fact.storage_size,
-            .alignment = fact.storage_alignment,
-        });
-    }
-
-    fn collectTaggedUnionFact(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl, fact: mir.TaggedUnionFact) !void {
-        for (union_decl.cases) |case| {
-            if (case.ty) |ty| _ = try self.llvmType(ty);
-        }
-        try self.tagged_unions.put(union_decl.name.text, .{ .decl = union_decl, .layout = fact.layout });
     }
 
     fn collectCallableEmissionFacts(self: *LlvmEmitter) !void {
@@ -480,21 +242,15 @@ const LlvmEmitter = struct {
             checked.kind == .global_initializer)
             return error.UnsupportedLlvmEmission;
         const declaration_span = spanFromSourcePoint(fact.declaration_source);
-        const ret_ty = try self.signatureTypeExpr(checked.signature_return_type_id, declaration_span);
-        _ = try self.llvmType(ret_ty);
-        const signature_ret = try self.llvmSignatureType(checked.signature_return_type_id);
-        if (!std.mem.eql(u8, signature_ret, try self.llvmType(ret_ty))) return error.UnsupportedLlvmEmission;
+        _ = try self.llvmSignatureType(checked.signature_return_type_id);
         const params = try self.scratch.allocator().alloc(lower_llvm_model.FnParam, fact.params.len);
         for (fact.params, fn_mir.param_types, checked.param_types, checked.signature_param_type_ids, 0..) |param, mir_param_ty, checked_param_ty, signature_type_id, index| {
             if (!mir.ValueType.eql(checked_param_ty, mir_param_ty)) return error.UnsupportedLlvmEmission;
-            const param_ty = try self.signatureTypeExpr(signature_type_id, declaration_span);
-            const signature_param = try self.llvmSignatureType(signature_type_id);
-            if (!std.mem.eql(u8, signature_param, try self.llvmType(param_ty))) return error.UnsupportedLlvmEmission;
+            _ = try self.llvmSignatureType(signature_type_id);
             params[index] = .{
                 .name = param.spelling,
                 .value_ty = checked_param_ty,
                 .type_id = signature_type_id,
-                .ty = param_ty,
             };
         }
         const debug_id: ?usize = if (checked.kind == .function) blk: {
@@ -512,7 +268,6 @@ const LlvmEmitter = struct {
         try self.fn_sigs.put(name, .{
             .return_ty = checked.return_ty,
             .return_type_id = checked.signature_return_type_id,
-            .ret = ret_ty,
             .params = params,
             .c_abi = checked.c_abi,
             .is_variadic = checked.is_variadic,
@@ -568,7 +323,6 @@ const LlvmEmitter = struct {
 
     fn emitCheckedZeroGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact) !void {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
-        const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
         const llvm_ty = try self.llvmSignatureType(global.signature_type_id);
         if (global.ty != .value) {
             const executable_type = mir_executable_llvm.renderType(self.scratch.allocator(), &mir.ExecutableBody{}, global.ty, null) catch |err| switch (err) {
@@ -579,7 +333,7 @@ const LlvmEmitter = struct {
         }
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const kind: []const u8 = if (global.is_const) "constant" else "global";
-        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, try self.zeroInitializer(ty) });
+        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ name, visibility, kind, llvm_ty, try self.zeroInitializerForSignature(global.signature_type_id) });
     }
 
     fn emitCheckedAggregateGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.AggregateInitializerPlan) !void {
@@ -747,12 +501,6 @@ const LlvmEmitter = struct {
         return if (identity.id.eql(symbol_id) and identity.kind == .function) identity.spelling else null;
     }
 
-    fn typeAliasIdentity(self: *const LlvmEmitter, fact: mir.TypeAliasFact) ?mir.SymbolIdentity {
-        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
-        const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
-        return if (identity.id.eql(fact.symbol_id) and identity.kind == .type_) identity else null;
-    }
-
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
         for (self.mir_module.callable_emission_facts) |fact| {
             const checked = self.checkedCallableFact(fact.def_id) orelse return error.UnsupportedLlvmEmission;
@@ -816,26 +564,6 @@ const LlvmEmitter = struct {
         return self.source_path;
     }
 
-    fn globalConstIndexValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
-        return switch (expr.kind) {
-            .int_literal => |literal| numeric.parseUsizeLiteral(literal),
-            .char_literal => |literal| numeric.parseCharLiteral(literal),
-            .grouped => |inner| self.globalConstIndexValue(inner.*),
-            else => null,
-        };
-    }
-
-    fn reflectEnv(self: *LlvmEmitter) LlvmReflectEnv {
-        return .{
-            .type_aliases = &self.type_aliases,
-            .enum_types = &self.enum_types,
-            .packed_bits = &self.packed_bits,
-            .overlay_unions = &self.overlay_unions,
-            .tagged_unions = &self.tagged_unions,
-            .struct_types = &self.struct_types,
-        };
-    }
-
     fn scalarConstGlobalInitializer(self: *LlvmEmitter, fact: mir.GlobalInitializerFact) ![]const u8 {
         if (!fact.scalarValue().isCompatibleWith(fact.value_ty)) return error.UnsupportedLlvmEmission;
         return self.llvmScalarGlobalInitializer(fact.scalarValue());
@@ -854,57 +582,92 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn zeroInitializer(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
-        const resolved_ty = self.resolveAliasType(ty);
-        if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
-        if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| if (std.mem.eql(u8, name.text, "bool"))
-                "0"
-            else if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, resolved_ty))
-                "0.0"
-            else if (isOpaqueAddressTypeName(name.text))
-                "0"
-            else if (self.integerBitsOf(resolved_ty) != null or self.enumDeclForType(resolved_ty) != null)
-                "0"
-            else if (self.overlayInfoForType(resolved_ty) != null)
-                "zeroinitializer"
-            else if (self.taggedUnionForType(resolved_ty) != null)
-                "zeroinitializer"
-            else if (self.structDeclForType(resolved_ty) != null)
-                "zeroinitializer"
-            else if (libraryScalarLlvmType(name.text) != null)
-                "0"
-            else
-                error.UnsupportedLlvmEmission,
-            .pointer, .raw_many_pointer => "null",
-            .nullable => |child| if (self.nullablePayloadIsValueType(child.*) or self.isAggregateType(child.*))
-                "zeroinitializer"
-            else
-                "null",
-            .slice => "zeroinitializer",
-            .array => "zeroinitializer",
-            .qualified => |node| try self.zeroInitializer(node.child.*),
-            .generic => |node| if (lower_llvm_shape.resultInfo(&self.type_aliases, resolved_ty)) |_|
-                "zeroinitializer"
-            else if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1)
-                // MmioPtr<T> lowers to `ptr` (see llvmType); its zero is a null pointer.
-                "null"
-            else if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2)
-                // DmaBuf<T,U> lowers to i64 (an opaque DMA address); its zero is 0.
-                "0"
-            else if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1)
-                // Reg<T,..>/RegBits<T,..> lower to their payload T (see llvmType).
-                try self.zeroInitializer(node.args[0])
-            else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
-                try self.zeroInitializer(node.args[0])
-            else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
-                // UserPtr<T>/PhysPtr<T> lower to i64 (see llvmType); their zero is 0.
-                "0"
-            else
-                error.UnsupportedLlvmEmission,
-            else => error.UnsupportedLlvmEmission,
+    /// Uses the admitted signature representation, never a materialized AST
+    /// type. This deliberately classifies nominal declarations from their
+    /// module facts instead of inferring aggregates from LLVM's textual type
+    /// spelling: a future named LLVM aggregate must still use
+    /// `zeroinitializer`, not scalar `0`.
+    fn zeroInitializerForSignature(self: *LlvmEmitter, id: mir.SignatureTypeId) anyerror![]const u8 {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
+        return switch (shape) {
+            .qualified => |node| self.zeroInitializerForSignature(node.child),
+            .pointer, .raw_many_pointer, .fn_pointer => "null",
+            .slice, .array, .closure_type => "zeroinitializer",
+            .nullable => |child| if (lower_llvm_type_facts.isPointerLike(&self.mir_module, child)) "null" else "zeroinitializer",
+            .name => |name| self.zeroInitializerForSignatureName(name),
+            .generic => |node| self.zeroInitializerForSignatureGeneric(node.base, node.args),
+            .enum_literal, .dyn_trait, .member => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn zeroInitializerForSignatureName(self: *LlvmEmitter, name: []const u8) anyerror![]const u8 {
+        if (std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never")) return error.UnsupportedLlvmEmission;
+        if (std.mem.eql(u8, name, "cstr") or std.mem.eql(u8, name, "va_list")) return "null";
+        if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) return "0.0";
+        if (std.mem.eql(u8, name, "bool") or lower_llvm_type_facts.isOpaqueAddressName(name) or std.mem.eql(u8, name, "c_void") or std.mem.eql(u8, name, "IrqOff") or scalar_repr.integer(name) != null) return "0";
+
+        if (self.signatureTypeAliasForName(name)) |alias| return self.zeroInitializerForSignature(alias.target_type_id);
+        if (self.signatureEnumForName(name)) |enum_fact| return self.zeroInitializerForSignature(enum_fact.repr_type_id);
+        if (self.signaturePackedBitsForName(name)) |packed_bits| return self.zeroInitializerForSignature(packed_bits.repr_type_id);
+        if (self.signatureOverlayUnionForName(name) != null or self.signatureTaggedUnionForName(name) != null or self.signatureStructForName(name) != null) return "zeroinitializer";
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn zeroInitializerForSignatureGeneric(self: *LlvmEmitter, base: []const u8, args: []const mir.SignatureTypeId) anyerror![]const u8 {
+        if (std.mem.eql(u8, base, "Result") and args.len == 2) return "zeroinitializer";
+        if ((std.mem.eql(u8, base, "atomic") or std.mem.eql(u8, base, "MaybeUninit") or std.mem.eql(u8, base, "Reg") or std.mem.eql(u8, base, "RegBits") or lower_llvm_type_facts.isPayloadDomain(base)) and args.len >= 1)
+            return self.zeroInitializerForSignature(args[0]);
+        if ((std.mem.eql(u8, base, "MmioPtr") and args.len == 1)) return "null";
+        if ((std.mem.eql(u8, base, "DmaBuf") and args.len == 2) or (lower_llvm_type_facts.isOpaqueAddressGeneric(base) and args.len >= 1)) return "0";
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn signatureTypeAliasForName(self: *const LlvmEmitter, name: []const u8) ?mir.TypeAliasFact {
+        for (self.mir_module.type_aliases) |fact| if (self.symbolSpelling(fact.symbol_id)) |spelling| {
+            if (std.mem.eql(u8, spelling, name)) return fact;
+        };
+        return null;
+    }
+
+    fn signatureEnumForName(self: *const LlvmEmitter, name: []const u8) ?mir.EnumFact {
+        for (self.mir_module.enums) |fact| if (self.symbolSpelling(fact.symbol_id)) |spelling| {
+            if (std.mem.eql(u8, spelling, name)) return fact;
+        };
+        return null;
+    }
+
+    fn signaturePackedBitsForName(self: *const LlvmEmitter, name: []const u8) ?mir.PackedBitsFact {
+        for (self.mir_module.packed_bits) |fact| if (self.symbolSpelling(fact.symbol_id)) |spelling| {
+            if (std.mem.eql(u8, spelling, name)) return fact;
+        };
+        return null;
+    }
+
+    fn signatureOverlayUnionForName(self: *const LlvmEmitter, name: []const u8) ?mir.OverlayUnionFact {
+        for (self.mir_module.overlay_unions) |fact| if (self.symbolSpelling(fact.symbol_id)) |spelling| {
+            if (std.mem.eql(u8, spelling, name)) return fact;
+        };
+        return null;
+    }
+
+    fn signatureTaggedUnionForName(self: *const LlvmEmitter, name: []const u8) ?mir.TaggedUnionFact {
+        for (self.mir_module.tagged_unions) |fact| if (self.symbolSpelling(fact.symbol_id)) |spelling| {
+            if (std.mem.eql(u8, spelling, name)) return fact;
+        };
+        return null;
+    }
+
+    fn signatureStructForName(self: *const LlvmEmitter, name: []const u8) ?mir.StructFact {
+        for (self.mir_module.structs) |fact| if (self.symbolSpelling(fact.symbol_id)) |spelling| {
+            if (std.mem.eql(u8, spelling, name)) return fact;
+        };
+        return null;
+    }
+
+    fn symbolSpelling(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?[]const u8 {
+        if (!symbol_id.isValid() or symbol_id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[symbol_id.index()];
+        return if (identity.id.eql(symbol_id) and identity.kind == .type_) identity.spelling else null;
     }
 
     // `#[backend_name("Y")]`: a module-level alias exposing the override symbol, pointing at the
@@ -923,20 +686,11 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn cAbiExtension(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) []const u8 {
-        if (typeNameEql(self.resolveAliasType(ty), "bool")) return if (self.target_arch == .aarch64) "" else "zeroext ";
-        const bits = self.integerBitsOf(ty) orelse return "";
-        if (bits > 32) return "";
-        if (self.target_arch == .aarch64) return "";
-        if (bits == 32) return if (self.target_arch == .riscv64) "signext " else "";
-        return if (self.isSignedIntegerType(ty)) "signext " else "zeroext ";
-    }
-
     fn cAbiExtensionForSignature(self: *LlvmEmitter, id: mir.SignatureTypeId) []const u8 {
         const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return "";
         return switch (shape) {
             .qualified => |node| self.cAbiExtensionForSignature(node.child),
-            .generic => |node| if (isPayloadDomainGenericName(node.base) and node.args.len == 1)
+            .generic => |node| if (lower_llvm_type_facts.isPayloadDomain(node.base) and node.args.len == 1)
                 self.cAbiExtensionForSignature(node.args[0])
             else
                 "",
@@ -952,33 +706,12 @@ const LlvmEmitter = struct {
             if (integer.bits == 32) return if (self.target_arch == .riscv64) "signext " else "";
             return if (integer.signed) "signext " else "zeroext ";
         }
-        // A nominal alias is a type-declaration lookup, never callable
-        // signature syntax.  Keep its established ABI classification intact.
-        if (self.type_aliases.get(name)) |target| return self.cAbiExtension(target);
-        if (self.enum_types.get(name)) |decl| return self.cAbiExtension(enumReprType(decl));
-        if (self.packed_bits.get(name)) |info| return self.cAbiExtension(info.repr);
+        // Nominal declarations are resolved from the verified module facts,
+        // not from materialized AST type declarations.
+        if (self.signatureTypeAliasForName(name)) |alias| return self.cAbiExtensionForSignature(alias.target_type_id);
+        if (self.signatureEnumForName(name)) |enum_fact| return self.cAbiExtensionForSignature(enum_fact.repr_type_id);
+        if (self.signaturePackedBitsForName(name)) |packed_bits| return self.cAbiExtensionForSignature(packed_bits.repr_type_id);
         return "";
-    }
-
-    fn promoteCVariadicArgument(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, value: []const u8) !ArgValue {
-        const resolved = self.resolveAliasType(ty);
-        if (typeNameEql(resolved, "f32")) {
-            const promoted = simpleType(ty.span, "f64");
-            return .{ .ty = promoted, .value = try self.castValue(value, ty, promoted) };
-        }
-        if (typeNameEql(resolved, "bool")) {
-            const promoted = simpleType(ty.span, "i32");
-            return .{ .ty = promoted, .value = try self.castValue(value, ty, promoted) };
-        }
-        if (self.integerBitsOf(ty)) |bits| {
-            if (bits < 32) {
-                const promoted = simpleType(ty.span, "i32");
-                return .{ .ty = promoted, .value = try self.castValue(value, ty, promoted) };
-            }
-            return .{ .ty = ty, .value = value };
-        }
-        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty) or self.fixedLayoutBitsOf(ty) != null or std.mem.eql(u8, try self.llvmType(ty), "ptr")) return .{ .ty = ty, .value = value };
-        return error.UnsupportedLlvmEmission;
     }
 
     fn emitExecutableMirFunction(self: *LlvmEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: codegen_attrs.FunctionRenderAttrs) !bool {
@@ -1014,30 +747,26 @@ const LlvmEmitter = struct {
         const name = self.callableSymbol(fact) orelse return error.UnsupportedLlvmEmission;
         if (!mir.ValueType.eql(checked.return_ty, fn_mir.return_ty)) return false;
         const fn_sig = self.fn_sigs.get(name) orelse return error.UnsupportedLlvmEmission;
-        const ret_ty = fn_sig.ret;
         const ret_llvm = if (checked.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
             try self.llvmSignatureType(checked.signature_return_type_id)
         else
             mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, checked.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
+                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(checked.signature_return_type_id),
                 else => return err,
             };
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(checked.signature_return_type_id) else "";
 
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
-        const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
         const old_params = self.current_params;
         self.current_debug_scope = if (self.fn_sigs.get(name)) |sig| sig.debug_id else null;
         self.current_debug_span = spanFromMirSourcePoint(fact.declaration_source);
-        self.current_return_ty = ret_ty;
         self.current_function = name;
         self.current_params = fn_sig.params;
         defer {
             self.current_debug_scope = old_scope;
             self.current_debug_span = old_span;
-            self.current_return_ty = old_return_ty;
             self.current_function = old_function;
             self.current_params = old_params;
         }
@@ -1090,12 +819,11 @@ const LlvmEmitter = struct {
         const name = self.callableSymbol(fact) orelse return false;
         if (!mir.ValueType.eql(checked.return_ty, fn_mir.return_ty)) return false;
         const fn_sig = self.fn_sigs.get(name) orelse return false;
-        const ret_ty = fn_sig.ret;
         const ret_llvm = if (checked.return_ty == .value and fn_mir.return_callable_signature == null and !fn_mir.executable_body.return_dyn_trait_symbol_id.isValid())
             try self.llvmSignatureType(checked.signature_return_type_id)
         else
             mir_executable_llvm.renderType(self.scratch.allocator(), &fn_mir.executable_body, checked.return_ty, fn_mir.return_callable_signature) catch |err| switch (err) {
-                error.Unsupported, error.InvalidBody => try self.llvmType(ret_ty),
+                error.Unsupported, error.InvalidBody => try self.llvmSignatureType(checked.signature_return_type_id),
                 else => return err,
             };
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtensionForSignature(checked.signature_return_type_id) else "";
@@ -1196,7 +924,7 @@ const LlvmEmitter = struct {
             .cstr => "ptr",
             .slice => "{ ptr, i64 }",
             .address => "i64",
-            .struct_, .closed_enum, .open_enum => |name| self.llvmType(simpleType(.{ .offset = 0, .len = 0, .line = 0, .column = 0 }, name)) catch null,
+            .struct_, .closed_enum, .open_enum => |name| lower_llvm_type_facts.renderName(self.scratch.allocator(), &self.mir_module, name) catch null,
             else => null,
         };
     }
@@ -1461,13 +1189,13 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, ")\n\n");
     }
 
-    fn reportUnsupported(self: *LlvmEmitter, span: ast_bridge.Span, construct: []const u8) void {
+    fn reportUnsupported(self: *LlvmEmitter, span: diagnostics.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
             reporter.err(self.diagnosticSpan(span), "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
         }
     }
 
-    fn reportUnsupportedIfNone(self: *LlvmEmitter, span: ast_bridge.Span, construct: []const u8) void {
+    fn reportUnsupportedIfNone(self: *LlvmEmitter, span: diagnostics.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
             if (!reporter.has_errors) {
                 reporter.err(self.diagnosticSpan(span), "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
@@ -1475,26 +1203,12 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn diagnosticSpan(self: *LlvmEmitter, span: ast_bridge.Span) ast_bridge.Span {
-        if (isSourceSpan(span)) return span;
+    fn diagnosticSpan(self: *LlvmEmitter, span: diagnostics.Span) diagnostics.Span {
+        if (hasSourceLocation(span)) return span;
         if (self.current_debug_span) |current| {
-            if (isSourceSpan(current)) return current;
+            if (hasSourceLocation(current)) return current;
         }
         return span;
-    }
-
-    fn unsupportedExprValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
-        self.reportUnsupported(expr.span, @tagName(expr.kind));
-        return error.UnsupportedLlvmEmission;
-    }
-
-    fn nullablePayloadIsValueType(self: *LlvmEmitter, child: ast_bridge.TypeExpr) bool {
-        const resolved = self.resolveAliasType(child);
-        return switch (resolved.kind) {
-            .name => |n| !std.mem.eql(u8, n.text, "c_void"),
-            .qualified => |node| self.nullablePayloadIsValueType(node.child.*),
-            else => false,
-        };
     }
 
     fn emitMirAggregateReturnPointerFactConsumedComment(self: *LlvmEmitter, fact: mir.AggregateReturnPointerFact) !void {
@@ -1577,12 +1291,12 @@ const LlvmEmitter = struct {
         while (it.next()) |entry| {
             const thunk = entry.value_ptr.*;
             const sig = thunk.sig;
-            const ret_llvm = try self.llvmType(sig.ret);
-            const env_llvm = try self.llvmType(sig.params[0].ty);
+            const ret_llvm = try self.llvmSignatureType(sig.return_type_id);
+            const env_llvm = try self.llvmSignatureType(sig.params[0].type_id);
             self.temp_index = 0;
             try self.out.print(self.allocator, "define {s} @{s}(ptr %env", .{ ret_llvm, entry.key_ptr.* });
             for (sig.params[1..], 0..) |param, i| {
-                try self.out.print(self.allocator, ", {s} %a{d}", .{ try self.llvmType(param.ty), i });
+                try self.out.print(self.allocator, ", {s} %a{d}", .{ try self.llvmSignatureType(param.type_id), i });
             }
             if (self.linux_kernel and self.target_arch == .x86_64)
                 try self.out.appendSlice(self.allocator, ") nounwind fn_ret_thunk_extern {\nbb_entry:\n")
@@ -1594,18 +1308,18 @@ const LlvmEmitter = struct {
                 try self.out.appendSlice(self.allocator, ") {\nbb_entry:\n");
             const narrowed = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = ptrtoint ptr %env to {s}\n", .{ narrowed, env_llvm });
-            const returns_void = typeNameEql(sig.ret, "void");
+            const returns_void = try signature_type_mechanics.isVoid(self.mir_module.signature_types, sig.return_type_id);
             const result = if (returns_void) "" else try self.nextTemp();
-            const ret_ext = if (sig.c_abi) self.cAbiExtension(sig.ret) else "";
-            const env_ext = if (sig.c_abi) self.cAbiExtension(sig.params[0].ty) else "";
+            const ret_ext = if (sig.c_abi) self.cAbiExtensionForSignature(sig.return_type_id) else "";
+            const env_ext = if (sig.c_abi) self.cAbiExtensionForSignature(sig.params[0].type_id) else "";
             if (returns_void) {
                 try self.out.print(self.allocator, "  call void @{s}({s} {s}{s}", .{ thunk.fname, env_llvm, env_ext, narrowed });
             } else {
                 try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}({s} {s}{s}", .{ result, ret_ext, ret_llvm, thunk.fname, env_llvm, env_ext, narrowed });
             }
             for (sig.params[1..], 0..) |param, i| {
-                const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
-                try self.out.print(self.allocator, ", {s} {s}%a{d}", .{ try self.llvmType(param.ty), param_ext, i });
+                const param_ext = if (sig.c_abi) self.cAbiExtensionForSignature(param.type_id) else "";
+                try self.out.print(self.allocator, ", {s} {s}%a{d}", .{ try self.llvmSignatureType(param.type_id), param_ext, i });
             }
             try self.out.appendSlice(self.allocator, ")\n");
             if (returns_void) {
@@ -1623,111 +1337,6 @@ const LlvmEmitter = struct {
         return if (identity.id.eql(id) and identity.kind == .function) identity.spelling else null;
     }
 
-    fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
-        const source_llvm = try self.llvmType(source_ty);
-        const target_llvm = try self.llvmType(target_ty);
-        if (std.mem.eql(u8, source_llvm, target_llvm) and
-            self.fixedLayoutBitsOf(source_ty) != null and
-            self.fixedLayoutBitsOf(target_ty) != null)
-        {
-            return value;
-        }
-        if (std.mem.eql(u8, source_llvm, target_llvm)) {
-            const source_name = typeName(self.resolveAliasType(source_ty));
-            const target_name = typeName(self.resolveAliasType(target_ty));
-            if (source_name != null and target_name != null and std.mem.eql(u8, source_name.?, target_name.?)) {
-                return value;
-            }
-        }
-        // A `[]mut T as []const T` const-narrowing cast is a no-op: both slices lower to the
-        // identical `{ ptr, i64 }` LLVM type (LLVM pointers carry no constness).
-        if (std.mem.eql(u8, source_llvm, target_llvm) and
-            self.resolveAliasType(source_ty).kind == .slice and
-            self.resolveAliasType(target_ty).kind == .slice)
-        {
-            return value;
-        }
-        if (lower_llvm_shape.pointerAddressCoercion(&self.type_aliases, source_ty, target_ty)) {
-            return try self.emitBitcastValue(value, source_ty, target_ty);
-        }
-        if ((self.integerBitsOf(source_ty) != null or self.enumDeclForType(source_ty) != null) and
-            (self.integerBitsOf(target_ty) != null or self.enumDeclForType(target_ty) != null))
-        {
-            return try self.castIntegerValue(value, source_ty, target_ty);
-        }
-        if (typeNameEql(self.resolveAliasType(source_ty), "bool") and self.integerBitsOf(target_ty) != null) {
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = zext i1 {s} to {s}\n", .{ result, value, target_llvm });
-            return result;
-        }
-        if (self.integerBitsOf(source_ty) != null and typeNameEql(self.resolveAliasType(target_ty), "bool")) {
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, 0\n", .{ result, source_llvm, value });
-            return result;
-        }
-        // Float <-> float: widen f32->f64 (fpext) or narrow f64->f32 (fptrunc). Same-width
-        // float-to-float is already handled by the identical-llvm-type early return above.
-        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, source_ty) and lower_llvm_shape.isFloatTypeOf(&self.type_aliases, target_ty)) {
-            const op = if (lower_llvm_shape.isF32TypeOf(&self.type_aliases, source_ty)) "fpext" else "fptrunc";
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
-            return result;
-        }
-        // Integer -> float: sitofp for signed sources, uitofp for unsigned.
-        if (self.integerBitsOf(source_ty) != null and lower_llvm_shape.isFloatTypeOf(&self.type_aliases, target_ty)) {
-            const op = if (self.isSignedIntegerType(source_ty)) "sitofp" else "uitofp";
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
-            return result;
-        }
-        // Float -> integer: fptosi for signed targets, fptoui for unsigned (C truncation).
-        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, source_ty) and self.integerBitsOf(target_ty) != null) {
-            const op = if (self.isSignedIntegerType(target_ty)) "fptosi" else "fptoui";
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
-            return result;
-        }
-        return error.UnsupportedLlvmEmission;
-    }
-
-    fn emitBitcastValue(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
-        const source_bits = self.fixedLayoutBitsOf(source_ty) orelse return error.UnsupportedLlvmEmission;
-        const target_bits = self.fixedLayoutBitsOf(target_ty) orelse return error.UnsupportedLlvmEmission;
-        if (source_bits != target_bits) return error.UnsupportedLlvmEmission;
-
-        const source_llvm = try self.llvmType(source_ty);
-        const target_llvm = try self.llvmType(target_ty);
-        if (std.mem.eql(u8, source_llvm, target_llvm)) return value;
-
-        const op: []const u8 = if (std.mem.eql(u8, source_llvm, "ptr"))
-            "ptrtoint"
-        else if (std.mem.eql(u8, target_llvm, "ptr"))
-            "inttoptr"
-        else
-            "bitcast";
-
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
-        return result;
-    }
-
-    fn castIntegerValue(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
-        const source_bits = self.integerBitsOf(source_ty) orelse return error.UnsupportedLlvmEmission;
-        const target_bits = self.integerBitsOf(target_ty) orelse return error.UnsupportedLlvmEmission;
-        if (source_bits == target_bits) return value;
-
-        const result = try self.nextTemp();
-        const source_llvm = try self.llvmType(source_ty);
-        const target_llvm = try self.llvmType(target_ty);
-        if (source_bits < target_bits) {
-            const op: []const u8 = if (self.isSignedIntegerType(source_ty)) "sext" else "zext";
-            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
-        } else {
-            try self.out.print(self.allocator, "  {s} = trunc {s} {s} to {s}\n", .{ result, source_llvm, value, target_llvm });
-        }
-        return result;
-    }
-
     fn emitIntrinsicDecls(self: *LlvmEmitter) !void {
         try self.emitIntrinsicSet(self.need_uadd);
         try self.emitIntrinsicSet(self.need_usub);
@@ -1742,7 +1351,7 @@ const LlvmEmitter = struct {
     fn emitIntrinsicSet(self: *LlvmEmitter, set: std.StringHashMap(void)) !void {
         var it = set.keyIterator();
         while (it.next()) |name| {
-            const bits = intrinsicBits(name.*) orelse continue;
+            const bits = lower_llvm_type_facts.intrinsicBits(name.*) orelse continue;
             try self.out.print(self.allocator, "declare {{ i{d}, i1 }} @{s}(i{d}, i{d})\n", .{ bits, name.*, bits, bits });
         }
     }
@@ -1820,27 +1429,6 @@ const LlvmEmitter = struct {
             const escaped_function_path = try escapedLlvmString(self.scratch.allocator(), function.source_path);
             try self.out.print(self.allocator, "!{d} = !DIFile(filename: \"{s}\", directory: \".\")\n", .{ id, escaped_function_path });
         }
-        var debug_type_ids = std.StringHashMap(usize).init(self.allocator);
-        defer debug_type_ids.deinit();
-        var debug_types: std.ArrayList(DebugBasicType) = .empty;
-        defer debug_types.deinit(self.allocator);
-        for (self.debug_locals.items) |local| {
-            const ty = self.debugBasicType(local.ty) orelse continue;
-            if (!debug_type_ids.contains(ty.name)) {
-                const id = self.debug_next_id;
-                self.debug_next_id += 1;
-                try debug_type_ids.put(ty.name, id);
-                try debug_types.append(self.allocator, ty);
-            }
-        }
-        for (debug_types.items) |ty| {
-            const id = debug_type_ids.get(ty.name) orelse continue;
-            try self.out.print(
-                self.allocator,
-                "!{d} = !DIBasicType(name: \"{s}\", size: {d}, encoding: {s})\n",
-                .{ id, ty.name, ty.size_bits, ty.encoding },
-            );
-        }
         for (self.debug_functions.items) |function| {
             const name = try escapedLlvmString(self.scratch.allocator(), function.name);
             const file_id = debug_file_ids.get(function.source_path) orelse 1;
@@ -1849,29 +1437,6 @@ const LlvmEmitter = struct {
                 "!{d} = distinct !DISubprogram(name: \"{s}\", linkageName: \"{s}\", scope: !{d}, file: !{d}, line: {d}, type: !4, scopeLine: {d}, spFlags: DISPFlagDefinition, unit: !0)\n",
                 .{ function.id, name, name, file_id, file_id, function.line, function.line },
             );
-        }
-        for (self.debug_locals.items) |local| {
-            const ty = self.debugBasicType(local.ty) orelse continue;
-            const type_id = debug_type_ids.get(ty.name) orelse continue;
-            const name = try escapedLlvmString(self.scratch.allocator(), local.name);
-            var local_file_id: usize = 1;
-            for (self.debug_functions.items) |function| {
-                if (function.id != local.scope) continue;
-                local_file_id = debug_file_ids.get(function.source_path) orelse 1;
-                break;
-            }
-            switch (local.kind) {
-                .parameter => try self.out.print(
-                    self.allocator,
-                    "!{d} = !DILocalVariable(name: \"{s}\", arg: {d}, scope: !{d}, file: !{d}, line: {d}, type: !{d})\n",
-                    .{ local.id, name, local.arg_index orelse 0, local.scope, local_file_id, local.line, type_id },
-                ),
-                .variable => try self.out.print(
-                    self.allocator,
-                    "!{d} = !DILocalVariable(name: \"{s}\", scope: !{d}, file: !{d}, line: {d}, type: !{d})\n",
-                    .{ local.id, name, local.scope, local_file_id, local.line, type_id },
-                ),
-            }
         }
         for (self.debug_locations.items) |location| {
             try self.out.print(
@@ -1882,192 +1447,11 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn debugBasicType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?DebugBasicType {
-        const resolved = self.resolveAliasType(ty);
-        if (typeNameEql(resolved, "bool")) return .{ .name = "bool", .size_bits = 1, .encoding = "DW_ATE_boolean" };
-        if (typeNameEql(resolved, "f32")) return .{ .name = "f32", .size_bits = 32, .encoding = "DW_ATE_float" };
-        if (typeNameEql(resolved, "f64")) return .{ .name = "f64", .size_bits = 64, .encoding = "DW_ATE_float" };
-        const bits = self.integerBitsOf(resolved) orelse return null;
-        return switch (resolved.kind) {
-            .name => |name| .{
-                .name = name.text,
-                .size_bits = bits,
-                .encoding = if (isSignedInteger(resolved)) "DW_ATE_signed" else "DW_ATE_unsigned",
-            },
-            else => null,
-        };
-    }
-
-    fn llvmType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| if (std.mem.eql(u8, name.text, "void"))
-                "void"
-            else if (std.mem.eql(u8, name.text, "never"))
-                "void"
-            else if (isOpaqueAddressTypeName(name.text))
-                "i64"
-            else if (std.mem.eql(u8, name.text, "c_void"))
-                "i8"
-            else if (std.mem.eql(u8, name.text, "cstr"))
-                "ptr"
-            else if (std.mem.eql(u8, name.text, "IrqOff"))
-                "i8"
-                // C-ABI varargs cursor. On the RISC-V lp64 ABI `va_list` is a single pointer
-                // (i8*), so the cursor storage is one `ptr`-sized slot. va.start/arg/end operate
-                // on a pointer TO this slot (the generic VAARG legalizer handles the ABI).
-            else if (std.mem.eql(u8, name.text, "va_list"))
-                "ptr"
-            else if (std.mem.eql(u8, name.text, "bool"))
-                "i1"
-            else if (std.mem.eql(u8, name.text, "f32"))
-                "float"
-            else if (std.mem.eql(u8, name.text, "f64"))
-                "double"
-            else if (self.integerBitsOf(resolved_ty)) |bits|
-                try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{bits})
-            else if (self.enum_types.get(name.text)) |enum_decl|
-                try self.llvmType(enumReprType(enum_decl))
-            else if (self.packed_bits.get(name.text)) |info|
-                try self.llvmType(info.repr)
-            else if (self.overlay_unions.get(name.text)) |info|
-                try self.overlayLlvmType(info)
-            else if (self.tagged_unions.get(name.text)) |union_info|
-                try self.taggedUnionLlvmType(union_info.decl)
-            else if (self.struct_types.get(name.text)) |struct_info|
-                try self.structLlvmType(struct_info.decl)
-            else if (libraryScalarLlvmType(name.text)) |library_ty|
-                library_ty
-            else
-                error.UnsupportedLlvmEmission,
-            .pointer, .raw_many_pointer => "ptr",
-            // A pointer nullable lowers to its inner type's representation — the niche is
-            // in-band: `?*T` -> `ptr` (null address), `?*dyn Trait` -> `{ ptr, ptr }` (null
-            // data word). A VALUE optional `?T` has no spare sentinel, so it lowers to a
-            // tagged aggregate `{ i1, <T> }` (present tag + payload).
-            .nullable => |child| if (self.nullablePayloadIsValueType(child.*))
-                try std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s} }}", .{try self.llvmType(child.*)})
-            else
-                try self.llvmType(child.*),
-            .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ self.arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
-            .slice => "{ ptr, i64 }",
-            .fn_pointer => "ptr",
-            .closure_type => "{ ptr, ptr }",
-            // `*dyn Trait` is the same two-word fat pointer shape as a closure:
-            // { data, vtable }. The vtable is a rodata struct of function pointers.
-            .dyn_trait => "{ ptr, ptr }",
-            .generic => |node| if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2)
-                try self.resultLlvmType(node.args[0], node.args[1])
-            else if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
-                try self.atomicStorageLlvmType(node.args[0])
-            else if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1)
-                try self.llvmType(node.args[0])
-            else if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1)
-                try self.llvmType(node.args[0])
-            else if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1)
-                "ptr"
-            else if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2)
-                "i64"
-            else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
-                try self.llvmType(node.args[0])
-            else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
-                "i64"
-            else
-                error.UnsupportedLlvmEmission,
-            else => error.UnsupportedLlvmEmission,
-        };
-    }
-
-    // Callable signatures are materialized from the module-owned
-    // `SignatureTypeTable`, never by rebuilding an AST type.  Nominal names
-    // may still consult the transitional type-declaration registry for their
-    // representation; that is a type-declaration dependency, not a callable
-    // syntax ingress.
+    // Callable signatures are rendered from the module-owned signature graph
+    // and declaration facts.  This is deliberately independent of the
+    // transitional AST declaration registry.
     fn llvmSignatureType(self: *LlvmEmitter, id: mir.SignatureTypeId) ![]const u8 {
-        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedLlvmEmission;
-        return switch (shape) {
-            .name => |name| self.llvmSignatureNameType(name),
-            .enum_literal => error.UnsupportedLlvmEmission,
-            .qualified => |node| self.llvmSignatureType(node.child),
-            .pointer, .raw_many_pointer => "ptr",
-            .slice => "{ ptr, i64 }",
-            .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ node.length orelse return error.UnsupportedLlvmEmission, try self.llvmSignatureType(node.child) }),
-            .nullable => |child| if (self.signatureTypeIsPointerLike(child))
-                self.llvmSignatureType(child)
-            else
-                std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s} }}", .{try self.llvmSignatureType(child)}),
-            .generic => |node| self.llvmSignatureGenericType(node.base, node.args),
-            .fn_pointer => "ptr",
-            .closure_type => "{ ptr, ptr }",
-            // Dynamic dispatch is rejected by backend admission.  Do not
-            // retain a second representation route here.
-            .dyn_trait, .member => error.UnsupportedLlvmEmission,
-        };
-    }
-
-    /// Shared one-way bridge for remaining legacy body mechanics.
-    fn signatureTypeExpr(self: *LlvmEmitter, id: mir.SignatureTypeId, span: diagnostics.Span) anyerror!TransitionalTypeExpr {
-        return signature_type_materializer.typeExpr(self.scratch.allocator(), self.mir_module.signature_types, id, span) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.UnsupportedLlvmEmission,
-        };
-    }
-
-    fn llvmSignatureNameType(self: *LlvmEmitter, name: []const u8) ![]const u8 {
-        if (std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never")) return "void";
-        if (isOpaqueAddressTypeName(name)) return "i64";
-        if (std.mem.eql(u8, name, "c_void") or std.mem.eql(u8, name, "IrqOff")) return "i8";
-        if (std.mem.eql(u8, name, "cstr") or std.mem.eql(u8, name, "va_list")) return "ptr";
-        if (std.mem.eql(u8, name, "bool")) return "i1";
-        if (std.mem.eql(u8, name, "f32")) return "float";
-        if (std.mem.eql(u8, name, "f64")) return "double";
-        // Aliases and aggregates are module-level transitional
-        // type artifacts.  They are intentionally not carried by FnSig.
-        if (self.type_aliases.get(name)) |target| return self.llvmType(target);
-        if (self.enum_types.get(name)) |decl| return self.llvmType(enumReprType(decl));
-        if (self.packed_bits.get(name)) |info| return self.llvmType(info.repr);
-        if (self.overlay_unions.get(name)) |info| return self.overlayLlvmType(info);
-        if (self.tagged_unions.get(name)) |info| return self.taggedUnionLlvmType(info.decl);
-        if (self.struct_types.get(name)) |info| return self.structLlvmType(info.decl);
-        if (scalar_repr.integer(name)) |integer| return std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{integer.bits});
-        if (libraryScalarLlvmType(name)) |ty| return ty;
-        return error.UnsupportedLlvmEmission;
-    }
-
-    fn llvmSignatureGenericType(self: *LlvmEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {
-        if (std.mem.eql(u8, base, "Result") and args.len == 2) {
-            const ok = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, args[0])) "i8" else try self.llvmSignatureType(args[0]);
-            const err = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, args[1])) "i8" else try self.llvmSignatureType(args[1]);
-            return std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s}, {s} }}", .{ ok, err });
-        }
-        if (std.mem.eql(u8, base, "atomic") and args.len == 1) return self.llvmSignatureType(args[0]);
-        if (std.mem.eql(u8, base, "MaybeUninit") and args.len == 1) return self.llvmSignatureType(args[0]);
-        if ((std.mem.eql(u8, base, "Reg") or std.mem.eql(u8, base, "RegBits")) and args.len >= 1) return self.llvmSignatureType(args[0]);
-        if (std.mem.eql(u8, base, "MmioPtr") and args.len == 1) return "ptr";
-        if (std.mem.eql(u8, base, "DmaBuf") and args.len == 2) return "i64";
-        if (isPayloadDomainGenericName(base) and args.len == 1) return self.llvmSignatureType(args[0]);
-        if (isOpaqueAddressGenericName(base) and args.len >= 1) return "i64";
-        return error.UnsupportedLlvmEmission;
-    }
-
-    fn signatureTypeIsPointerLike(self: *LlvmEmitter, id: mir.SignatureTypeId) bool {
-        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return false;
-        return switch (shape) {
-            .pointer, .raw_many_pointer, .fn_pointer => true,
-            .qualified => |node| self.signatureTypeIsPointerLike(node.child),
-            .name => |name| std.mem.eql(u8, name, "cstr"),
-            .generic => |node| std.mem.eql(u8, node.base, "MmioPtr") or std.mem.eql(u8, node.base, "UserPtr") or std.mem.eql(u8, node.base, "PhysPtr"),
-            else => false,
-        };
-    }
-
-    fn resultLlvmType(self: *LlvmEmitter, ok_ty: TransitionalTypeExpr, err_ty: TransitionalTypeExpr) ![]const u8 {
-        return std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s}, {s} }}", .{ try self.resultPayloadLlvmType(ok_ty), try self.resultPayloadLlvmType(err_ty) });
-    }
-
-    fn resultPayloadLlvmType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
-        if (typeNameEql(self.resolveAliasType(ty), "void")) return "i8";
-        return try self.llvmType(ty);
+        return lower_llvm_type_facts.render(self.scratch.allocator(), &self.mir_module, id) catch return error.UnsupportedLlvmEmission;
     }
 
     fn nextTemp(self: *LlvmEmitter) ![]const u8 {
@@ -2094,195 +1478,6 @@ const LlvmEmitter = struct {
             if (!self.currentSourceParamUsesLlvmName(label)) return label;
         }
     }
-
-    fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast_bridge.TypeExpr) ![]const u8 {
-        if (typeNameEql(self.resolveAliasType(payload_ty), "bool")) return "i8";
-        return self.llvmType(payload_ty);
-    }
-
-    fn structDeclForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.StructDecl {
-        return lower_llvm_lookup.structDeclForType(&self.type_aliases, &self.struct_types, ty);
-    }
-
-    fn packedBitsInfoForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?PackedBitsInfo {
-        return lower_llvm_lookup.packedBitsInfoForType(&self.type_aliases, &self.packed_bits, ty);
-    }
-
-    fn overlayInfoForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?OverlayUnionInfo {
-        return lower_llvm_lookup.overlayInfoForType(&self.type_aliases, &self.overlay_unions, ty);
-    }
-
-    fn taggedUnionForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.UnionDecl {
-        return lower_llvm_lookup.taggedUnionForType(&self.type_aliases, &self.tagged_unions, ty);
-    }
-
-    fn taggedUnionLlvmType(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl) ![]const u8 {
-        const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
-        const storage_ty = try self.taggedUnionPayloadStorageType(layout);
-        if (layout.padding_size == 0) {
-            return std.fmt.allocPrint(self.scratch.allocator(), "{{ i32, {s} }}", .{storage_ty});
-        }
-        return std.fmt.allocPrint(self.scratch.allocator(), "{{ i32, [{d} x i8], {s} }}", .{ layout.padding_size, storage_ty });
-    }
-
-    fn taggedUnionLayout(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl, depth: usize) ?TaggedUnionLayout {
-        _ = depth;
-        return if (self.tagged_unions.get(union_decl.name.text)) |info| info.layout else null;
-    }
-
-    fn taggedUnionPayloadStorageType(self: *LlvmEmitter, layout: TaggedUnionLayout) ![]const u8 {
-        const bits = layout.payload_alignment * 8;
-        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ layout.storage_count, bits });
-    }
-
-    fn enumDeclForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.EnumDecl {
-        return lower_llvm_lookup.enumDeclForType(&self.type_aliases, &self.enum_types, ty);
-    }
-
-    fn enumReprType(enum_decl: ast_bridge.EnumDecl) ast_bridge.TypeExpr {
-        return enum_decl.repr orelse simpleType(enum_decl.name.span, "isize");
-    }
-
-    fn enumCaseValue(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl, case: ast_bridge.EnumCase) ![]const u8 {
-        if (case.value) |value| return try self.enumLiteralValue(value);
-        for (enum_decl.cases, 0..) |candidate, i| {
-            if (std.mem.eql(u8, candidate.name.text, case.name.text)) {
-                return try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{i});
-            }
-        }
-        return error.UnsupportedLlvmEmission;
-    }
-
-    fn enumLiteralValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
-        return switch (expr.kind) {
-            .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
-            .grouped => |inner| try self.enumLiteralValue(inner.*),
-            .unary => |node| blk: {
-                if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try self.enumLiteralValue(node.expr.*)});
-            },
-            else => error.UnsupportedLlvmEmission,
-        };
-    }
-
-    fn resolveAliasType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {
-        return type_bridge.resolveAliasType(&self.type_aliases, ty);
-    }
-
-    fn structLlvmType(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) anyerror![]const u8 {
-        if (struct_decl.is_c_union) return try self.cUnionLlvmType(struct_decl);
-        var text: std.ArrayList(u8) = .empty;
-        try text.appendSlice(self.scratch.allocator(), "{ ");
-        for (struct_decl.fields, 0..) |field, i| {
-            if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
-            const field_ty = if (isMmioStructAbi(struct_decl))
-                (self.mmioFieldInfo(field) orelse return error.UnsupportedLlvmEmission).storage_ty
-            else
-                field.ty;
-            try text.appendSlice(self.scratch.allocator(), try self.llvmType(field_ty));
-        }
-        try text.appendSlice(self.scratch.allocator(), " }");
-        return text.toOwnedSlice(self.scratch.allocator());
-    }
-
-    fn overlayLlvmType(self: *LlvmEmitter, info: OverlayUnionInfo) ![]const u8 {
-        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i8]", .{info.size});
-    }
-
-    // A `#[c_union]` has no native LLVM union. Represent it as a storage array whose element
-    // integer width encodes the max field alignment (`[count x i{align*8}]`) — the same
-    // alignment-carrying idiom used for tagged-union payloads — so an alloca/field of this
-    // type gets both the largest arm's size AND its alignment. All arms live at offset 0, so
-    // member access needs no GEP (see emitMemberAddress); the pointer IS reinterpreted per arm.
-    fn cUnionLlvmType(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) ![]const u8 {
-        const layout = self.cUnionStorageLayout(struct_decl) orelse return error.UnsupportedLlvmEmission;
-        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ layout.count, layout.alignment * 8 });
-    }
-
-    const CUnionStorageLayout = struct { count: usize, alignment: usize };
-
-    fn cUnionStorageLayout(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) ?CUnionStorageLayout {
-        const info = self.struct_types.get(struct_decl.name.text) orelse return null;
-        const storage_alignment = info.storage_alignment orelse return null;
-        const storage_size = info.storage_size orelse return null;
-        if (!struct_decl.is_c_union or storage_alignment == 0 or storage_size == 0) return null;
-        if (storage_alignment != 1 and storage_alignment != 2 and storage_alignment != 4 and storage_alignment != 8 and storage_alignment != 16) return null;
-        if (storage_size % storage_alignment != 0) return null;
-        return .{
-            .count = @max(@as(usize, 1), storage_size / storage_alignment),
-            .alignment = storage_alignment,
-        };
-    }
-
-    fn mmioFieldInfo(self: *LlvmEmitter, field: ast_bridge.Field) ?MmioFieldInfo {
-        _ = self;
-        const generic = switch (field.ty.kind) {
-            .generic => |node| node,
-            else => return null,
-        };
-        if (std.mem.eql(u8, generic.base.text, "Reg")) {
-            if (generic.args.len != 2) return null;
-            return .{ .storage_ty = generic.args[0], .value_ty = generic.args[0] };
-        }
-        if (std.mem.eql(u8, generic.base.text, "RegBits")) {
-            if (generic.args.len != 3) return null;
-            return .{ .storage_ty = generic.args[0], .value_ty = generic.args[1] };
-        }
-        return null;
-    }
-
-    fn arrayLenValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
-        var env = self.reflectEnv();
-        return lower_llvm_reflect.arrayLenValue(&env, expr);
-    }
-
-    fn integerBitsOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?u16 {
-        if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
-        if (self.packedBitsInfoForType(ty)) |info| return self.integerBitsOf(info.repr);
-        if (self.structDeclForType(ty) != null or self.taggedUnionForType(ty) != null or self.overlayInfoForType(ty) != null) return null;
-        if (lower_llvm_shape.domainPayloadType(&self.type_aliases, ty)) |payload_ty| return self.integerBitsOf(payload_ty);
-        return integerBits(self.resolveAliasType(ty));
-    }
-
-    fn isSignedIntegerType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
-        if (self.enumDeclForType(ty)) |enum_decl| return self.isSignedIntegerType(enumReprType(enum_decl));
-        if (self.packedBitsInfoForType(ty)) |info| return self.isSignedIntegerType(info.repr);
-        if (lower_llvm_shape.domainPayloadType(&self.type_aliases, ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
-        return isSignedInteger(self.resolveAliasType(ty));
-    }
-
-    fn fixedLayoutBitsOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?u16 {
-        if (self.integerBitsOf(ty)) |bits| return bits;
-        const resolved = self.resolveAliasType(ty);
-        return switch (resolved.kind) {
-            .name => |name| if (std.mem.eql(u8, name.text, "f32"))
-                32
-            else if (std.mem.eql(u8, name.text, "f64") or isOpaqueAddressTypeName(name.text))
-                64
-            else
-                null,
-            .pointer, .raw_many_pointer, .nullable, .slice, .fn_pointer => 64,
-            .generic => |node| if ((isOpaqueAddressGenericName(node.base.text) or std.mem.eql(u8, node.base.text, "MmioPtr")) and node.args.len == 1) 64 else null,
-            .qualified => |node| self.fixedLayoutBitsOf(node.child.*),
-            else => null,
-        };
-    }
-
-    fn isAggregateType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
-        const resolved_ty = self.resolveAliasType(ty);
-        if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.isAggregateType(payload_ty);
-        return switch (resolved_ty.kind) {
-            .array => true,
-            .slice => true,
-            .closure_type => true,
-            .dyn_trait => true,
-            .nullable => |child| self.nullablePayloadIsValueType(child.*) or self.isAggregateType(child.*),
-            .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null or self.taggedUnionForType(resolved_ty) != null,
-            .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
-            else => false,
-        };
-    }
 };
 
 fn spanFromSourcePoint(source: mir.SourcePoint) diagnostics.Span {
@@ -2292,4 +1487,12 @@ fn spanFromSourcePoint(source: mir.SourcePoint) diagnostics.Span {
         .line = source.line,
         .column = @intCast(source.column),
     };
+}
+
+/// A diagnostic source location is valid only when both coordinates were
+/// assigned. This deliberately mirrors the source-location predicate used by
+/// the fact layer without converting this backend's diagnostic spans back to
+/// `SourcePoint` through a syntax-to-MIR bridge.
+fn hasSourceLocation(span: diagnostics.Span) bool {
+    return span.line != 0 and span.column != 0;
 }

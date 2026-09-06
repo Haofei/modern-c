@@ -7,15 +7,12 @@
 const std = @import("std");
 
 const artifact_model = @import("artifact_model.zig");
-const ast_bridge = @import("ast_bridge.zig");
 const backend = @import("backend.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
-    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     mir_module: *const mir.Module,
@@ -40,7 +37,7 @@ pub fn appendSourceMap(
         .reporter = opts.reporter,
     };
     defer mapper.deinit();
-    try mapper.collectRowArtifacts(source_map_artifacts);
+    try mapper.collectRowFacts(mir_module.source_map_declarations);
     try mapper.emitCollectedRows();
 
     var mir_facts_input: std.ArrayList(u8) = .empty;
@@ -57,7 +54,7 @@ pub fn appendLineDirective(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     source_path: ?[]const u8,
-    span: ast_bridge.Span,
+    span: diagnostics.Span,
 ) !void {
     const path = source_path orelse return;
     if (span.line == 0) return;
@@ -261,23 +258,18 @@ fn valueSpelling(function: mir.Function, id: mir.ValueId) []const u8 {
     return if (identity.id.eql(id)) identity.spelling else "none";
 }
 
-fn sourcePointAsSpan(line: usize, column: usize, offset: usize, len: usize, file_id: u32) mir.SourcePoint {
-    return .{
-        .line = line,
-        .column = column,
-        .offset = offset,
-        .len = len,
-        .file_id = file_id,
-    };
-}
-
-fn astSpanAsSourcePoint(span: ast_bridge.Span) mir.SourcePoint {
-    return .{
-        .line = span.line,
-        .column = span.column,
-        .offset = span.offset,
-        .len = span.len,
-        .file_id = span.file_id,
+fn sourceMapKindName(kind: mir.SourceMapDeclarationKind) []const u8 {
+    return switch (kind) {
+        .global => "global",
+        .function => "function",
+        .extern_fn => "extern_fn",
+        .type_alias => "type_alias",
+        .struct_ => "struct",
+        .enum_ => "enum",
+        .union_ => "union",
+        .packed_bits => "packed_bits",
+        .overlay_union => "overlay_union",
+        .@"opaque" => "opaque",
     };
 }
 
@@ -424,55 +416,64 @@ const SourceMapEmitter = struct {
     symbol_kind: []const u8 = "value",
     visibility: []const u8 = "internal",
     origin: []const u8 = "source",
-    decl_row_artifacts: std.ArrayList(declaration_artifacts.SourceMapArtifact) = .empty,
+    decl_row_facts: std.ArrayList(mir.SourceMapDeclarationFact) = .empty,
 
     fn deinit(self: *SourceMapEmitter) void {
-        self.decl_row_artifacts.deinit(self.allocator);
+        self.decl_row_facts.deinit(self.allocator);
         self.scratch.deinit();
     }
 
-    fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const declaration_artifacts.SourceMapArtifact) !void {
-        for (artifacts) |artifact| {
-            try self.decl_row_artifacts.append(self.allocator, artifact);
+    fn collectRowFacts(self: *SourceMapEmitter, facts: []const mir.SourceMapDeclarationFact) !void {
+        for (facts) |fact| {
+            try self.decl_row_facts.append(self.allocator, fact);
         }
     }
 
     fn emitCollectedRows(self: *SourceMapEmitter) !void {
-        for (self.decl_row_artifacts.items) |artifact| {
-            switch (artifact) {
-                .global => |global| {
-                    self.origin = global.origin;
-                    self.symbol_kind = if (global.is_const) "assoc_const" else "value";
+        for (self.decl_row_facts.items) |fact| {
+            const symbol = self.symbolSpelling(fact.symbol_id) orelse return error.InvalidMirSourceMapDeclarationFacts;
+            const object_symbol = fact.backend_name orelse symbol;
+            switch (fact.kind) {
+                .global => {
+                    self.origin = fact.origin;
+                    self.symbol_kind = if (fact.is_const) "assoc_const" else "value";
                     self.visibility = "internal";
-                    try self.emitEntry("global", global.symbol, astSpanAsSourcePoint(global.name_span), global.symbol, "mir:global:init");
-                    if (global.init_span) |init_span| try self.emitEntry("global_initializer_expr", global.symbol, astSpanAsSourcePoint(init_span), global.symbol, "mir:global:init");
+                    try self.emitEntry("global", symbol, fact.declaration_source, object_symbol, "mir:global:init");
+                    if (fact.initializer_source) |init_source| try self.emitEntry("global_initializer_expr", symbol, init_source, object_symbol, "mir:global:init");
                 },
-                .function => |function| {
-                    self.origin = function.origin;
+                .function => {
+                    self.origin = fact.origin;
                     self.symbol_kind = "free_fn";
-                    self.visibility = if (function.exported) "exported" else "internal";
-                    try self.emitEntry("function", function.symbol, astSpanAsSourcePoint(function.name_span), function.object_symbol, "mir:function:entry");
+                    self.visibility = if (fact.exported) "exported" else "internal";
+                    try self.emitEntry("function", symbol, fact.declaration_source, object_symbol, "mir:function:entry");
                     const previous_function = self.current_function;
-                    self.current_function = function.symbol;
-                    try self.emitFunctionMirRows(function.symbol);
+                    self.current_function = symbol;
+                    try self.emitFunctionMirRows(symbol);
                     self.current_function = previous_function;
                 },
-                .extern_fn => |function| {
-                    self.origin = function.origin;
+                .extern_fn => {
+                    self.origin = fact.origin;
                     self.symbol_kind = "extern_fn";
                     self.visibility = "exported";
-                    try self.emitEntry("extern_fn", function.symbol, astSpanAsSourcePoint(function.name_span), function.symbol, "mir:function:entry");
+                    try self.emitEntry("extern_fn", symbol, fact.declaration_source, object_symbol, "mir:function:entry");
                 },
-                .type_decl => |decl| {
-                    self.origin = decl.origin;
-                    self.symbol_kind = if (std.mem.eql(u8, decl.kind, "type_alias")) "type_alias" else "type";
+                .type_alias, .struct_, .enum_, .union_, .packed_bits, .overlay_union, .@"opaque" => {
+                    self.origin = fact.origin;
+                    const kind = sourceMapKindName(fact.kind);
+                    self.symbol_kind = if (fact.kind == .type_alias) "type_alias" else "type";
                     self.visibility = "internal";
-                    try self.emitEntry(decl.kind, decl.symbol, astSpanAsSourcePoint(decl.name_span), decl.symbol, "-");
+                    try self.emitEntry(kind, symbol, fact.declaration_source, object_symbol, "-");
                 },
             }
         }
         self.symbol_kind = "value";
         self.visibility = "internal";
+    }
+
+    fn symbolSpelling(self: *const SourceMapEmitter, id: mir.SymbolId) ?[]const u8 {
+        if (!id.isValid() or id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[id.index()];
+        return if (identity.id.eql(id)) identity.spelling else null;
     }
 
     fn emitFunctionMirRows(self: *SourceMapEmitter, symbol: []const u8) !void {
@@ -486,9 +487,9 @@ const SourceMapEmitter = struct {
         }
         for (function.blocks) |block| {
             for (block.instructions, 0..) |instruction, instruction_index| {
-                const source = mir.sourcePointForSpanId(function, instruction.typed_span_id) orelse continue;
+                var source = mir.sourcePointForSpanId(function, instruction.typed_span_id) orelse continue;
                 if (source.line == 0) continue;
-                const span = sourcePointAsSpan(source.line, source.column, source.offset, source.len, if (source.file_id == diagnostics.invalid_file_id) file_id else source.file_id);
+                if (source.file_id == diagnostics.invalid_file_id) source.file_id = file_id;
                 const mir_block = try std.fmt.allocPrint(
                     self.allocator,
                     "mir:{s}:block:{d}:instr:{d}:{s}",
@@ -496,15 +497,15 @@ const SourceMapEmitter = struct {
                 );
                 defer self.allocator.free(mir_block);
                 const primary_kind = sourceMapKindForMirInstruction(function, instruction) orelse continue;
-                const row_key = try std.fmt.allocPrint(self.allocator, "{s}\x00{d}\x00{d}", .{ primary_kind, span.line, span.column });
+                const row_key = try std.fmt.allocPrint(self.allocator, "{s}\x00{d}\x00{d}", .{ primary_kind, source.line, source.column });
                 const entry = try emitted.getOrPut(row_key);
                 if (entry.found_existing) {
                     self.allocator.free(row_key);
                     continue;
                 }
-                try self.emitEntry(primary_kind, symbol, span, symbol, mir_block);
+                try self.emitEntry(primary_kind, symbol, source, symbol, mir_block);
                 if (instruction.kind == .defer_cleanup) {
-                    try self.emitEntry("defer_expr", symbol, span, symbol, mir_block);
+                    try self.emitEntry("defer_expr", symbol, source, symbol, mir_block);
                 }
             }
         }

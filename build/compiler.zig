@@ -69,8 +69,7 @@ pub fn build(b: *std.Build) h.Ctx {
     unit_shards_step.dependOn(frontend_shard_step);
     unit_shards_step.dependOn(sema_shard_step);
     unit_shards_step.dependOn(mir_cleanup_shard_step);
-    unit_shards_step.dependOn(lower_c_shard_step);
-    unit_shards_step.dependOn(lower_llvm_shard_step);
+    unit_shards_step.dependOn(backend_shard_step);
 
     // Keep the specification fixture suite as an explicit build dependency.
     // Importing it through main is not sufficient for Zig's lazy test analysis.

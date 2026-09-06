@@ -1,26 +1,10 @@
-const ast_bridge = @import("ast_bridge.zig");
 const mir_model = @import("mir_model.zig");
-const type_layout = @import("layout.zig");
-
-pub const LocalSlot = struct {
-    ty: ast_bridge.TypeExpr,
-    ptr: []const u8,
-    kind: LocalSlotKind = .normal,
-    is_mutable: bool = false,
-};
-
-pub const LocalSlotKind = enum {
-    normal,
-    va_list_local,
-    va_list_param,
-};
 
 pub const FnSig = struct {
-    /// Canonical callable result identity. `ret` is a backend-local transient
-    /// materialized from `return_type_id`; it is never source-signature data.
+    /// Canonical callable result identity. LLVM declaration and thunk
+    /// rendering consume this through the module-owned signature table.
     return_ty: mir_model.ValueType,
     return_type_id: mir_model.SignatureTypeId,
-    ret: ast_bridge.TypeExpr,
     params: []const FnParam,
     c_abi: bool = false,
     is_variadic: bool = false,
@@ -30,14 +14,13 @@ pub const FnSig = struct {
     error_from: bool = false,
 };
 
-/// Backend-local callable parameter mechanics.  The AST type is synthesized
-/// from the module-owned signature table solely for legacy expression-body
-/// rendering; declaration artifacts never carry it.
+/// Backend-local callable parameter mechanics. Its type is a stable
+/// module-owned signature identity; body lowering must not materialize an
+/// AST type merely to render a declaration or closure thunk.
 pub const FnParam = struct {
     name: []const u8,
     value_ty: mir_model.ValueType,
     type_id: mir_model.SignatureTypeId,
-    ty: ast_bridge.TypeExpr,
     is_comptime: bool = false,
 };
 
@@ -47,105 +30,6 @@ pub const FnParam = struct {
 pub const BindThunk = struct {
     fname: []const u8,
     sig: FnSig,
-};
-
-pub const PackedBitsInfo = struct {
-    repr: ast_bridge.TypeExpr,
-    fields: []const ast_bridge.Field,
-};
-
-pub const OverlayUnionInfo = struct {
-    fields: []const ast_bridge.Field,
-    size: u64,
-    alignment: u64,
-};
-
-pub const OverlayLayout = struct {
-    size: u64,
-    alignment: u64,
-};
-
-pub const TaggedUnionLayout = type_layout.ComptimeTaggedUnionLayout;
-
-pub const TaggedUnionInfo = struct {
-    decl: ast_bridge.UnionDecl,
-    layout: TaggedUnionLayout,
-};
-
-pub const StructInfo = struct {
-    decl: ast_bridge.StructDecl,
-    storage_size: ?usize,
-    storage_alignment: ?usize,
-};
-
-pub const MmioFieldInfo = struct {
-    storage_ty: ast_bridge.TypeExpr,
-    value_ty: ast_bridge.TypeExpr,
-};
-
-pub const MmioAccessInfo = struct {
-    op: []const u8,
-    base: ast_bridge.Expr,
-    struct_ty: ast_bridge.TypeExpr,
-    storage_ty: ast_bridge.TypeExpr,
-    value_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-    offset: u64,
-};
-
-pub const MmioMapInfo = struct {
-    source_ty: ast_bridge.TypeExpr,
-    payload_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const RawCallInfo = struct {
-    kind: mir_model.CallTargetKind,
-    address_ty: ast_bridge.TypeExpr,
-    payload_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const ByteViewCallInfo = struct {
-    kind: mir_model.CallTargetKind,
-    source_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const ReflectionCallInfo = struct {
-    kind: mir_model.CallTargetKind,
-    target_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const VaCallInfo = struct {
-    kind: mir_model.CallTargetKind,
-    cursor_ty: ?ast_bridge.TypeExpr = null,
-    payload_ty: ?ast_bridge.TypeExpr = null,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const MmioFencePlacement = enum {
-    before_store,
-    after_load,
-};
-
-pub const DmaBufCallInfo = struct {
-    base: ast_bridge.Expr,
-    op: []const u8,
-    dma_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const DmaCacheCallInfo = struct {
-    op: []const u8,
-    dma_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const ArgValue = struct {
-    ty: ast_bridge.TypeExpr,
-    value: []const u8,
 };
 
 pub const StringLiteralGlobal = struct {
@@ -170,99 +54,4 @@ pub const DebugLocation = struct {
     scope: usize,
     line: usize,
     column: usize,
-};
-
-pub const DebugLocalKind = enum {
-    parameter,
-    variable,
-};
-
-pub const DebugLocal = struct {
-    id: usize,
-    name: []const u8,
-    scope: usize,
-    line: usize,
-    ty: ast_bridge.TypeExpr,
-    kind: DebugLocalKind,
-    arg_index: ?usize = null,
-};
-
-pub const LoopLabels = struct {
-    break_label: []const u8,
-    continue_label: []const u8,
-    // G7: source loop label naming this loop (`outer:`), or null when unlabeled.
-    // A labeled `break :outer` / `continue :outer` resolves against this.
-    label: ?[]const u8 = null,
-};
-
-pub const RawManyOffsetInfo = struct {
-    base: ast_bridge.Expr,
-    base_ty: ast_bridge.TypeExpr,
-    element_ty: ast_bridge.TypeExpr,
-    result_ty: ast_bridge.TypeExpr,
-};
-
-pub const EnumRawCallInfo = struct {
-    base: ast_bridge.Expr,
-    enum_ty: ast_bridge.TypeExpr,
-    repr_ty: ast_bridge.TypeExpr,
-};
-
-pub const DomainResidueCallInfo = struct {
-    base: ast_bridge.Expr,
-    domain_ty: ast_bridge.TypeExpr,
-    payload_ty: ast_bridge.TypeExpr,
-};
-
-pub const DomainOpCallInfo = struct {
-    domain_ty: ast_bridge.TypeExpr,
-    payload_ty: ast_bridge.TypeExpr,
-    return_ty: ast_bridge.TypeExpr,
-    interval_ty: ?ast_bridge.TypeExpr,
-    op: []const u8,
-};
-
-pub const ConversionCallInfo = struct {
-    source_ty: ast_bridge.TypeExpr,
-    target_ty: ast_bridge.TypeExpr,
-    op: []const u8,
-};
-
-pub const ReduceCallInfo = struct {
-    source_ty: ast_bridge.TypeExpr,
-    element_ty: ast_bridge.TypeExpr,
-    return_ty: ast_bridge.TypeExpr,
-    op: []const u8,
-};
-
-pub const ConstGetCallInfo = struct {
-    base: ast_bridge.Expr,
-    array_ty: ast_bridge.TypeExpr,
-    element_ty: ast_bridge.TypeExpr,
-    index: u64,
-};
-
-pub const IntRange = struct {
-    min: i128,
-    max: i128,
-};
-
-pub const AtomicCallInfo = struct {
-    base: ast_bridge.Expr,
-    op: []const u8,
-    payload_ty: ast_bridge.TypeExpr,
-    // True when the base is a `*atomic<T>` (the atomic accessed by pointer): the pointer value
-    // is the atomic's address, rather than the base needing `&place`.
-    base_is_pointer: bool = false,
-};
-
-pub const MaybeUninitCallInfo = struct {
-    base: ast_bridge.Expr,
-    op: []const u8,
-    payload_ty: ast_bridge.TypeExpr,
-};
-
-pub const ResultTypeInfo = struct {
-    ok_ty: ast_bridge.TypeExpr,
-    err_ty: ast_bridge.TypeExpr,
 };

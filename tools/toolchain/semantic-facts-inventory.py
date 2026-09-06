@@ -16,18 +16,19 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+RETIRED_COMPATIBILITY_FILES = (
+    "src/declaration_artifacts.zig",
+    "src/mir_facts_view.zig",
+    "src/mir_source_bridge.zig",
+    "src/syntax_bridge.zig",
+)
+
 SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "c-expression-type-inference": {
         "docs/typed-semantic-facts.md": ["| `c-expression-type-inference` |"],
     },
     "c-type-shape-classification": {
         "docs/typed-semantic-facts.md": ["| `c-type-shape-classification` |"],
-        "src/lower_c_info.zig": [
-            "const LocalInfo = lower_c_model.LocalInfo",
-            "const GlobalInfo = lower_c_model.GlobalInfo",
-            "pub fn localInfoFromType(",
-            "pub fn globalInfoFromType(",
-        ],
         "src/lower_c_shape.zig": [
             "pub fn resolvedArrayChildType(",
             "pub fn isPointerLikeGlobalType(",
@@ -35,48 +36,19 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     },
     "c-abi-aggregate-lowering": {
         "docs/typed-semantic-facts.md": ["| `c-abi-aggregate-lowering` |"],
-        "src/lower_c_aggregate.zig": [
-            "pub fn emitArrayLiteral(",
-            "pub fn emitStructLiteral(",
-            "pub fn emitTaggedUnionConstructor(",
+        "src/lower_c_aggregate_deps.zig": [
+            "pub fn emitUnitsInDependencyOrder(",
+            "pub fn collectStructClosure(",
+            "pub fn aggregateDepsSatisfied(",
         ],
     },
     "c-call-target-classification": {
         "docs/typed-semantic-facts.md": ["| `c-call-target-classification` |"],
-        "src/lower_c_call.zig": [
-            "pub fn emitBitcastInferredLocalInit(",
-            "pub fn emitExternNonNullCallInferredLocalInit(",
-            "pub fn emitSequencedCallLocalInit(",
-            "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify",
-            "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias",
-        ],
-        "src/lower_c_reflect.zig": [
-            "pub fn emitReflectionCall",
-            ".reflection_size",
-            ".reflection_repr",
-        ],
-        "src/lower_c_memory.zig": [
-            "pub fn emitByteViewCall",
-            ".byte_view_as_bytes",
-            ".byte_view_equal",
-            "mir.dmaCallFactInfo(kind)",
-        ],
-        "src/lower_c_mmio.zig": [
-            "pub fn emitMmioMapCall",
-            ".mmio_map",
-            "ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload",
-            "ctx.mir_call_target_kind(ctx.emit_ctx, callee.span) != expected",
-            "ctx.mir_target_type(ctx.emit_ctx, .mmio_struct",
-            "ctx.mir_target_type(ctx.emit_ctx, .mmio_storage",
-            "ctx.mir_target_type(ctx.emit_ctx, .mmio_value",
-            "ctx.mir_target_type(ctx.emit_ctx, .mmio_result",
-        ],
-        "src/lower_c_convert.zig": [
-            "mir.conversionCallTargetKindForName(op)",
-            "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target",
-        ],
-        "src/lower_c_try.zig": [
-            "ctx.call_ctx.mir_call_target_kind(ctx.call_ctx.emit_ctx, expr.span)",
+        "src/mir_executable_c.zig": [
+            ".atomic_load => |load|",
+            ".atomic_update => |update|",
+            ".dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice",
+            ".raw_load =>",
         ],
         "src/lower_c_collect.zig": [],
     },
@@ -192,57 +164,36 @@ T3_DISPOSITION_AUDIT: dict[str, list[str]] = {
 T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
     "registered-semantic-family": [
         "src/ast_query.zig",
-        "src/lower_c_aggregate.zig",
+        "src/lower_c_aggregate_deps.zig",
         "src/lower_c_emitter.zig",
-        "src/lower_c_expr.zig",
         "src/lower_c_global.zig",
-        "src/lower_c_info.zig",
         "src/lower_c_layout.zig",
         "src/lower_c_shape.zig",
-        "src/lower_c_target.zig",
         "src/lower_c_type.zig",
     ],
     "mir-fact-consumer": [
         "src/lower_c.zig",
-        "src/lower_c_access.zig",
-        "src/lower_c_arith.zig",
         "src/lower_c_atomic.zig",
-        "src/lower_c_builtin_emit.zig",
-        "src/lower_c_call.zig",
         "src/lower_c_collect.zig",
-        "src/lower_c_convert.zig",
-        "src/lower_c_domain.zig",
-        "src/lower_c_memory.zig",
-        "src/lower_c_mmio.zig",
-        "src/lower_c_reflect.zig",
-        "src/lower_c_special.zig",
-        "src/lower_c_switch.zig",
-        "src/lower_c_try.zig",
         "src/lower_llvm_atomic.zig",
-        "src/lower_llvm_reflect.zig",
     ],
     "mechanics-only": [
         "src/lower_c_asm.zig",
         "src/lower_c_const.zig",
         "src/lower_c_defs.zig",
         "src/lower_c_dispatch.zig",
-        "src/lower_c_flow.zig",
-        "src/lower_c_inspect.zig",
         "src/lower_c_map.zig",
+        "src/lower_c_mmio_defs.zig",
         "src/lower_c_model.zig",
         "src/lower_c_names.zig",
         "src/lower_c_op.zig",
-        "src/lower_c_overlay.zig",
         "src/lower_c_runtime.zig",
         "src/lower_llvm_model.zig",
         "src/lower_llvm.zig",
-        "src/lower_llvm_lookup.zig",
         "src/lower_llvm_op.zig",
         "src/lower_llvm_prelude.zig",
-        "src/lower_llvm_query.zig",
-        "src/lower_llvm_shape.zig",
         "src/lower_llvm_text.zig",
-        "src/lower_llvm_type.zig",
+        "src/lower_llvm_type_facts.zig",
     ],
 }
 
@@ -381,10 +332,9 @@ C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "C aggregate-global representation is an accepted internal target policy",
     ],
-    "src/lower_c_info.zig": [
-        "pub const AggregateGlobalCShape = enum",
-        "pub fn aggregateGlobalCShape(",
-        "pub fn isAggregateGlobalType(",
+    "src/lower_c_emitter.zig": [
+        "fn isAggregateGlobalType(self: *CEmitter",
+        "if (self.isAggregateGlobalType(signature_ty)) \"{0}\" else \"0\"",
     ],
     "src/lower_c_tests.zig": [
         'test "lower-c materialized aggregate globals use the C aggregate representation policy"',
@@ -689,21 +639,6 @@ ANCHORS: dict[str, list[str]] = {
     "tests/spec/return_types.mc": [
         "reject_out_of_range_literal_return",
     ],
-    "src/lower_c_arith.zig": [
-        "pub const MirCheckElidedFn",
-        "pub const MirNoOverflowRangeFactFn",
-        "ctx.mir_check_elided",
-        "has_mir_no_overflow_range_fact",
-    ],
-    "src/lower_c_domain.zig": [
-        "mir.domainCallFactInfo(kind)",
-        "ctx.mir_target_type(ctx.emit_ctx, .domain_result",
-        "ctx.mir_target_type(ctx.emit_ctx, .domain_interval",
-    ],
-    "src/lower_c_builtin_emit.zig": [
-        "lower_c_arith.uncheckedCallInfo(ctx.arith, node)",
-        "return error.UnsupportedCEmission",
-    ],
     "src/lower_c.zig": [
         "VerifiedProgram.init(typed_mir",
     ],
@@ -714,14 +649,6 @@ ANCHORS: dict[str, list[str]] = {
         "pub fn emitGlobalArrayElementLoadExpr",
         "pub fn appendGlobalArrayElementStore",
         "pub fn appendGlobalArrayElementMemberStore",
-    ],
-    "src/lower_c_inspect.zig": [
-        '"lower ordinary_access',
-        '"lower race_backend',
-        '"lower race_semantics',
-        '"lower c_ub',
-        '"lower racing_load_semantics',
-        '"lower contract_scope',
     ],
     "src/lower_llvm.zig": [
         "VerifiedProgram.init(module_mir",
@@ -791,7 +718,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/codegen_request.zig": {
         '@import("early_declaration_metadata.zig")': 0,
-        '@import("declaration_artifacts.zig")': 1,
+        '@import("declaration_artifacts.zig")': 0,
         '@import("source_map_rows.zig")': 0,
         "early_declaration_metadata: early_declaration_metadata.EarlyDeclarationMetadataView": 0,
         "early_declaration_metadata: early_declaration_metadata.EarlyDeclarationArtifacts": 0,
@@ -801,7 +728,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "function_bodies: CodegenFunctionBodyArtifacts": 0,
         "source_map_rows: source_map_rows.SourceMapRows": 0,
         "source_map_artifacts: []const declaration_artifacts.SourceMapArtifact": 0,
-        "source_map_artifacts: []const SourceMapArtifact": 1,
+        "source_map_artifacts: []const SourceMapArtifact": 0,
         "source_map_rows: source_map_rows.SourceMapRowsView": 0,
     },
     "src/main.zig": {
@@ -818,7 +745,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/driver_codegen.zig": {
         '@import("driver_codegen_inputs.zig")': 1,
-        "driver_codegen_inputs.DeclarationArtifacts": 5,
+        "driver_codegen_inputs.DeclarationArtifacts": 0,
         "try driver_codegen_inputs.buildBackendInputs(": 3,
         "try driver_codegen_inputs.buildCArtifactInputs(": 2,
     },
@@ -973,8 +900,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/driver_codegen_inputs.zig": {
         '@import("ast.zig")': 0,
-        '@import("declaration_artifacts.zig")': 1,
-        "pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts": 1,
+        '@import("declaration_artifacts.zig")': 0,
+        "pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts": 0,
         "pub fn buildBackendInputs(": 1,
         "pub fn buildCArtifactInputs(": 1,
         "module: ast.Module": 0,
@@ -984,7 +911,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "session.buildMirFromResolvedDecls(resolved_decls": 1,
         "DeclarationArtifacts.collectFromDecls(session.allocator, module.decls)": 0,
         "DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls)": 0,
-        "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir)": 2,
+        "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir)": 0,
         "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, fallback_decls)": 0,
     },
     "src/lower_llvm_prelude.zig": {
@@ -1173,35 +1100,6 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "return collectConstGlobalsFromDeclsWithOptions(allocator, module, module.decls": 0,
         "return collectConstGlobalsFromDeclsWithOptions(allocator, module.decls": 0,
     },
-    "src/mir_source_bridge.zig": {
-        "Transitional AST-span to MIR-source-point bridge.": 1,
-        "pub fn sourcePointMatchesSpan(": 0,
-        "pub fn sourcePointFromOptionalSpan(": 1,
-        "pub fn isSourceSpan(": 1,
-        "pub fn firstCallTargetKindAt(": 1,
-        "pub fn uniqueCallTargetKindAt(": 1,
-        "pub fn hasCallTargetKindAt(": 1,
-        "pub const TargetTypeLookupKey = mir_facts_view.TargetTypeLookupKey": 1,
-        "pub fn targetTypeFactById(": 1,
-        "pub fn targetTypeFactAtWithModuleFallback(": 0,
-        "pub fn targetTypeFactAtCurrentSpan(": 1,
-        "pub fn targetTypeFactMatchingType(": 0,
-        "pub fn atomicInitPayloadTypeAt(": 1,
-        "pub fn targetTypeFactAtOwnedWithModuleFallback(": 0,
-        "pub fn targetTypeFactAtOwnedCurrentSpan(": 1,
-        "pub fn uniqueConstGetIndexAt(": 1,
-        "pub fn pointerFactMatchesAt(": 1,
-        "pub fn aggregatePointerFieldFactMatchesAt(": 1,
-        "pub fn pointerFactIsCallInvalidationAt(": 1,
-        "pub fn pointerFactMatchesSubjectFieldAt(": 1,
-        "pub fn pointerFactIsLiveGlobal(": 1,
-        "pub fn pointerFactIsLiveLocal(": 1,
-        "pub fn pointerFactLiveState(": 1,
-    },
-    "src/syntax_bridge.zig": {
-        "Transitional backend syntax-shape bridge.": 1,
-        "pub fn deferExprForRefInBlock(": 0,
-    },
     "src/mir_model.zig": {
         "mutability: ast.Mutability": 0,
     },
@@ -1244,18 +1142,21 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, program.runtime_hooks": 1,
     },
     "src/lower_c_map.zig": {
+        '@import("ast_bridge.zig")': 0,
+        "ast_bridge.": 0,
+        "astSpanAsSourcePoint": 0,
         "try mapper.emitModule(module);": 0,
         "fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void": 0,
         "try mapper.collectRowArtifacts(module);": 0,
         "try mapper.collectRowArtifactsFromDecls(decls);": 0,
         "try mapper.collectRowArtifacts(source_map.artifacts);": 0,
-        "try mapper.collectRowArtifacts(source_map_artifacts);": 1,
+        "try mapper.collectRowArtifacts(source_map_artifacts);": 0,
         "try mapper.collectRowArtifacts(artifacts.source_map_artifacts);": 0,
         "try mapper.emitCollectedRows();": 1,
         "fn collectRowArtifacts(self: *SourceMapEmitter, module: ast.Module) !void": 0,
         "fn collectRowArtifactsFromDecls(self: *SourceMapEmitter, decls: []const ast.Decl) !void": 0,
         "fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const source_map_rows.RowArtifact) !void": 0,
-        "fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const declaration_artifacts.SourceMapArtifact) !void": 1,
+        "fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const declaration_artifacts.SourceMapArtifact) !void": 0,
         "fn emitCollectedRows(self: *SourceMapEmitter) !void": 1,
         "fn emitFunctionMirRows(self: *SourceMapEmitter, symbol: []const u8) !void": 1,
         "fn sourceMapKindForMirInstruction(function: mir.Function, instruction: mir.Instruction) ?[]const u8": 1,
@@ -1266,9 +1167,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn emitNestedExpr(self: *SourceMapEmitter": 0,
         "fn emitExprChildren(self: *SourceMapEmitter": 0,
         "try self.decl_row_artifacts.append(self.allocator, decl);": 0,
-        "try self.decl_row_artifacts.append(self.allocator, artifact);": 1,
+        "try self.decl_row_artifacts.append(self.allocator, artifact);": 0,
         "for (self.decl_row_artifacts.items) |decl|": 0,
-        "for (self.decl_row_artifacts.items) |artifact|": 1,
+        "for (self.decl_row_artifacts.items) |artifact|": 0,
         "source_map.syntaxForRowEnumeration()": 0,
         "source_map.declsForRowEnumeration()": 0,
     },
@@ -1334,29 +1235,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/sema_builtin.zig": {
         "pub fn isDeclassifyCallName(": 0,
     },
-    "src/lower_c_expr.zig": {
-        "pub fn isDeclassifyCall(": 0,
-    },
     "src/builtin_syntax.zig": {
         "pub fn knownContractCalleeName(": 1,
         "pub fn reflectionCallKind(": 1,
         "pub fn isAssumeNoaliasCall(": 0,
-    },
-    "src/lower_llvm_query.zig": {
-        "pub fn builtinCallReturnType(": 0,
-        "ast_query.rawLoadCallReturnType(call)": 0,
-        "ast_query.rawPtrCallReturnType(call)": 0,
-        "pub fn isDeclassifyCall(": 0,
-        "pub fn isResultConstructorCall(": 0,
-        "pub fn isPhysCall(": 0,
-        "pub fn isBindCall(": 0,
-        "pub fn isBindCallByNode(": 0,
-        "pub fn isDropCall(": 0,
-        "pub fn isAssumeNoaliasCall(": 0,
-        "fn bitcastTargetType(": 0,
-        "pub fn reflectionCallKind(": 0,
-        "pub const ReflectionCallKind": 0,
-        "ast_query.isPhysCall(call.callee.*)": 0,
     },
     # The ordinary C backend now consumes executable MIR. Keep a compact
     # no-resurrection ratchet for the retired AST function-body authority.
@@ -1436,6 +1318,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
 }
 
+# `declaration_artifacts.zig` was physically deleted after source-map rows
+# moved into module-owned MIR facts. Keep its historical anchor block above as
+# migration archaeology, but remove it from the active inventory so this gate
+# only ratchets files that still exist in the compiler.
+del EXACT_COUNTS["src/declaration_artifacts.zig"]
+
 
 def duplicate_exact_count_files() -> list[str]:
     """Detect duplicate top-level file keys before Python dict parsing hides them."""
@@ -1509,6 +1397,11 @@ def zig_top_level_functions(relative: str) -> dict[str, bool]:
 def main() -> int:
     missing: list[str] = []
     checked = 0
+
+    for relative in RETIRED_COMPATIBILITY_FILES:
+        checked += 1
+        if (REPO_ROOT / relative).exists():
+            missing.append(f"retired compatibility module still exists: {relative}")
 
     for duplicate in duplicate_exact_count_files():
         missing.append(f"EXACT_COUNTS: duplicate top-level file key {duplicate!r}")

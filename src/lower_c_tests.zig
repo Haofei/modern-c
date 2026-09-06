@@ -2,10 +2,9 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
+const c_inspection = @import("c_inspection.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
-const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_runtime = @import("lower_c_runtime.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
@@ -517,9 +516,7 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     var typed_mir = try mir.buildFromDecls(allocator, decls);
     defer typed_mir.deinit();
 
-    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls, &typed_mir);
-    defer artifacts.deinit(allocator);
-    try lower_c.appendCSourceMapFromGenerated(allocator, artifacts.source_map_artifacts, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    try lower_c.appendCSourceMapFromGenerated(allocator, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });
@@ -10892,23 +10889,23 @@ test "C bitcast query accepts only the real builtin call shape" {
     const probe_fn = parsed.decls()[0].kind.fn_decl;
     const probe_ret = probe_fn.body.?.items[0].kind.@"return".?;
     const outer_call = probe_ret.kind.call;
-    try std.testing.expect(!lower_c_expr.isBitcastCall(outer_call));
+    try std.testing.expect(!c_inspection.isBitcastCall(outer_call));
 
     const grouped_callee = outer_call.callee.*.kind.grouped;
     const inner_call = grouped_callee.kind.call;
-    try std.testing.expect(lower_c_expr.isBitcastCall(inner_call));
+    try std.testing.expect(c_inspection.isBitcastCall(inner_call));
 
     const missing_value_fn = parsed.decls()[1].kind.fn_decl;
     const missing_value_ret = missing_value_fn.body.?.items[0].kind.@"return".?;
-    try std.testing.expect(!lower_c_expr.isBitcastCall(missing_value_ret.kind.call));
+    try std.testing.expect(!c_inspection.isBitcastCall(missing_value_ret.kind.call));
 
     const missing_type_fn = parsed.decls()[2].kind.fn_decl;
     const missing_type_ret = missing_type_fn.body.?.items[0].kind.@"return".?;
-    try std.testing.expect(!lower_c_expr.isBitcastCall(missing_type_ret.kind.call));
+    try std.testing.expect(!c_inspection.isBitcastCall(missing_type_ret.kind.call));
 
     const valid_fn = parsed.decls()[3].kind.fn_decl;
     const valid_ret = valid_fn.body.?.items[0].kind.@"return".?;
-    try std.testing.expect(lower_c_expr.isBitcastCall(valid_ret.kind.call));
+    try std.testing.expect(c_inspection.isBitcastCall(valid_ret.kind.call));
 }
 
 test "lower-c inspection markers for lowering-sensitive spec behavior" {
@@ -10946,7 +10943,7 @@ test "lower-c inspection markers for lowering-sensitive spec behavior" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try lower_c.appendInspectionFromDecls(std.testing.allocator, module.decls, &output);
+    try c_inspection.appendInspectionFromDecls(std.testing.allocator, module.decls, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "lower checked_arith") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "op=add") != null);

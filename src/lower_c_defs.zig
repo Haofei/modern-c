@@ -25,7 +25,6 @@ pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]co
 pub const DeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
 pub const FieldDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
 pub const EnumCaseValueFn = *const fn (ctx: *anyopaque, value: ast_bridge.Expr) anyerror!void;
-pub const ResultPayloadCTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -39,7 +38,6 @@ pub const Context = struct {
     declarator: DeclaratorFn,
     field_declarator: FieldDeclaratorFn,
     enum_case_value: EnumCaseValueFn,
-    result_payload_c_type: ResultPayloadCTypeFn,
 };
 
 pub fn emitEnums(ctx: Context, enums: *std.StringHashMap(ast_bridge.EnumDecl)) !void {
@@ -207,9 +205,9 @@ pub fn emitResultType(ctx: Context, result: ResultInfo) !void {
     try ctx.out.appendSlice(ctx.allocator, "union {\n");
     ctx.indent.* += 1;
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} ok;\n", .{try ctx.result_payload_c_type(ctx.emit_ctx, result.ok_ty)});
+    try ctx.out.print(ctx.allocator, "{s} ok;\n", .{result.ok_c_type});
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} err;\n", .{try ctx.result_payload_c_type(ctx.emit_ctx, result.err_ty)});
+    try ctx.out.print(ctx.allocator, "{s} err;\n", .{result.err_c_type});
     ctx.indent.* -= 1;
     try writeIndent(ctx);
     try ctx.out.appendSlice(ctx.allocator, "} payload;\n");
@@ -225,7 +223,7 @@ pub fn emitOptType(ctx: Context, opt: OptInfo) !void {
     try writeIndent(ctx);
     try ctx.out.appendSlice(ctx.allocator, "bool present;\n");
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} value;\n", .{try ctx.c_type(ctx.emit_ctx, opt.payload_ty)});
+    try ctx.out.print(ctx.allocator, "{s} value;\n", .{opt.payload_c_type});
     ctx.indent.* -= 1;
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{opt.name});
 }
@@ -234,43 +232,9 @@ pub fn emitArrayType(ctx: Context, array: ArrayInfo) !void {
     try ctx.out.print(ctx.allocator, "typedef struct {s} {{\n", .{array.name});
     ctx.indent.* += 1;
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} elems[{s}];\n", .{ array.element_c_type, array.len });
+    try ctx.out.print(ctx.allocator, "{s} elems[{d}];\n", .{ array.element_c_type, array.len });
     ctx.indent.* -= 1;
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{array.name});
-}
-
-pub fn emitFnPtrTypes(ctx: Context, fn_ptr_types: *std.StringHashMap(ast_bridge.TypeExpr)) !void {
-    var it = fn_ptr_types.iterator();
-    while (it.next()) |entry| {
-        const node = entry.value_ptr.kind.fn_pointer;
-        try ctx.out.appendSlice(ctx.allocator, "typedef ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, node.ret.*));
-        try ctx.out.print(ctx.allocator, " (*{s})(", .{entry.key_ptr.*});
-        if (node.params.len == 0) {
-            try ctx.out.appendSlice(ctx.allocator, "void");
-        } else {
-            for (node.params, 0..) |param, i| {
-                if (i > 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-                try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, param));
-            }
-        }
-        try ctx.out.appendSlice(ctx.allocator, ");\n\n");
-    }
-}
-
-pub fn emitClosureTypes(ctx: Context, closure_types: *std.StringHashMap(ast_bridge.TypeExpr)) !void {
-    var it = closure_types.iterator();
-    while (it.next()) |entry| {
-        const node = entry.value_ptr.kind.closure_type;
-        try ctx.out.appendSlice(ctx.allocator, "typedef struct { ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, node.ret.*));
-        try ctx.out.appendSlice(ctx.allocator, " (*code)(void *");
-        for (node.params) |param| {
-            try ctx.out.appendSlice(ctx.allocator, ", ");
-            try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, param));
-        }
-        try ctx.out.print(ctx.allocator, "); void *env; }} {s};\n\n", .{entry.key_ptr.*});
-    }
 }
 
 fn emitIgnoredLocalPrefix(ctx: Context, name: []const u8) !void {

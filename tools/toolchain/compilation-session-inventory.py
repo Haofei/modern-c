@@ -143,6 +143,11 @@ def main() -> int:
         "unit_test_step.dependOn(unit_mir_step);",
         "unit_test_step.dependOn(lower_c_shard_step);",
         "unit_test_step.dependOn(lower_llvm_shard_step);",
+        "unit_shards_step.dependOn(backend_shard_step);",
+    )
+    require(
+        "build/tiers.zig",
+        'm0_full_step.dependOn(ctx.cmd("test-unit-shards"));',
     )
 
     print("PASS: compilation-session-inventory - per-file request context is the only production path")

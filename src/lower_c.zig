@@ -1,19 +1,12 @@
 const std = @import("std");
 
-const ast_bridge = @import("ast_bridge.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const codegen_request = @import("codegen_request.zig");
-const SourceMapArtifact = @import("declaration_artifacts.zig").SourceMapArtifact;
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
-const lower_c_inspect = @import("lower_c_inspect.zig");
 const lower_c_map = @import("lower_c_map.zig");
 const lower_c_runtime = @import("lower_c_runtime.zig");
-
-pub fn appendInspectionFromDecls(allocator: std.mem.Allocator, decls: []const ast_bridge.Decl, out: *std.ArrayList(u8)) anyerror!void {
-    return lower_c_inspect.appendInspectionFromDecls(allocator, decls, out);
-}
 
 // The target conformance profile is owned by the backend seam. `kernel` is
 // freestanding-by-default and has no ambient I/O. `hosted` opts in to a host C
@@ -53,7 +46,6 @@ fn backendEmitMap(
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        request.source_map_artifacts,
         request.out,
         request.generated_artifact,
         request.program.typed_mir,
@@ -137,7 +129,6 @@ fn appendCProfileWithVerifiedProgram(
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    source_map_artifacts: []const SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,
@@ -145,5 +136,5 @@ pub fn appendCSourceMapFromGenerated(
     generated_c_path: ?[]const u8,
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
-    try lower_c_map.appendSourceMap(allocator, source_map_artifacts, out, generated_c, typed_mir, source_path, generated_c_path, opts);
+    try lower_c_map.appendSourceMap(allocator, out, generated_c, typed_mir, source_path, generated_c_path, opts);
 }

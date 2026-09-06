@@ -27,8 +27,8 @@ Instead this is **function-level coverage by source instrumentation**:
 
 1. `tools/toolchain/lowering-cov-instrument.py` injects a
    `lower_cov.hit("<file>:<fn>:<line>")` probe as the first statement of every
-   function in every backend implementation file (currently 40 C backend files and
-   12 LLVM backend files).
+   function in every backend implementation file (currently 19 C backend files and
+   7 LLVM backend files).
 2. `lowering-coverage.sh` copies the checkout to a temporary work directory,
    instruments that copy, and builds the instrumented `mcc` there. The main
    checkout is not rewritten, so the gate is safe inside aggregate/parallel
@@ -53,12 +53,12 @@ The checked build step also ratchets the source set, probe universe, and uncover
 counts via `tools/toolchain/lowering-coverage-baseline.tsv`; a shrinking source set
 or a growing uncovered count fails `zig build lowering-coverage`.
 
-## Current headline (172 host fixtures + 62 targeted probes + 60 mcfuzz programs)
+## Current headline (75 runnable host fixtures + 66 targeted probes + 60 mcfuzz programs)
 
 | file | covered | uncovered | % |
 | --- | --- | --- | --- |
-| `src/lower_c*.zig` | 1281 / 1439 | **158** | 89.0% |
-| `src/lower_llvm*.zig` | 516 / 604 | **88** | 85.4% |
+| `src/lower_c*.zig` | 246 / 389 | **143** | 63.2% |
+| `src/lower_llvm*.zig` | 92 / 129 | **37** | 71.3% |
 
 > **Caveat on the LLVM number.** The diff-backend harness *skips* any fixture the
 > LLVM backend cannot yet lower, and the fuzzer's LLVM path is narrower than its C
@@ -74,19 +74,15 @@ authoritative list; line numbers move frequently across backend refactors.
 
 ### C backend (`lower_c*.zig`)
 
-- **Alternate public entry points** — `lower_c.zig:appendC`,
-  `appendCProfile`, `appendCSourceMap`, `appendInspection`, `appendLayoutAsserts`,
-  and `appendStructDecls`. These are usually not miscompile risks; they indicate
-  commands such as `emit-map`/layout inspection are not part of the coverage corpus.
-- **Index/address temp paths** — `lower_c_access.zig` functions such as
-  `emitDirectCallArrayIndexAddressValueTemp`, `emitDirectCallSliceIndexValueTemp`,
-  and `emitLocalSliceIndexStore`.
-- **Aggregate temp paths** — `lower_c_aggregate.zig` functions such as
-  `emitArrayLiteralWithTemps`, `emitStructLiteralWithTemps`, and
-  unchecked-add aggregate call-argument helpers.
-- **Inline asm / atomics / float reduce** — `lower_c_asm.zig:emitAsmStmt`,
-  `lower_c_atomic.zig:asmHasMemoryClobber`, and
-  `lower_c_arith.zig:emitFloatReduceCall`.
+- **Alternate public entry points** — `lower_c.zig:appendCProfileWithMirArtifacts`
+  and declaration/layout helpers. These are usually not miscompile risks; they
+  indicate commands such as layout inspection are not part of the coverage corpus.
+- **Aggregate temp paths** — the retired AST aggregate-expression lowering
+  previously implemented by `lower_c_aggregate.zig` has been removed; complete
+  function bodies now use executable MIR.
+- **Inline asm / atomics** — `lower_c_asm.zig:emitAsmStmt`,
+  `lower_c_asm.zig:emitPreciseAsmStmt`, and
+  `lower_c_atomic.zig:asmHasMemoryClobber`.
 
 Full list: `zig-out/lowering-cov/uncovered_lower_c.txt`.
 

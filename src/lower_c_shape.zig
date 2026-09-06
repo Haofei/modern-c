@@ -7,7 +7,6 @@ const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
 const lower_c_const = @import("lower_c_const.zig");
-const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_type = @import("lower_c_type.zig");
@@ -16,7 +15,6 @@ const type_bridge = @import("type_bridge.zig");
 const GlobalInfo = lower_c_model.GlobalInfo;
 const MmioField = lower_c_model.MmioField;
 const cType = lower_c_type.cType;
-const intLiteralText = lower_c_expr.intLiteralText;
 const typeName = type_bridge.typeName;
 const widthBits = lower_c_op.widthBits;
 const TypeExpr = ast_bridge.TypeExpr;
@@ -67,6 +65,14 @@ pub fn globalArrayLenText(ty: ast_bridge.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .array => |node| intLiteralText(node.len),
         .qualified => |node| globalArrayLenText(node.child.*),
+        else => null,
+    };
+}
+
+fn intLiteralText(expr: ast_bridge.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .int_literal => |literal| literal,
+        .grouped => |inner| intLiteralText(inner.*),
         else => null,
     };
 }

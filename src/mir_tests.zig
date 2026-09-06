@@ -10,7 +10,6 @@ const mir_executable_body = @import("mir_executable_body.zig");
 const mir_executable_c = @import("mir_executable_c.zig");
 const mir_executable_llvm = @import("mir_executable_llvm.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
-const mir_facts_view = @import("mir_facts_view.zig");
 const mir_body_plan = @import("mir_body_plan.zig");
 const module_parser = @import("module_parser.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
@@ -881,6 +880,51 @@ test "executable MIR admits direct local 128-bit storage" {
     try std.testing.expectEqual(@as(?u16, 16), mir_model.ExecutableMemoryAccess.scalarAlignment(.{ .integer = "u128" }));
 }
 
+test "executable MIR local slots carry syntax-free declaration identities" {
+    const source =
+        \\fn slots(input: u32) -> u32 {
+        \\    var value: u32 = input;
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_local_slot_identities.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const function = functionByNameMut(&module_mir, "slots") orelse return error.TestUnexpectedResult;
+    try mir_executable_body.verify(function);
+    try mir.validateLoweringAdmission(module_mir);
+
+    var parameter: ?*mir.ExecutableLocalIdentity = null;
+    var local: ?*mir.ExecutableLocalIdentity = null;
+    for (function.executable_body.locals) |*identity| {
+        if (std.mem.eql(u8, identity.spelling, "input")) parameter = identity;
+        if (std.mem.eql(u8, identity.spelling, "value")) local = identity;
+    }
+    const input = parameter orelse return error.TestUnexpectedResult;
+    const value = local orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir.ExecutableLocalKind.parameter, input.kind);
+    try std.testing.expectEqual(mir.ExecutableLocalKind.local, value.kind);
+    try std.testing.expect(input.type_id.isValid());
+    try std.testing.expect(value.type_id.isValid());
+    try std.testing.expect(input.signature_type_id.isValid());
+    try std.testing.expect(value.signature_type_id.isValid());
+    try std.testing.expect(input.declaration_span_id.isValid());
+    try std.testing.expect(value.declaration_span_id.isValid());
+    try std.testing.expect(value.mutable);
+
+    const saved_signature = value.signature_type_id;
+    value.signature_type_id = mir.SignatureTypeId.fromIndex(module_mir.signature_types.shapes.len);
+    try std.testing.expectError(error.InvalidMirExecutableLocalFacts, mir.validateLoweringAdmission(module_mir));
+    value.signature_type_id = saved_signature;
+
+    value.mutable = false;
+    try std.testing.expectError(error.InvalidLocalIdentity, mir_executable_body.verify(function));
+    value.mutable = true;
+    try mir.validateLoweringAdmission(module_mir);
+}
+
 test "executable MIR classifies representation-preserving pointer casts" {
     const mutable_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const const_pointer: ValueType = .{ .pointer = .{ .kind = .single, .mutability = .@"const", .child = "u32" } };
@@ -1123,6 +1167,8 @@ test "executable MIR owns declared struct literal field order and types" {
     try std.testing.expectEqual(@as(usize, 2), aggregate_type.field_count);
     try std.testing.expectEqualStrings("u32", aggregate_type.field_types[0].name());
     try std.testing.expectEqualStrings("u64", aggregate_type.field_types[1].name());
+    try std.testing.expect(aggregate_type.field_signature_type_ids[0].isValid());
+    try std.testing.expect(aggregate_type.field_signature_type_ids[1].isValid());
 
     const result = function.executable_body.expressions[function.executable_body.expressions.len - 1];
     const aggregate = switch (result.operation) {
@@ -1135,12 +1181,53 @@ test "executable MIR owns declared struct literal field order and types" {
     try mir.validateLoweringAdmission(module_mir);
 
     const mutable_function = functionByNameMut(&module_mir, "pair") orelse return error.TestUnexpectedResult;
+    const saved_field_signature = mutable_function.executable_body.aggregate_types[0].field_signature_type_ids[0];
+    mutable_function.executable_body.aggregate_types[0].field_signature_type_ids[0] =
+        mir.SignatureTypeId.fromIndex(module_mir.signature_types.shapes.len);
+    try std.testing.expectError(error.InvalidMirExecutableTypeFacts, mir.validateLoweringAdmission(module_mir));
+    mutable_function.executable_body.aggregate_types[0].field_signature_type_ids[0] = saved_field_signature;
     const aggregate_expression = &mutable_function.executable_body.expressions[mutable_function.executable_body.expressions.len - 1];
     aggregate_expression.operation.struct_.field_indices[1] = 1;
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
     aggregate_expression.operation.struct_.field_indices[1] = 0;
     mutable_function.executable_body.aggregate_types[0].field_type_ids[0] = mutable_function.executable_body.aggregate_types[0].field_type_ids[1];
     try std.testing.expectError(error.InvalidMirExecutableBody, mir.validateLoweringAdmission(module_mir));
+}
+
+test "executable MIR admits only module-owned Result and wrapper payload shapes" {
+    const source =
+        \\fn result(value: u32) -> Result<u32, u8> { return ok(value); }
+        \\fn load(value: *mut atomic<u32>) -> u32 { return value.load(.acquire); }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_executable_type_shape_identities.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+
+    const result_function = functionByNameMut(&module_mir, "result") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), result_function.executable_body.result_types.len);
+    const result_shape = &result_function.executable_body.result_types[0];
+    try std.testing.expect(result_shape.signature_type_id.isValid());
+    try std.testing.expect(result_shape.ok_signature_type_id.isValid());
+    try std.testing.expect(result_shape.err_signature_type_id.isValid());
+
+    const load = functionByNameMut(&module_mir, "load") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), load.executable_body.parameters.len);
+    const parameter = &load.executable_body.parameters[0];
+    try std.testing.expect(parameter.atomic_payload_type_id.isValid());
+    try std.testing.expect(parameter.atomic_payload_signature_type_id.isValid());
+    try mir.validateLoweringAdmission(module_mir);
+
+    const saved_result_signature = result_shape.err_signature_type_id;
+    result_shape.err_signature_type_id = mir.SignatureTypeId.fromIndex(module_mir.signature_types.shapes.len);
+    try std.testing.expectError(error.InvalidMirExecutableTypeFacts, mir.validateLoweringAdmission(module_mir));
+    result_shape.err_signature_type_id = saved_result_signature;
+
+    const saved_atomic_signature = parameter.atomic_payload_signature_type_id;
+    parameter.atomic_payload_signature_type_id = mir.SignatureTypeId.fromIndex(module_mir.signature_types.shapes.len);
+    try std.testing.expectError(error.InvalidMirExecutableTypeFacts, mir.validateLoweringAdmission(module_mir));
+    parameter.atomic_payload_signature_type_id = saved_atomic_signature;
+    try mir.validateLoweringAdmission(module_mir);
 }
 
 test "executable MIR owns enum representation and signed case value" {
@@ -2853,172 +2940,6 @@ test "MIR target-type owner identities mirror direct calls" {
     try std.testing.expect(std.mem.indexOf(u8, identity_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
 }
 
-test "MIR facts view keeps typed lookup and module fallback separate" {
-    const source =
-        \\enum E { bad }
-        \\
-        \\fn callee(x: u32) -> u32 {
-        \\    return x;
-        \\}
-        \\
-        \\fn caller() -> u32 {
-        \\    let local = callee(7);
-        \\    return local;
-        \\}
-        \\
-        \\fn literal_source() -> f64 {
-        \\    return 1.5;
-        \\}
-        \\
-        \\fn text_source() -> cstr {
-        \\    return "txt";
-        \\}
-        \\
-        \\fn array_source() -> [2]u32 {
-        \\    return .{ 1, 2 };
-        \\}
-        \\
-        \\fn ok_source(value: u32) -> Result<u32, E> {
-        \\    return ok(value);
-        \\}
-        \\
-        \\fn err_source() -> Result<u32, E> {
-        \\    return err(.bad);
-        \\}
-        \\
-        \\fn add(env: *mut u32, value: u32) -> u32 {
-        \\    return env.* + value;
-        \\}
-        \\
-        \\fn bind_source(env: *mut u32) -> closure(u32) -> u32 {
-        \\    return bind(env, add);
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_facts_view_typed_target_type.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
-    defer module_mir.deinit();
-
-    const callee = functionByName(module_mir, "callee").?;
-    const caller = functionByName(module_mir, "caller").?;
-    const literal_source = functionByName(module_mir, "literal_source").?;
-    const text_source = functionByName(module_mir, "text_source").?;
-    const array_source = functionByName(module_mir, "array_source").?;
-    const ok_source = functionByName(module_mir, "ok_source").?;
-    const err_source = functionByName(module_mir, "err_source").?;
-    const bind_source = functionByName(module_mir, "bind_source").?;
-    const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
-    const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
-    const local_fact = targetTypeFactByKind(caller, .inferred_local) orelse return error.TestUnexpectedResult;
-    const float_fact = literal_source.float_facts[0];
-    const float_source = mir.sourcePointForSpanId(literal_source, float_fact.typed_span_id) orelse return error.TestUnexpectedResult;
-    const string_fact = targetTypeFactByKind(text_source, .string_literal) orelse return error.TestUnexpectedResult;
-    const array_fact = targetTypeFactByKind(array_source, .array_literal) orelse return error.TestUnexpectedResult;
-    const ok_fact = targetTypeFactByKind(ok_source, .result_ok) orelse return error.TestUnexpectedResult;
-    const err_fact = targetTypeFactByKind(err_source, .result_err) orelse return error.TestUnexpectedResult;
-    const bind_fact = targetTypeFactByKind(bind_source, .bind) orelse return error.TestUnexpectedResult;
-    const db = mir_facts_view.MirFactsView.init();
-    const result_span = result_fact.source;
-
-    try std.testing.expect(db.targetOwnerIdBySpelling(&caller, "callee").?.eql(result_fact.typed_target_owner_id));
-    try std.testing.expect(db.targetOwnerIdBySpelling(&caller, "missing") == null);
-
-    try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.typed_target_owner_id, result_fact.target_index) == null);
-    try std.testing.expect(db.targetTypeFactAtOwnedCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .direct_call_result,
-            .source = result_span,
-            .typed_target_owner_id = result_fact.typed_target_owner_id,
-            .index = result_fact.target_index,
-        },
-    }) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .expression_result,
-            .source = expression_fact.source,
-        },
-    }) == null);
-    try std.testing.expect(db.targetTypeFactAtOwnedCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .inferred_local,
-            .source = local_fact.source,
-            .typed_target_owner_id = local_fact.typed_target_owner_id,
-            .index = local_fact.target_index,
-        },
-    }) == null);
-    try std.testing.expect(db.floatTargetTypeAtCurrentSpan(&callee, float_source) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .string_literal,
-            .source = string_fact.source,
-        },
-    }) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .array_literal,
-            .source = array_fact.source,
-        },
-    }) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .result_ok,
-            .source = ok_fact.source,
-        },
-    }) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .result_err,
-            .source = err_fact.source,
-        },
-    }) == null);
-    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
-        .current = &callee,
-        .fact = .{
-            .kind = .bind,
-            .source = bind_fact.source,
-        },
-    }) == null);
-
-    const wrong_span = mir.SourcePoint{
-        .line = result_fact.source.line + 100,
-        .column = result_fact.source.column + 100,
-        .offset = result_fact.source.offset + 100,
-        .len = result_fact.source.len,
-    };
-    try std.testing.expect(db.targetTypeFactAtOwned(&caller, .direct_call_result, wrong_span, result_fact.typed_target_owner_id, result_fact.target_index) == null);
-
-    const by_id = db.targetTypeFactById(&caller, .{
-        .kind = .direct_call_result,
-        .typed_span_id = result_fact.typed_span_id,
-        .typed_result_ty = result_fact.typed_result_ty,
-        .typed_target_owner_id = result_fact.typed_target_owner_id,
-        .target_index = result_fact.target_index,
-    }) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.meta.eql(rawTargetTypeFactByKind(caller, .direct_call_result).?, by_id));
-
-    try std.testing.expect(db.targetTypeFactById(&caller, .{
-        .kind = .direct_call_result,
-        .typed_span_id = result_fact.typed_span_id,
-        .typed_result_ty = result_fact.typed_result_ty,
-        .target_index = result_fact.target_index,
-    }) == null);
-}
-
 test "MIR float facts are the complete typed authority for float literals" {
     const source =
         \\fn f32_value() -> f32 { return 1.5; }
@@ -3038,10 +2959,6 @@ test "MIR float facts are the complete typed authority for float literals" {
     try std.testing.expectEqual(@as(usize, 0), f64_function.target_type_facts.len);
     try std.testing.expect(mir.ValueType.eql(mir.floatFactTargetType(&f32_function, f32_function.float_facts[0]).?, .{ .float = "f32" }));
     try std.testing.expect(mir.ValueType.eql(mir.floatFactTargetType(&f64_function, f64_function.float_facts[0]).?, .{ .float = "f64" }));
-    const facts_view = mir_facts_view.MirFactsView.init();
-    const f32_source = mir.sourcePointForSpanId(f32_function, f32_function.float_facts[0].typed_span_id) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(mir.ValueType.eql(facts_view.floatTargetTypeAtCurrentSpan(&f32_function, f32_source).?, .{ .float = "f32" }));
-
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     const missing_function = functionByNameMut(&missing, "f32_value") orelse return error.TestUnexpectedResult;
@@ -3193,11 +3110,6 @@ test "MIR exposes generic typed span identity matching for codegen facts" {
     const call_target_fn = functionByName(module_mir, "call_target").?;
     const call_target_fact = if (call_target_fn.call_target_facts.len == 1) call_target_fn.call_target_facts[0] else return error.TestUnexpectedResult;
     try std.testing.expect(call_target_fact.typed_span_id.isValid());
-    const db = mir_facts_view.MirFactsView.init();
-    try std.testing.expect(std.meta.eql(call_target_fact, db.callTargetFactById(&call_target_fn, .{
-        .kind = .fence_release,
-        .typed_span_id = call_target_fact.typed_span_id,
-    }).?));
     try std.testing.expect(mir.callTargetFactMatchesSpanId(call_target_fn, call_target_fact, call_target_fact.typed_span_id));
     var drifted_call_target = call_target_fact;
     drifted_call_target.typed_span_id = SpanId.fromIndex(4096);
@@ -4301,21 +4213,6 @@ test "MIR owns qualified union and enum variant path result types" {
     for (shadow.target_type_facts) |fact| {
         try std.testing.expect(fact.kind != .enum_variant_path_result);
     }
-    const facts = mir_facts_view.MirFactsView.init();
-    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
-        .current = &shadow,
-        .fact = .{
-            .kind = .qualified_union_result,
-            .source = targetTypeFactSource(make, qualified_fact.?) orelse return error.TestUnexpectedResult,
-        },
-    }) == null);
-    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
-        .current = &shadow,
-        .fact = .{
-            .kind = .enum_variant_path_result,
-            .source = targetTypeFactSource(variant, variant_fact.?) orelse return error.TestUnexpectedResult,
-        },
-    }) == null);
 }
 
 test "MIR owns dyn coercion targets and excludes pass-through values" {
@@ -5943,26 +5840,6 @@ test "MIR owns inferred local dyn dispatch call types" {
     try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(notify, .dyn_dispatch_result));
     const void_argument_fact = targetTypeFactByKind(notify, .dyn_dispatch_argument) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(1, 0)), void_argument_fact.target_index);
-    const notify_ptr = functionByNamePtr(&typed_mir, "notify").?;
-    const facts = mir_facts_view.MirFactsView.init();
-    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
-        .current = notify_ptr,
-        .fact = .{
-            .kind = .dyn_dispatch_result,
-            .source = dispatch_fact.source,
-            .typed_target_owner_id = dispatch_fact.typed_target_owner_id,
-            .index = dispatch_fact.target_index,
-        },
-    }) == null);
-    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
-        .current = notify_ptr,
-        .fact = .{
-            .kind = .dyn_dispatch_argument,
-            .source = argument_fact.source,
-            .typed_target_owner_id = argument_fact.typed_target_owner_id,
-            .index = argument_fact.target_index,
-        },
-    }) == null);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
@@ -6043,8 +5920,6 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
 
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
-    const increment = functionByName(typed_mir, "increment").?;
-    const facts = mir_facts_view.MirFactsView.init();
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
         const function = functionByName(typed_mir, name).?;
         const fact = targetTypeFactByKind(function, .indirect_call_callee) orelse return error.TestUnexpectedResult;
@@ -6054,13 +5929,6 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
         };
         try std.testing.expect(resolved);
         try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
-        try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
-            .current = &increment,
-            .fact = .{
-                .kind = .indirect_call_callee,
-                .source = fact.source,
-            },
-        }) == null);
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -6818,7 +6686,6 @@ test "MIR owns const_get base result and index facts" {
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "get_word").?;
-    const other = functionByNamePtr(&typed_mir, "other").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.const_get, function.call_target_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), function.const_get_facts.len);
@@ -6838,21 +6705,6 @@ test "MIR owns const_get base result and index facts" {
     try std.testing.expectEqualStrings("Words", typeExprHeadName(targetTypeSyntaxForTest(function, base_fact.?) orelse return error.TestUnexpectedResult).?);
     try std.testing.expectEqualStrings("u32", typeExprHeadName(targetTypeSyntaxForTest(function, result_fact.?) orelse return error.TestUnexpectedResult).?);
     try std.testing.expectEqual(@as(?usize, 2), instruction_index);
-    const facts = mir_facts_view.MirFactsView.init();
-    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
-        .current = other,
-        .fact = .{
-            .kind = .const_get_base,
-            .source = targetTypeFactSource(function, base_fact.?) orelse return error.TestUnexpectedResult,
-        },
-    }) == null);
-    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
-        .current = other,
-        .fact = .{
-            .kind = .const_get_result,
-            .source = targetTypeFactSource(function, result_fact.?) orelse return error.TestUnexpectedResult,
-        },
-    }) == null);
     try mir.validateConstGetFactsForLowering(typed_mir);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
@@ -9032,26 +8884,6 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqual(init_payload.target_index, init_result.target_index);
     try std.testing.expectEqualStrings("u32", init_payload.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("atomic", init_result.target_ty.kind.generic.base.text);
-    const other = functionByNamePtr(&typed_mir, "other").?;
-    const facts = mir_facts_view.MirFactsView.init();
-    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
-        .current = other,
-        .fact = .{
-            .kind = .atomic_init_payload,
-            .source = init_payload.source,
-            .typed_target_owner_id = init_payload.typed_target_owner_id,
-            .index = init_payload.target_index,
-        },
-    }) == null);
-    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
-        .current = other,
-        .fact = .{
-            .kind = .atomic_init_result,
-            .source = init_result.source,
-            .typed_target_owner_id = init_result.typed_target_owner_id,
-            .index = init_result.target_index,
-        },
-    }) == null);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

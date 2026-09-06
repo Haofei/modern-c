@@ -501,8 +501,6 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/mir_ownership_authority.zig", "pub const AutoDropCleanupKey")
     require_not_contains("src/mir_ownership_authority.zig", "missingAutoDropCancellationIsAllowed")
-    require_not_contains("src/backend_cleanup.zig", "syntax_bridge.dropPointerLocalReleaseCall")
-    require_not_contains("src/backend_cleanup.zig", 'const syntax_bridge = @import("syntax_bridge.zig")')
     require_not_contains("src/backend_cleanup.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/backend_cleanup.zig", "mir_ownership_authority.AutoDropCleanupKey")
     require_not_contains("src/ownership_facts.zig", "AutoDropCleanupRegistration")

@@ -118,14 +118,11 @@ It then exposes:
 `CheckedProgram` is not a full Typed HIR. It contains no AST or expression tree;
 typed MIR remains the only executable body representation.
 
-`EarlyDeclarationArtifacts` are a driver-only mechanics bridge for collecting
-source-map rows. They are not semantic authority, are not stored on
-`VerifiedProgram`, and are never carried by ordinary `LowerRequest`.
-`EmitMapRequest` alone carries the resulting
-`declaration_artifacts.SourceMapArtifact` rows for source-map output.
-`driver_codegen_inputs.zig` is the only driver-owned compatibility edge that
-may assemble those rows next to `VerifiedProgram` construction; `main.zig` and
-backend lowerers must not call declaration collectors directly.
+Source-map declaration rows are `Module.source_map_declarations`: syntax-free
+facts admitted with the `VerifiedProgram`'s typed MIR. `EmitMapRequest` carries
+only that verified program and the generated artifact; it does not carry an
+AST declaration slice or a source-map artifact array. `main.zig` and backend
+lowerers therefore cannot call declaration collectors directly.
 
 Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcmap` use `artifact_model.ArtifactBundle`; backend lowering only receives the source digest through `LowerOptions`.
 
@@ -179,14 +176,16 @@ facts.
 These modules are legitimate shared inputs for backend work:
 
 - `mir.zig`: typed MIR, facts, verifier/admission.
-- `mir_facts_view.zig`: transitional query layer for facts not yet indexed by
-  stable typed ids. Target-type source-span compatibility queries are
-  current-function-only, so broad module scans cannot reappear hidden behind
-  backend lookups.
 - `layout.zig`: layout calculation shared by semantic and backend code.
 - `eval.zig`: compile-time constant evaluation.
 - `numeric.zig`: numeric literal and arithmetic helpers.
 - `string_literal.zig`: canonical decoded string bytes.
+
+The retired `mir_facts_view.zig` and `mir_source_bridge.zig` compatibility
+layers are not valid backend inputs. Backend semantic decisions must come from
+the verified MIR facts and typed identities already carried by the program;
+missing facts fail admission rather than falling back to AST spans or source
+spelling.
 
 `ast_query.zig` may be used for remaining syntax-shape compatibility helpers,
 but it must not become a new semantic authority. The long-term direction is for

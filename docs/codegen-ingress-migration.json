@@ -8,23 +8,6 @@
     "blocked_without_framework": false
   },
   "ast_shaped_payload_budget": {
-    "src/declaration_artifacts.zig": {
-      "params: []ast.Param": 0,
-      "return_type: ?ast.TypeExpr": 0,
-      "backend_attrs: []const ast.Attr": 0,
-      "ty: ?ast.TypeExpr": 0,
-      "init: ?ast.Expr": 0,
-      "TraitDeclArtifact": 0,
-      "ImplTraitArtifact": 0,
-      "pub const TypeDeclArtifact = union(enum)": 0,
-      "pub const TransitionalTypeDeclArtifact = union(enum)": 0,
-      "type_alias: ast.TypeAlias": 0,
-      "struct_decl: ast.StructDecl": 0,
-      "enum_decl: ast.EnumDecl": 0,
-      "union_decl: ast.UnionDecl": 0,
-      "packed_bits_decl: ast.PackedBitsDecl": 0,
-      "overlay_union_decl: ast.OverlayUnionDecl": 0
-    },
     "src/codegen_attrs.zig": {
       "transitional_ret_type: ?ast_bridge.TypeExpr": 0,
       "ty: ?ast_bridge.TypeExpr": 0,
@@ -45,26 +28,8 @@
     "src/codegen_request.zig": {
       "declaration_artifacts: CgDeclArtifacts": 0,
       "declaration_artifacts: declaration_artifacts.CodegenDeclarationArtifacts": 0,
-      "source_map_artifacts: []const SourceMapArtifact": 1
-    },
-    "src/declaration_artifacts.zig": {
-      "has_explicit_abi: bool": 0,
-      "backend_name: ?[]const u8": 0,
-      "has_error_from: bool": 0,
-      "has_mc_abi: bool": 0,
-      "render_attrs: attr_syntax.FunctionRenderAttrs": 0,
-      "const attr_syntax = @import(\"attr_syntax.zig\")": 0,
-      "render_attrs: codegen_attrs.FunctionRenderAttrs": 0,
-      "const codegen_attrs = @import(\"codegen_attrs.zig\")": 0,
-      "signature: codegen_attrs.FunctionSignatureFacts": 0,
-      "body_facts: codegen_attrs.FunctionBodyFacts": 0,
-      ".is_const = fn_decl.is_const": 0,
-      "CallableEmissionFact": 0,
-      "signature: codegen_attrs.GlobalSignatureFacts": 0,
-      "initializer: codegen_attrs.GlobalInitFacts": 0,
-      "checkedGlobalInitializer(checked.?)": 0,
-      ".signature = .{": 0,
-      ".initializer = .{": 0
+      "source_map_artifacts: []const SourceMapArtifact": 0,
+      "program.typed_mir.source_map_declarations": 1
     },
     "src/lower_c_emitter.zig": {
       "function.backend_attrs": 0,
@@ -207,15 +172,6 @@
     }
   },
   "forbidden_regressions": {
-    "src/declaration_artifacts.zig": {
-      "abi: ?[]const u8": 0,
-      "    attrs: []const ast.Attr,": 0,
-      "backend_attrs: []const ast.Attr": 0,
-      "has_explicit_abi: bool": 0,
-      "has_error_from: bool": 0,
-      "has_mc_abi: bool": 0,
-      "is_variadic: bool": 0
-    },
     "src/lower_c_emitter.zig": {
       "function.attrs": 0,
       "function.abi": 0,

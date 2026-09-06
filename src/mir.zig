@@ -125,6 +125,8 @@ pub const TaggedUnionFact = mir_model.TaggedUnionFact;
 pub const TaggedUnionCaseFact = mir_model.TaggedUnionCaseFact;
 pub const StructFact = mir_model.StructFact;
 pub const StructFieldFact = mir_model.StructFieldFact;
+pub const SourceMapDeclarationKind = mir_model.SourceMapDeclarationKind;
+pub const SourceMapDeclarationFact = mir_model.SourceMapDeclarationFact;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -679,6 +681,7 @@ pub const LocalId = mir_model.LocalId;
 pub const PlaceId = mir_model.PlaceId;
 pub const CleanupActionId = mir_model.CleanupActionId;
 pub const ExecutableParameter = mir_model.ExecutableParameter;
+pub const ExecutableLocalKind = mir_model.ExecutableLocalKind;
 pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
 pub const ExecutableExpression = mir_model.ExecutableExpression;
 pub const ExecutableAtomicOrdering = mir_model.ExecutableAtomicOrdering;
@@ -1304,6 +1307,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     }
     var checked_globals: std.ArrayList(CheckedGlobalFact) = .empty;
     errdefer checked_globals.deinit(allocator);
+    var source_map_declarations: std.ArrayList(SourceMapDeclarationFact) = .empty;
+    errdefer source_map_declarations.deinit(allocator);
     var type_alias_facts: std.ArrayList(TypeAliasFact) = .empty;
     errdefer type_alias_facts.deinit(allocator);
     var enum_facts: std.ArrayList(EnumFact) = .empty;
@@ -1348,6 +1353,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         const decl = declFromBuildItem(item);
         const typed_source_id = if (fileIdFromBuildItem(item)) |file_id| try internSourceId(&source_ids, file_id) else SourceId.invalid;
         const typed_def_id = defIdFromBuildItem(item, decl_ordinal);
+        try appendSourceMapDeclarationFact(allocator, &source_map_declarations, decl, typed_source_id, &symbol_ids);
         switch (decl.kind) {
             .enum_decl => |enum_decl| {
                 const cases = try allocator.alloc(EnumCaseFact, enum_decl.cases.len);
@@ -1961,6 +1967,18 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             return error.InvalidMirStructFacts;
         identity.kind = .type_;
     }
+    // Opaque declarations intentionally have no layout fact, but their
+    // source-map rows still need a stable typed module symbol rather than an
+    // AST declaration payload.
+    for (source_map_declarations.items) |fact| if (fact.kind == .@"opaque") {
+        if (!fact.symbol_id.isValid() or fact.symbol_id.index() >= symbol_identities.len)
+            return error.InvalidMirSymbolIdentity;
+        const identity = &symbol_identities[fact.symbol_id.index()];
+        if (!identity.id.eql(fact.symbol_id) or
+            (identity.kind != .unknown and identity.kind != .type_))
+            return error.InvalidMirSymbolIdentity;
+        identity.kind = .type_;
+    };
     const source_identities = try buildSourceIdentities(allocator, &source_ids);
     errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
@@ -1984,6 +2002,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     }
     const checked_globals_slice = try checked_globals.toOwnedSlice(allocator);
     errdefer allocator.free(checked_globals_slice);
+    const source_map_declarations_slice = try source_map_declarations.toOwnedSlice(allocator);
+    errdefer allocator.free(source_map_declarations_slice);
     const type_alias_facts_slice = try type_alias_facts.toOwnedSlice(allocator);
     errdefer allocator.free(type_alias_facts_slice);
     const enum_facts_slice = try enum_facts.toOwnedSlice(allocator);
@@ -2030,6 +2050,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
         .checked_callables = checked_callables_slice,
         .callable_emission_facts = callable_emission_facts_slice,
         .checked_globals = checked_globals_slice,
+        .source_map_declarations = source_map_declarations_slice,
         .type_aliases = type_alias_facts_slice,
         .enums = enum_facts_slice,
         .packed_bits = packed_bits_facts_slice,
@@ -2808,6 +2829,87 @@ fn buildCallableEmissionFact(
         .backend_name = attr_syntax.backendNameOverride(attrs),
         .render_attrs = attr_syntax.functionRenderAttrs(attrs),
     };
+}
+
+fn appendSourceMapDeclarationFact(
+    allocator: std.mem.Allocator,
+    facts: *std.ArrayList(SourceMapDeclarationFact),
+    decl: ast.Decl,
+    source_id: SourceId,
+    symbol_ids: *std.StringHashMap(SymbolId),
+) !void {
+    const origin = sourceMapOrigin(decl.attrs, std.meta.activeTag(decl.kind) == .extern_fn);
+    const common = struct {
+        fn append(
+            rows: *std.ArrayList(SourceMapDeclarationFact),
+            row_allocator: std.mem.Allocator,
+            id: SymbolId,
+            row_source_id: SourceId,
+            kind: SourceMapDeclarationKind,
+            source: SourcePoint,
+            row_origin: []const u8,
+        ) !void {
+            try rows.append(row_allocator, .{
+                .symbol_id = id,
+                .source_id = row_source_id,
+                .kind = kind,
+                .declaration_source = source,
+                .origin = row_origin,
+            });
+        }
+    };
+    switch (decl.kind) {
+        .global_decl => |global| {
+            const symbol_id = try internSymbolId(symbol_ids, global.name.text);
+            try facts.append(allocator, .{
+                .symbol_id = symbol_id,
+                .source_id = source_id,
+                .kind = .global,
+                .declaration_source = sourcePointFromSpan(global.name.span),
+                .initializer_source = if (global.init) |init| sourcePointFromSpan(init.span) else null,
+                .is_const = global.is_const,
+                .exported = global.exported,
+                .origin = origin,
+            });
+        },
+        .fn_decl => |fn_decl| if (fn_decl.body != null) {
+            const symbol_id = try internSymbolId(symbol_ids, fn_decl.name.text);
+            try facts.append(allocator, .{
+                .symbol_id = symbol_id,
+                .source_id = source_id,
+                .kind = .function,
+                .declaration_source = sourcePointFromSpan(fn_decl.name.span),
+                .exported = fn_decl.exported,
+                .origin = origin,
+                .backend_name = attr_syntax.backendNameOverride(decl.attrs),
+            });
+        },
+        .extern_fn => |fn_decl| try common.append(
+            facts,
+            allocator,
+            try internSymbolId(symbol_ids, fn_decl.name.text),
+            source_id,
+            .extern_fn,
+            sourcePointFromSpan(fn_decl.name.span),
+            origin,
+        ),
+        .type_alias => |node| try common.append(facts, allocator, try internSymbolId(symbol_ids, node.name.text), source_id, .type_alias, sourcePointFromSpan(node.name.span), origin),
+        .struct_decl => |node| try common.append(facts, allocator, try internSymbolId(symbol_ids, node.name.text), source_id, .struct_, sourcePointFromSpan(node.name.span), origin),
+        .enum_decl => |node| try common.append(facts, allocator, try internSymbolId(symbol_ids, node.name.text), source_id, .enum_, sourcePointFromSpan(node.name.span), origin),
+        .union_decl => |node| try common.append(facts, allocator, try internSymbolId(symbol_ids, node.name.text), source_id, .union_, sourcePointFromSpan(node.name.span), origin),
+        .packed_bits_decl => |node| try common.append(facts, allocator, try internSymbolId(symbol_ids, node.name.text), source_id, .packed_bits, sourcePointFromSpan(node.name.span), origin),
+        .overlay_union_decl => |node| try common.append(facts, allocator, try internSymbolId(symbol_ids, node.name.text), source_id, .overlay_union, sourcePointFromSpan(node.name.span), origin),
+        .opaque_decl => |name| try common.append(facts, allocator, try internSymbolId(symbol_ids, name.text), source_id, .@"opaque", sourcePointFromSpan(name.span), origin),
+        else => {},
+    }
+}
+
+fn sourceMapOrigin(attrs: []const ast.Attr, is_extern: bool) []const u8 {
+    for (attrs) |attr| switch (attr.kind) {
+        .origin => |origin| return origin,
+        else => {},
+    };
+    return if (is_extern) "external" else "source";
 }
 
 fn applyCheckedCallableFact(allocator: std.mem.Allocator, function: *Function, checked: CheckedCallableFact) !void {
@@ -5244,12 +5346,15 @@ pub const LoweringAdmissionError = error{
     InvalidMirStructFacts,
     InvalidMirGlobalInitializerFacts,
     InvalidMirCallableEmissionFacts,
+    InvalidMirSourceMapDeclarationFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirFloatFacts,
     InvalidMirRangeFacts,
     InvalidMirBoundsFacts,
     InvalidMirElidedBounds,
+    InvalidMirExecutableLocalFacts,
+    InvalidMirExecutableTypeFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
     InvalidMirExecutableBody,
@@ -5265,6 +5370,8 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateCallTargetFactsForLowering(module);
     try validateInstructionSpanIdentitiesForLowering(module);
     for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
+    try validateExecutableLocalFactsForLowering(module);
+    try validateExecutableTypeFactsForLowering(module);
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
     try validateFloatFactsForLowering(module);
@@ -5283,9 +5390,66 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateStructFactsForLowering(module);
     try validateGlobalInitializerFactsForLowering(module);
     try validateCallableEmissionFactsForLowering(module);
+    try validateSourceMapDeclarationFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
+}
+
+/// The executable-body verifier proves LocalId/type/span coherence. This
+/// module-level check additionally validates a present source-shape key
+/// against the one authoritative SignatureTypeTable. Pattern/legacy locals
+/// may intentionally omit that optional shape; their ValueType/TypeId record
+/// remains sufficient for mechanical storage rendering.
+fn validateExecutableLocalFactsForLowering(module: Module) error{InvalidMirExecutableLocalFacts}!void {
+    for (module.functions) |function| {
+        const body = &function.executable_body;
+        if (!body.complete) continue;
+        for (body.locals) |local| switch (local.kind) {
+            .parameter, .local => if (local.signature_type_id.isValid() and !module.signature_types.contains(local.signature_type_id))
+                return error.InvalidMirExecutableLocalFacts,
+            .synthetic => if (local.signature_type_id.isValid()) return error.InvalidMirExecutableLocalFacts,
+        };
+    }
+}
+
+/// Validate the optional source-shape IDs carried by executable aggregate
+/// layouts and the required Result declaration shape. TypeId/ValueType
+/// agreement is checked by `mir_executable_body`; this joins the remaining
+/// backend-facing shape identities to the module-owned signature table.
+fn validateExecutableTypeFactsForLowering(module: Module) error{InvalidMirExecutableTypeFacts}!void {
+    for (module.functions) |function| {
+        const body = &function.executable_body;
+        if (!body.complete) continue;
+        for (body.aggregate_types) |aggregate| {
+            for (aggregate.field_signature_type_ids[0..aggregate.field_count]) |id|
+                if (id.isValid() and !module.signature_types.contains(id))
+                    return error.InvalidMirExecutableTypeFacts;
+        }
+        for (body.result_types) |result| {
+            if (!result.signature_type_id.isValid() or !result.ok_signature_type_id.isValid() or
+                !result.err_signature_type_id.isValid() or !module.signature_types.contains(result.signature_type_id) or
+                !module.signature_types.contains(result.ok_signature_type_id) or
+                !module.signature_types.contains(result.err_signature_type_id))
+                return error.InvalidMirExecutableTypeFacts;
+        }
+        for (body.parameters) |parameter| {
+            if (parameter.atomic_payload_type_id.isValid()) {
+                if (!parameter.atomic_payload_signature_type_id.isValid() or
+                    !module.signature_types.contains(parameter.atomic_payload_signature_type_id))
+                    return error.InvalidMirExecutableTypeFacts;
+            } else if (parameter.atomic_payload_signature_type_id.isValid()) {
+                return error.InvalidMirExecutableTypeFacts;
+            }
+            if (parameter.dma_payload_type_id.isValid()) {
+                if (!parameter.dma_payload_signature_type_id.isValid() or
+                    !module.signature_types.contains(parameter.dma_payload_signature_type_id))
+                    return error.InvalidMirExecutableTypeFacts;
+            } else if (parameter.dma_payload_signature_type_id.isValid()) {
+                return error.InvalidMirExecutableTypeFacts;
+            }
+        }
+    }
 }
 
 /// Optimizer elision records are semantic SpanIds, not source-coordinate
@@ -5321,6 +5485,121 @@ fn validateGlobalInitializerFactsForLowering(module: Module) error{InvalidMirGlo
         }
         if (!global.has_initializer_plan or fact == null) return error.InvalidMirGlobalInitializerFacts;
     }
+}
+
+/// `emit-map` receives these rows only through `VerifiedProgram`, so reject
+/// malformed presentation metadata at the same admission boundary as the
+/// executable facts.  The rows are intentionally syntax-free, but their
+/// identity and source coordinates must still agree with the module facts.
+fn validateSourceMapDeclarationFactsForLowering(module: Module) error{InvalidMirSourceMapDeclarationFacts}!void {
+    for (module.source_map_declarations, 0..) |fact, index| {
+        if (!moduleSymbolIdentityValid(module, fact.symbol_id)) return error.InvalidMirSourceMapDeclarationFacts;
+        if (!sourceMapSourcePointValid(module, fact.source_id, fact.declaration_source))
+            return error.InvalidMirSourceMapDeclarationFacts;
+        if (fact.initializer_source) |source| {
+            if (fact.kind != .global or !sourceMapSourcePointValid(module, fact.source_id, source))
+                return error.InvalidMirSourceMapDeclarationFacts;
+        }
+        if (fact.backend_name) |name| {
+            if (name.len == 0 or fact.kind != .function) return error.InvalidMirSourceMapDeclarationFacts;
+        }
+        for (module.source_map_declarations[0..index]) |prior| {
+            if (prior.symbol_id.eql(fact.symbol_id)) return error.InvalidMirSourceMapDeclarationFacts;
+        }
+        if (!sourceMapDeclarationMatchesModule(module, fact)) return error.InvalidMirSourceMapDeclarationFacts;
+    }
+}
+
+fn sourceMapSourcePointValid(module: Module, source_id: SourceId, source: SourcePoint) bool {
+    if (source.line == 0 or source.column == 0 or source.len == 0) return false;
+    if (!source_id.isValid()) return true;
+    if (source_id.index() >= module.source_identities.len) return false;
+    const identity = module.source_identities[source_id.index()];
+    return identity.id.eql(source_id) and source.file_id == identity.file_id;
+}
+
+fn sourceMapDeclarationMatchesModule(module: Module, fact: SourceMapDeclarationFact) bool {
+    const identity = module.symbol_identities[fact.symbol_id.index()];
+    const source_matches = switch (fact.kind) {
+        .global => for (module.checked_globals) |global| {
+            if (!global.symbol_id.eql(fact.symbol_id)) continue;
+            break global.source_id.eql(fact.source_id) and global.is_const == fact.is_const and global.exported == fact.exported;
+        } else false,
+        .function, .extern_fn => for (module.checked_callables) |callable| {
+            if (!callable.symbol_id.eql(fact.symbol_id)) continue;
+            const expected_kind: CallableKind = if (fact.kind == .function) .function else .extern_function;
+            break callable.kind == expected_kind and callable.source_id.eql(fact.source_id);
+        } else false,
+        .type_alias => sourceMapTypeFactMatches(module.type_aliases, fact.symbol_id, fact.source_id),
+        .struct_ => sourceMapTypeFactMatches(module.structs, fact.symbol_id, fact.source_id),
+        .enum_ => sourceMapTypeFactMatches(module.enums, fact.symbol_id, fact.source_id),
+        .union_ => sourceMapTypeFactMatches(module.tagged_unions, fact.symbol_id, fact.source_id),
+        .packed_bits => sourceMapTypeFactMatches(module.packed_bits, fact.symbol_id, fact.source_id),
+        .overlay_union => sourceMapTypeFactMatches(module.overlay_unions, fact.symbol_id, fact.source_id),
+        // Opaque declarations have no layout/ABI fact yet, but still require
+        // an admitted module symbol and a coherent source location.
+        .@"opaque" => identity.kind == .type_,
+    };
+    const expected_identity_kind: @TypeOf(identity.kind) = switch (fact.kind) {
+        .global => .global,
+        .function, .extern_fn => .function,
+        .type_alias, .struct_, .enum_, .union_, .packed_bits, .overlay_union, .@"opaque" => .type_,
+    };
+    return identity.id.eql(fact.symbol_id) and identity.kind == expected_identity_kind and source_matches;
+}
+
+fn sourceMapTypeFactMatches(facts: anytype, symbol_id: SymbolId, source_id: SourceId) bool {
+    for (facts) |fact| if (fact.symbol_id.eql(symbol_id)) return fact.source_id.eql(source_id);
+    return false;
+}
+
+test "source-map declaration facts are module-owned and admitted" {
+    const test_support = @import("test_support.zig");
+    const source =
+        \\struct Header { value: u32, }
+        \\const COUNT: u32 = 1;
+        \\extern fn sink(value: u32) -> void;
+        \\#[backend_name("mc_entry")]
+        \\export fn entry() -> u32 { return COUNT; }
+    ;
+    var parsed = try test_support.parseModule("source_map_declaration_facts.mc", source);
+    defer parsed.deinit();
+    var module = try buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), module.source_map_declarations.len);
+    try std.testing.expectEqual(SourceMapDeclarationKind.struct_, module.source_map_declarations[0].kind);
+    try std.testing.expectEqual(SourceMapDeclarationKind.global, module.source_map_declarations[1].kind);
+    try std.testing.expectEqual(SourceMapDeclarationKind.extern_fn, module.source_map_declarations[2].kind);
+    try std.testing.expectEqual(SourceMapDeclarationKind.function, module.source_map_declarations[3].kind);
+    try std.testing.expectEqualStrings("mc_entry", module.source_map_declarations[3].backend_name.?);
+    try validateLoweringAdmission(module);
+}
+
+test "lowering admission rejects malformed source-map declaration facts" {
+    const test_support = @import("test_support.zig");
+    const source =
+        \\const COUNT: u32 = 1;
+        \\fn entry() -> u32 { return COUNT; }
+    ;
+    var parsed = try test_support.parseModule("malformed_source_map_declaration_facts.mc", source);
+    defer parsed.deinit();
+    var module = try buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module.deinit();
+    try validateLoweringAdmission(module);
+
+    const saved_source = module.source_map_declarations[0].declaration_source;
+    module.source_map_declarations[0].declaration_source.line = 0;
+    try std.testing.expectError(error.InvalidMirSourceMapDeclarationFacts, validateLoweringAdmission(module));
+    module.source_map_declarations[0].declaration_source = saved_source;
+
+    const saved_symbol = module.source_map_declarations[1].symbol_id;
+    module.source_map_declarations[1].symbol_id = module.source_map_declarations[0].symbol_id;
+    try std.testing.expectError(error.InvalidMirSourceMapDeclarationFacts, validateLoweringAdmission(module));
+    module.source_map_declarations[1].symbol_id = saved_symbol;
+
+    module.source_map_declarations[0].source_id = SourceId.fromIndex(0);
+    try std.testing.expectError(error.InvalidMirSourceMapDeclarationFacts, validateLoweringAdmission(module));
 }
 
 fn validateTypeAliasFactsForLowering(module: Module) error{InvalidMirTypeAliasFacts}!void {
@@ -8500,6 +8779,17 @@ const FunctionBuilder = struct {
             }
             const executable_local = try builder.internExecutableLocal(param.name.text);
             const parameter_span_id = try builder.internSpanId(builder.sourcePoint(param.name.span));
+            const parameter_type_id = try builder.internTypeId(param_ty);
+            const parameter_signature_type_id = try builder.signature_types.internTypeExpr(param.ty, const_fns, const_globals);
+            try builder.recordExecutableLocalIdentity(
+                executable_local,
+                param_ty,
+                parameter_type_id,
+                parameter_signature_type_id,
+                parameter_span_id,
+                false,
+                .parameter,
+            );
             const callable_signature = try builder.executableCallableSignature(param.ty);
             const dyn_trait_symbol_id = if (dynTraitNameFromTypeAlias(param.ty, aliases)) |trait_name|
                 try builder.internExecutableTraitSymbol(trait_name)
@@ -8519,13 +8809,21 @@ const FunctionBuilder = struct {
             try builder.executable_parameters.append(allocator, .{
                 .local = executable_local,
                 .ty = param_ty,
-                .type_id = try builder.internTypeId(param_ty),
+                .type_id = parameter_type_id,
                 .callable_signature = callable_signature,
                 .dyn_trait_symbol_id = dyn_trait_symbol_id,
                 .atomic_payload_ty = atomic_payload_ty orelse .unknown,
                 .atomic_payload_type_id = if (atomic_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
+                .atomic_payload_signature_type_id = if (directAtomicPayloadTypeExprAlias(param.ty, aliases, true)) |payload|
+                    try builder.signature_types.internTypeExpr(payload, const_fns, const_globals)
+                else
+                    .invalid,
                 .dma_payload_ty = dma_payload_ty orelse .unknown,
                 .dma_payload_type_id = if (dma_payload_ty) |payload| try builder.internTypeId(payload) else .invalid,
+                .dma_payload_signature_type_id = if (dma_buffer_info) |info|
+                    try builder.signature_types.internTypeExpr(info.payload_type_expr, const_fns, const_globals)
+                else
+                    .invalid,
                 .dma_mode = dma_mode,
                 .span_id = parameter_span_id,
             });
@@ -10861,7 +11159,7 @@ const FunctionBuilder = struct {
     fn executableBlockHasPredecessor(self: *const FunctionBuilder, target: usize) bool {
         for (self.blocks.items) |candidate| {
             for (candidate.successors.items) |successor| {
-            if (successor.eql(BlockId.fromIndex(target))) return true;
+                if (successor.eql(BlockId.fromIndex(target))) return true;
             }
         }
         return false;
@@ -10984,6 +11282,34 @@ const FunctionBuilder = struct {
         return id;
     }
 
+    /// Fill the immutable backend-facing identity for one local storage
+    /// generation.  Construction still has syntax in scope, but the emitted
+    /// body stores only canonical IDs and ValueType, never a TypeExpr.
+    fn recordExecutableLocalIdentity(
+        self: *FunctionBuilder,
+        local: LocalId,
+        ty: ValueType,
+        type_id: TypeId,
+        signature_type_id: SignatureTypeId,
+        declaration_span_id: SpanId,
+        mutable: bool,
+        kind: mir_model.ExecutableLocalKind,
+    ) !void {
+        if (!local.isValid() or local.index() >= self.executable_locals.items.len or
+            !type_id.isValid() or !declaration_span_id.isValid())
+            return error.InvalidExecutableLocalIdentity;
+        const identity = &self.executable_locals.items[local.index()];
+        if (!identity.id.eql(local) or identity.ty != .unknown or identity.type_id.isValid() or
+            identity.signature_type_id.isValid() or identity.declaration_span_id.isValid())
+            return error.InvalidExecutableLocalIdentity;
+        identity.ty = ty;
+        identity.type_id = type_id;
+        identity.signature_type_id = signature_type_id;
+        identity.declaration_span_id = declaration_span_id;
+        identity.mutable = mutable;
+        identity.kind = kind;
+    }
+
     fn appendSyntheticExecutableLocal(self: *FunctionBuilder, prefix: []const u8) !LocalId {
         const id = LocalId.fromIndex(self.executable_locals.items.len);
         const spelling = if (std.mem.eql(u8, prefix, "for_iterable"))
@@ -10992,7 +11318,7 @@ const FunctionBuilder = struct {
             "__mc_for_index"
         else
             return error.InvalidSyntheticLocal;
-        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling });
+        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling, .kind = .synthetic });
         return id;
     }
 
@@ -11286,7 +11612,7 @@ const FunctionBuilder = struct {
 
     fn appendSyntheticIfLetSubjectLocal(self: *FunctionBuilder) !LocalId {
         const id = LocalId.fromIndex(self.executable_locals.items.len);
-        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = "__mc_iflet_subject" });
+        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = "__mc_iflet_subject", .kind = .synthetic });
         return id;
     }
 
@@ -12431,6 +12757,7 @@ const FunctionBuilder = struct {
                 if (length != items.len or length == 0)
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 const element_ty = valueTypeFromTypeAlias(target.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
+                const element_signature_type_id = try self.signature_types.internTypeExpr(target.child.*, self.const_fns, self.const_globals);
                 const callable_element = if (aggregateTargetTypeAlias(target.child.*, self.aliases).kind == .fn_pointer)
                     try self.executableCallableSignature(target.child.*)
                 else
@@ -12439,7 +12766,7 @@ const FunctionBuilder = struct {
                     try self.internExecutableTraitSymbol(trait_name)
                 else
                     SymbolId.invalid;
-                if (!try self.internExecutableArrayType(result_ty, element_ty, length, callable_element, dyn_trait_symbol))
+                if (!try self.internExecutableArrayType(result_ty, element_ty, element_signature_type_id, length, callable_element, dyn_trait_symbol))
                     break :array self.unsupportedExecutableExpression(.unsupported_array_literal);
                 const operands = try self.allocator.alloc(ExprId, items.len);
                 var operands_owned = false;
@@ -12747,6 +13074,7 @@ const FunctionBuilder = struct {
         self: *FunctionBuilder,
         ty: ValueType,
         element_ty: ValueType,
+        element_signature_type_id: SignatureTypeId,
         length: usize,
         callable_element: ?mir_model.ExecutableCallSignature,
         dyn_trait_symbol: SymbolId,
@@ -12763,8 +13091,9 @@ const FunctionBuilder = struct {
                 aggregate.array_length == null or aggregate.array_length.? != length or
                 aggregate.field_count != stored_field_count)
                 return false;
-            for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count]) |field_ty, field_type_id, field_dyn_trait_symbol| {
+            for (aggregate.field_types[0..aggregate.field_count], aggregate.field_type_ids[0..aggregate.field_count], aggregate.field_signature_type_ids[0..aggregate.field_count], aggregate.field_dyn_trait_symbols[0..aggregate.field_count]) |field_ty, field_type_id, field_signature_type_id, field_dyn_trait_symbol| {
                 if (!sameValueType(field_ty, element_ty) or !field_type_id.eql(element_type_id) or
+                    !field_signature_type_id.eql(element_signature_type_id) or
                     !field_dyn_trait_symbol.eql(dyn_trait_symbol)) return false;
             }
             return true;
@@ -12779,6 +13108,7 @@ const FunctionBuilder = struct {
         for (0..stored_field_count) |index| {
             aggregate.field_types[index] = element_ty;
             aggregate.field_type_ids[index] = element_type_id;
+            aggregate.field_signature_type_ids[index] = element_signature_type_id;
             aggregate.field_callable_signatures[index] = callable_element;
             aggregate.field_dyn_trait_symbols[index] = dyn_trait_symbol;
         }
@@ -12819,6 +13149,7 @@ const FunctionBuilder = struct {
             .array => |array| {
                 const length = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return false;
                 const element_ty = self.executableValueType(array.child.*);
+                const element_signature_type_id = try self.signature_types.internTypeExpr(array.child.*, self.const_fns, self.const_globals);
                 const callable_element = if (aggregateTargetTypeAlias(array.child.*, self.aliases).kind == .fn_pointer)
                     try self.executableCallableSignature(array.child.*)
                 else
@@ -12827,7 +13158,7 @@ const FunctionBuilder = struct {
                     try self.internExecutableTraitSymbol(trait_name)
                 else
                     SymbolId.invalid;
-                if (!try self.internExecutableArrayType(ty, element_ty, length, callable_element, dyn_trait_symbol)) return false;
+                if (!try self.internExecutableArrayType(ty, element_ty, element_signature_type_id, length, callable_element, dyn_trait_symbol)) return false;
                 if (element_ty == .array) {
                     if (!try self.internExecutableTypeExpr(element_ty, array.child.*)) return false;
                     self.markExecutableArrayElementLayoutComplete(ty, element_ty);
@@ -13072,6 +13403,7 @@ const FunctionBuilder = struct {
             aggregate.field_spellings[index] = field.name.text;
             aggregate.field_types[index] = field_ty;
             aggregate.field_type_ids[index] = try self.internTypeId(field_ty);
+            aggregate.field_signature_type_ids[index] = try self.signature_types.internTypeExpr(field.ty, self.const_fns, self.const_globals);
             if (field_ty == .value) {
                 if (dynTraitNameFromTypeAlias(field.ty, self.aliases)) |trait_name| {
                     aggregate.field_dyn_trait_symbols[index] = try self.internExecutableTraitSymbol(trait_name);
@@ -13164,19 +13496,26 @@ const FunctionBuilder = struct {
         const type_id = try self.internTypeId(ty);
         const ok_type_id = try self.internTypeId(ok_ty);
         const err_type_id = try self.internTypeId(err_ty);
+        const signature_type_id = try self.signature_types.internTypeExpr(type_expr, self.const_fns, self.const_globals);
+        const ok_signature_type_id = try self.signature_types.internTypeExpr(generic.args[0], self.const_fns, self.const_globals);
+        const err_signature_type_id = try self.signature_types.internTypeExpr(generic.args[1], self.const_fns, self.const_globals);
         for (self.executable_result_types.items) |shape| {
             if (!shape.type_id.eql(type_id)) continue;
             return sameValueType(shape.ty, ty) and sameValueType(shape.ok_ty, ok_ty) and
                 sameValueType(shape.err_ty, err_ty) and shape.ok_type_id.eql(ok_type_id) and
-                shape.err_type_id.eql(err_type_id);
+                shape.err_type_id.eql(err_type_id) and shape.signature_type_id.eql(signature_type_id) and
+                shape.ok_signature_type_id.eql(ok_signature_type_id) and shape.err_signature_type_id.eql(err_signature_type_id);
         }
         try self.executable_result_types.append(self.allocator, .{
             .type_id = type_id,
             .ty = ty,
+            .signature_type_id = signature_type_id,
             .ok_type_id = ok_type_id,
             .ok_ty = ok_ty,
+            .ok_signature_type_id = ok_signature_type_id,
             .err_type_id = err_type_id,
             .err_ty = err_ty,
+            .err_signature_type_id = err_signature_type_id,
         });
         if (!try self.internExecutableTypeExpr(ok_ty, generic.args[0])) return false;
         if (!try self.internExecutableTypeExpr(err_ty, generic.args[1])) return false;
@@ -13623,10 +13962,33 @@ const FunctionBuilder = struct {
     }
 
     fn appendExecutableStatement(self: *FunctionBuilder, source: SourcePoint, operation: ExecutableStatement.Operation) !void {
+        const span_id = try self.internSpanId(source);
+        switch (operation) {
+            .local_init => |local_init| {
+                if (!local_init.local.isValid() or local_init.local.index() >= self.executable_locals.items.len or !local_init.type_id.isValid())
+                    return error.InvalidExecutableLocalIdentity;
+                const identity = &self.executable_locals.items[local_init.local.index()];
+                if (!identity.id.eql(local_init.local)) return error.InvalidExecutableLocalIdentity;
+                if (!identity.type_id.isValid()) {
+                    // Compiler-generated locals and pattern bindings have no
+                    // declaration TypeExpr. Their ValueType/TypeId still form
+                    // a complete syntax-free local-slot fact.
+                    identity.ty = local_init.ty;
+                    identity.type_id = local_init.type_id;
+                    identity.declaration_span_id = span_id;
+                    identity.mutable = local_init.mutable;
+                } else if (!sameValueType(identity.ty, local_init.ty) or !identity.type_id.eql(local_init.type_id) or
+                    identity.mutable != local_init.mutable)
+                {
+                    return error.InvalidExecutableLocalIdentity;
+                }
+            },
+            else => {},
+        }
         try self.executable_statements.append(self.allocator, .{
             .id = InstId.fromIndex(self.executable_statements.items.len),
             .block_id = BlockId.fromIndex(self.current),
-            .span_id = try self.internSpanId(source),
+            .span_id = span_id,
             .operation = operation,
         });
     }
@@ -14387,6 +14749,20 @@ const FunctionBuilder = struct {
                         else => {},
                     }
                     const executable_local = try self.internExecutableLocal(name.text);
+                    const executable_local_type_id = try self.internTypeId(executable_ty);
+                    const executable_local_signature_type_id = if (executable_ty_expr) |declared_ty|
+                        try self.signature_types.internTypeExpr(declared_ty, self.const_fns, self.const_globals)
+                    else
+                        SignatureTypeId.invalid;
+                    try self.recordExecutableLocalIdentity(
+                        executable_local,
+                        executable_ty,
+                        executable_local_type_id,
+                        executable_local_signature_type_id,
+                        try self.internSpanId(self.sourcePoint(name.span)),
+                        mutable,
+                        .local,
+                    );
                     if (executable_ty_expr) |declared_ty| {
                         if (self.executableTypeExprIsVaList(declared_ty))
                             self.executable_locals.items[executable_local.index()].is_va_list = true;
@@ -14416,7 +14792,7 @@ const FunctionBuilder = struct {
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .local_init = .{
                         .local = executable_local,
                         .ty = executable_ty,
-                        .type_id = try self.internTypeId(executable_ty),
+                        .type_id = executable_local_type_id,
                         .value = executable_initializer,
                         .mutable = mutable,
                     } });

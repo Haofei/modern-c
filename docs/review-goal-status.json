@@ -37,10 +37,6 @@
       ],
       "retired_evidence": [
         {
-          "file": "src/declaration_artifacts.zig",
-          "needle": "function_body_fallbacks"
-        },
-        {
           "file": "src/lower_c_emitter.zig",
           "needle": "legacyFunctionBody"
         },

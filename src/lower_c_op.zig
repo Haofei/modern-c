@@ -9,9 +9,7 @@
 const std = @import("std");
 
 const lower_c_type = @import("lower_c_type.zig");
-const syntax_bridge = @import("syntax_bridge.zig");
 const checkedTypeSuffix = lower_c_type.checkedTypeSuffix;
-const isNegativeOne = syntax_bridge.isNegativeOne;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 
 pub fn unaryCOp(op: anytype) []const u8 {
@@ -171,12 +169,6 @@ pub fn isOverflowOp(op: CheckedOp) bool {
             std.mem.eql(u8, binary, "mod") or
             std.mem.eql(u8, binary, "shl"),
     };
-}
-
-pub fn trapKindForBinary(node: anytype, ty: []const u8) TrapKind {
-    if ((node.op == .div or node.op == .mod) and isSignedIntType(ty) and isNegativeOne(node.right.*)) return .integer_overflow;
-    if (node.op == .div or node.op == .mod) return .divide_by_zero;
-    return .integer_overflow;
 }
 
 pub fn isSignedIntType(ty: []const u8) bool {

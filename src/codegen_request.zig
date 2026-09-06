@@ -3,7 +3,6 @@ const std = @import("std");
 const codegen_options = @import("codegen_options.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir_model.zig");
-const SourceMapArtifact = @import("declaration_artifacts.zig").SourceMapArtifact;
 const verified_program = @import("verified_program.zig");
 
 /// Backend lowering request.
@@ -14,12 +13,11 @@ pub const LowerRequest = struct {
     opts: codegen_options.LowerOptions,
 };
 
-/// Backend source-map request. This stays separate from ordinary lowering so
-/// the remaining source-map syntax row enumeration is explicit and isolated
-/// from code-generation semantics.
+/// Backend source-map request. This stays separate from ordinary lowering;
+/// declaration rows are read only from the module-owned syntax-free facts in
+/// `program.typed_mir.source_map_declarations`.
 pub const EmitMapRequest = struct {
     program: verified_program.VerifiedProgram,
-    source_map_artifacts: []const SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: codegen_options.LowerOptions,
@@ -126,7 +124,7 @@ test "codegen requests keep source map mechanics out of ordinary lowering" {
     try std.testing.expect(!@hasField(LowerRequest, "source_map_artifacts"));
     try std.testing.expect(!@hasField(EmitMapRequest, "declaration_artifacts"));
     try std.testing.expect(!@hasField(EmitMapRequest, "function_bodies"));
-    try std.testing.expect(@hasField(EmitMapRequest, "source_map_artifacts"));
+    try std.testing.expect(!@hasField(EmitMapRequest, "source_map_artifacts"));
 }
 
 test "dynamic trait signature admission traverses nested syntax-free shapes" {

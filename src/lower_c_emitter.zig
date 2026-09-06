@@ -10,7 +10,7 @@ const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
 const type_bridge = @import("type_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const TransitionalTypeExpr = @TypeOf(@as(lower_c_model.ArrayInfo, undefined).element_ty);
+const TransitionalTypeExpr = ast_bridge.TypeExpr;
 
 /// Ephemeral legacy rendering view.  MIR facts retain only a
 /// `SignatureTypeId`; this view is reconstructed from the module-owned table
@@ -39,10 +39,9 @@ const lower_c_const = @import("lower_c_const.zig");
 const lower_c_collect = @import("lower_c_collect.zig");
 const lower_c_defs = @import("lower_c_defs.zig");
 const lower_c_names = @import("lower_c_names.zig");
-const lower_c_aggregate = @import("lower_c_aggregate.zig");
-const lower_c_reflect = @import("lower_c_reflect.zig");
+const lower_c_aggregate = @import("lower_c_aggregate_deps.zig");
 const lower_c_map = @import("lower_c_map.zig");
-const lower_c_mmio = @import("lower_c_mmio.zig");
+const lower_c_mmio = @import("lower_c_mmio_defs.zig");
 const lower_c_layout = @import("lower_c_layout.zig");
 const lower_c_dispatch = @import("lower_c_dispatch.zig");
 const ArrayInfo = lower_c_model.ArrayInfo;
@@ -54,7 +53,6 @@ const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 const OverlayFieldInfo = lower_c_model.OverlayFieldInfo;
 const ResultInfo = lower_c_model.ResultInfo;
-const ReflectEnv = lower_c_reflect.ReflectEnv;
 const StructTypeStyle = lower_c_model.StructTypeStyle;
 const MmioStruct = lower_c_model.MmioStruct;
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
@@ -181,8 +179,10 @@ pub const CEmitter = struct {
     // Function-pointer signatures encountered, each emitted as a `typedef RET
     // (*name)(params);` so the name-in-the-middle C declarator works anywhere a
     // plain type name does.
-    fn_ptr_types: std.StringHashMap(ast_bridge.TypeExpr),
-    closure_types: std.StringHashMap(ast_bridge.TypeExpr),
+    // Function/closure typedefs are keyed by canonical SignatureTypeId rather
+    // than materialized TypeExpr.  Their names remain stable C ABI spellings.
+    fn_ptr_types: std.StringHashMap(mir.SignatureTypeId),
+    closure_types: std.StringHashMap(mir.SignatureTypeId),
     // Signature-only aggregate declarations are derived directly from the
     // module-owned SignatureTypeTable.  Unlike the legacy body registries
     // above, these records deliberately store only an ID, never TypeExpr.
@@ -231,8 +231,8 @@ pub const CEmitter = struct {
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
             .opt_types = std.StringHashMap(lower_c_model.OptInfo).init(allocator),
-            .fn_ptr_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
-            .closure_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
+            .fn_ptr_types = std.StringHashMap(mir.SignatureTypeId).init(allocator),
+            .closure_types = std.StringHashMap(mir.SignatureTypeId).init(allocator),
             .signature_type_defs = std.AutoHashMap(mir.SignatureTypeId, void).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
             .mir_module = mir_module,
@@ -285,14 +285,139 @@ pub const CEmitter = struct {
 
     fn collectModule(self: *CEmitter) anyerror!void {
         try self.collectTypeAliasFacts();
+        try self.collectSignatureSliceArtifacts();
         try self.collectEnumFacts();
         try self.collectPackedBitsFacts();
         try self.collectOverlayUnionFacts();
         try self.collectTaggedUnionFacts();
         try self.collectStructFacts();
+        try self.collectSignatureAggregateArtifacts();
         try self.collectCallableEmissionFacts();
         try self.collectCheckedPlannedGlobals();
         try self.collectBindThunks();
+    }
+
+    /// Populate the C slice typedef registry directly from the verified
+    /// module-owned signature graph. This keeps slice declaration artifacts
+    /// independent of materialized aggregate rendering views.
+    fn collectSignatureSliceArtifacts(self: *CEmitter) !void {
+        for (self.mir_module.signature_types.shapes, 0..) |_, index|
+            try lower_c_collect.collectSignatureSliceType(self.signatureSliceArtifactContext(), mir.SignatureTypeId.fromIndex(index));
+    }
+
+    /// Arrays, `Result`, and value-optionals are declaration artifacts owned
+    /// solely by the verified signature graph.  This deliberately runs before
+    /// materialized struct views are collected: aggregate registration must
+    /// never recover type identity from an AST node.
+    fn collectSignatureAggregateArtifacts(self: *CEmitter) !void {
+        for (self.mir_module.signature_types.shapes, 0..) |_, index|
+            try self.collectSignatureAggregateType(mir.SignatureTypeId.fromIndex(index));
+    }
+
+    fn collectSignatureAggregateType(self: *CEmitter, id: mir.SignatureTypeId) !void {
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+        switch (shape) {
+            .qualified => |node| try self.collectSignatureAggregateType(node.child),
+            .pointer => |node| try self.collectSignatureAggregateType(node.child),
+            .raw_many_pointer => |node| try self.collectSignatureAggregateType(node.child),
+            .slice => |node| try self.collectSignatureAggregateType(node.child),
+            .nullable => |child| {
+                try self.collectSignatureAggregateType(child);
+                if (self.signatureTypeIsPointerLike(child)) return;
+                const name = try self.cSignatureType(id);
+                const payload = try self.cSignatureType(child);
+                if (self.opt_types.get(name)) |existing| {
+                    if (!existing.type_id.eql(id) or !existing.payload_type_id.eql(child) or !std.mem.eql(u8, existing.payload_c_type, payload)) return error.GeneratedTypeNameCollision;
+                } else try self.opt_types.put(name, .{ .type_id = id, .name = name, .payload_type_id = child, .payload_c_type = payload });
+            },
+            .array => |node| {
+                try self.collectSignatureAggregateType(node.child);
+                const length = node.length orelse return error.UnsupportedCEmission;
+                const name = try self.cSignatureType(id);
+                const element = try self.cSignatureType(node.child);
+                if (self.array_types.get(name)) |existing| {
+                    if (!existing.type_id.eql(id) or !existing.element_type_id.eql(node.child) or existing.len != length or !std.mem.eql(u8, existing.element_c_type, element)) return error.GeneratedTypeNameCollision;
+                } else try self.array_types.put(name, .{ .type_id = id, .name = name, .element_type_id = node.child, .element_c_type = element, .len = length });
+            },
+            .generic => |node| {
+                for (node.args) |arg| try self.collectSignatureAggregateType(arg);
+                if (!std.mem.eql(u8, node.base, "Result")) return;
+                if (node.args.len != 2) return error.UnsupportedCEmission;
+                const name = try self.cSignatureType(id);
+                const ok = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, node.args[0])) "unsigned char" else try self.cSignatureType(node.args[0]);
+                const err = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, node.args[1])) "unsigned char" else try self.cSignatureType(node.args[1]);
+                if (self.result_types.get(name)) |existing| {
+                    if (!existing.type_id.eql(id) or !existing.ok_type_id.eql(node.args[0]) or !existing.err_type_id.eql(node.args[1]) or !std.mem.eql(u8, existing.ok_c_type, ok) or !std.mem.eql(u8, existing.err_c_type, err)) return error.GeneratedTypeNameCollision;
+                } else try self.result_types.put(name, .{ .type_id = id, .name = name, .ok_type_id = node.args[0], .err_type_id = node.args[1], .ok_c_type = ok, .err_c_type = err });
+            },
+            .fn_pointer => |node| {
+                try self.collectSignatureAggregateType(node.ret);
+                for (node.params) |param| try self.collectSignatureAggregateType(param);
+            },
+            .closure_type => |node| {
+                try self.collectSignatureAggregateType(node.ret);
+                for (node.params) |param| try self.collectSignatureAggregateType(param);
+            },
+            .member => return error.UnsupportedCEmission,
+            .name, .enum_literal, .dyn_trait => {},
+        }
+    }
+
+    /// Function-pointer and closure typedefs are emitted from every reachable
+    /// signature-table shape before by-value aggregate definitions. This keeps
+    /// struct fields renderable without retaining an AST typedef registry.
+    fn emitSignatureCallableTypes(self: *CEmitter) !void {
+        for (self.mir_module.signature_types.shapes, 0..) |_, index|
+            try self.emitSignatureCallableType(mir.SignatureTypeId.fromIndex(index));
+    }
+
+    fn emitSignatureCallableType(self: *CEmitter, id: mir.SignatureTypeId) !void {
+        if (self.signature_type_defs.contains(id)) return;
+        const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+        switch (shape) {
+            .qualified => |node| try self.emitSignatureCallableType(node.child),
+            .pointer => |node| try self.emitSignatureCallableType(node.child),
+            .raw_many_pointer => |node| try self.emitSignatureCallableType(node.child),
+            .slice => |node| try self.emitSignatureCallableType(node.child),
+            .array => |node| try self.emitSignatureCallableType(node.child),
+            .nullable => |child| try self.emitSignatureCallableType(child),
+            .generic => |node| for (node.args) |arg| try self.emitSignatureCallableType(arg),
+            .member => |node| try self.emitSignatureCallableType(node.base),
+            .fn_pointer => |node| {
+                try self.emitSignatureCallableType(node.ret);
+                for (node.params) |param| try self.emitSignatureCallableType(param);
+                try self.signature_type_defs.put(id, {});
+                const name = try self.cSignatureType(id);
+                if (self.fn_ptr_types.get(name)) |existing| {
+                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    return;
+                }
+                try self.fn_ptr_types.put(name, id);
+                try self.out.print(self.allocator, "typedef {s} (*{s})(", .{ try self.cSignatureType(node.ret), name });
+                if (node.params.len == 0) {
+                    try self.out.appendSlice(self.allocator, "void");
+                } else for (node.params, 0..) |param, index| {
+                    if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+                    try self.out.appendSlice(self.allocator, try self.cSignatureType(param));
+                }
+                try self.out.appendSlice(self.allocator, ");\n\n");
+            },
+            .closure_type => |node| {
+                try self.emitSignatureCallableType(node.ret);
+                for (node.params) |param| try self.emitSignatureCallableType(param);
+                try self.signature_type_defs.put(id, {});
+                const name = try self.cSignatureType(id);
+                if (self.closure_types.get(name)) |existing| {
+                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    return;
+                }
+                try self.closure_types.put(name, id);
+                try self.out.print(self.allocator, "typedef struct {{ {s} (*code)(void *", .{try self.cSignatureType(node.ret)});
+                for (node.params) |param| try self.out.print(self.allocator, ", {s}", .{try self.cSignatureType(param)});
+                try self.out.print(self.allocator, "); void *env; }} {s};\n\n", .{name});
+            },
+            .name, .enum_literal, .dyn_trait => {},
+        }
     }
 
     /// Materialize legacy helper input from the single module-owned alias
@@ -398,8 +523,6 @@ pub const CEmitter = struct {
     /// retaining an AST initializer or declaration payload.
     fn collectCheckedPlannedGlobals(self: *CEmitter) !void {
         for (self.mir_module.checked_globals) |global| {
-            const ty = try self.signatureTypeExpr(global.signature_type_id, spanFromSourcePoint(global.declaration_source));
-            try self.collectTypeArtifacts(ty);
             const fact = self.mir_module.checkedGlobalInitializer(global) orelse continue;
             _ = fact;
         }
@@ -410,7 +533,6 @@ pub const CEmitter = struct {
             try self.collectMmioStruct(struct_decl);
             return;
         }
-        for (struct_decl.fields) |field| try self.collectTypeArtifacts(field.ty);
     }
 
     fn collectCallableEmissionFacts(self: *CEmitter) !void {
@@ -438,7 +560,12 @@ pub const CEmitter = struct {
                 .error_from = fact.error_from,
             });
             if (checked.kind != .extern_function) if (fact.backend_name) |backend_name| try self.backend_names.put(name, backend_name);
-            try self.collectCallableEmissionFactSliceTypes(name, fn_mir);
+            // Executable bodies carry their declaration shapes as stable
+            // SignatureTypeIds.  `emitSignatureTypeDefinitions` consumes those
+            // IDs directly, so do not reconstruct an AST-shaped type merely to
+            // seed the retired body-artifact registries here.  In particular,
+            // this must not turn a target-type fact's SpanId back into source
+            // coordinates in the production C path.
         }
     }
 
@@ -490,8 +617,7 @@ pub const CEmitter = struct {
         try self.emitSliceTypes();
         // Function-pointer typedefs depend only on already-declared scalar/struct
         // types, and structs/params may reference them by name.
-        try self.emitFnPtrTypes();
-        try self.emitClosureTypes();
+        try self.emitSignatureCallableTypes();
         try self.emitMmioStructTypes();
         // Arrays, structs, Result types, and tagged unions can embed one another
         // by value (`[N]S`, `struct { [N]S }`, `Result<S, E>`), so emit them in
@@ -590,7 +716,11 @@ pub const CEmitter = struct {
             },
             .fn_pointer => |node| {
                 const name = try self.cSignatureType(id);
-                if (self.fn_ptr_types.contains(name)) return;
+                if (self.fn_ptr_types.get(name)) |existing| {
+                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    return;
+                }
+                try self.fn_ptr_types.put(name, id);
                 try self.out.print(self.allocator, "typedef {s} (*{s})(", .{ try self.cSignatureType(node.ret), name });
                 if (node.params.len == 0) {
                     try self.out.appendSlice(self.allocator, "void");
@@ -602,7 +732,11 @@ pub const CEmitter = struct {
             },
             .closure_type => |node| {
                 const name = try self.cSignatureType(id);
-                if (self.closure_types.contains(name)) return;
+                if (self.closure_types.get(name)) |existing| {
+                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    return;
+                }
+                try self.closure_types.put(name, id);
                 try self.out.print(self.allocator, "typedef struct {{ {s} (*code)(void *", .{try self.cSignatureType(node.ret)});
                 for (node.params) |param| try self.out.print(self.allocator, ", {s}", .{try self.cSignatureType(param)});
                 try self.out.print(self.allocator, "); void *env; }} {s};\n\n", .{name});
@@ -1020,17 +1154,6 @@ pub const CEmitter = struct {
         };
     }
 
-    fn reflectEnv(self: *CEmitter) ReflectEnv {
-        return .{
-            .type_aliases = &self.type_aliases,
-            .structs = &self.structs,
-            .enums = &self.enums,
-            .packed_bits = &self.packed_bits,
-            .overlay_unions = &self.overlay_unions,
-            .tagged_unions = &self.tagged_unions,
-        };
-    }
-
     fn nextTempName(self: *CEmitter) ![]const u8 {
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -1041,7 +1164,7 @@ pub const CEmitter = struct {
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
             .array, .slice, .closure_type, .dyn_trait => true,
-            .nullable => |child| self.nullablePayloadIsValueOptional(child.*),
+            .nullable => |child| lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child.*),
             .generic => |node| if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2)
                 true
             else if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1)
@@ -1302,8 +1425,12 @@ pub const CEmitter = struct {
             .packed_bits = &self.packed_bits,
             .overlay_unions = &self.overlay_unions,
             .array_types = &self.array_types,
+            .result_types = &self.result_types,
+            .opt_types = &self.opt_types,
+            .signature_types = self.mir_module.signature_types,
             .name_ctx = self,
             .name_for_type = aggregateDepNameForType,
+            .name_for_signature = aggregateDepNameForSignature,
         };
     }
 
@@ -1312,20 +1439,17 @@ pub const CEmitter = struct {
         return self.cTypeFor(ty, .typedef_name);
     }
 
+    fn aggregateDepNameForSignature(ctx: *anyopaque, id: mir.SignatureTypeId) anyerror![]const u8 {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.cSignatureType(id);
+    }
+
     fn emitStruct(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
         try lower_c_defs.emitStruct(self.defsContext(), struct_decl);
     }
 
     fn emitSliceTypes(self: *CEmitter) !void {
         try lower_c_defs.emitSliceTypes(self.defsContext(), &self.slice_types);
-    }
-
-    // C has no `void` struct member, so a `Result<void, E>` (or `Result<T, void>`)
-    // payload uses a 1-byte placeholder. The unit value `()` lowers to `0`, so
-    // `.payload.ok = 0` stays well-formed.
-    fn resultPayloadCType(self: *CEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
-        if (isVoidType(self.resolveAliasType(ty))) return "unsigned char";
-        return try self.cTypeFor(ty, .typedef_name);
     }
 
     fn emitResultType(self: *CEmitter, result: ResultInfo) !void {
@@ -1487,6 +1611,8 @@ pub const CEmitter = struct {
             // callable or declaration-artifact payloads.
             .name => |name| if (self.type_aliases.get(name)) |target|
                 try self.cTypeFor(target, .typedef_name)
+            else if (self.isCheckedNominalType(name))
+                try self.cIdent(name)
             else
                 primitiveCTypeName(name) orelse try self.cIdent(name),
             .enum_literal => |name| try self.cIdent(name),
@@ -1519,6 +1645,17 @@ pub const CEmitter = struct {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.UnsupportedCEmission,
         };
+    }
+
+    /// Nominal declarations shadow predeclared scalar spellings in the C
+    /// renderer. This is driven by checked module identity, rather than a
+    /// materialized AST map: `enum Error` must stay `Error` even though the
+    /// freestanding prelude also has a scalar `Error` convention.
+    fn isCheckedNominalType(self: *const CEmitter, name: []const u8) bool {
+        for (self.mir_module.symbol_identities) |identity| {
+            if (identity.kind == .type_ and std.mem.eql(u8, identity.spelling, name)) return true;
+        }
+        return false;
     }
 
     fn cSignatureGenericType(self: *CEmitter, base: []const u8, args: []const mir.SignatureTypeId) ![]const u8 {
@@ -1681,8 +1818,6 @@ pub const CEmitter = struct {
             .tagged_unions = &self.tagged_unions,
             .structs = &self.structs,
             .mmio_structs = &self.mmio_structs,
-            .fn_ptr_types = &self.fn_ptr_types,
-            .closure_types = &self.closure_types,
             .emit_ctx = self,
             .slice_type_name = sliceTypeNameForType,
             .array_type_name = arrayTypeNameForType,
@@ -1698,8 +1833,7 @@ pub const CEmitter = struct {
         return .{
             .allocator = self.allocator,
             .out = self.out,
-            .structs = &self.structs,
-            .reflect_env = self.reflectEnv(),
+            .mir_module = self.mir_module,
         };
     }
 
@@ -1726,7 +1860,6 @@ pub const CEmitter = struct {
             .declarator = declaratorForDefs,
             .field_declarator = fieldDeclaratorForDefs,
             .enum_case_value = enumCaseValueForDefs,
-            .result_payload_c_type = resultPayloadCTypeForDefs,
         };
     }
 
@@ -1827,11 +1960,6 @@ pub const CEmitter = struct {
         return self.emitEnumCaseValue(value);
     }
 
-    fn resultPayloadCTypeForDefs(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.resultPayloadCType(ty);
-    }
-
     fn isVoidTypeForDispatch(ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return isVoidType(self.resolveAliasType(ty));
@@ -1847,7 +1975,6 @@ pub const CEmitter = struct {
         errdefer fields.deinit();
         for (overlay_union.fields, fact.fields) |field, field_fact| {
             if (!std.mem.eql(u8, field.name.text, field_fact.spelling)) return error.UnsupportedCEmission;
-            try self.collectTypeArtifacts(field.ty);
             try fields.put(field.name.text, .{
                 .ty = field.ty,
                 .layout = .{ .size = field_fact.size, .alignment = field_fact.alignment },
@@ -1862,9 +1989,6 @@ pub const CEmitter = struct {
     }
 
     fn collectTaggedUnion(self: *CEmitter, union_decl: ast_bridge.UnionDecl) !void {
-        for (union_decl.cases) |case| {
-            if (case.ty) |ty| try self.collectTypeArtifacts(ty);
-        }
         try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
@@ -1876,153 +2000,30 @@ pub const CEmitter = struct {
         try lower_c_type.appendPointerType(self.typeEmitContext(), out, child, mutability, style);
     }
 
-    fn collectCallableEmissionFactSliceTypes(self: *CEmitter, name: []const u8, fn_mir: mir.Function) !void {
-        const previous_function = self.current_function;
-        self.current_function = name;
-        defer self.current_function = previous_function;
-        // Signature types are rendered from the module-owned type table.
-        try self.collectMirFunctionTypes(&fn_mir);
-    }
-
-    fn collectMirFunctionTypes(self: *CEmitter, fn_mir: *const mir.Function) !void {
-        for (fn_mir.target_type_facts) |fact| {
-            const source = mir.sourcePointForSpanId(fn_mir.*, fact.typed_span_id) orelse return error.InvalidMirTargetTypeFacts;
-            const ty = try self.signatureTypeExpr(fact.target_type_id, spanFromSourcePoint(source));
-            try self.collectTypeArtifacts(ty);
-        }
-    }
-
-    fn collectTypeArtifacts(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {
-        const resolved_ty = self.resolveAliasType(ty);
-        try lower_c_collect.collectArrayType(self.arrayArtifactContext(), resolved_ty);
-        try lower_c_collect.collectSliceType(self.sliceArtifactContext(), resolved_ty);
-        try lower_c_collect.collectResultType(self.resultArtifactContext(), resolved_ty);
-        try lower_c_collect.collectFnPtrType(self.fnPtrArtifactContext(), resolved_ty);
-        try self.collectOptTypes(ty);
-    }
-
-    // Register any value optional `?T` (tagged repr) reachable through `ty` so its
-    // `mc_opt_<T>` typedef is emitted. Mirrors collectSliceType's per-type dedup.
-    fn collectOptTypes(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {
-        const resolved = self.resolveAliasType(ty);
-        switch (resolved.kind) {
-            .pointer => |node| try self.collectOptTypes(node.child.*),
-            .raw_many_pointer => |node| try self.collectOptTypes(node.child.*),
-            .slice => |node| try self.collectOptTypes(node.child.*),
-            .array => |node| try self.collectOptTypes(node.child.*),
-            .qualified => |node| try self.collectOptTypes(node.child.*),
-            .generic => |node| for (node.args) |arg| try self.collectOptTypes(arg),
-            .member => |node| try self.collectOptTypes(node.base.*),
-            .nullable => |child| {
-                try self.collectOptTypes(child.*);
-                if (self.nullablePayloadIsValueOptional(child.*)) {
-                    const payload = self.resolveAliasType(child.*);
-                    const name = try lower_c_names.optTypeName(self.typeNameContext(), payload);
-                    if (self.opt_types.get(name)) |existing| {
-                        if (!type_bridge.sameTypeSyntax(existing.payload_ty, payload)) return error.GeneratedTypeNameCollision;
-                    } else try self.opt_types.put(name, .{ .name = name, .payload_ty = payload });
-                }
-            },
-            else => {},
-        }
-    }
-
-    // A `?T` payload uses the tagged repr iff T is a sized VALUE type (not a pointer,
-    // slice, fn-pointer, or `*dyn` — those keep the null-sentinel repr).
-    fn nullablePayloadIsValueOptional(self: *CEmitter, child: ast_bridge.TypeExpr) bool {
-        const resolved = self.resolveAliasType(child);
-        return switch (resolved.kind) {
-            // A named payload — a scalar (u32/…), address class (PAddr), struct, enum,
-            // or packed-bits — uses the tagged repr. Pointers/slices/dyn keep the
-            // sentinel repr; arrays/generics are deferred.
-            .name => |n| !std.mem.eql(u8, n.text, "c_void"),
-            .qualified => |node| self.nullablePayloadIsValueOptional(node.child.*),
-            else => false,
-        };
-    }
-
-    fn collectTypeArtifactsForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!void {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.collectTypeArtifacts(ty);
-    }
-
-    fn arrayArtifactContext(self: *CEmitter) lower_c_collect.ArrayArtifactContext {
+    fn signatureSliceArtifactContext(self: *CEmitter) lower_c_collect.SignatureSliceArtifactContext {
         return .{
             .emit_ctx = self,
-            .collect_type_artifacts = collectTypeArtifactsForCollect,
-            .array_type_name = arrayTypeNameForCollect,
-            .array_len_text_for_expr = arrayLenTextForCollect,
-            .c_type_for_typedef = cTypeForTypedefForCollect,
-            .array_types = &self.array_types,
-        };
-    }
-
-    fn arrayTypeNameForCollect(ctx: *anyopaque, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.arrayTypeName(child, len_expr);
-    }
-
-    fn arrayLenTextForCollect(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.arrayLenTextForExpr(expr);
-    }
-
-    fn cTypeForTypedefForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.cTypeFor(ty, .typedef_name);
-    }
-
-    fn resultArtifactContext(self: *CEmitter) lower_c_collect.ResultArtifactContext {
-        return .{
-            .emit_ctx = self,
-            .collect_type_artifacts = collectTypeArtifactsForCollect,
-            .result_type_name = resultTypeNameForCollect,
-            .result_types = &self.result_types,
-        };
-    }
-
-    fn resultTypeNameForCollect(ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.resultTypeName(ok_ty, err_ty);
-    }
-
-    fn sliceArtifactContext(self: *CEmitter) lower_c_collect.SliceArtifactContext {
-        return .{
-            .emit_ctx = self,
-            .slice_type_name = sliceTypeNameForCollect,
-            .pointer_type_for_slice_element = pointerTypeForSliceElementForCollect,
+            .signature_types = self.mir_module.signature_types,
+            .slice_type_name = signatureSliceTypeNameForCollect,
+            .pointer_type_for_slice_element = signaturePointerTypeForSliceElementForCollect,
             .slice_types = &self.slice_types,
         };
     }
 
-    fn sliceTypeNameForCollect(ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8 {
+    fn signatureSliceTypeNameForCollect(ctx: *anyopaque, child: mir.SignatureTypeId, mutability: mir.TypeMutability) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.sliceTypeName(child, mutability);
+        return std.fmt.allocPrint(self.scratch.allocator(), "mc_slice_{s}_{s}", .{
+            if (mutability == .mut) "mut" else "const",
+            try self.cSignatureSuffix(child),
+        });
     }
 
-    fn pointerTypeForSliceElementForCollect(ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8 {
+    fn signaturePointerTypeForSliceElementForCollect(ctx: *anyopaque, child: mir.SignatureTypeId, mutability: mir.TypeMutability) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.pointerTypeForSliceElement(child, mutability);
-    }
-
-    fn fnPtrArtifactContext(self: *CEmitter) lower_c_collect.FnPtrArtifactContext {
-        return .{
-            .emit_ctx = self,
-            .fn_ptr_type_name = fnPtrTypeNameForCollect,
-            .closure_type_name = closureTypeNameForCollect,
-            .fn_ptr_types = &self.fn_ptr_types,
-            .closure_types = &self.closure_types,
-        };
-    }
-
-    fn fnPtrTypeNameForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.fnPtrTypeName(ty.kind.fn_pointer);
-    }
-
-    fn closureTypeNameForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.closureTypeName(ty.kind.closure_type);
+        return std.fmt.allocPrint(self.scratch.allocator(), "{s}{s} *", .{
+            try self.cSignatureType(child),
+            if (mutability == .@"const") " const" else "",
+        });
     }
 
     // A stable typedef name for a function-pointer signature: `mc_fnptr_<ret>` then
@@ -2033,17 +2034,6 @@ pub const CEmitter = struct {
 
     fn closureTypeName(self: *CEmitter, node: anytype) ![]const u8 {
         return lower_c_names.closureTypeName(self.typeNameContext(), node);
-    }
-
-    fn emitFnPtrTypes(self: *CEmitter) !void {
-        try lower_c_defs.emitFnPtrTypes(self.defsContext(), &self.fn_ptr_types);
-    }
-
-    // A closure is a fat value: a code pointer taking the type-erased env first,
-    // plus the env pointer. `bind`/calls cast at the boundary (compiler-generated),
-    // so user code stays typed and cast-free.
-    fn emitClosureTypes(self: *CEmitter) !void {
-        try lower_c_defs.emitClosureTypes(self.defsContext(), &self.closure_types);
     }
 
     // ----- Tier 2 trait objects (traits-design §4,§8) ---------------------------

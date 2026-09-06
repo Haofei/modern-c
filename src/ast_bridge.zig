@@ -1,9 +1,9 @@
 //! Transitional backend AST-shape bridge.
 //!
-//! C/LLVM lowering still receives AST-shaped expressions, declarations, spans,
-//! and type expressions in compatibility paths.  Keep direct AST access behind
-//! direct AST access behind this bridge so the remaining syntax-shaped backend contract is inventoried
-//! in one place while VerifiedProgram moves toward typed facts.
+//! C lowering still receives AST-shaped expressions, declarations, spans, and
+//! type expressions in compatibility paths. Keep direct AST access behind this bridge
+//! so the remaining syntax-shaped backend contract is inventoried in
+//! one place while VerifiedProgram moves toward typed facts.
 
 const ast = @import("ast.zig");
 

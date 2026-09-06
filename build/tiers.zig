@@ -24,6 +24,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("test"));
+    m0_full_step.dependOn(ctx.cmd("test-unit-shards"));
     m0_full_step.dependOn(ctx.cmd("c-test"));
     m0_full_step.dependOn(ctx.cmd("sweep"));
     m0_full_step.dependOn(ctx.cmd("sanitize"));

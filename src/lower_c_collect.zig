@@ -6,54 +6,26 @@ const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
+const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const type_bridge = @import("type_bridge.zig");
 
-const ArrayInfo = lower_c_model.ArrayInfo;
 const MmioStruct = lower_c_model.MmioStruct;
 const PackedBitsField = lower_c_model.PackedBitsField;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
-const ResultInfo = lower_c_model.ResultInfo;
 const SliceInfo = lower_c_model.SliceInfo;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = type_bridge.typeName;
 
-pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!void;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
-pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
-pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) anyerror![]const u8;
-pub const ExprTextFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8;
-pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8;
-pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8;
+pub const SignatureSliceTypeNameFn = *const fn (ctx: *anyopaque, child: mir.SignatureTypeId, mutability: mir.TypeMutability) anyerror![]const u8;
 
-pub const FnPtrArtifactContext = struct {
+/// Syntax-free typedef artifact ingress.  The registry is keyed by the
+/// declaration spelling, but every collision check is against the verified
+/// `SignatureTypeId` pair, never a materialized TypeExpr.
+pub const SignatureSliceArtifactContext = struct {
     emit_ctx: *anyopaque,
-    fn_ptr_type_name: TypeNameFn,
-    closure_type_name: TypeNameFn,
-    fn_ptr_types: *std.StringHashMap(ast_bridge.TypeExpr),
-    closure_types: *std.StringHashMap(ast_bridge.TypeExpr),
-};
-
-pub const ArrayArtifactContext = struct {
-    emit_ctx: *anyopaque,
-    collect_type_artifacts: TypeArtifactFn,
-    array_type_name: ArrayTypeNameFn,
-    array_len_text_for_expr: ExprTextFn,
-    c_type_for_typedef: TypeNameFn,
-    array_types: *std.StringHashMap(ArrayInfo),
-};
-
-pub const ResultArtifactContext = struct {
-    emit_ctx: *anyopaque,
-    collect_type_artifacts: TypeArtifactFn,
-    result_type_name: ResultTypeNameFn,
-    result_types: *std.StringHashMap(ResultInfo),
-};
-
-pub const SliceArtifactContext = struct {
-    emit_ctx: *anyopaque,
-    slice_type_name: SliceTypeNameFn,
-    pointer_type_for_slice_element: SliceTypeNameFn,
+    signature_types: mir.SignatureTypeTable,
+    slice_type_name: SignatureSliceTypeNameFn,
+    pointer_type_for_slice_element: SignatureSliceTypeNameFn,
     slice_types: *std.StringHashMap(SliceInfo),
 };
 
@@ -88,124 +60,55 @@ pub fn collectMmioStruct(
     try mmio_structs.put(struct_decl.name.text, .{ .fields = fields });
 }
 
-pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
-    switch (ty.kind) {
+/// Register every slice typedef required by `id`.  This is intentionally a
+/// walk over the immutable signature graph rather than the old AST-shaped
+/// declaration/body collectors.  The extra mutable companion preserves C
+/// lowering of a const-narrowed range and is represented by the same child ID
+/// with `TypeMutability.mut`.
+pub fn collectSignatureSliceType(ctx: SignatureSliceArtifactContext, id: mir.SignatureTypeId) anyerror!void {
+    const shape = signature_type_mechanics.shape(ctx.signature_types, id) catch return error.InvalidSignatureType;
+    switch (shape) {
+        .slice => |node| {
+            try collectSignatureSliceType(ctx, node.child);
+            try putSignatureSliceType(ctx, id, node.child, node.mutability);
+            if (node.mutability == .@"const") try putSignatureSliceType(ctx, id, node.child, .mut);
+        },
+        .pointer => |node| try collectSignatureSliceType(ctx, node.child),
+        .raw_many_pointer => |node| try collectSignatureSliceType(ctx, node.child),
+        .nullable => |child| try collectSignatureSliceType(ctx, child),
+        .qualified => |node| try collectSignatureSliceType(ctx, node.child),
+        .array => |node| try collectSignatureSliceType(ctx, node.child),
+        .generic => |node| {
+            if (std.mem.eql(u8, node.base, "DmaBuf") and node.args.len == 2)
+                try putSignatureSliceType(ctx, id, node.args[0], .mut);
+            for (node.args) |arg| try collectSignatureSliceType(ctx, arg);
+        },
         .fn_pointer => |node| {
-            try collectFnPtrType(ctx, node.ret.*);
-            for (node.params) |param| try collectFnPtrType(ctx, param);
-            const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
-            if (ctx.fn_ptr_types.get(name)) |existing| {
-                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
-            } else try ctx.fn_ptr_types.put(name, ty);
+            try collectSignatureSliceType(ctx, node.ret);
+            for (node.params) |param| try collectSignatureSliceType(ctx, param);
         },
         .closure_type => |node| {
-            try collectFnPtrType(ctx, node.ret.*);
-            for (node.params) |param| try collectFnPtrType(ctx, param);
-            const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
-            if (ctx.closure_types.get(name)) |existing| {
-                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
-            } else try ctx.closure_types.put(name, ty);
+            try collectSignatureSliceType(ctx, node.ret);
+            for (node.params) |param| try collectSignatureSliceType(ctx, param);
         },
-        .pointer => |node| try collectFnPtrType(ctx, node.child.*),
-        .raw_many_pointer => |node| try collectFnPtrType(ctx, node.child.*),
-        .nullable => |child| try collectFnPtrType(ctx, child.*),
-        .qualified => |node| try collectFnPtrType(ctx, node.child.*),
-        .array => |node| try collectFnPtrType(ctx, node.child.*),
-        .slice => |node| try collectFnPtrType(ctx, node.child.*),
-        .generic => |node| for (node.args) |arg| try collectFnPtrType(ctx, arg),
-        .member => |node| try collectFnPtrType(ctx, node.base.*),
-        else => {},
+        .member => |node| try collectSignatureSliceType(ctx, node.base),
+        .name, .enum_literal, .dyn_trait => {},
     }
 }
 
-pub fn collectArrayType(ctx: ArrayArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
-    switch (ty.kind) {
-        .array => |node| {
-            try collectArrayType(ctx, node.child.*);
-            try ctx.collect_type_artifacts(ctx.emit_ctx, node.child.*);
-            const name = try ctx.array_type_name(ctx.emit_ctx, node.child.*, node.len);
-            const len = try ctx.array_len_text_for_expr(ctx.emit_ctx, node.len);
-            const element_c_type = try ctx.c_type_for_typedef(ctx.emit_ctx, node.child.*);
-            if (ctx.array_types.get(name)) |existing| {
-                if (!std.mem.eql(u8, existing.element_c_type, element_c_type) or !std.mem.eql(u8, existing.len, len)) return error.GeneratedTypeNameCollision;
-            } else {
-                try ctx.array_types.put(name, .{
-                    .name = name,
-                    .element_ty = node.child.*,
-                    .element_c_type = element_c_type,
-                    .len = len,
-                });
-            }
-        },
-        .pointer => |node| try collectArrayType(ctx, node.child.*),
-        .raw_many_pointer => |node| try collectArrayType(ctx, node.child.*),
-        .slice => |node| try collectArrayType(ctx, node.child.*),
-        .nullable => |child| try collectArrayType(ctx, child.*),
-        .qualified => |node| try collectArrayType(ctx, node.child.*),
-        .generic => |node| for (node.args) |arg| try collectArrayType(ctx, arg),
-        .member => |node| try collectArrayType(ctx, node.base.*),
-        else => {},
-    }
-}
-
-pub fn collectResultType(ctx: ResultArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
-    switch (ty.kind) {
-        .pointer => |node| try collectResultType(ctx, node.child.*),
-        .raw_many_pointer => |node| try collectResultType(ctx, node.child.*),
-        .slice => |node| try collectResultType(ctx, node.child.*),
-        .array => |node| try collectResultType(ctx, node.child.*),
-        .nullable => |child| try collectResultType(ctx, child.*),
-        .qualified => |node| try collectResultType(ctx, node.child.*),
-        .member => |node| try collectResultType(ctx, node.base.*),
-        .generic => |node| {
-            for (node.args) |arg| try ctx.collect_type_artifacts(ctx.emit_ctx, arg);
-            if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
-                const name = try ctx.result_type_name(ctx.emit_ctx, node.args[0], node.args[1]);
-                if (ctx.result_types.get(name)) |existing| {
-                    if (!type_bridge.sameTypeSyntax(existing.ok_ty, node.args[0]) or !type_bridge.sameTypeSyntax(existing.err_ty, node.args[1])) return error.GeneratedTypeNameCollision;
-                } else {
-                    try ctx.result_types.put(name, .{ .name = name, .ok_ty = node.args[0], .err_ty = node.args[1] });
-                }
-            }
-        },
-        else => {},
-    }
-}
-
-pub fn collectSliceType(ctx: SliceArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
-    switch (ty.kind) {
-        .slice => |node| {
-            try collectSliceType(ctx, node.child.*);
-            try putSliceType(ctx, node.child.*, node.mutability);
-            // A source `[]mut T` can appear implicitly even when the declared
-            // surface type is only `[]const T`, e.g. `let s: []const T = a[0..n]`.
-            // The emitter const-narrows that mutable slice value through a
-            // temporary, so the mutable companion typedef must exist.
-            if (node.mutability == .@"const") try putSliceType(ctx, node.child.*, .mut);
-        },
-        .pointer => |node| try collectSliceType(ctx, node.child.*),
-        .raw_many_pointer => |node| try collectSliceType(ctx, node.child.*),
-        .nullable => |child| try collectSliceType(ctx, child.*),
-        .qualified => |node| try collectSliceType(ctx, node.child.*),
-        .array => |node| try collectSliceType(ctx, node.child.*),
-        .generic => |node| {
-            if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2) {
-                try putSliceType(ctx, node.args[0], .mut);
-            }
-            for (node.args) |arg| try collectSliceType(ctx, arg);
-        },
-        .member => |node| try collectSliceType(ctx, node.base.*),
-        else => {},
-    }
-}
-
-fn putSliceType(ctx: SliceArtifactContext, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) !void {
+fn putSignatureSliceType(ctx: SignatureSliceArtifactContext, type_id: mir.SignatureTypeId, child: mir.SignatureTypeId, mutability: mir.TypeMutability) !void {
     const name = try ctx.slice_type_name(ctx.emit_ctx, child, mutability);
     const ptr_type = try ctx.pointer_type_for_slice_element(ctx.emit_ctx, child, mutability);
     if (ctx.slice_types.get(name)) |existing| {
-        if (!std.mem.eql(u8, existing.ptr_type, ptr_type) or existing.mutability != mutability) return error.GeneratedTypeNameCollision;
+        if (!existing.element_type_id.eql(child) or existing.mutability != mutability or !std.mem.eql(u8, existing.ptr_type, ptr_type)) return error.GeneratedTypeNameCollision;
     } else {
-        try ctx.slice_types.put(name, .{ .name = name, .ptr_type = ptr_type, .element_ty = child, .mutability = mutability });
+        try ctx.slice_types.put(name, .{
+            .type_id = type_id,
+            .name = name,
+            .ptr_type = ptr_type,
+            .element_type_id = child,
+            .mutability = mutability,
+        });
     }
 }
 

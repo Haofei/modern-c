@@ -36,8 +36,6 @@ pub const TypeEmitContext = struct {
     tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
     structs: *const std.StringHashMap(ast_bridge.StructDecl),
     mmio_structs: *const std.StringHashMap(MmioStruct),
-    fn_ptr_types: *std.StringHashMap(ast_bridge.TypeExpr),
-    closure_types: *std.StringHashMap(ast_bridge.TypeExpr),
     emit_ctx: *anyopaque,
     slice_type_name: SliceTypeNameFn,
     array_type_name: ArrayTypeNameFn,
@@ -115,16 +113,10 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast_bridge.
         },
         .fn_pointer => {
             const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
-            if (ctx.fn_ptr_types.get(name)) |existing| {
-                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
-            } else try ctx.fn_ptr_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },
         .closure_type => {
             const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
-            if (ctx.closure_types.get(name)) |existing| {
-                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
-            } else try ctx.closure_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },
         // A `*dyn Trait` lowers to its fat-pointer typedef `mc_dyn_Trait`

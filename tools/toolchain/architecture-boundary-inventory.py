@@ -46,8 +46,9 @@ EXACT_BACKEND_COUNTS = {
     # so new codegen syntax/eval/artifact ingress fails immediately.  Update
     # these only when the count decreases or a deliberate migration patch
     # moves one of these edges behind verified MIR facts.
-    '@import("ast_bridge.zig")': 39,
-    '@import("declaration_artifacts.zig")': 2,
+    '@import("ast_bridge.zig")': 13,
+    '@import("type_bridge.zig")': 6,
+    '@import("declaration_artifacts.zig")': 0,
     '@import("eval.zig")': 0,
     # The bounded atomic-load slice aliases its transitional type payload in
     # one place instead of repeating bridge-qualified names. Future patches
@@ -55,10 +56,9 @@ EXACT_BACKEND_COUNTS = {
     # Global initializers now lower only from admitted initializer plans.
     # The obsolete LLVM global-initializer fallback and dead C literal-shape
     # probes are deleted; this ratchet may only decrease.
-    "ast_bridge.": 1368,
-    # Ordinary codegen no longer carries declaration artifacts. Remaining
-    # references belong to the isolated source-map request and collection path.
-    "declaration_artifacts.": 5,
+    "ast_bridge.": 221,
+    # Source maps now consume module-owned syntax-free declaration facts.
+    "declaration_artifacts.": 0,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 0,
     '@import("attr_syntax.zig")': 0,
@@ -83,15 +83,13 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
     ("src/codegen_request.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
     ("src/codegen_request.zig", "@import(\"early_declaration_metadata.zig\")"): 0,
-    ("src/codegen_request.zig", "@import(\"declaration_artifacts.zig\")"): 1,
-    ("src/declaration_artifacts.zig", "@import(\"early_declaration_metadata.zig\")"): 0,
-    ("src/declaration_artifacts.zig", "@import(\"module_parser.zig\")"): 1,
+    ("src/codegen_request.zig", "@import(\"declaration_artifacts.zig\")"): 0,
     ("src/main.zig", "@import(\"declaration_artifacts.zig\")"): 0,
     ("src/main.zig", "@import(\"driver_codegen_inputs.zig\")"): 0,
     ("src/driver_codegen.zig", "@import(\"driver_codegen_inputs.zig\")"): 1,
     ("src/main.zig", "collectFromDecls"): 0,
     ("src/driver_codegen_inputs.zig", "@import(\"ast.zig\")"): 0,
-    ("src/driver_codegen_inputs.zig", "@import(\"declaration_artifacts.zig\")"): 1,
+    ("src/driver_codegen_inputs.zig", "@import(\"declaration_artifacts.zig\")"): 0,
     ("src/driver_codegen_inputs.zig", "@import(\"module_parser.zig\")"): 1,
     ("src/driver_codegen_inputs.zig", "pub const SourceMapArtifact = declaration_artifacts.SourceMapArtifact"): 0,
     ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromDecls(session.allocator, module.decls)"): 0,
@@ -101,7 +99,7 @@ EXACT_FILE_COUNTS = {
     ("src/driver_codegen_inputs.zig", "session.buildVerifiedProgramFromDecls(decls"): 0,
     ("src/driver_codegen_inputs.zig", "session.buildVerifiedProgramFromResolvedDecls(resolved_decls"): 1,
     ("src/driver_codegen_inputs.zig", "session.buildMirFromResolvedDecls(resolved_decls"): 1,
-    ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir)"): 2,
+    ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls, module_mir)"): 0,
     ("src/driver_codegen_inputs.zig", "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, fallback_decls)"): 0,
     ("src/driver_codegen_inputs.zig", "fn fallbackResolvedDecls("): 0,
     ("src/driver_codegen_inputs.zig", "fn collectDeclarationArtifacts(session: *CompilationSession, module: ast.Module)"): 0,
@@ -125,60 +123,17 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const SourceMapRowsView = legacy_backend_syntax.SourceMapRowsView"): 0,
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapRowsView = struct"): 0,
-    ("src/declaration_artifacts.zig", "pub const SyntaxDeclarationSlice = []const ast.Decl"): 0,
-    ("src/declaration_artifacts.zig", "pub fn collectFromSyntaxDecls("): 0,
-    ("src/declaration_artifacts.zig", "fn collectFromSyntaxDecls("): 0,
-    ("src/declaration_artifacts.zig", "fn collectFromResolvedDeclItems("): 1,
-    ("src/declaration_artifacts.zig", "pub fn collectFromResolvedDecls("): 1,
-    ("src/declaration_artifacts.zig", "pub fn collectFromModuleDeclsForTests("): 0,
-    ("src/declaration_artifacts.zig", "[]const module_parser.ResolvedDecl"): 1,
-    ("src/declaration_artifacts.zig", "var syntax_decls = try allocator.alloc(ast.Decl"): 0,
-    ("src/declaration_artifacts.zig", "syntax_decls[i] = entry.decl"): 0,
-    ("src/declaration_artifacts.zig", "return collectFromSyntaxDecls(allocator, syntax_decls)"): 0,
-    ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
-    ("src/declaration_artifacts.zig", "function_artifacts: []const FunctionArtifact"): 0,
-    # Callable and global emission are module-owned MIR data; declaration
-    # artifacts retain source-map mechanics only.
-    ("src/declaration_artifacts.zig", "decl_artifacts: []const GlobalArtifact"): 0,
-    ("src/declaration_artifacts.zig", "global_artifacts: []const ast.GlobalDecl"): 0,
-    ("src/declaration_artifacts.zig", "global_artifacts: []const GlobalArtifact"): 0,
-    ("src/declaration_artifacts.zig", "trait_artifacts: []const TraitArtifact"): 0,
-    ("src/declaration_artifacts.zig", "trait_decl_artifacts: []const TraitDeclArtifact"): 0,
-    ("src/declaration_artifacts.zig", "impl_trait_artifacts: []const ImplTraitArtifact"): 0,
-    ("src/declaration_artifacts.zig", "type_alias_artifacts: []const ast.TypeAlias"): 0,
-    ("src/declaration_artifacts.zig", "type_alias: ast.TypeAlias"): 0,
-    ("src/declaration_artifacts.zig", "struct_artifacts: []const ast.StructDecl"): 0,
-    ("src/declaration_artifacts.zig", "enum_artifacts: []const ast.EnumDecl"): 0,
-    ("src/declaration_artifacts.zig", "union_artifacts: []const ast.UnionDecl"): 0,
-    ("src/declaration_artifacts.zig", "packed_bits_artifacts: []const ast.PackedBitsDecl"): 0,
-    ("src/declaration_artifacts.zig", "overlay_union_artifacts: []const ast.OverlayUnionDecl"): 0,
-    ("src/declaration_artifacts.zig", "type_decl_artifacts: []const TypeDeclArtifact"): 0,
-    ("src/declaration_artifacts.zig", "pub const DeclArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "pub const TypeDeclArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "pub const TransitionalTypeDeclArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "pub const FunctionArtifact = struct"): 0,
-    ("src/declaration_artifacts.zig", "    fn_decl: ast.FnDecl,"): 0,
-    ("src/declaration_artifacts.zig", "pub const GlobalArtifact = struct"): 0,
-    ("src/declaration_artifacts.zig", "pub const TraitArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "pub const TraitDeclArtifact = struct"): 0,
-    ("src/declaration_artifacts.zig", "pub const ImplTraitArtifact = struct"): 0,
-    ("src/declaration_artifacts.zig", "pub const TypeArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "type_artifacts: []const TypeArtifact"): 0,
-    ("src/declaration_artifacts.zig", "pub const CallableValueArtifact = union(enum)"): 0,
-    ("src/declaration_artifacts.zig", "body: ast.Block"): 0,
-    ("src/declaration_artifacts.zig", "opaque_decl: ast.Ident"): 0,
     ("src/codegen_request.zig", '@import("source_map_rows.zig")'): 0,
     ("src/codegen_request.zig", "source_map_rows: source_map_rows.SourceMapRows"): 0,
     ("src/codegen_request.zig", "declaration_artifacts: declaration_artifacts.CodegenDeclarationArtifacts"): 0,
     ("src/codegen_request.zig", "source_map_artifacts: []const declaration_artifacts.SourceMapArtifact"): 0,
     ("src/lower_c_map.zig", "source_map_rows"): 0,
-    ("src/lower_c_map.zig", "[]const declaration_artifacts.SourceMapArtifact"): 2,
+    ("src/lower_c_map.zig", "[]const declaration_artifacts.SourceMapArtifact"): 0,
+    ("src/lower_c_map.zig", '@import("ast_bridge.zig")'): 0,
+    ("src/lower_c_map.zig", "ast_bridge."): 0,
+    ("src/lower_c_map.zig", "astSpanAsSourcePoint"): 0,
     ("src/lower_c_map.zig", "fn emitFunctionMirRows(self: *SourceMapEmitter, symbol: []const u8) !void"): 1,
     ("src/lower_c_map.zig", "fn emitBlock(self: *SourceMapEmitter"): 0,
-    ("src/mir_facts_view.zig", "targetTypeFactAtWithModuleFallback"): 0,
-    ("src/mir_facts_view.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
-    ("src/mir_facts_view.zig", "targetTypeFactAtCurrentSpan"): 1,
-    ("src/mir_facts_view.zig", "targetTypeFactAtOwnedCurrentSpan"): 1,
     ("src/lower_c_emitter.zig", "targetTypeFactAtWithModuleFallback"): 0,
     ("src/lower_c_emitter.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
     ("src/lower_c_emitter.zig", "targetTypeFactAtCurrentSpan"): 0,
@@ -422,12 +377,11 @@ EXACT_FILE_COUNTS = {
     ("src/main.zig", "parsed.decls()"): 0,
     ("src/main.zig", "parsed.moduleForInspection()"): 0,
     ("src/lower_c.zig", "pub fn appendInspection(allocator: std.mem.Allocator, module"): 0,
-    ("src/lower_c.zig", "pub fn appendInspectionFromDecls("): 1,
-    ("src/lower_c_inspect.zig", "pub fn appendInspection(allocator: std.mem.Allocator, module"): 0,
-    ("src/lower_c_inspect.zig", "pub fn appendInspectionFromDecls("): 1,
-    ("src/lower_c_inspect.zig", "for (module.decls)"): 0,
+    ("src/lower_c.zig", "pub fn appendInspectionFromDecls("): 0,
+    ("src/c_inspection.zig", "pub fn appendInspectionFromDecls("): 1,
     ("src/spec_tests.zig", "lower_c.appendInspection(allocator, module"): 0,
-    ("src/spec_tests.zig", "lower_c.appendInspectionFromDecls(allocator, module.decls"): 1,
+    ("src/spec_tests.zig", "lower_c.appendInspectionFromDecls(allocator, module.decls"): 0,
+    ("src/spec_tests.zig", "c_inspection.appendInspectionFromDecls(allocator, module.decls"): 1,
     ("src/spec_tests.zig", "name_resolve.transform(allocator, module"): 0,
     ("src/spec_tests.zig", "name_resolve.transformDeclsWithSymbols(allocator, module.decls"): 1,
     ("src/spec_tests.zig", "generic_precheck.check(allocator, resolved"): 0,
@@ -460,7 +414,6 @@ EXACT_FILE_COUNTS = {
     ("src/lower_llvm_tests.zig", "fn appendLlvmCheckedMirProfileDeclsTest("): 1,
     ("src/main.zig", "checked.decls()"): 0,
     ("src/main.zig", "buildVerifiedProgramFromDecls(module.decls"): 0,
-    ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
     ("src/type_syntax.zig", "pub fn sameTypeSyntax("): 1,
     ("src/type_syntax.zig", "pub fn viewType("): 1,
     ("src/lower_llvm.zig", "fn isPointerLikeType("): 0,
@@ -473,60 +426,12 @@ EXACT_FILE_COUNTS = {
     ("src/lower_llvm.zig", "fn maybeUninitPayloadType("): 0,
     ("src/lower_llvm.zig", "fn resultInfo("): 0,
     ("src/lower_llvm.zig", "fn domainPayloadType("): 0,
-    ("src/lower_llvm_shape.zig", "pub fn isPointerLikeType("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn isFloatTypeOf("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn isF32TypeOf("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn isMmioPtrType("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn pointerAddressCoercion("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn nullableInnerType("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn atomicPayloadType("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn maybeUninitPayloadType("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn resultInfo("): 1,
-    ("src/lower_llvm_shape.zig", "pub fn domainPayloadType("): 1,
     ("src/lower_c_emitter.zig", "fn sourcePointMatchesSpan("): 0,
     ("src/lower_c_emitter.zig", "fn sourcePointFromOptionalSpan("): 0,
     ("src/lower_c_emitter.zig", "fn isSourceSpan("): 0,
     ("src/lower_llvm.zig", "fn sourcePointMatchesSpan("): 0,
     ("src/lower_llvm.zig", "fn sourcePointFromOptionalSpan("): 0,
     ("src/lower_llvm.zig", "fn isSourceSpan("): 0,
-    ("src/mir_source_bridge.zig", "pub fn sourcePointMatchesSpan("): 0,
-    ("src/mir_source_bridge.zig", "pub fn sourcePointFromOptionalSpan("): 1,
-    ("src/mir_source_bridge.zig", "pub fn isSourceSpan("): 1,
-    ("src/mir_source_bridge.zig", "pub fn firstCallTargetKindAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn uniqueCallTargetKindAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn hasCallTargetKindAt("): 1,
-    ("src/mir_source_bridge.zig", "pub const TargetTypeLookupKey = mir_facts_view.TargetTypeLookupKey"): 1,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactById("): 1,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtWithModuleFallback("): 0,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtCurrentSpan("): 1,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactMatchingType("): 0,
-    ("src/mir_source_bridge.zig", "pub fn atomicInitPayloadTypeAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtOwnedWithModuleFallback("): 0,
-    ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtOwnedCurrentSpan("): 1,
-    ("src/mir_source_bridge.zig", "pub fn uniqueConstGetIndexAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn pointerFactMatchesAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn aggregatePointerFieldFactMatchesAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn pointerFactIsCallInvalidationAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn pointerFactMatchesSubjectFieldAt("): 1,
-    ("src/mir_source_bridge.zig", "pub fn pointerFactIsLiveGlobal("): 1,
-    ("src/mir_source_bridge.zig", "pub fn pointerFactIsLiveLocal("): 1,
-    ("src/mir_source_bridge.zig", "pub fn pointerFactLiveState("): 1,
-    ("src/mir_source_bridge.zig", "pub fn replacementSourceFromSpan("): 0,
-    ("src/mir_source_bridge.zig", "pub fn replacementSourceMatchesSpan("): 0,
-    ("src/mir_source_bridge.zig", "@import(\"ast.zig\")"): 0,
-    ("src/mir_source_bridge.zig", "@import(\"type_syntax.zig\")"): 0,
-    ("src/mir_source_bridge.zig", "@import(\"ast_bridge.zig\")"): 1,
-    ("src/mir_source_bridge.zig", "@import(\"type_bridge.zig\")"): 1,
-    ("src/lower_c_emitter.zig", "mir_facts_view.TargetTypeFactQuery"): 0,
-    ("src/lower_c_emitter.zig", "mir_facts_view.PointerFactQuery"): 0,
-    ("src/lower_llvm.zig", "mir_facts_view.PointerFactQuery"): 0,
-    ("src/lower_c_emitter.zig", "@import(\"mir_facts_view.zig\")"): 0,
-    ("src/lower_llvm.zig", "@import(\"mir_facts_view.zig\")"): 0,
-    ("src/lower_c_access.zig", "mir.sourcePointFromSpan("): 0,
-    ("src/lower_c_access.zig", "fn replacementForSource("): 0,
-    ("src/lower_c_access.zig", "fn sameSource("): 0,
-    ("src/lower_c_try.zig", "mir.sourcePointFromSpan("): 0,
-    ("src/lower_c_mmio.zig", "mir.sourcePointFromSpan("): 0,
     ("src/lower_c_emitter.zig", "targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result"): 0,
     ("src/lower_llvm.zig", "targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result"): 0,
     ("src/lower_c_emitter.zig", "targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload"): 0,
@@ -563,18 +468,9 @@ REQUIRED_ANCHORS = {
     "src/hir_inspection.zig": (
         'pub const inspection_only_header = "hir mode=inspection-only pipeline_boundary=false\\n";',
     ),
-    "src/mir_facts_view.zig": (
-        "MIR owns construction and verification.",
-        "small query surface",
-        "targetTypeFactById",
-    ),
-    "src/mir_source_bridge.zig": (
-        "Transitional AST-span to MIR-source-point bridge.",
-        "VerifiedProgram boundary is being",
-    ),
-    "src/syntax_bridge.zig": (
-        "Transitional backend syntax-shape bridge.",
-        "expression-shape helper access behind this narrow bridge",
+    "src/c_inspection.zig": (
+        "Inspection-only C metadata emitter.",
+        "`lower_c.zig` consumes only verified executable MIR.",
     ),
     "src/type_bridge.zig": (
         "Transitional backend type-shape bridge.",
@@ -583,11 +479,6 @@ REQUIRED_ANCHORS = {
     "src/ast_bridge.zig": (
         "Transitional backend AST-shape bridge.",
         "direct AST access behind this bridge",
-    ),
-    "src/declaration_artifacts.zig": (
-        "Declaration artifacts for the remaining codegen compatibility edge.",
-        "Backends consume these through `codegen_request`",
-        "Transitional declaration artifacts isolated from backend lowering requests.",
     ),
     "src/driver_codegen_inputs.zig": (
         "Driver-owned codegen input assembly.",
@@ -621,7 +512,21 @@ FORBIDDEN_GLOBAL_PATTERNS = {
     r"VerifiedProgram\.initFromDecls\(": "declaration-slice VerifiedProgram construction",
     r"@import\(\"early_declaration_metadata\.zig\"\)": "retired early declaration metadata shim import",
     r"@import\(\"source_map_rows\.zig\"\)": "retired source-map rows wrapper import",
+    r"@import\(\"mir_facts_view\.zig\"\)": "retired MIR facts-view import",
+    r"@import\(\"mir_source_bridge\.zig\"\)": "retired AST-span-to-MIR bridge import",
+    r"@import\(\"syntax_bridge\.zig\"\)": "retired backend syntax bridge import",
 }
+
+RETIRED_FILES = (
+    "src/declaration_artifacts.zig",
+    "src/lower_c_expr.zig",
+    "src/lower_llvm_lookup.zig",
+    "src/lower_llvm_shape.zig",
+    "src/lower_llvm_type.zig",
+    "src/mir_facts_view.zig",
+    "src/mir_source_bridge.zig",
+    "src/syntax_bridge.zig",
+)
 
 
 def fail(message: str) -> None:
@@ -723,8 +628,8 @@ def validate_syntax_free_mir_plan_imports(paths: list[Path]) -> list[str]:
 
 def main() -> int:
     sources = backend_sources()
-    if len(sources) != 51:
-        fail(f"backend source inventory has {len(sources)} files, expected 51")
+    if len(sources) != 30:
+        fail(f"backend source inventory has {len(sources)} files, expected 30")
 
     for needle, expected in EXACT_BACKEND_COUNTS.items():
         require_exact_backend_count(needle, expected)
@@ -735,6 +640,10 @@ def main() -> int:
     for rel_path, needles in REQUIRED_ANCHORS.items():
         for needle in needles:
             require_contains(rel_path, needle)
+
+    for rel_path in RETIRED_FILES:
+        if (ROOT / rel_path).exists():
+            fail(f"retired compatibility module still exists: {rel_path}")
 
     for pattern, description in FORBIDDEN_BACKEND_PATTERNS.items():
         require_absent_in_backend(pattern, description)

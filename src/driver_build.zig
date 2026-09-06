@@ -29,10 +29,8 @@ pub fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_
     try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.BuildFailed);
 
     var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, false, &module_mir, &early_metadata, error.BuildFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, false, &module_mir, error.BuildFailed);
     defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
 
     var raw_c: std.ArrayList(u8) = .empty;
     defer raw_c.deinit(allocator);
@@ -118,7 +116,7 @@ pub fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    try attachCSourceMapDigests(allocator, be, program, early_metadata, raw_c.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, raw_c.items, lower_opts, &bundle);
     session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
         return error.BuildFailed;
     };
@@ -131,7 +129,6 @@ pub fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
-    declaration_artifacts: driver_codegen_inputs.DeclarationArtifacts,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
     bundle: *artifact_model.ArtifactBundle,
@@ -141,7 +138,6 @@ pub fn attachCSourceMapDigests(
     defer map_bytes.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .source_map_artifacts = declaration_artifacts.source_map_artifacts,
         .out = &map_bytes,
         .generated_artifact = generated_c,
         .opts = lower_opts,

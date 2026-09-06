@@ -34,10 +34,13 @@ pub const LocalInfo = struct {
 };
 
 pub const ArrayInfo = struct {
+    /// Canonical source of identity for a generated aggregate typedef.  The
+    /// backend never needs the materialized array TypeExpr to emit it.
+    type_id: mir.SignatureTypeId,
     name: []const u8,
-    element_ty: ast_bridge.TypeExpr,
+    element_type_id: mir.SignatureTypeId,
     element_c_type: []const u8,
-    len: []const u8,
+    len: usize,
 };
 
 // A by-value aggregate typedef emitted in dependency order (see
@@ -129,10 +132,13 @@ pub const SliceAccess = struct {
 };
 
 pub const SliceInfo = struct {
+    /// Identity comes from the verified module-owned signature table.  The C
+    /// declaration artifact deliberately retains no AST type node.
+    type_id: mir.SignatureTypeId,
     name: []const u8,
     ptr_type: []const u8,
-    element_ty: ast_bridge.TypeExpr,
-    mutability: ast_bridge.Mutability,
+    element_type_id: mir.SignatureTypeId,
+    mutability: mir.TypeMutability,
 };
 
 pub const PackedBitsInfo = struct {
@@ -171,15 +177,20 @@ pub const OverlayLayout = struct {
 pub const ReflectionCallKind = builtin_syntax.ReflectionCallKind;
 
 pub const ResultInfo = struct {
+    type_id: mir.SignatureTypeId,
     name: []const u8,
-    ok_ty: ast_bridge.TypeExpr,
-    err_ty: ast_bridge.TypeExpr,
+    ok_type_id: mir.SignatureTypeId,
+    err_type_id: mir.SignatureTypeId,
+    ok_c_type: []const u8,
+    err_c_type: []const u8,
 };
 
 // A value optional `?T`: the tagged aggregate `{ bool present; T value; }`.
 pub const OptInfo = struct {
+    type_id: mir.SignatureTypeId,
     name: []const u8,
-    payload_ty: ast_bridge.TypeExpr,
+    payload_type_id: mir.SignatureTypeId,
+    payload_c_type: []const u8,
 };
 
 pub const ResultSwitchSubject = struct {

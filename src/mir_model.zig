@@ -1881,17 +1881,45 @@ pub const ExecutableParameter = struct {
     /// inference from pointer spelling.
     atomic_payload_ty: ValueType = .unknown,
     atomic_payload_type_id: TypeId = .invalid,
+    /// Source-shape identity for the `T` in `atomic<T>`. Backends that need
+    /// a declaration spelling use this ID instead of reopening parameter
+    /// syntax; non-atomic parameters leave it invalid.
+    atomic_payload_signature_type_id: SignatureTypeId = .invalid,
     /// Payload/coherence identity for an otherwise opaque `DmaBuf<T, mode>`
     /// parameter. Mutually exclusive with the other `.value` refinements.
     dma_payload_ty: ValueType = .unknown,
     dma_payload_type_id: TypeId = .invalid,
+    /// Source-shape identity for the payload `T` in `DmaBuf<T, mode>`.
+    dma_payload_signature_type_id: SignatureTypeId = .invalid,
     dma_mode: ?ExecutableDmaBufferMode = null,
     span_id: SpanId = .invalid,
+};
+
+/// Origin of a canonical local storage generation.  The distinction lets a
+/// backend render ABI parameters, source locals, and compiler temporaries
+/// without reopening a declaration AST or inferring the role from spelling.
+pub const ExecutableLocalKind = enum {
+    parameter,
+    local,
+    synthetic,
 };
 
 pub const ExecutableLocalIdentity = struct {
     id: LocalId,
     spelling: []const u8,
+    /// Storage type and its executable-MIR identity.  This is redundant with
+    /// the owning parameter/local-init operation on purpose: local-slot and
+    /// debug consumers address a `LocalId` directly and must not rescan an
+    /// AST or recover a declaration from a source coordinate.
+    ty: ValueType = .unknown,
+    type_id: TypeId = .invalid,
+    /// Exact declared/inferred source shape when one exists. Synthetic
+    /// compiler locals leave this invalid; their storage is fully described
+    /// by `ty`/`type_id` above.
+    signature_type_id: SignatureTypeId = .invalid,
+    declaration_span_id: SpanId = .invalid,
+    mutable: bool = false,
+    kind: ExecutableLocalKind = .local,
     /// This local owns target-ABI `va_list` cursor storage. The ordinary
     /// `.value` type is intentionally insufficient to select that storage:
     /// callable and dynamic-trait values also use the opaque value class.
@@ -1926,6 +1954,11 @@ pub const ExecutableAggregateType = struct {
     field_spellings: [max_executable_operands][]const u8 = [_][]const u8{""} ** max_executable_operands,
     field_types: [max_executable_operands]ValueType = [_]ValueType{.unknown} ** max_executable_operands,
     field_type_ids: [max_executable_operands]TypeId = [_]TypeId{.invalid} ** max_executable_operands,
+    /// Optional source-shape identities for declaration/typedef renderers.
+    /// Field index remains the semantic projection identity; this parallel
+    /// table only prevents a backend from rematerializing a TypeExpr to spell
+    /// an otherwise opaque aggregate member type.
+    field_signature_type_ids: [max_executable_operands]SignatureTypeId = [_]SignatureTypeId{.invalid} ** max_executable_operands,
     /// Exact function-pointer shape for fields whose deliberately opaque
     /// `.value` representation would otherwise be ambiguous.
     field_callable_signatures: [max_executable_operands]?ExecutableCallSignature = [_]?ExecutableCallSignature{null} ** max_executable_operands,
@@ -2099,10 +2132,15 @@ pub const ExecutableEnumType = struct {
 pub const ExecutableResultType = struct {
     type_id: TypeId,
     ty: ValueType,
+    /// Exact `Result<Ok, Err>` shape and its payload source shapes. These are
+    /// declaration facts, separate from the executable storage TypeIds.
+    signature_type_id: SignatureTypeId = .invalid,
     ok_type_id: TypeId,
     ok_ty: ValueType,
+    ok_signature_type_id: SignatureTypeId = .invalid,
     err_type_id: TypeId,
     err_ty: ValueType,
+    err_signature_type_id: SignatureTypeId = .invalid,
 };
 
 pub const max_executable_switch_cases: usize = 8;
@@ -3865,6 +3903,40 @@ pub const SourceIdentity = struct {
     file_id: u32,
 };
 
+/// Syntax-free declaration metadata consumed only by the source-map emitter.
+///
+/// This is module-owned so `emit-map` observes the same declaration identity
+/// and source coordinates that admitted typed MIR.  It intentionally carries
+/// no AST declaration or type-expression payload: semantic lowering must not
+/// depend on this presentation metadata.
+pub const SourceMapDeclarationKind = enum {
+    global,
+    function,
+    extern_fn,
+    type_alias,
+    struct_,
+    enum_,
+    union_,
+    packed_bits,
+    overlay_union,
+    @"opaque",
+};
+
+pub const SourceMapDeclarationFact = struct {
+    symbol_id: SymbolId,
+    source_id: SourceId,
+    kind: SourceMapDeclarationKind,
+    declaration_source: SourcePoint,
+    initializer_source: ?SourcePoint = null,
+    is_const: bool = false,
+    exported: bool = false,
+    /// Source-map provenance is a presentation label, not a semantic input.
+    origin: []const u8 = "source",
+    /// An optional backend spelling declared by `#[backend_name(...)]`.
+    /// Absent overrides resolve to `symbol_id` through `symbol_identities`.
+    backend_name: ?[]const u8 = null,
+};
+
 pub const SpanIdentity = struct {
     id: SpanId,
     source: SourcePoint,
@@ -4551,6 +4623,7 @@ pub const Module = struct {
     checked_callables: []CheckedCallableFact = &.{},
     callable_emission_facts: []CallableEmissionFact = &.{},
     checked_globals: []CheckedGlobalFact = &.{},
+    source_map_declarations: []SourceMapDeclarationFact = &.{},
     type_aliases: []TypeAliasFact = &.{},
     enums: []EnumFact = &.{},
     packed_bits: []PackedBitsFact = &.{},
@@ -4755,6 +4828,7 @@ pub const Module = struct {
             self.allocator.free(self.callable_emission_facts);
         }
         if (self.checked_globals.len != 0) self.allocator.free(self.checked_globals);
+        if (self.source_map_declarations.len != 0) self.allocator.free(self.source_map_declarations);
         if (self.type_aliases.len != 0) self.allocator.free(self.type_aliases);
         for (self.enums) |enum_fact| if (enum_fact.cases.len != 0) self.allocator.free(enum_fact.cases);
         if (self.enums.len != 0) self.allocator.free(self.enums);

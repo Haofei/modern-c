@@ -9,6 +9,7 @@ const hir = @import("hir_inspection.zig");
 const ir = @import("ir_inspection.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
+const c_inspection = @import("c_inspection.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
@@ -636,7 +637,7 @@ test "tests/spec fixtures produce declared lower-c inspection markers" {
 
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try lower_c.appendInspectionFromDecls(allocator, module.decls, &output);
+        try c_inspection.appendInspectionFromDecls(allocator, module.decls, &output);
 
         var checks = std.mem.splitScalar(u8, check_value, ',');
         while (checks.next()) |raw_check| {

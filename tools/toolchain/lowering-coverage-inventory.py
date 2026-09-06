@@ -9,10 +9,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MIN_LOWER_C_FILES = 40
-MIN_LOWER_LLVM_FILES = 12
-MIN_LOWER_C_UNIVERSE = 1439
-MIN_LOWER_LLVM_UNIVERSE = 604
+MIN_LOWER_C_FILES = 19
+MIN_LOWER_LLVM_FILES = 7
+MIN_LOWER_C_UNIVERSE = 389
+MIN_LOWER_LLVM_UNIVERSE = 129
 
 
 def fail(message: str) -> None:
@@ -93,19 +93,19 @@ def main() -> int:
     for needle in (
         "src/lower_c*.zig",
         "src/lower_llvm*.zig",
-        "currently 40 C backend files and",
-        "12 LLVM backend files",
+        "currently 19 C backend files and",
+        "7 LLVM backend files",
         "tools/toolchain/lowering-coverage-baseline.tsv",
         "or a growing uncovered count fails `zig build lowering-coverage`",
-        "1281 / 1439",
-        "516 / 604",
+        "246 / 389",
+        "92 / 129",
     ):
         if needle not in docs:
             fail(f"docs/lowering-coverage.md missing {needle!r}")
 
     for path, needle in (
         ("build/hardening.zig", "lowering-coverage"),
-        ("build/tiers.zig", 'm0_step.dependOn(ctx.cmd("lowering-coverage"))'),
+        ("build/tiers.zig", 'm0_full_step.dependOn(ctx.cmd("lowering-coverage"))'),
         ("tools/dev-gates.py", "lowering-coverage-inventory-test"),
     ):
         require_contains(path, needle)

@@ -133,6 +133,11 @@ pub fn verify(function: *const mir.Function) !void {
     }
     for (body.locals, 0..) |identity, index| {
         if (!identity.id.isValid() or identity.id.index() != index) return error.InvalidLocalIdentity;
+        if (identity.spelling.len == 0) return error.InvalidLocalIdentity;
+        if (body.complete) {
+            try verifyType(function, identity.type_id, identity.ty, true);
+            try verifySpanId(function, identity.declaration_span_id);
+        }
         if (identity.is_va_list and identity.dyn_trait_symbol_id.isValid()) return error.InvalidLocalIdentity;
         if (identity.dyn_trait_symbol_id.isValid()) {
             const trait = symbol(body, identity.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
@@ -157,12 +162,16 @@ pub fn verify(function: *const mir.Function) !void {
         try verifyType(function, parameter.type_id, parameter.ty, body.complete);
         if (parameter.callable_signature) |signature| {
             if (parameter.ty != .value or parameter.dyn_trait_symbol_id.isValid() or parameter.atomic_payload_type_id.isValid() or
+                parameter.atomic_payload_signature_type_id.isValid() or
                 parameter.dma_payload_type_id.isValid() or parameter.dma_payload_ty != .unknown or
+                parameter.dma_payload_signature_type_id.isValid() or
                 parameter.dma_mode != null) return error.InvalidFunctionSignature;
             try verifyCallableSignature(function, signature, body.complete);
         } else if (parameter.dyn_trait_symbol_id.isValid()) {
             if (parameter.ty != .value or parameter.atomic_payload_type_id.isValid() or
+                parameter.atomic_payload_signature_type_id.isValid() or
                 parameter.dma_payload_type_id.isValid() or parameter.dma_payload_ty != .unknown or
+                parameter.dma_payload_signature_type_id.isValid() or
                 parameter.dma_mode != null) return error.InvalidFunctionSignature;
             const trait = symbol(body, parameter.dyn_trait_symbol_id) orelse return error.InvalidSymbolReference;
             if (body.complete and trait.kind != .trait) return error.InvalidCalleeSymbol;
@@ -173,14 +182,17 @@ pub fn verify(function: *const mir.Function) !void {
             };
             if (!atomic_container or parameter.atomic_payload_ty == .unknown or parameter.atomic_payload_ty == .value or
                 parameter.dma_payload_type_id.isValid() or parameter.dma_payload_ty != .unknown or
+                parameter.dma_payload_signature_type_id.isValid() or
                 parameter.dma_mode != null)
                 return error.InvalidFunctionSignature;
             try verifyType(function, parameter.atomic_payload_type_id, parameter.atomic_payload_ty, body.complete);
         } else if (parameter.dma_payload_type_id.isValid()) {
-            if (parameter.ty != .value or parameter.dma_payload_ty == .unknown or parameter.dma_payload_ty == .value or
+            if (parameter.ty != .value or parameter.atomic_payload_signature_type_id.isValid() or parameter.dma_payload_ty == .unknown or parameter.dma_payload_ty == .value or
                 parameter.dma_mode == null) return error.InvalidFunctionSignature;
             try verifyType(function, parameter.dma_payload_type_id, parameter.dma_payload_ty, body.complete);
-        } else if (parameter.dma_payload_ty != .unknown or parameter.dma_mode != null) {
+        } else if (parameter.dma_payload_ty != .unknown or parameter.dma_payload_signature_type_id.isValid() or
+            parameter.dma_mode != null)
+        {
             return error.InvalidFunctionSignature;
         } else if (body.complete and parameter.ty == .value) return error.InvalidFunctionSignature;
     }
@@ -244,6 +256,7 @@ pub fn verify(function: *const mir.Function) !void {
         try verifySpanId(function, statement_value.span_id);
         try verifyStatement(function, statement_value);
     }
+    try verifyLocalDeclarationFacts(function);
 
     if (body.terminators.len != function.blocks.len) return error.InvalidTerminatorIdentity;
     for (body.terminators, 0..) |terminator, index| {
@@ -254,6 +267,36 @@ pub fn verify(function: *const mir.Function) !void {
     if (body.complete) try verifyExecutableCleanupCfg(function);
 
     if (body.complete and containsIncompleteOperation(body)) return error.InvalidCompletionClaim;
+}
+
+/// Local slots are primary executable-MIR facts, not a renderer cache. Keep
+/// their direct LocalId view synchronized with the parameter/local-init rows
+/// that produce the actual storage generation.
+fn verifyLocalDeclarationFacts(function: *const mir.Function) !void {
+    const body = &function.executable_body;
+    for (body.locals) |identity| {
+        var parameters: usize = 0;
+        var initializers: usize = 0;
+        for (body.parameters) |parameter| if (parameter.local.eql(identity.id)) {
+            parameters += 1;
+            if (!sameValueType(parameter.ty, identity.ty) or !parameter.type_id.eql(identity.type_id) or
+                !parameter.span_id.eql(identity.declaration_span_id) or identity.mutable)
+                return error.InvalidLocalIdentity;
+        };
+        for (body.statements) |statement_value| switch (statement_value.operation) {
+            .local_init => |local_init| if (local_init.local.eql(identity.id)) {
+                initializers += 1;
+                if (!sameValueType(local_init.ty, identity.ty) or !local_init.type_id.eql(identity.type_id) or
+                    local_init.mutable != identity.mutable)
+                    return error.InvalidLocalIdentity;
+            },
+            else => {},
+        };
+        switch (identity.kind) {
+            .parameter => if (parameters != 1 or initializers != 0) return error.InvalidLocalIdentity,
+            .local, .synthetic => if (parameters != 0 or initializers != 1) return error.InvalidLocalIdentity,
+        }
+    }
 }
 
 fn cleanupAction(body: *const mir.ExecutableBody, id: mir.CleanupActionId) ?mir.ExecutableCleanupAction {

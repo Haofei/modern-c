@@ -1,18 +1,23 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const mir = @import("mir_model.zig");
-const module_parser = @import("module_parser.zig");
 
-pub fn collectArtifactsFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl, typed_mir: *const mir.Module) !declaration_artifacts.EarlyDeclarationArtifacts {
-    var resolved_decls = try allocator.alloc(module_parser.ResolvedDecl, decls.len);
-    defer allocator.free(resolved_decls);
-    for (decls, 0..) |decl, i| {
-        resolved_decls[i] = .{
-            .file_id = @enumFromInt(0),
-            .decl = decl,
-        };
+/// Test-only view of source-map facts already admitted into typed MIR.
+///
+/// The declaration slice stays in this transitional signature solely to keep
+/// older test helpers source-compatible; it is neither inspected nor retained.
+pub const SourceMapFacts = struct {
+    declarations: []const mir.SourceMapDeclarationFact,
+
+    pub fn deinit(self: *SourceMapFacts, allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
     }
-    return declaration_artifacts.EarlyDeclarationArtifacts.collectFromResolvedDecls(allocator, resolved_decls, typed_mir);
+};
+
+pub fn collectArtifactsFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl, typed_mir: *const mir.Module) !SourceMapFacts {
+    _ = allocator;
+    _ = decls;
+    return .{ .declarations = typed_mir.source_map_declarations };
 }

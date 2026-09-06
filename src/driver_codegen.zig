@@ -9,6 +9,7 @@ const backend_registry = @import("backend_registry.zig");
 const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const compiler_session = @import("compiler_session.zig");
+const c_inspection = @import("c_inspection.zig");
 const driver_build = @import("driver_build.zig");
 const driver_codegen_inputs = @import("driver_codegen_inputs.zig");
 const lower_c = @import("lower_c.zig");
@@ -41,7 +42,7 @@ pub fn runLowerC(session: *CompilationSession, path: []const u8, source: []const
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendInspectionFromDecls(allocator, decls, &output);
+    try c_inspection.appendInspectionFromDecls(allocator, decls, &output);
     try session.writeStdout(output.items);
 }
 
@@ -60,10 +61,8 @@ pub fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_
     try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed);
 
     var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, error.EmitCFailed);
     defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
@@ -94,7 +93,7 @@ pub fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    try driver_build.attachCSourceMapDigests(allocator, be, program, early_metadata, output.items, lower_opts, &bundle);
+    try driver_build.attachCSourceMapDigests(allocator, be, program, output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -113,10 +112,8 @@ pub fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_sourc
     try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed);
 
     var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, error.EmitCFailed);
     defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
 
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
@@ -148,7 +145,6 @@ pub fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_sourc
     defer output.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .source_map_artifacts = early_metadata.source_map_artifacts,
         .out = &output,
         .generated_artifact = generated_c.items,
         .opts = lower_opts,
@@ -171,10 +167,8 @@ pub fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_sour
     try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitLlvmFailed);
 
     var module_mir: mir.Module = undefined;
-    var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, error.EmitLlvmFailed);
     defer module_mir.deinit();
-    defer early_metadata.deinit(allocator);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
@@ -226,10 +220,8 @@ pub fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []c
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     var typed_mir: mir.Module = undefined;
-    var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
+    try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir);
     defer typed_mir.deinit();
-    defer artifacts.deinit(allocator);
     lower_c.appendLayoutAssertsWithMirArtifacts(allocator, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-layout: a struct named in --structs= was not found in {s}\n", .{path});
@@ -261,10 +253,8 @@ pub fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     var typed_mir: mir.Module = undefined;
-    var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
+    try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir);
     defer typed_mir.deinit();
-    defer artifacts.deinit(allocator);
     lower_c.appendStructDeclsWithMirArtifacts(allocator, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-c-struct: a struct named in --structs= was not found in {s}\n", .{path});
