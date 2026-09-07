@@ -327,7 +327,7 @@ pub const CEmitter = struct {
                 const name = try self.cSignatureType(id);
                 const payload = try self.cSignatureType(child);
                 if (self.opt_types.get(name)) |existing| {
-                    if (!existing.type_id.eql(id) or !existing.payload_type_id.eql(child) or !std.mem.eql(u8, existing.payload_c_type, payload)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing.type_id, id) or !try self.sameSignatureType(existing.payload_type_id, child) or !std.mem.eql(u8, existing.payload_c_type, payload)) return error.GeneratedTypeNameCollision;
                 } else try self.opt_types.put(name, .{ .type_id = id, .name = name, .payload_type_id = child, .payload_c_type = payload });
             },
             .array => |node| {
@@ -336,7 +336,7 @@ pub const CEmitter = struct {
                 const name = try self.cSignatureType(id);
                 const element = try self.cSignatureType(node.child);
                 if (self.array_types.get(name)) |existing| {
-                    if (!existing.type_id.eql(id) or !existing.element_type_id.eql(node.child) or existing.len != length or !std.mem.eql(u8, existing.element_c_type, element)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing.type_id, id) or !try self.sameSignatureType(existing.element_type_id, node.child) or existing.len != length or !std.mem.eql(u8, existing.element_c_type, element)) return error.GeneratedTypeNameCollision;
                 } else try self.array_types.put(name, .{ .type_id = id, .name = name, .element_type_id = node.child, .element_c_type = element, .len = length });
             },
             .generic => |node| {
@@ -347,7 +347,7 @@ pub const CEmitter = struct {
                 const ok = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, node.args[0])) "unsigned char" else try self.cSignatureType(node.args[0]);
                 const err = if (try signature_type_mechanics.isVoid(self.mir_module.signature_types, node.args[1])) "unsigned char" else try self.cSignatureType(node.args[1]);
                 if (self.result_types.get(name)) |existing| {
-                    if (!existing.type_id.eql(id) or !existing.ok_type_id.eql(node.args[0]) or !existing.err_type_id.eql(node.args[1]) or !std.mem.eql(u8, existing.ok_c_type, ok) or !std.mem.eql(u8, existing.err_c_type, err)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing.type_id, id) or !try self.sameSignatureType(existing.ok_type_id, node.args[0]) or !try self.sameSignatureType(existing.err_type_id, node.args[1]) or !std.mem.eql(u8, existing.ok_c_type, ok) or !std.mem.eql(u8, existing.err_c_type, err)) return error.GeneratedTypeNameCollision;
                 } else try self.result_types.put(name, .{ .type_id = id, .name = name, .ok_type_id = node.args[0], .err_type_id = node.args[1], .ok_c_type = ok, .err_c_type = err });
             },
             .fn_pointer => |node| {
@@ -389,7 +389,7 @@ pub const CEmitter = struct {
                 try self.signature_type_defs.put(id, {});
                 const name = try self.cSignatureType(id);
                 if (self.fn_ptr_types.get(name)) |existing| {
-                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing, id)) return error.GeneratedTypeNameCollision;
                     return;
                 }
                 try self.fn_ptr_types.put(name, id);
@@ -408,7 +408,7 @@ pub const CEmitter = struct {
                 try self.signature_type_defs.put(id, {});
                 const name = try self.cSignatureType(id);
                 if (self.closure_types.get(name)) |existing| {
-                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing, id)) return error.GeneratedTypeNameCollision;
                     return;
                 }
                 try self.closure_types.put(name, id);
@@ -717,7 +717,7 @@ pub const CEmitter = struct {
             .fn_pointer => |node| {
                 const name = try self.cSignatureType(id);
                 if (self.fn_ptr_types.get(name)) |existing| {
-                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing, id)) return error.GeneratedTypeNameCollision;
                     return;
                 }
                 try self.fn_ptr_types.put(name, id);
@@ -733,7 +733,7 @@ pub const CEmitter = struct {
             .closure_type => |node| {
                 const name = try self.cSignatureType(id);
                 if (self.closure_types.get(name)) |existing| {
-                    if (!existing.eql(id)) return error.GeneratedTypeNameCollision;
+                    if (!try self.sameSignatureType(existing, id)) return error.GeneratedTypeNameCollision;
                     return;
                 }
                 try self.closure_types.put(name, id);
@@ -937,12 +937,12 @@ pub const CEmitter = struct {
 
     fn emitCheckedGlobalAddressGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.GlobalAddressInitializerPlan) !void {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedCEmission;
-        const target = self.checkedGlobalSymbolId(plan.target_symbol_id) orelse return error.UnsupportedCEmission;
+        const target = try self.cGlobalAddress(plan);
         const rendered_type = try self.cSignatureType(global.signature_type_id);
         try self.writeLineDirective(spanFromSourcePoint(global.declaration_source));
         try self.out.print(self.allocator, "#undef {s}\n", .{name});
         try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
-        try self.out.print(self.allocator, "{s} {s} = &{s};\n\n", .{ rendered_type, name, target });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n\n", .{ rendered_type, name, target });
     }
 
     fn emitCheckedFunctionSymbolGlobal(self: *CEmitter, global: mir.CheckedGlobalFact, plan: mir.FunctionSymbolInitializerPlan) !void {
@@ -980,12 +980,12 @@ pub const CEmitter = struct {
                 const length = array.length orelse return error.UnsupportedCEmission;
                 if (items.len != length) return error.UnsupportedCEmission;
                 var text: std.ArrayList(u8) = .empty;
-                try text.appendSlice(self.scratch.allocator(), "{ ");
+                try text.appendSlice(self.scratch.allocator(), "{ .elems = { ");
                 for (items, 0..) |item, index| {
                     if (index != 0) try text.appendSlice(self.scratch.allocator(), ", ");
                     try text.appendSlice(self.scratch.allocator(), try self.cAggregateGlobalInitializer(item, array.child));
                 }
-                try text.appendSlice(self.scratch.allocator(), " }");
+                try text.appendSlice(self.scratch.allocator(), " } }");
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
             .struct_ => |struct_plan| blk: {
@@ -1012,11 +1012,22 @@ pub const CEmitter = struct {
                 const ty = try self.cSignatureType(id);
                 break :blk try std.fmt.allocPrint(self.scratch.allocator(), "(({s}){s})", .{ ty, try self.cStringBackingName(value.backing_id) });
             },
-            .global_address => |value| blk: {
-                const target = self.checkedGlobalSymbolId(value.target_symbol_id) orelse return error.UnsupportedCEmission;
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "&{s}", .{target});
+            .global_address => |value| try self.cGlobalAddress(value),
+        };
+    }
+
+    fn cGlobalAddress(self: *CEmitter, plan: mir.GlobalAddressInitializerPlan) ![]const u8 {
+        const target = self.checkedGlobalSymbolId(plan.target_symbol_id) orelse return error.UnsupportedCEmission;
+        var out: std.ArrayList(u8) = .empty;
+        try out.print(self.scratch.allocator(), "&{s}", .{target});
+        for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+            .index => |index| try out.print(self.scratch.allocator(), ".elems[{d}]", .{index}),
+            .field => |field| {
+                const fact = self.structFact(field.struct_symbol_id) orelse return error.UnsupportedCEmission;
+                try out.print(self.scratch.allocator(), ".{s}", .{try self.cIdent(fact.fields[field.index].spelling)});
             },
         };
+        return out.toOwnedSlice(self.scratch.allocator());
     }
 
     fn structFact(self: *const CEmitter, symbol_id: mir.SymbolId) ?mir.StructFact {
@@ -1683,10 +1694,39 @@ pub const CEmitter = struct {
         return out.toOwnedSlice(self.scratch.allocator());
     }
 
+    // The framed signature encoding preserves nominal identity and recursively
+    // resolves aliases, so equivalent spellings share a declaration artifact.
+    fn sameSignatureType(self: *CEmitter, left: mir.SignatureTypeId, right: mir.SignatureTypeId) !bool {
+        return left.eql(right) or std.mem.eql(u8, try self.cSignatureSuffix(left), try self.cSignatureSuffix(right));
+    }
+
+    fn sameSignatureTypeForCollect(ctx: *anyopaque, left: mir.SignatureTypeId, right: mir.SignatureTypeId) anyerror!bool {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.sameSignatureType(left, right);
+    }
+
+    fn signatureAliasTarget(self: *const CEmitter, name: []const u8) ?mir.SignatureTypeId {
+        for (self.mir_module.type_aliases) |fact| {
+            const identity = self.typeAliasIdentity(fact) orelse continue;
+            if (std.mem.eql(u8, identity.spelling, name)) return fact.target_type_id;
+        }
+        return null;
+    }
+
+    fn signatureStructNamed(self: *const CEmitter, name: []const u8) bool {
+        for (self.mir_module.structs) |fact| {
+            const identity = self.mir_module.symbol_identities[fact.symbol_id.index()];
+            if (std.mem.eql(u8, identity.spelling, name)) return true;
+        }
+        return false;
+    }
+
     fn cSignatureSuffix(self: *CEmitter, id: mir.SignatureTypeId) anyerror![]const u8 {
         const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
         return switch (shape) {
-            .name => |name| if (self.structs.contains(name))
+            .name => |name| if (self.signatureAliasTarget(name)) |target|
+                self.cSignatureSuffix(target)
+            else if (self.signatureStructNamed(name))
                 std.fmt.allocPrint(self.scratch.allocator(), "mc_type_struct_{d}_{s}", .{ name.len, name })
             else if (primitiveCTypeName(name) != null)
                 name
@@ -2005,6 +2045,7 @@ pub const CEmitter = struct {
             .emit_ctx = self,
             .signature_types = self.mir_module.signature_types,
             .slice_type_name = signatureSliceTypeNameForCollect,
+            .same_type = sameSignatureTypeForCollect,
             .pointer_type_for_slice_element = signaturePointerTypeForSliceElementForCollect,
             .slice_types = &self.slice_types,
         };
@@ -2047,8 +2088,9 @@ pub const CEmitter = struct {
     fn signatureTypeIsPointerLike(self: *CEmitter, id: mir.SignatureTypeId) bool {
         const shape = self.mir_module.signature_types.get(id) orelse return false;
         return switch (shape) {
-            .pointer, .raw_many_pointer => true,
+            .pointer, .raw_many_pointer, .fn_pointer => true,
             .qualified => |node| self.signatureTypeIsPointerLike(node.child),
+            .name => |name| if (self.signatureAliasTarget(name)) |target| self.signatureTypeIsPointerLike(target) else std.mem.eql(u8, name, "cstr") or std.mem.eql(u8, name, "va_list"),
             else => false,
         };
     }

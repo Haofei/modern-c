@@ -404,7 +404,7 @@ test "lower-c renders pure array literals from syntax-free aggregate plans" {
         false,
         null,
     );
-    try expectContains(output.items, "VALUES = { { 1, 2 }, { 3, 4 } };");
+    try expectContains(output.items, "VALUES = { .elems = { { .elems = { 1, 2 } }, { .elems = { 3, 4 } } } };");
 }
 
 test "lower-c renders named struct global literals from syntax-free plans" {
@@ -448,7 +448,7 @@ test "lower-c renders nested array and struct function-symbol global plans" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMirArtifacts(std.testing.allocator, &module_mir, &output, .kernel, "c_nested_aggregate_global_plan.mc", .{}, false, null);
     try expectContains(output.items, "greeting = ((char const *)mc_str_greeting_0);");
-    try expectContains(output.items, "config = { .entries = { { .label = ((char const *)mc_str_greeting_0), .op = add }, { .label = ((char const *)mc_str_greeting_0), .op = mul } }, .source = &backing };");
+    try expectContains(output.items, "config = { .entries = { .elems = { { .label = ((char const *)mc_str_greeting_0), .op = add }, { .label = ((char const *)mc_str_greeting_0), .op = mul } } }, .source = &backing };");
 }
 
 test "lower-c fails closed when a scalar const-global fact is missing" {
@@ -1142,7 +1142,7 @@ test "lower-c emits function-symbol global and array plans without AST initializ
         null,
     );
     try expectContains(output.items, "default_op = add;");
-    try expectContains(output.items, "default_ops = { add, mul };");
+    try expectContains(output.items, "default_ops = { .elems = { add, mul } };");
 }
 
 test "lower-c emits copied verified aggregate and relocation global plans without AST artifacts" {
@@ -1183,13 +1183,13 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
         false,
         null,
     );
-    try expectContains(output.items, "copied_values = { 7, 8 };");
+    try expectContains(output.items, "copied_values = { .elems = { 7, 8 } };");
     try expectContains(output.items, "table = { .label = ((char const *)mc_str_table_0), .left = 11, .right = 12 };");
     try expectContains(output.items, "copied_table = { .label = ((char const *)mc_str_table_0), .left = 11, .right = 12 };");
     try expectContains(output.items, "copied_mode = Mode_ready;");
     try expectContains(output.items, "copied_nullable = NULL;");
     try expectContains(output.items, "copied_ptr = &seed;");
-    try expectContains(output.items, "copied_ops = { add, mul };");
+    try expectContains(output.items, "copied_ops = { .elems = { add, mul } };");
 }
 
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
@@ -12043,7 +12043,7 @@ test "lower-c closure callees materialize once" {
         search_from = index + callee.len;
     }
     try std.testing.expectEqual(@as(usize, 1), count);
-    try expectContains(body, "mc_closure_ptr_");
+    try expectContains(body, "mc_closure_ptr");
     try expectContains(body, ").code((mc_exec_tmp_");
     try expectContains(body, ").env");
 }

@@ -26,7 +26,10 @@ pub fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.BuildFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.BuildFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
 
     var module_mir: mir.Module = undefined;
     const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, false, &module_mir, error.BuildFailed);

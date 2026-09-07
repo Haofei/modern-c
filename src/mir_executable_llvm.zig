@@ -526,8 +526,8 @@ const Renderer = struct {
         if (enumTypeForValueType(self.body, ty)) |enum_ty| return self.typeTextDepth(enum_ty.repr_ty, depth + 1);
         if (taggedUnionTypeForValueType(self.body, ty)) |shape| return self.taggedUnionTypeText(shape.*);
         if (resultTypeForValueType(self.body, ty)) |shape| {
-            const ok_ty = try self.typeTextDepth(shape.ok_ty, depth + 1);
-            const err_ty = try self.typeTextDepth(shape.err_ty, depth + 1);
+            const ok_ty = if (shape.ok_ty == .void) "i8" else try self.typeTextDepth(shape.ok_ty, depth + 1);
+            const err_ty = if (shape.err_ty == .void) "i8" else try self.typeTextDepth(shape.err_ty, depth + 1);
             return std.fmt.allocPrint(self.allocator, "{{ i1, {s}, {s} }}", .{ ok_ty, err_ty });
         }
         const aggregate = aggregateTypeForValueType(self.body, ty) orelse return error.Unsupported;
@@ -666,6 +666,10 @@ const Renderer = struct {
         for (self.body.statements) |statement| switch (statement.operation) {
             .local_init => |local| {
                 if (self.locals.contains(local.local.raw)) return error.InvalidBody;
+                if (local.ty == .void) {
+                    try self.locals.put(local.local.raw, .{ .ty = "void", .storage = "", .addressable = false });
+                    continue;
+                }
                 const ty = try self.localStorageType(local);
                 const slot = try std.fmt.allocPrint(self.allocator, "%mc_local_{d}", .{local.local.raw});
                 try self.output.print(self.allocator, "  {s} = alloca {s}\n", .{ slot, ty });
@@ -719,6 +723,10 @@ const Renderer = struct {
     fn emitStatement(self: *Renderer, statement: mir.ExecutableStatement) RenderError!void {
         switch (statement.operation) {
             .local_init => |local| {
+                if (local.ty == .void) {
+                    if (local.value) |initializer| _ = try self.emitExpression(initializer);
+                    return;
+                }
                 const ty = try self.localStorageType(local);
                 const slot = (self.locals.get(local.local.raw) orelse return error.InvalidBody).storage;
                 if (mir.executableVaListLocal(self.body, local.local)) {
@@ -1244,6 +1252,7 @@ const Renderer = struct {
             try self.output.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ inverted, tag });
             return .{ .ty = "i1", .spelling = inverted };
         }
+        if (expression.result_ty == .void) return .{ .ty = "void", .spelling = "" };
         if (kind == .optional_present and self.body.expressions[operand_id.index()].result_ty == .nullable_pointer)
             return operand;
         const index: usize = switch (kind) {
@@ -1495,6 +1504,8 @@ const Renderer = struct {
         if (!std.mem.eql(u8, payload.ty, payload_ty)) return error.InvalidBody;
         const tagged = try self.temp();
         try self.output.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, if (operation.is_ok) "true" else "false" });
+        if ((if (operation.is_ok) shape.ok_ty else shape.err_ty) == .void)
+            return .{ .ty = result_ty, .spelling = tagged };
         const value = try self.temp();
         try self.output.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{
             value,

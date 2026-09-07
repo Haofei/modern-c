@@ -211,6 +211,12 @@ fn emitStatement(
                 try out.appendSlice(allocator, ");\n");
                 return;
             }
+            if (local.ty == .void) {
+                try out.appendSlice(allocator, "unsigned char ");
+                try appendLocal(allocator, out, body, local.local);
+                try out.appendSlice(allocator, " = 0;\n");
+                return;
+            }
             if (isSliceType(local.ty) or local.ty == .value) {
                 if (local.value == null) return error.UnsupportedType;
                 try out.appendSlice(allocator, "__auto_type ");
@@ -289,8 +295,14 @@ fn emitStatement(
                         var projections: [mir.max_executable_projections]CLeafProjection = undefined;
                         var first = true;
                         const target = placeById(body, store.place) orelse return error.InvalidPlace;
-                        try emitRaceAggregateStore(allocator, out, body, store.place, store.ty, target.type_id, store.value, &projections, 0, indent, &first);
+                        try emitRaceAggregateStore(allocator, out, body, store.place, store.ty, target.type_id, store.value, &projections, 0, indent, &first, null);
                         return;
+                    }
+                    if (mir.executableCallablePlace(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*)) |signature| {
+                        if (signature.has_environment) {
+                            try emitRaceClosureStore(allocator, out, body, store.place, store.value, &.{});
+                            return;
+                        }
                     }
                     if ((store.ty == .value and mir.executableCallablePlace(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) or
                         store.ty == .closed_enum or store.ty == .open_enum)
@@ -316,7 +328,11 @@ fn emitStatement(
             // `prepareStatementExpressions` evaluated the complete expression
             // graph, including a void-valued root.  Emitting it again would
             // duplicate effects.
-            _ = expressionById(body, value) orelse return error.InvalidExpression;
+            const expression = expressionById(body, value) orelse return error.InvalidExpression;
+            if (expressionNeedsTemporary(expression.*)) {
+                try writeIndent(allocator, out, indent);
+                try out.print(allocator, "(void)mc_exec_tmp_{d};\n", .{value.raw});
+            }
         },
         .guard => |guard| switch (guard.kind) {
             .assert_ => {
@@ -687,6 +703,24 @@ fn emitCLeafSuffix(
     }
 }
 
+fn emitRaceClosureLoad(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, place_id: mir.PlaceId, projections: []const CLeafProjection) (RenderError || std.mem.Allocator.Error)!void {
+    try out.appendSlice(allocator, "({ __auto_type mc_closure_ptr = &(");
+    try emitPlace(allocator, out, body, place_id);
+    try emitCLeafSuffix(allocator, out, body, (placeById(body, place_id) orelse return error.InvalidPlace).type_id, projections);
+    try out.appendSlice(allocator, "); (__typeof__(*mc_closure_ptr)){ .code = __atomic_load_n(&mc_closure_ptr->code, __ATOMIC_RELAXED), .env = __atomic_load_n(&mc_closure_ptr->env, __ATOMIC_RELAXED) }; })");
+}
+
+fn emitRaceClosureStore(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, place_id: mir.PlaceId, value_id: mir.ExprId, projections: []const CLeafProjection) (RenderError || std.mem.Allocator.Error)!void {
+    try out.appendSlice(allocator, "{ __auto_type mc_closure_ptr = &(");
+    try emitPlace(allocator, out, body, place_id);
+    try emitCLeafSuffix(allocator, out, body, (placeById(body, place_id) orelse return error.InvalidPlace).type_id, projections);
+    try out.appendSlice(allocator, "); __auto_type mc_closure_value = (");
+    try emitExpression(allocator, out, body, value_id, 0);
+    try out.appendSlice(allocator, ")");
+    try emitCLeafSuffix(allocator, out, body, (expressionById(body, value_id) orelse return error.InvalidExpression).type_id, projections);
+    try out.appendSlice(allocator, "; __atomic_store_n(&mc_closure_ptr->code, mc_closure_value.code, __ATOMIC_RELAXED); __atomic_store_n(&mc_closure_ptr->env, mc_closure_value.env, __ATOMIC_RELAXED); }\n");
+}
+
 fn emitRaceAggregateLoad(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -696,7 +730,11 @@ fn emitRaceAggregateLoad(
     type_id: mir.TypeId,
     projections: *[mir.max_executable_projections]CLeafProjection,
     projection_count: usize,
+    callable: ?mir.ExecutableCallSignature,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    if (callable) |signature| if (signature.has_environment) {
+        return emitRaceClosureLoad(allocator, out, body, place_id, projections[0..projection_count]);
+    };
     if (mir.executableAggregateCopyAlignment(ty) == null) {
         if (scalarMemoryInfo(ty)) |scalar| {
             try out.print(allocator, "(({s})mc_race_load_{s}(&(", .{ scalar.c_type, scalar.helper_suffix });
@@ -732,7 +770,7 @@ fn emitRaceAggregateLoad(
             try out.appendSlice(allocator, " = ");
             projections[projection_count] = .{ .field = index };
         }
-        try emitRaceAggregateLoad(allocator, out, body, place_id, shape.field_types[metadata_index], shape.field_type_ids[metadata_index], projections, projection_count + 1);
+        try emitRaceAggregateLoad(allocator, out, body, place_id, shape.field_types[metadata_index], shape.field_type_ids[metadata_index], projections, projection_count + 1, shape.field_callable_signatures[metadata_index]);
     }
     try out.appendSlice(allocator, if (shape.array_length != null) " } })" else " })");
 }
@@ -749,7 +787,13 @@ fn emitRaceAggregateStore(
     projection_count: usize,
     indent: usize,
     first: *bool,
+    callable: ?mir.ExecutableCallSignature,
 ) (RenderError || std.mem.Allocator.Error)!void {
+    if (callable) |signature| if (signature.has_environment) {
+        if (!first.*) try writeIndent(allocator, out, indent);
+        first.* = false;
+        return emitRaceClosureStore(allocator, out, body, place_id, value_id, projections[0..projection_count]);
+    };
     if (mir.executableAggregateCopyAlignment(ty) == null) {
         if (!first.*) try writeIndent(allocator, out, indent);
         first.* = false;
@@ -783,7 +827,7 @@ fn emitRaceAggregateStore(
         const metadata_index: usize = if (shape.array_length != null) 0 else index;
         if (metadata_index >= shape.field_count) return error.UnsupportedType;
         projections[projection_count] = if (shape.array_length != null) .{ .index = index } else .{ .field = index };
-        try emitRaceAggregateStore(allocator, out, body, place_id, shape.field_types[metadata_index], shape.field_type_ids[metadata_index], value_id, projections, projection_count + 1, indent, first);
+        try emitRaceAggregateStore(allocator, out, body, place_id, shape.field_types[metadata_index], shape.field_type_ids[metadata_index], value_id, projections, projection_count + 1, indent, first, shape.field_callable_signatures[metadata_index]);
     }
 }
 
@@ -845,7 +889,7 @@ fn emitExpressionOperation(
             .race_unordered => {
                 if (mir.executableAggregateCopyAlignment(expression.result_ty) != null) {
                     var projections: [mir.max_executable_projections]CLeafProjection = undefined;
-                    try emitRaceAggregateLoad(allocator, out, body, load.place, expression.result_ty, expression.type_id, &projections, 0);
+                    try emitRaceAggregateLoad(allocator, out, body, load.place, expression.result_ty, expression.type_id, &projections, 0, null);
                     return;
                 }
                 if (dynLoadTargetSupported(body, expression.*, load)) {
@@ -856,13 +900,11 @@ fn emitExpressionOperation(
                     try emitRacePairLoad(allocator, out, body, load.place, expression.id, .slice);
                     return;
                 }
-                if (expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load) and
-                    expressionUsedAsClosureIndirectCallee(body, expression.id))
-                {
-                    try out.print(allocator, "({{ __auto_type mc_closure_ptr_{d} = ", .{expression.id.raw});
-                    try emitPlaceAddress(allocator, out, body, load.place);
-                    try out.print(allocator, "; __typeof__(*mc_closure_ptr_{d}) mc_closure_tmp_{d}; __atomic_load(mc_closure_ptr_{d}, &mc_closure_tmp_{d}, __ATOMIC_RELAXED); mc_closure_tmp_{d}; }})", .{ expression.id.raw, expression.id.raw, expression.id.raw, expression.id.raw, expression.id.raw });
-                    return;
+                if (mir.executableCallablePlace(body.aggregate_types, (placeById(body, load.place) orelse return error.InvalidPlace).*)) |signature| {
+                    if (signature.has_environment) {
+                        try emitRaceClosureLoad(allocator, out, body, load.place, &.{});
+                        return;
+                    }
                 }
                 if (expression.result_ty == .value and callableLoadTargetSupported(body, expression.*, load)) {
                     try out.appendSlice(allocator, "__atomic_load_n(");
@@ -1141,6 +1183,11 @@ fn emitExpressionOperation(
             });
         },
         .variant_payload => |operation| {
+            if (expression.result_ty == .void) {
+                try out.appendSlice(allocator, "((void)(");
+                try emitExpression(allocator, out, body, operation.operand, depth + 1);
+                return out.appendSlice(allocator, "))");
+            }
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, operation.operand, depth + 1);
             switch (operation.kind) {
@@ -1221,7 +1268,10 @@ fn emitExpressionOperation(
             try appendCType(allocator, out, body, shape.ty);
             try out.appendSlice(allocator, "){ .is_ok = ");
             try out.appendSlice(allocator, if (result.is_ok) "true, .payload.ok = " else "false, .payload.err = ");
-            try emitExpression(allocator, out, body, result.payload, depth + 1);
+            if ((if (result.is_ok) shape.ok_ty else shape.err_ty) == .void) {
+                // Operand preparation already evaluated the unit expression.
+                try out.appendSlice(allocator, "0");
+            } else try emitExpression(allocator, out, body, result.payload, depth + 1);
             try out.appendSlice(allocator, " })");
         },
         .array => |aggregate| {
@@ -4538,6 +4588,7 @@ fn prepareExpressionSet(
                 try out.print(allocator, "mc_exec_tmp_{d} = ", .{expression.id.raw});
             }
         }
+        if (!expressionNeedsTemporary(expression)) try out.appendSlice(allocator, "(void)");
         try emitExpressionOperation(allocator, out, body, &expression, 0);
         try out.appendSlice(allocator, ";\n");
         if (mmioMapTrapEdge(body, expression) != null) {
@@ -5172,7 +5223,7 @@ fn emitLiteral(
 ) (RenderError || std.mem.Allocator.Error)!void {
     switch (literal) {
         .integer => |magnitude| try emitUnsignedIntegerLiteral(allocator, out, magnitude),
-        .signed_integer => |value| try out.print(allocator, "{d}", .{value}),
+        .signed_integer => |value| try emitSignedIntegerLiteral(allocator, out, value),
         .float => |value| switch (value) {
             .f32_bits => |bits| try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits}),
             .f64_bits => |bits| try out.print(allocator, "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))", .{bits}),
@@ -5247,6 +5298,22 @@ fn emitCStringBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes
         },
     };
     try out.append(allocator, '"');
+}
+
+fn emitSignedIntegerLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: i128) std.mem.Allocator.Error!void {
+    if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64)) {
+        if (value == std.math.minInt(i64)) return out.appendSlice(allocator, "(-9223372036854775807LL - 1)");
+        return out.print(allocator, "{d}", .{value});
+    }
+    if (value < 0) {
+        try out.appendSlice(allocator, "(-(__int128)");
+        try emitUnsignedIntegerLiteral(allocator, out, @intCast(-(value + 1)));
+        try out.appendSlice(allocator, " - 1)");
+    } else {
+        try out.appendSlice(allocator, "((__int128)");
+        try emitUnsignedIntegerLiteral(allocator, out, @intCast(value));
+        try out.appendSlice(allocator, ")");
+    }
 }
 
 fn emitUnsignedIntegerLiteral(

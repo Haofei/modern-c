@@ -2115,6 +2115,38 @@ test "CheckedProgram admits direct global-address initializer plans" {
     module_mir.global_initializer_facts[1] = saved;
 }
 
+test "global relocation projections validate bounds, fields and final pointee type" {
+    const source =
+        \\const fn values() -> [2]u32 { return .{ 7, 8 }; }
+        \\global table: Table = .{ .items = values() };
+        \\struct Table { items: [2]u32 }
+        \\global ptr: *const u32 = &table.items[1];
+    ;
+    var parsed = try test_support.parseCheckedModule("projected_global_address.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    const saved = module_mir.global_initializer_facts[1];
+    const plan = &module_mir.global_initializer_facts[1].plan.global_address;
+    try std.testing.expectEqual(@as(usize, 2), plan.projection_count);
+    plan.projections[1].index = 2;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved;
+    plan.projections[0].field.struct_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved;
+    plan.projections[0].field.index = 1;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved;
+    plan.projection_count = 1;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved;
+    plan.projection_count = plan.projections.len + 1;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+    module_mir.global_initializer_facts[1] = saved;
+}
+
 test "CheckedProgram admits direct function-symbol global and array initializer plans" {
     const source =
         \\fn add(left: u32, right: u32) -> u32 { return left + right; }

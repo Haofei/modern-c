@@ -333,7 +333,10 @@ pub fn transformDecls(
     var out: std.ArrayList(ast.Decl) = .empty;
     for (decls) |d| {
         if (d.kind == .fn_decl and d.kind.fn_decl.is_async) {
+            const first_generated = out.items.len;
             try lowerAsyncFn(&low, &out, d);
+            for (out.items[first_generated..]) |*generated|
+                generated.* = try inheritGeneratedSource(arena, generated.*, d.kind.fn_decl.name.span);
         } else {
             try out.append(arena, d);
         }
@@ -464,6 +467,48 @@ fn patchUfcsOne(arena: std.mem.Allocator, p: *ast.Expr, futs: *std.StringHashMap
         }
     }
     patchUfcsExpr(arena, p.*, futs);
+}
+
+// Generated syntax belongs to the async declaration that produced it. Clone
+// shared children rather than mutating source syntax reused by another function.
+fn inheritGeneratedSource(arena: std.mem.Allocator, value: anytype, source: diagnostics.Span) std.mem.Allocator.Error!@TypeOf(value) {
+    const T = @TypeOf(value);
+    if (T == diagnostics.Span) {
+        if (value.line == 0) return source;
+        var span = value;
+        if (span.file_id == diagnostics.invalid_file_id) span.file_id = source.file_id;
+        return span;
+    }
+    return switch (@typeInfo(T)) {
+        .@"struct" => blk: {
+            var result = value;
+            inline for (std.meta.fields(T)) |field| {
+                if (!field.is_comptime) @field(result, field.name) = try inheritGeneratedSource(arena, @field(value, field.name), source);
+            }
+            break :blk result;
+        },
+        .@"union" => switch (value) {
+            inline else => |payload, tag| @unionInit(T, @tagName(tag), try inheritGeneratedSource(arena, payload, source)),
+        },
+        .optional => if (value) |payload| try inheritGeneratedSource(arena, payload, source) else null,
+        .pointer => |info| blk: {
+            if (info.child == u8) break :blk value;
+            switch (info.size) {
+                .one => {
+                    const result = try arena.create(info.child);
+                    result.* = try inheritGeneratedSource(arena, value.*, source);
+                    break :blk result;
+                },
+                .slice => {
+                    const result = try arena.alloc(info.child, value.len);
+                    for (value, 0..) |child, i| result[i] = try inheritGeneratedSource(arena, child, source);
+                    break :blk result;
+                },
+                else => break :blk value,
+            }
+        },
+        else => value,
+    };
 }
 
 fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Error!void {

@@ -4293,9 +4293,8 @@ fn unsignedConstValueFits(value: u128, ty: ValueType) bool {
 /// starts with folded scalar values, zero-initialized storage, pure fixed
 /// arrays, direct nominal enum cases, nullable-pointer `null`, direct string
 /// pointer literals, relocations to already-planned globals, and direct
-/// function symbols. Struct
-/// literals and projected relocations still need their own explicit facts and
-/// remain outside this representation.
+/// function symbols. Struct literals own field plans and projected relocations
+/// own paths validated against the module's aggregate facts.
 pub const GlobalInitializerPlan = union(enum) {
     scalar: ConstScalarValue,
     zero,
@@ -4353,8 +4352,15 @@ pub const EnumInitializerPlan = struct {
 /// an identifier spelling or a source expression. Admission additionally
 /// proves source order and pointee-shape agreement before either backend emits
 /// the relocation.
+pub const GlobalAddressProjection = union(enum) {
+    index: usize,
+    field: struct { struct_symbol_id: SymbolId, index: usize },
+};
+
 pub const GlobalAddressInitializerPlan = struct {
     target_symbol_id: SymbolId,
+    projections: [max_executable_projections]GlobalAddressProjection = undefined,
+    projection_count: usize = 0,
 };
 
 /// A first-class function value stored in a global. The target is resolved by
@@ -5056,7 +5062,24 @@ fn globalAddressInitializerPlanMatchesGlobalForType(plan: GlobalAddressInitializ
         else => return false,
     };
     const canonical_pointee = transparentSignatureTypeId(module, pointee) orelse return false;
-    const canonical_target = transparentSignatureTypeId(module, target.global.signature_type_id) orelse return false;
+    var target_type = target.global.signature_type_id;
+    if (plan.projection_count > plan.projections.len) return false;
+    for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+        .index => |index| {
+            const target_shape = transparentSignatureShape(module, target_type) orelse return false;
+            if (target_shape != .array or target_shape.array.length == null or index >= target_shape.array.length.?) return false;
+            target_type = target_shape.array.child;
+        },
+        .field => |field| {
+            if (!signatureTypeResolvesToSymbol(module, target_type, field.struct_symbol_id)) return false;
+            const fact = for (module.structs) |candidate| {
+                if (candidate.symbol_id.eql(field.struct_symbol_id)) break candidate;
+            } else return false;
+            if (fact.is_c_union or fact.is_mmio or field.index >= fact.fields.len) return false;
+            target_type = fact.fields[field.index].type_id;
+        },
+    };
+    const canonical_target = transparentSignatureTypeId(module, target_type) orelse return false;
     return canonical_pointee.eql(canonical_target);
 }
 

@@ -3,6 +3,8 @@ const h = @import("helpers.zig");
 
 // Spec / C / LLVM IR + object emit sweeps and the cross-backend differential gates.
 pub fn register(ctx: *h.Ctx) void {
+    _ = h.addScriptTest(ctx, "backend-regressions-test", "Compile and run static-data and executable backend regressions", &.{ "python3", "tools/toolchain/backend-regressions-test.py", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "c-test", "Emit-C compile-check the pass corpus and diagnostic-check the bad/ reject corpus", &.{ "bash", "tools/toolchain/check-generated-c.sh", "zig-out/bin/mcc", "tests/c_emit/*.mc", "zig-out/c-test", "tests/c_emit/bad/*.mc" });
 
     _ = h.addScriptTest(ctx, "llvm-test", "Emit LLVM IR for the initial backend slice and validate it with llvm-as", &.{ "bash", "tools/toolchain/llvm-test.sh", "zig-out/bin/mcc", "zig-out/llvm-test" });

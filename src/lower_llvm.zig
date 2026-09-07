@@ -386,12 +386,12 @@ const LlvmEmitter = struct {
 
     fn emitCheckedGlobalAddressGlobal(self: *LlvmEmitter, global: mir.CheckedGlobalFact, plan: mir.GlobalAddressInitializerPlan) !void {
         const name = self.checkedGlobalSymbol(global) orelse return error.UnsupportedLlvmEmission;
-        const target = self.checkedGlobalSymbolId(plan.target_symbol_id) orelse return error.UnsupportedLlvmEmission;
+        const target = try self.llvmGlobalAddress(plan);
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const kind: []const u8 = if (global.is_const) "constant" else "global";
         try self.out.print(
             self.allocator,
-            "@{s} = {s}{s} {s} @{s}\n",
+            "@{s} = {s}{s} {s} {s}\n",
             .{ name, visibility, kind, try self.llvmSignatureType(global.signature_type_id), target },
         );
     }
@@ -473,11 +473,24 @@ const LlvmEmitter = struct {
                     .{ string.len, string.name },
                 );
             },
-            .global_address => |value| blk: {
-                const target = self.checkedGlobalSymbolId(value.target_symbol_id) orelse return error.UnsupportedLlvmEmission;
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{target});
-            },
+            .global_address => |value| try self.llvmGlobalAddress(value),
         };
+    }
+
+    fn llvmGlobalAddress(self: *LlvmEmitter, plan: mir.GlobalAddressInitializerPlan) ![]const u8 {
+        const target = self.checkedGlobalSymbolId(plan.target_symbol_id) orelse return error.UnsupportedLlvmEmission;
+        if (plan.projection_count == 0) return std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{target});
+        const global = for (self.mir_module.checked_globals) |candidate| {
+            if (candidate.symbol_id.eql(plan.target_symbol_id)) break candidate;
+        } else return error.UnsupportedLlvmEmission;
+        var out: std.ArrayList(u8) = .empty;
+        try out.print(self.scratch.allocator(), "getelementptr ({s}, ptr @{s}, i64 0", .{ try self.llvmSignatureType(global.signature_type_id), target });
+        for (plan.projections[0..plan.projection_count]) |projection| switch (projection) {
+            .index => |index| try out.print(self.scratch.allocator(), ", i64 {d}", .{index}),
+            .field => |field| try out.print(self.scratch.allocator(), ", i32 {d}", .{field.index}),
+        };
+        try out.appendSlice(self.scratch.allocator(), ")");
+        return out.toOwnedSlice(self.scratch.allocator());
     }
 
     fn structFact(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?mir.StructFact {

@@ -36,7 +36,10 @@ pub fn runLowerC(session: *CompilationSession, path: []const u8, source: []const
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.LowerCFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.LowerCFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
     const decls = try resolved.astDecls(parse_allocator);
     defer parse_allocator.free(decls);
 
@@ -58,7 +61,10 @@ pub fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
 
     var module_mir: mir.Module = undefined;
     const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, error.EmitCFailed);
@@ -109,7 +115,10 @@ pub fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_sourc
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitCFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
 
     var module_mir: mir.Module = undefined;
     const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, error.EmitCFailed);
@@ -164,7 +173,10 @@ pub fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_sour
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitLlvmFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, optimize, error.EmitLlvmFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
 
     var module_mir: mir.Module = undefined;
     const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, error.EmitLlvmFailed);
@@ -213,7 +225,10 @@ pub fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []c
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.EmitLayoutFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.EmitLayoutFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
     var names = try parseStructNames(allocator, structs_csv, usage);
     defer names.deinit(allocator);
 
@@ -246,7 +261,10 @@ pub fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []
     const parse_allocator = arena.allocator();
 
     const resolved = session.resolved_program orelse return error.MissingResolvedSources;
-    try session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.EmitCStructFailed);
+    session.checkResolvedProgram(resolved.*, parse_allocator, &diag, false, error.EmitCStructFailed) catch |err| {
+        if (diag.has_errors) diag.render();
+        return err;
+    };
     var names = try parseStructNames(allocator, structs_csv, usage);
     defer names.deinit(allocator);
 

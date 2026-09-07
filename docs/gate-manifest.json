@@ -34,7 +34,8 @@
         "feature-maturity-test",
         "validation-scope-inventory-test",
         "std-api-docs-test",
-        "no-committed-private-keys-test"
+        "no-committed-private-keys-test",
+        "backend-regressions-test"
       ]
     }
   },
@@ -377,6 +378,23 @@
         "c0"
       ],
       "skip_policy": "no-skip"
+    },
+    {
+      "id": "backend-regressions-test",
+      "owner": "codegen",
+      "category": "backend-runtime-regressions",
+      "tier": "pr",
+      "required_tools": [
+        "python3",
+        "mcc",
+        "clang"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "tool-required"
     }
   ]
 }

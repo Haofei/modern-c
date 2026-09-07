@@ -20,11 +20,12 @@ pub const SignatureSliceTypeNameFn = *const fn (ctx: *anyopaque, child: mir.Sign
 
 /// Syntax-free typedef artifact ingress.  The registry is keyed by the
 /// declaration spelling, but every collision check is against the verified
-/// `SignatureTypeId` pair, never a materialized TypeExpr.
+/// alias-resolved signature identity, never a materialized TypeExpr.
 pub const SignatureSliceArtifactContext = struct {
     emit_ctx: *anyopaque,
     signature_types: mir.SignatureTypeTable,
     slice_type_name: SignatureSliceTypeNameFn,
+    same_type: *const fn (*anyopaque, mir.SignatureTypeId, mir.SignatureTypeId) anyerror!bool,
     pointer_type_for_slice_element: SignatureSliceTypeNameFn,
     slice_types: *std.StringHashMap(SliceInfo),
 };
@@ -100,7 +101,7 @@ fn putSignatureSliceType(ctx: SignatureSliceArtifactContext, type_id: mir.Signat
     const name = try ctx.slice_type_name(ctx.emit_ctx, child, mutability);
     const ptr_type = try ctx.pointer_type_for_slice_element(ctx.emit_ctx, child, mutability);
     if (ctx.slice_types.get(name)) |existing| {
-        if (!existing.element_type_id.eql(child) or existing.mutability != mutability or !std.mem.eql(u8, existing.ptr_type, ptr_type)) return error.GeneratedTypeNameCollision;
+        if (!try ctx.same_type(ctx.emit_ctx, existing.element_type_id, child) or existing.mutability != mutability or !std.mem.eql(u8, existing.ptr_type, ptr_type)) return error.GeneratedTypeNameCollision;
     } else {
         try ctx.slice_types.put(name, .{
             .type_id = type_id,
