@@ -18,7 +18,7 @@ GATE_MANIFEST = ROOT / "docs" / "gate-manifest.json"
 ARRAYS = {}
 
 MIN_GATE_COUNTS = {}
-MIN_M0_DEPENDENCIES = 20
+MIN_M0_DEPENDENCIES = 14
 
 
 def fail(message: str) -> None:

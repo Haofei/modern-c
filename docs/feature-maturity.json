@@ -104,7 +104,7 @@
       "area": "ownership-experimental",
       "spec_anchor": "view struct",
       "evidence": [
-        "tools/toolchain/ownership-experimental-surface-inventory.py",
+        "docs/spec/MC_0.7_Final_Design.md",
         "src/sema_tests.zig"
       ]
     },

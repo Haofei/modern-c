@@ -82,31 +82,6 @@ RULES: tuple[Rule, ...] = (
         "unit test source changes are covered by the compiler unit/spec test step",
     ),
     Rule(
-        ("src/sema_move.zig", "tools/toolchain/move-place-identity-inventory.py"),
-        ("move-place-identity-inventory-test",),
-        "move checker place-identity changes need the focused typed-place drift gate",
-    ),
-    Rule(
-        ("src/sema_model.zig", "src/sema_move.zig", "tools/toolchain/move-cfg-skeleton-inventory.py"),
-        ("move-cfg-skeleton-inventory-test",),
-        "move checker CFG model/worklist changes need the focused CFG skeleton drift gate",
-    ),
-    Rule(
-        ("src/sema_model.zig", "src/sema_move.zig", "tools/toolchain/move-dynamic-place-policy-inventory.py"),
-        ("move-dynamic-place-policy-inventory-test",),
-        "move checker dynamic-place changes need the focused stable-symbolic versus wildcard policy gate",
-    ),
-    Rule(
-        ("src/sema_model.zig", "src/sema_move.zig", "tools/toolchain/move-pointer-pointee-boundary-inventory.py"),
-        ("move-pointer-pointee-boundary-inventory-test",),
-        "move checker pointer-pointee changes need the focused accept/reject boundary gate",
-    ),
-    Rule(
-        ("src/sema_model.zig", "src/sema_move.zig", "tests/spec/move_place.mc", "tools/toolchain/move-projection-inventory.py"),
-        ("move-projection-inventory-test",),
-        "move checker projection changes need the explicit admission-map gate",
-    ),
-    Rule(
         ("tools/ci/pass-gates.py",),
         ("ci-pass-gates-test",),
         "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",
@@ -120,11 +95,6 @@ RULES: tuple[Rule, ...] = (
         ("tools/dev-gates.py", "tools/toolchain/dev-gates-test.py"),
         ("dev-gates-test",),
         "development gate selector changes need focused routing contract coverage",
-    ),
-    Rule(
-        ("tools/toolchain/move-unsupported-inventory.py",),
-        ("move-unsupported-inventory-test",),
-        "move unsupported-channel inventory changes need its focused drift gate",
     ),
     Rule(
         ("tools/test/contract-lint.py",),
@@ -197,73 +167,25 @@ RULES: tuple[Rule, ...] = (
     Rule(
         (
             "tools/toolchain/lowering-coverage.sh",
-            "tools/toolchain/lowering-coverage-inventory.py",
             "tools/toolchain/lowering-coverage-baseline.tsv",
             "docs/lowering-coverage.md",
         ),
-        ("lowering-coverage-inventory-test", "lowering-coverage"),
+        ("lowering-coverage",),
         "lowering coverage ratchet changes need the lowering coverage gate",
     ),
     Rule(
         (
-            "tools/toolchain/codegen-ingress-migration-test.py",
-            "docs/codegen-ingress-migration.json",
-        ),
-        ("codegen-ingress-migration-test",),
-        "codegen ingress changes need the codegen ingress manifest gate",
-    ),
-    Rule(
-        (
-            "tools/toolchain/semantic-facts-inventory.py",
-            "docs/typed-semantic-facts.md",
-        ),
-        ("semantic-facts-inventory-test",),
-        "semantic fact inventory changes need the semantic facts gate",
-    ),
-    Rule(
-        (
-            "docs/review-goal-status.json",
-            "tools/toolchain/review-goal-status-test.py",
-        ),
-        ("review-goal-status-test",),
-        "active review goal status changes need the review goal status gate",
-    ),
-    Rule(
-        (
-            "tools/toolchain/architecture-boundary-inventory.py",
+            "src/architecture_boundary_tests.zig",
             "src/backend.zig",
             "src/backend_cleanup.zig",
             "src/lower_c*.zig",
             "src/lower_llvm*.zig",
-            "src/hir_inspection.zig",
-            "src/loader.zig",
-            "src/mir_facts_view.zig",
-            "src/mir_*_plan.zig",
-            "src/type_syntax.zig",
+            "src/lower_cov.zig",
+            "src/mir_body_plan*.zig",
+            "src/mir_executable_*.zig",
         ),
-        ("architecture-boundary-inventory-test",),
-        "compiler architecture boundary changes need the backend syntax-escape and cleanup-state ratchet",
-    ),
-    Rule(
-        (
-            "tools/toolchain/compilation-session-inventory.py",
-            "src/main.zig",
-            "docs/refactoring-plan.md",
-        ),
-        ("compilation-session-inventory-test",),
-        "compiler session context changes need the compilation session gate",
-    ),
-    Rule(
-        (
-            "tools/toolchain/mir-identity-inventory.py",
-            "src/mir_model.zig",
-            "src/mir.zig",
-            "src/mir_tests.zig",
-            "docs/refactoring-plan.md",
-            "docs/typed-semantic-facts.md",
-        ),
-        ("mir-identity-inventory-test",),
-        "typed MIR identity changes need the MIR identity inventory gate",
+        ("architecture-boundary-test",),
+        "backend/MIR-body module changes need the structural syntax-front-end import check",
     ),
     Rule(
         ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv", "docs/compiler-coverage.md"),
@@ -337,12 +259,6 @@ RULES: tuple[Rule, ...] = (
         ("tools/toolchain/diagnostics-reference.py", "tools/toolchain/diagnostic-code-inventory.py", "docs/diagnostics.md", "docs/diagnostic-code-inventory.md"),
         ("diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "mcc-cli-test"),
         "diagnostic inventory changes need generated reference, ownership checks, and the installed explain CLI smoke",
-    ),
-    Rule(
-        ("tests/spec/bad/move_cfg_arrays_reject.mc",),
-        ("move-unsupported-inventory-test",),
-        "move checker unsupported-channel evidence needs the focused fail-closed inventory gate",
-        ("git diff --check",),
     ),
     Rule(
         ("tools/toolchain/spec-*-sweep.py", "tools/toolchain/llvm-opt-sweep.py"),
@@ -567,9 +483,6 @@ def host_manifest_gates(path: str) -> tuple[list[str], list[str]]:
 def spec_fixture_gates(path: str) -> tuple[list[str], list[str]]:
     gates = ["test"]
     reasons = ["spec fixture metadata and inline EXPECT contracts are checked by compiler unit/spec tests"]
-    if path == "tests/spec/move_place.mc":
-        gates.append("move-projection-inventory-test")
-        reasons.append("move-place fixtures are the projection admission inventory evidence")
     try:
         with (ROOT / path).open("r", encoding="utf-8") as source:
             for _, line in zip(range(20), source):

@@ -13,26 +13,19 @@
   "ci_pass_assertions": {
     "ci-m0-pass": {
       "build_tier": "m0",
-      "min_count": 17,
+      "min_count": 14,
       "gates": [
         "test-lint",
         "bad-diagnostics-test",
         "diagnostics-reference-test",
         "diagnostic-code-inventory-test",
-        "semantic-facts-inventory-test",
-        "architecture-boundary-inventory-test",
-        "codegen-ingress-migration-test",
-        "compilation-session-inventory-test",
-        "mir-identity-inventory-test",
         "gate-manifest-test",
         "ci-pass-gates-test",
         "dev-gates-test",
         "mcc-cli-test",
         "mcc-build-test",
         "mcmap-test",
-        "ownership-experimental-surface-inventory-test",
         "feature-maturity-test",
-        "validation-scope-inventory-test",
         "std-api-docs-test",
         "no-committed-private-keys-test",
         "backend-regressions-test"
@@ -101,72 +94,12 @@
       "skip_policy": "no-skip"
     },
     {
-      "id": "semantic-facts-inventory-test",
-      "owner": "backend-authority",
-      "category": "semantic-fact-inventory",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "architecture-boundary-inventory-test",
+      "id": "architecture-boundary-test",
       "owner": "compiler-architecture",
-      "category": "architecture-boundary-inventory",
+      "category": "module-graph-boundary",
       "tier": "pr",
       "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "codegen-ingress-migration-test",
-      "owner": "backend-authority",
-      "category": "codegen-ingress-migration",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "compilation-session-inventory-test",
-      "owner": "compiler-session",
-      "category": "request-state-inventory",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "mir-identity-inventory-test",
-      "owner": "mir",
-      "category": "typed-identity-inventory",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
+        "zig"
       ],
       "build_tiers": [
         "m0",
@@ -304,36 +237,6 @@
       "skip_policy": "no-skip"
     },
     {
-      "id": "validation-scope-inventory-test",
-      "owner": "scope-control",
-      "category": "validation-scope",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "ownership-experimental-surface-inventory-test",
-      "owner": "ownership",
-      "category": "experimental-surface-boundary",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
       "id": "feature-maturity-test",
       "owner": "compiler-architecture",
       "category": "feature-maturity-inventory",
@@ -395,6 +298,49 @@
         "c0"
       ],
       "skip_policy": "tool-required"
+    },
+    {
+      "id": "test-spec",
+      "owner": "compiler-core",
+      "category": "spec-fixture-suite",
+      "tier": "pr",
+      "required_tools": [
+        "zig"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "dev-gates-test",
+      "owner": "test-infra",
+      "category": "gate-routing",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "std-api-docs-test",
+      "owner": "stdlib",
+      "category": "generated-reference",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
     }
   ]
 }

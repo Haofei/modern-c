@@ -2,15 +2,14 @@
 # Fast local regression gate for MIR/backend cleanup authority work.
 #
 # This is intentionally narrower than `zig build test c-test llvm-test ...`.
-# It covers the cleanup/defer/auto-drop unit tests plus the two inventory gates
-# that prevent backend-local ownership authority from regressing.
+# It covers the cleanup/defer/auto-drop unit tests plus the structural
+# architecture-boundary check that keeps backends off the syntax front end.
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-python3 tools/toolchain/semantic-facts-inventory.py
-python3 tools/toolchain/mir-identity-inventory.py
+zig build architecture-boundary-test
 zig test src/main.zig \
   --test-filter "defer" \
   --test-filter "auto-drop" \

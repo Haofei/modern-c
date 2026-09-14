@@ -51,22 +51,17 @@ inspection HIR remains a dump tool and is not promoted into the pipeline.
 
 | Phase | Theme | Closed evidence |
 |---:|---|---|
-| 0 | Stop backend authority growth | Remaining exceptions are exact-count-gated by the architecture and semantic-facts inventories. |
+| 0 | Stop backend authority growth | Backend/MIR-body modules may not import the syntax front end; every remaining edge is named in `src/architecture_boundary_tests.zig`. |
 | 1 | CheckedProgram + executable MIR body identity | `CheckedProgram` is syntax-free and executable function bodies no longer use legacy AST fallback emitters. |
 | 2 | Per-file source/module cutover | The loader no longer builds a combined textual source; parsing and source identity are per-file. |
 
-`docs/codegen-ingress-migration.json` is the closure ledger for the retired
-AST-shaped declaration ingress beside `VerifiedProgram`. Its zero budgets and
-syntax-free fact anchors prevent C/LLVM codegen from regaining those payloads.
-`codegen-ingress-migration-test` must pass in every core tier; future changes
-must preserve those zero budgets instead of adding compatibility paths.
-
-The machine-readable completion evidence for these bounded review goals lives
-in `docs/review-goal-status.json`. The completed MIR compatibility-projections
-row is deliberately narrow: it covers persistent AST payloads and
-typed-vs-legacy identity mirrors, not structural `ValueType`+`TypeId`
-validation pairs, presentation spelling tables, or source/string-only legacy
-facts with no typed mirror.
+The former migration ledgers (`docs/codegen-ingress-migration.json`,
+`docs/review-goal-status.json`) and the `*-inventory.py` gates that counted
+exact source strings are deleted. They tracked needle counts, not structure:
+they broke on unrelated edits and proved nothing about the module graph. The
+single structural invariant that remains — a backend reads MIR, not syntax — is
+enforced by `zig build architecture-boundary-test`, which parses real
+`@import` edges and lists every current exception by name.
 
 ## Current queue
 
@@ -100,7 +95,7 @@ codegen no longer receives a declaration provider for it.
 
 Each patch should change one invariant family and include one focused proof:
 
-- inventory test for authority-boundary changes;
+- `architecture-boundary-test` for authority-boundary changes;
 - direct backend/MIR regression for semantic changes;
 - CLI/tool test for surface removals;
 - no unrelated kernel or validation-workload edits.
@@ -109,9 +104,8 @@ Focused compiler-authority checks:
 
 ```text
 git diff --check
-zig build semantic-facts-inventory-test --summary all
-zig build architecture-boundary-inventory-test --summary all
-zig build codegen-ingress-migration-test --summary all
+zig build architecture-boundary-test --summary all
+zig build test --summary all
 ```
 
 Use broader C/LLVM, fuzz, or QEMU validation only when the touched slice changes

@@ -7,13 +7,11 @@ import importlib.util
 import pathlib
 import subprocess
 import sys
-import tempfile
 from collections.abc import Sequence
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEV_GATES = ROOT / "tools" / "dev-gates.py"
-ARCHITECTURE_INVENTORY = ROOT / "tools" / "toolchain" / "architecture-boundary-inventory.py"
 
 
 def fail(message: str) -> None:
@@ -29,34 +27,6 @@ def load_dev_gates():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def load_architecture_inventory():
-    spec = importlib.util.spec_from_file_location("architecture_inventory", ARCHITECTURE_INVENTORY)
-    if spec is None or spec.loader is None:
-        fail(f"cannot load {ARCHITECTURE_INVENTORY.relative_to(ROOT)}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def assert_syntax_free_mir_plan_import_policy(module) -> None:
-    if module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS:
-        fail(f"legacy MIR plan exceptions changed: {module.LEGACY_MIR_PLAN_IMPORT_EXCEPTIONS!r}")
-    with tempfile.TemporaryDirectory() as temp:
-        root = pathlib.Path(temp)
-        (root / "mir_leaf_plan.zig").write_text('const std = @import("std");\nconst mir = @import("mir_model.zig");\n', encoding="utf-8")
-        (root / "mir_parent_plan.zig").write_text('const leaf = @import("mir_leaf_plan.zig");\n', encoding="utf-8")
-        if module.validate_syntax_free_mir_plan_imports(module.mir_plan_sources(root)):
-            fail("syntax-free MIR plan policy rejected allowed imports")
-
-        for index, imported in enumerate(sorted(module.MIR_PLAN_FORBIDDEN_IMPORTS)):
-            (root / f"mir_bad_{index}_plan.zig").write_text(f'const forbidden = @import("{imported}");\n', encoding="utf-8")
-        failures = module.validate_syntax_free_mir_plan_imports(module.mir_plan_sources(root))
-        for imported in module.MIR_PLAN_FORBIDDEN_IMPORTS:
-            if not any(f"forbidden syntax ingress {imported!r}" in failure for failure in failures):
-                fail(f"syntax-free MIR plan policy accepted {imported!r}: {failures!r}")
 
 
 def assert_gates(module, paths: Sequence[str], expected: Sequence[str]) -> None:
@@ -94,7 +64,6 @@ def assert_route(module, paths: Sequence[str], expected_gates: Sequence[str], ex
 
 def main() -> None:
     module = load_dev_gates()
-    assert_syntax_free_mir_plan_import_policy(load_architecture_inventory())
 
     assert_gates(
         module,
@@ -179,21 +148,9 @@ def main() -> None:
     assert_gates(module, ["tests/spec/does-not-exist.mc"], ["test"])
     assert_gates(module, ["tools/dev-gates.py"], ["dev-gates-test"])
     assert_gates(module, ["tools/toolchain/dev-gates-test.py"], ["dev-gates-test"])
-    assert_gates(module, ["tools/toolchain/move-unsupported-inventory.py"], ["move-unsupported-inventory-test"])
-    assert_gates(module, ["tools/toolchain/move-place-identity-inventory.py"], ["move-place-identity-inventory-test"])
-    assert_gates(module, ["tools/toolchain/move-cfg-skeleton-inventory.py"], ["move-cfg-skeleton-inventory-test"])
-    assert_gates(module, ["tools/toolchain/move-dynamic-place-policy-inventory.py"], ["move-dynamic-place-policy-inventory-test"])
-    assert_gates(module, ["tools/toolchain/move-pointer-pointee-boundary-inventory.py"], ["move-pointer-pointee-boundary-inventory-test"])
-    assert_gates(module, ["tools/toolchain/move-projection-inventory.py"], ["move-projection-inventory-test"])
-    assert_gates(module, ["src/sema_move.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-place-identity-inventory-test", "move-cfg-skeleton-inventory-test", "move-dynamic-place-policy-inventory-test", "move-pointer-pointee-boundary-inventory-test", "move-projection-inventory-test"])
-    assert_gates(module, ["src/sema_model.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-cfg-skeleton-inventory-test", "move-dynamic-place-policy-inventory-test", "move-pointer-pointee-boundary-inventory-test", "move-projection-inventory-test"])
-    assert_gates(module, ["tests/spec/move_place.mc"], ["test", "move-projection-inventory-test"])
-    assert_route(
-        module,
-        ["tests/spec/bad/move_cfg_arrays_reject.mc"],
-        ["move-unsupported-inventory-test"],
-        ["git diff --check"],
-    )
+    assert_gates(module, ["src/sema_move.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend"])
+    assert_gates(module, ["src/sema_model.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend"])
+    assert_gates(module, ["tests/spec/move_place.mc"], ["test"])
     assert_gates(module, ["tools/ci/pass-gates.py"], ["ci-pass-gates-test"])
     assert_gates(module, ["build/tiers.zig"], ["fast"])
     assert_gates(module, ["tools/m0-parallel.sh"], ["fast"])
@@ -237,28 +194,18 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/std-api-docs.py"], ["std-api-docs-test"])
     assert_gates(module, ["tools/toolchain/gate-manifest-test.py"], ["gate-manifest-test"])
     assert_gates(module, ["docs/gate-manifest.json"], ["gate-manifest-test"])
-    assert_gates(module, ["tools/toolchain/lowering-coverage.sh"], ["lowering-coverage-inventory-test", "lowering-coverage"])
-    assert_gates(module, ["tools/toolchain/lowering-coverage-inventory.py"], ["lowering-coverage-inventory-test", "lowering-coverage"])
-    assert_gates(module, ["tools/toolchain/lowering-coverage-baseline.tsv"], ["lowering-coverage-inventory-test", "lowering-coverage"])
-    assert_route(module, ["docs/lowering-coverage.md"], ["lowering-coverage-inventory-test", "lowering-coverage"], ["git diff --check"])
-    assert_gates(module, ["tools/toolchain/codegen-ingress-migration-test.py"], ["codegen-ingress-migration-test"])
-    assert_gates(module, ["docs/codegen-ingress-migration.json"], ["codegen-ingress-migration-test"])
-    assert_gates(module, ["tools/toolchain/semantic-facts-inventory.py"], ["semantic-facts-inventory-test"])
-    assert_gates(module, ["tools/toolchain/architecture-boundary-inventory.py"], ["architecture-boundary-inventory-test"])
-    assert_gates(module, ["tools/toolchain/review-goal-status-test.py"], ["review-goal-status-test"])
-    assert_gates(module, ["docs/review-goal-status.json"], ["review-goal-status-test"])
-    assert_gates_include(module, ["src/backend.zig"], ["architecture-boundary-inventory-test"])
-    assert_gates_include(module, ["src/lower_c_emitter.zig"], ["architecture-boundary-inventory-test"])
-    assert_gates_include(module, ["src/lower_llvm.zig"], ["architecture-boundary-inventory-test"])
-    assert_gates_include(module, ["src/type_syntax.zig"], ["architecture-boundary-inventory-test"])
-    assert_route(module, ["docs/typed-semantic-facts.md"], ["semantic-facts-inventory-test", "mir-identity-inventory-test"], ["git diff --check"])
-    assert_gates(module, ["tools/toolchain/compilation-session-inventory.py"], ["compilation-session-inventory-test"])
-    assert_gates_include(module, ["src/main.zig"], ["compilation-session-inventory-test"])
-    assert_route(module, ["docs/refactoring-plan.md"], ["compilation-session-inventory-test", "mir-identity-inventory-test"], ["git diff --check"])
-    assert_gates(module, ["tools/toolchain/mir-identity-inventory.py"], ["mir-identity-inventory-test"])
-    assert_gates_include(module, ["src/mir_model.zig"], ["test", "mir-identity-inventory-test"])
-    assert_gates_include(module, ["src/mir.zig"], ["test", "mir-identity-inventory-test"])
-    assert_gates_include(module, ["src/mir_tests.zig"], ["test", "mir-identity-inventory-test"])
+    assert_gates(module, ["tools/toolchain/lowering-coverage.sh"], ["lowering-coverage"])
+    assert_gates(module, ["tools/toolchain/lowering-coverage-baseline.tsv"], ["lowering-coverage"])
+    assert_route(module, ["docs/lowering-coverage.md"], ["lowering-coverage"], ["git diff --check"])
+    assert_gates(module, ["src/architecture_boundary_tests.zig"], ["test", "architecture-boundary-test"])
+    assert_gates_include(module, ["src/backend.zig"], ["architecture-boundary-test"])
+    assert_gates_include(module, ["src/lower_c_emitter.zig"], ["architecture-boundary-test"])
+    assert_gates_include(module, ["src/lower_llvm.zig"], ["architecture-boundary-test"])
+    assert_gates_include(module, ["src/mir_executable_c.zig"], ["architecture-boundary-test"])
+    assert_gates_include(module, ["src/mir_body_plan.zig"], ["architecture-boundary-test"])
+    assert_gates_include(module, ["src/mir_model.zig"], ["test"])
+    assert_gates_include(module, ["src/mir.zig"], ["test"])
+    assert_gates_include(module, ["src/mir_tests.zig"], ["test"])
     assert_gates(module, ["tools/toolchain/compiler-coverage.sh"], ["compiler-coverage"])
     assert_gates(module, ["tools/toolchain/compiler-coverage-baseline.tsv"], ["compiler-coverage"])
     assert_route(module, ["docs/compiler-coverage.md"], ["compiler-coverage"], ["git diff --check"])

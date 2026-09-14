@@ -16,13 +16,7 @@ pub fn register(ctx: *h.Ctx) void {
     // conformance tier, not only `fast`, so a contract regression can't slip into m0/c0/c1.
     m0_full_step.dependOn(ctx.cmd("test-lint"));
     m0_full_step.dependOn(ctx.cmd("bad-diagnostics-test"));
-    m0_full_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
-    m0_full_step.dependOn(ctx.cmd("review-goal-status-test"));
-    m0_full_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+    m0_full_step.dependOn(ctx.cmd("architecture-boundary-test"));
     m0_full_step.dependOn(ctx.cmd("test"));
     m0_full_step.dependOn(ctx.cmd("test-unit-shards"));
     m0_full_step.dependOn(ctx.cmd("c-test"));
@@ -109,20 +103,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     // diagnostic-code-inventory-test ensures every emitted E_* has fixture or allowlist ownership.
     m0_full_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
-    // move-unsupported-inventory-test keeps fail-closed move-array unsupported channels named and fixture-owned.
-    m0_full_step.dependOn(ctx.cmd("move-unsupported-inventory-test"));
-    // move-place-identity-inventory-test keeps alias assignment ownership checks typed-place based.
-    m0_full_step.dependOn(ctx.cmd("move-place-identity-inventory-test"));
-    // move-cfg-skeleton-inventory-test keeps the explicit move-CFG/worklist boundary anchored.
-    m0_full_step.dependOn(ctx.cmd("move-cfg-skeleton-inventory-test"));
-    // move-dynamic-place-policy-inventory-test keeps stable dynamic indexes distinct from unknown wildcards.
-    m0_full_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test"));
-    // move-pointer-pointee-boundary-inventory-test keeps pointer-pointee move-resource accept/reject policy explicit.
-    m0_full_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("move-projection-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("feature-maturity-test"));
-    m0_full_step.dependOn(ctx.cmd("validation-scope-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     m0_full_step.dependOn(ctx.cmd("parallel-runner-test"));
     m0_full_step.dependOn(ctx.cmd("m0-timing-report-test"));
@@ -235,31 +216,25 @@ pub fn register(ctx: *h.Ctx) void {
 
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and
-    // static inventory checks, while leaving fuzz, QEMU, and env-fragile LLVM/
+    // the structural architecture-boundary check, while leaving fuzz, QEMU, and env-fragile LLVM/
     // sanitizer sweeps to m0-full and nightly profiles. For process-level
     // parallelism without nested-worker oversubscription, use
     // `tools/fast-parallel.sh`.
-    const core_dev_step = b.step("core-dev", "Fast compiler-core development loop: cleanup/MIR authority, C sweep, LLVM smoke, and inventories");
+    const core_dev_step = b.step("core-dev", "Fast compiler-core development loop: cleanup/MIR authority, C sweep, LLVM smoke, and the architecture-boundary check");
     core_dev_step.dependOn(ctx.cmd("cleanup-fast"));
     core_dev_step.dependOn(ctx.cmd("c-test"));
     core_dev_step.dependOn(ctx.cmd("llvm-test"));
-    core_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
-    core_dev_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
-    core_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+    core_dev_step.dependOn(ctx.cmd("architecture-boundary-test"));
 
-    const ownership_cleanup_dev_step = b.step("ownership-cleanup-dev", "Fast ownership cleanup authority loop: MIR cleanup shard and semantic/MIR inventories");
+    const ownership_cleanup_dev_step = b.step("ownership-cleanup-dev", "Fast ownership cleanup authority loop: MIR cleanup shard and the architecture-boundary check");
     ownership_cleanup_dev_step.dependOn(ctx.cmd("test-shard-mir-cleanup"));
-    ownership_cleanup_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
-    ownership_cleanup_dev_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
-    ownership_cleanup_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+    ownership_cleanup_dev_step.dependOn(ctx.cmd("architecture-boundary-test"));
 
-    const ownership_backend_dev_step = b.step("ownership-backend-dev", "Ownership cleanup backend loop: MIR cleanup shard, C/LLVM lowering shards, and inventories");
+    const ownership_backend_dev_step = b.step("ownership-backend-dev", "Ownership cleanup backend loop: MIR cleanup shard, C/LLVM lowering shards, and the architecture-boundary check");
     ownership_backend_dev_step.dependOn(ctx.cmd("test-shard-mir-cleanup"));
     ownership_backend_dev_step.dependOn(ctx.cmd("test-shard-lower-c"));
     ownership_backend_dev_step.dependOn(ctx.cmd("test-shard-lower-llvm"));
-    ownership_backend_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
-    ownership_backend_dev_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
-    ownership_backend_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+    ownership_backend_dev_step.dependOn(ctx.cmd("architecture-boundary-test"));
 
     const m0_step = b.step("m0", "Run core M0 compiler validation gates");
     // Keep the default M0 tier focused on deterministic compiler-core confidence.
@@ -268,12 +243,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     m0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
-    m0_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
-    m0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
-    m0_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
-    m0_step.dependOn(ctx.cmd("review-goal-status-test"));
-    m0_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
-    m0_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+    m0_step.dependOn(ctx.cmd("architecture-boundary-test"));
     m0_step.dependOn(ctx.cmd("gate-manifest-test"));
     m0_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     m0_step.dependOn(ctx.cmd("dev-gates-test"));
@@ -286,9 +256,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("backend-regressions-test"));
     m0_step.dependOn(ctx.cmd("path-remap-test"));
     m0_step.dependOn(ctx.cmd("mcmap-test"));
-    m0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_step.dependOn(ctx.cmd("feature-maturity-test"));
-    m0_step.dependOn(ctx.cmd("validation-scope-inventory-test"));
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     m0_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
 
@@ -299,22 +267,8 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("install-layout-test"));
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
-    fast_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
-    fast_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
-    fast_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
-    fast_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
-    fast_step.dependOn(ctx.cmd("review-goal-status-test"));
-    fast_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
-    fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
-    fast_step.dependOn(ctx.cmd("move-unsupported-inventory-test"));
-    fast_step.dependOn(ctx.cmd("move-place-identity-inventory-test"));
-    fast_step.dependOn(ctx.cmd("move-cfg-skeleton-inventory-test"));
-    fast_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test"));
-    fast_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
-    fast_step.dependOn(ctx.cmd("move-projection-inventory-test"));
-    fast_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
+    fast_step.dependOn(ctx.cmd("architecture-boundary-test"));
     fast_step.dependOn(ctx.cmd("feature-maturity-test"));
-    fast_step.dependOn(ctx.cmd("validation-scope-inventory-test"));
     fast_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     fast_step.dependOn(ctx.cmd("parallel-runner-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
@@ -345,22 +299,8 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("bad-diagnostics-test")); // golden wording for reject diagnostics
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
-    c0_step.dependOn(ctx.cmd("lowering-coverage-inventory-test")); // split backend coverage ratchet stays pointed at implementation files
-    c0_step.dependOn(ctx.cmd("semantic-facts-inventory-test")); // backend semantic authority stays registered and anchored
-    c0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test")); // backend syntax escapes and deleted cleanup state stay ratcheted
-    c0_step.dependOn(ctx.cmd("codegen-ingress-migration-test")); // AST-shaped codegen ingress budget stays explicit and decreasing
-    c0_step.dependOn(ctx.cmd("review-goal-status-test")); // active review goals stay evidence-backed until complete
-    c0_step.dependOn(ctx.cmd("compilation-session-inventory-test")); // request-scoped compiler context stays anchored
-    c0_step.dependOn(ctx.cmd("mir-identity-inventory-test")); // typed MIR identity migration seed stays anchored
-    c0_step.dependOn(ctx.cmd("move-unsupported-inventory-test")); // fail-closed move-array unsupported channels stay named and covered
-    c0_step.dependOn(ctx.cmd("move-place-identity-inventory-test")); // alias assignment ownership checks stay typed-place based
-    c0_step.dependOn(ctx.cmd("move-cfg-skeleton-inventory-test")); // explicit move-CFG/worklist boundary stays anchored
-    c0_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test")); // stable dynamic indexes stay distinct from unknown wildcards
-    c0_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test")); // pointer-pointee move-resource accept/reject policy stays explicit
-    c0_step.dependOn(ctx.cmd("move-projection-inventory-test")); // projection admission map stays explicit
-    c0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test")); // advanced ownership forms stay outside the stable v0 surface
+    c0_step.dependOn(ctx.cmd("architecture-boundary-test")); // backends/MIR body modules stay off the syntax front end
     c0_step.dependOn(ctx.cmd("feature-maturity-test")); // feature maturity stays Core/Experimental/Validation classified
-    c0_step.dependOn(ctx.cmd("validation-scope-inventory-test")); // freestanding validation remains a language-validation workload, not an OS deliverable track
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current

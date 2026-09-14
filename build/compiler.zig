@@ -62,6 +62,9 @@ pub fn build(b: *std.Build) h.Ctx {
     const lower_c_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-lower-c", "src/test_shard_lower_c.zig", "Run C backend unit-test shard");
     const lower_llvm_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-lower-llvm", "src/test_shard_lower_llvm.zig", "Run LLVM backend unit-test shard");
     const backend_shard_step = addTestShard(b, target, optimize, options, test_filters, "test-shard-backend", "src/test_shard_backend.zig", "Run C/LLVM backend unit-test shard");
+    // Structural replacement for the retired needle-count inventory ratchets:
+    // one import-graph rule, enforced against the real source files.
+    const architecture_boundary_step = addTestShard(b, target, optimize, options, test_filters, "architecture-boundary-test", "src/architecture_boundary_tests.zig", "Check backend/MIR-body modules do not import the syntax front end");
     unit_test_step.dependOn(lower_c_shard_step);
     unit_test_step.dependOn(lower_llvm_shard_step);
 
@@ -104,6 +107,7 @@ pub fn build(b: *std.Build) h.Ctx {
     ctx.cmds.put("test-shard-lower-c", lower_c_shard_step) catch @panic("OOM");
     ctx.cmds.put("test-shard-lower-llvm", lower_llvm_shard_step) catch @panic("OOM");
     ctx.cmds.put("test-shard-backend", backend_shard_step) catch @panic("OOM");
+    ctx.cmds.put("architecture-boundary-test", architecture_boundary_step) catch @panic("OOM");
     ctx.cmds.put("test-unit-shards", unit_shards_step) catch @panic("OOM");
     ctx.cmds.put("test-spec", spec_test_step) catch @panic("OOM");
     ctx.cmds.put("test", test_step) catch @panic("OOM");

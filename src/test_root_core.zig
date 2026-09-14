@@ -8,6 +8,7 @@ const compiler_session = @import("compiler_session.zig");
 const driver_build = @import("driver_build.zig");
 const verified_program = @import("verified_program.zig");
 
+const architecture_boundary_tests = @import("architecture_boundary_tests.zig");
 const eval_tests = @import("eval_tests.zig");
 const hir_tests = @import("hir_tests.zig");
 const ir_tests = @import("ir_tests.zig");
@@ -29,6 +30,7 @@ test {
     _ = compiler_session;
     _ = driver_build;
     _ = verified_program;
+    _ = architecture_boundary_tests;
     _ = eval_tests;
     _ = hir_tests;
     _ = ir_tests;

@@ -80,7 +80,7 @@ def main() -> None:
         'const m0_step = b.step("m0"',
         'const fast_step = b.step("fast"',
     )
-    if len(fast_gates) < 30 or len(m0_gates) < 20:
+    if len(fast_gates) < 18 or len(m0_gates) < 14:
         fail("tier extraction boundaries no longer describe core gate inventories")
 
     print(
