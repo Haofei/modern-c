@@ -8189,9 +8189,18 @@ pub const FunctionBuilder = struct {
         if (expr.kind == .float_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .float) {
             result_ty = expected;
         };
-        if (expr.kind == .int_literal) if (expected_ty) |expected| if (std.meta.activeTag(expected) == .integer) {
-            const parts = numeric.parseIntegerLiteralParts(expr.kind.int_literal);
-            if (parts == null or parts.?.suffix == null) result_ty = expected;
+        // An unsuffixed integer literal has no type of its own; it takes the
+        // one its context asks for. An arithmetic domain (`wrap<T>`, `sat<T>`)
+        // is such a context: the domain changes what overflow does at runtime,
+        // not what a literal can denote. Leaving the literal at its own
+        // integer type made `return 250;` in a `-> sat<u8>` function an
+        // incomplete executable body, which both backends then declined.
+        if (expr.kind == .int_literal) if (expected_ty) |expected| switch (expected) {
+            .integer, .domain_integer => {
+                const parts = numeric.parseIntegerLiteralParts(expr.kind.int_literal);
+                if (parts == null or parts.?.suffix == null) result_ty = expected;
+            },
+            else => {},
         };
         // Unary negation does not change its operand type. A targetless literal
         // nested below the unary node still receives the surrounding

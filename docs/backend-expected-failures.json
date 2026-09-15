@@ -4,21 +4,6 @@
   "purpose": "Fixtures under tests/c_emit that mcc emit-c cannot compile today. Each is still asserted: it must fail, and fail for the recorded reason. A fixture that starts passing, stops failing for its recorded reason, or begins failing without an entry here fails the c-test gate.",
   "emit_c": [
     {
-      "fixture": "tests/c_emit/arithmetic_domains.mc",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter cannot render this construct yet; emitVerifiedMirFunction declines it."
-    },
-    {
-      "fixture": "tests/c_emit/contextual_keywords_g24.mc",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter cannot render this construct yet; emitVerifiedMirFunction declines it."
-    },
-    {
-      "fixture": "tests/c_emit/evaluation_order.mc",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter cannot render this construct yet; emitVerifiedMirFunction declines it."
-    },
-    {
       "fixture": "tests/c_emit/fuzz_async_arm_return.mc",
       "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
       "note": "std/task.mc's executor dispatches through *dyn Future; the qualified C and LLVM backends refuse dynamic trait objects by design."
