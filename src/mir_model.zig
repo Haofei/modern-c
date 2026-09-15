@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const sema_types = @import("sema_types.zig");
+
 const type_layout = @import("layout.zig");
 const semantic_ids = @import("semantic_ids.zig");
 
@@ -5149,6 +5151,12 @@ fn symbolIdForTypeSpelling(identities: []const SymbolIdentity, spelling: []const
 // existing caller are byte-for-byte unchanged.
 pub const BuildOptions = struct {
     optimize: bool = false,
+    /// Types sema already resolved for this compilation, so the builder reads
+    /// them instead of re-deriving the same judgement from the AST. Null when
+    /// MIR is built without a preceding check (unit tests, `mcc dump-mir` on
+    /// unchecked input); the builder then falls back to the shared rule in
+    /// `sema_types.zig` rather than to a copy of its own.
+    resolved_types: ?*const sema_types.Resolved = null,
 };
 
 pub fn pointerShapeName(shape: PointerShape) []const u8 {

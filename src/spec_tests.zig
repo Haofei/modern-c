@@ -845,6 +845,7 @@ fn prepareSpecProgram(
     reporter.source_views = source_views;
 
     var session = compiler_session.CompilationSession.init(allocator, io);
+    defer session.deinit();
     session.module_graph = &loaded.graph;
     session.source_views = source_views;
     var parsed: module_parser.ParsedSourceDatabase = undefined;

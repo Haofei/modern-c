@@ -8,6 +8,7 @@ const error_from = @import("error_from.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const numeric = @import("numeric.zig");
 const eval = @import("eval.zig");
+const sema_types = @import("sema_types.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const sema_move = @import("sema_move.zig");
 const target_layout = @import("target_layout.zig");
@@ -362,6 +363,12 @@ pub const Checker = struct {
     // questions outside expression-checking code paths.
     active_structs: ?*const std.StringHashMap(StructInfo) = null,
     active_tagged_unions: ?*const std.StringHashMap(UnionInfo) = null,
+    // Where the checker records resolved expression types for the MIR builder
+    // to read instead of re-inferring them (see `sema_types.zig`). Null when
+    // nobody downstream wants the table, so plain `mcc check` pays nothing.
+    // Recording failure is an allocation failure like any other: it sets
+    // `oom`, so an incomplete table is never quietly handed on.
+    resolved_types: ?*sema_types.Resolved = null,
     // Names of checked resource structs (`move struct` and `linear struct`), set
     // for the duration of checkModule so the move/liveness pass can classify
     // bindings. Empty for the common case (no checked resources -> pass is a no-op).
@@ -3765,7 +3772,20 @@ pub const Checker = struct {
         self.errorCode(span, "E_NO_ERROR_CONVERSION", "'?' cannot convert the propagated error to the function's error type; declare an #[error_from] fn converting it");
     }
 
+    /// Record what this expression resolved to, for the MIR builder to read
+    /// back instead of inferring it a second time. Only the scalar-literal
+    /// slice is modelled structurally so far; everything else is skipped and
+    /// the builder keeps its existing path.
+    fn recordResolvedType(self: *Checker, expr: ast.Expr) void {
+        const resolved = self.resolved_types orelse return;
+        const ty = sema_types.scalarOfLiteral(expr) orelse return;
+        resolved.record(expr.span, ty) catch {
+            self.oom = true;
+        };
+    }
+
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
+        self.recordResolvedType(expr);
         return switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
             .await_expr => unreachable,

@@ -31,6 +31,7 @@ const parser = @import("parser.zig");
 const sema_builtin = @import("sema_builtin.zig");
 const sema_type = @import("sema_type.zig");
 const scalar_repr = @import("scalar_repr.zig");
+const sema_types = @import("sema_types.zig");
 const string_literal = @import("string_literal.zig");
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
@@ -67,17 +68,17 @@ const integerLiteralValue = numeric.integerLiteralValue;
 const parseArrayLen = array_len.parseArrayLen;
 const parseArrayLenWithReflect = array_len.parseArrayLenWithReflect;
 
+// The literal -> scalar-type rule now has exactly one implementation, in
+// `sema_types.zig`, which sema uses when it records and the builder uses when
+// no recording is available. These two render that one answer back to the
+// `ast.TypeExpr` the builder still passes around.
 pub fn integerLiteralTypeExpr(literal: []const u8, span: ast.Span) ast.TypeExpr {
-    if (numeric.parseIntegerLiteralParts(literal)) |parsed| {
-        if (parsed.suffix) |suffix| return ast_query.simpleNameType(suffix.typeName(), span);
-    }
-    return ast_query.simpleNameType("u32", span);
+    return ast_query.simpleNameType(sema_types.integerOfLiteral(literal).spelling(), span);
 }
 
 pub fn suffixedIntegerLiteralTypeExpr(literal: []const u8, span: ast.Span) ?ast.TypeExpr {
-    const parsed = numeric.parseIntegerLiteralParts(literal) orelse return null;
-    const suffix = parsed.suffix orelse return null;
-    return ast_query.simpleNameType(suffix.typeName(), span);
+    const resolved = sema_types.suffixedIntegerOfLiteral(literal) orelse return null;
+    return ast_query.simpleNameType(resolved.spelling(), span);
 }
 
 const mir_model = @import("mir_model.zig");

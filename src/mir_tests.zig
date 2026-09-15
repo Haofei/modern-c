@@ -12,6 +12,8 @@ const mir_executable_llvm = @import("mir_executable_llvm.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_body_plan = @import("mir_body_plan.zig");
 const module_parser = @import("module_parser.zig");
+const sema = @import("sema.zig");
+const sema_types = @import("sema_types.zig");
 const signature_type_materializer = @import("signature_type_materializer.zig");
 const test_support = @import("test_support.zig");
 
@@ -15209,4 +15211,51 @@ test "MIR bind thunk facts resolve targets through SymbolId only" {
     try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
     function.span_identities[saved_span.index()].id = saved_span_identity;
     try mir.validateBindThunkFactsForLowering(module_mir);
+}
+
+test "MIR reads sema's resolved scalar types and agrees with its own fallback" {
+    const source =
+        \\fn scalars() -> bool {
+        \\    let flag: bool = true;
+        \\    let wide: i64 = 7_i64;
+        \\    let plain: u32 = 9;
+        \\    return flag && wide == 7_i64 && plain == 9;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "resolved_scalars.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(resolved.count() > 0);
+
+    // With the table, the builder reads sema's answer; without it, it falls
+    // back to the same shared rule in sema_types. The two must be the same
+    // MIR, and the debug assertion inside the builder proves the table and
+    // the rule agreed at every literal along the way.
+    var with_table = try mir.buildOptFromDecls(std.testing.allocator, module.decls, .{ .resolved_types = &resolved });
+    defer with_table.deinit();
+    var without_table = try mir.buildOptFromDecls(std.testing.allocator, module.decls, .{});
+    defer without_table.deinit();
+
+    var with_dump: std.ArrayList(u8) = .empty;
+    defer with_dump.deinit(std.testing.allocator);
+    var without_dump: std.ArrayList(u8) = .empty;
+    defer without_dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, with_table, &with_dump);
+    try mir.appendDumpFromMir(std.testing.allocator, without_table, &without_dump);
+    try std.testing.expectEqualStrings(without_dump.items, with_dump.items);
+
+    // The scalar literal types actually reached MIR as expression results.
+    try std.testing.expect(std.mem.indexOf(u8, with_dump.items, "expression_result") != null);
 }

@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+const sema_types = @import("sema_types.zig");
+
 const array_len = @import("array_len.zig");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
@@ -1010,6 +1012,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         };
                         var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &symbol_ids, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                         builder.optimize = options.optimize;
+                        builder.resolved_types = options.resolved_types;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
                         {
@@ -1295,6 +1298,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     errdefer if (checked_body_signature_type_ids_unowned and checked.body_signature_type_ids.len != 0) allocator.free(checked.body_signature_type_ids);
                     var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &symbol_ids, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &signature_types, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries, aggregate_return_facts.pointer_facts);
                     builder.optimize = options.optimize;
+                    builder.resolved_types = options.resolved_types;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
                     {
@@ -4985,6 +4989,9 @@ pub const FunctionBuilder = struct {
     // Fact-gated optimizer toggle (annex E); set from BuildOptions. Off by default so
     // the standard pipeline emits identical MIR.
     optimize: bool = false,
+    // Types sema already resolved for this compilation; set from BuildOptions.
+    // Where this answers, it is the authority and the builder does not infer.
+    resolved_types: ?*const sema_types.Resolved = null,
     active_contract: ?[]const u8 = null,
     active_contract_region_id: ?usize = null,
     active_unsafe: bool = false,
@@ -15108,13 +15115,36 @@ pub const FunctionBuilder = struct {
         );
     }
 
+    /// The scalar result type of a literal expression.
+    ///
+    /// Sema resolved this while checking and recorded it against the
+    /// expression's span; read that. When MIR is built with no preceding check
+    /// -- MIR unit tests, `dump-mir` on unchecked input -- there is no
+    /// recording, and the fallback is the same shared rule sema itself used,
+    /// not a second implementation living in the builder.
+    fn scalarLiteralTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        const resolved = self.resolvedScalarType(expr) orelse return null;
+        return ast_query.simpleNameType(resolved.spelling(), expr.span);
+    }
+
+    fn resolvedScalarType(self: *FunctionBuilder, expr: ast.Expr) ?sema_types.ResolvedType {
+        const shared = sema_types.scalarOfLiteral(expr);
+        const table = self.resolved_types orelse return shared;
+        const recorded = table.lookup(expr.span) orelse return shared;
+        // The table and the shared rule are the same judgement reached twice.
+        // If they ever disagree the handoff is wrong, and quietly preferring
+        // one would hide it.
+        if (shared) |rule| std.debug.assert(recorded.eql(rule));
+        return recorded;
+    }
+
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
             .call => |call| self.inferredLocalCallType(call),
-            .int_literal => |literal| integerLiteralTypeExpr(literal, expr.span),
-            .bool_literal => ast_query.simpleNameType("bool", expr.span),
-            .void_literal => ast_query.simpleNameType("void", expr.span),
+            // Scalar literal results come from sema's resolved-type table, not
+            // from a second inference here.
+            .int_literal, .bool_literal, .void_literal => self.scalarLiteralTypeExpr(expr),
             // A direct function address is a code pointer, not a pointer to a
             // value. Its full signature belongs to MIR so backends cannot
             // rebuild it from their separate function-signature maps.

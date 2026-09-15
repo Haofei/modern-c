@@ -13,6 +13,7 @@ const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
 const monomorphize = @import("monomorphize.zig");
 const sema = @import("sema.zig");
+const sema_types = @import("sema_types.zig");
 
 pub const max_artifact_metadata_bytes = artifact_publisher.max_metadata_bytes;
 
@@ -41,12 +42,22 @@ pub const CompilationSession = struct {
     resolved_program: ?*const module_parser.ResolvedProgram = null,
     project_source_digest: ?artifact_model.Sha256Digest = null,
     visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
+    // What sema resolved while checking this request, kept so MIR construction
+    // can read it instead of deriving the same answers from the AST a second
+    // time. Populated by `checkDecls`; null until then, and null for requests
+    // that never check.
+    resolved_types: ?sema_types.Resolved = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) CompilationSession {
         return .{
             .allocator = allocator,
             .io = io,
         };
+    }
+
+    pub fn deinit(self: *CompilationSession) void {
+        if (self.resolved_types) |*resolved| resolved.deinit();
+        self.resolved_types = null;
     }
 
     fn publisher(self: *CompilationSession) artifact_publisher.Publisher {
@@ -199,10 +210,19 @@ pub const CompilationSession = struct {
     }
 
     fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {
-        _ = self;
+        if (self.resolved_types) |*previous| previous.deinit();
+        self.resolved_types = sema_types.Resolved.init(self.allocator);
         var checker = sema.Checker.init(diag);
         checker.optimize = optimize;
+        checker.resolved_types = &self.resolved_types.?;
         checker.checkDecls(decls, visibility_mode, qualified_owners);
+    }
+
+    /// The resolved-type table for this request, if checking produced one.
+    /// MIR construction passes it to the builder, which then reads types
+    /// rather than re-inferring them.
+    fn resolvedTypeTable(self: *CompilationSession) ?*const sema_types.Resolved {
+        return if (self.resolved_types) |*resolved| resolved else null;
     }
 
     pub fn buildVerifiedProgramFromDecls(
@@ -213,7 +233,7 @@ pub const CompilationSession = struct {
         module_mir: *mir.Module,
         failure_error: StageFailure,
     ) !backend.VerifiedProgram {
-        module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });
+        module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize, .resolved_types = self.resolvedTypeTable() });
         errdefer module_mir.deinit();
         const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
             if (diag.has_errors) return failure_error;
@@ -231,7 +251,7 @@ pub const CompilationSession = struct {
         module_mir: *mir.Module,
         failure_error: StageFailure,
     ) !backend.VerifiedProgram {
-        module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize });
+        module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize, .resolved_types = self.resolvedTypeTable() });
         errdefer module_mir.deinit();
         const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
             if (diag.has_errors) return failure_error;
@@ -247,7 +267,7 @@ pub const CompilationSession = struct {
         optimize: bool,
         module_mir: *mir.Module,
     ) !void {
-        module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize });
+        module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize, .resolved_types = self.resolvedTypeTable() });
     }
 };
 
@@ -270,6 +290,7 @@ test "CompilationSession attaches per-file resolved module syntax" {
     defer std.testing.allocator.free(source_views);
     reporter.source_views = source_views;
     var session = CompilationSession.init(std.testing.allocator, std.testing.io);
+    defer session.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var parsed_sources: module_parser.ParsedSourceDatabase = undefined;
@@ -297,6 +318,7 @@ test "CompilationSession restores artifact metadata sidecar snapshots" {
     defer allocator.free(metadata_path);
 
     var session = CompilationSession.init(allocator, std.testing.io);
+    defer session.deinit();
     try session.writeOutputPath(metadata_path, "old metadata");
     var present_snapshot = try session.snapshotMetadataSidecar(metadata_path);
     defer present_snapshot.deinit(allocator);

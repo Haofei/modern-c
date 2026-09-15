@@ -6,6 +6,7 @@ const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const sema_model = @import("sema_model.zig");
+const sema_types = @import("sema_types.zig");
 
 fn checkSource(source: []const u8, reporter: *diagnostics.Reporter) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -3537,4 +3538,52 @@ test "nullable classification resolves aliases inside the type constructor" {
 
     try checkSource(source, &reporter);
     try std.testing.expect(!reporter.has_errors);
+}
+
+test "sema records resolved scalar literal types for the MIR builder" {
+    const source =
+        \\fn scalars() -> bool {
+        \\    let flag: bool = true;
+        \\    let wide: i64 = 7_i64;
+        \\    let plain: u32 = 9;
+        \\    return flag && wide == 7_i64 && plain == 9;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "resolved_scalars.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    // bool, i64 and u32 are three distinct resolved types, interned once each
+    // however many literals mention them.
+    try std.testing.expectEqual(@as(usize, 3), resolved.table.len());
+    try std.testing.expect(resolved.count() >= 4);
+
+    var saw_bool = false;
+    var saw_i64 = false;
+    var saw_u32 = false;
+    for (resolved.table.types.items) |ty| {
+        if (ty.eql(.boolean)) saw_bool = true;
+        if (ty.eql(.{ .integer = .{ .signed = true, .width = .w64 } })) saw_i64 = true;
+        if (ty.eql(.{ .integer = .{ .signed = false, .width = .w32 } })) saw_u32 = true;
+    }
+    try std.testing.expect(saw_bool);
+    try std.testing.expect(saw_i64);
+    try std.testing.expect(saw_u32);
 }

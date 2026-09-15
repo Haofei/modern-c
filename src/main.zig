@@ -142,6 +142,7 @@ pub fn main(init: std.process.Init) !void {
 fn runMain(init: std.process.Init) !void {
     const allocator = init.gpa;
     var session = CompilationSession.init(allocator, init.io);
+    defer session.deinit();
     // Flush the lowering-coverage trace on every exit path (no-op unless armed via
     // the MC_LOWER_COV env var). Placed first so it covers all `try`/error returns.
     lower_cov.init(init.io, init.environ_map.get("MC_LOWER_COV"));
