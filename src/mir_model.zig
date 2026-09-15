@@ -4576,6 +4576,12 @@ pub fn aggregateInitializerPlanMatchesType(
                 for (items) |item| if (!aggregateInitializerPlanMatchesType(item, types, array.child, callables, source_order)) break :blk false;
                 break :blk true;
             },
+            // An array spelled through an alias (`type Counts = [4]Count;`)
+            // reaches this layer as a bare name, and this layer has no alias
+            // table. Module admission resolves it and checks the length and
+            // every element. Same policy as `.struct_` below.
+            .name => true,
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
             else => false,
         },
         // CheckedProgram deliberately owns only the signature table.  The
@@ -4589,7 +4595,26 @@ pub fn aggregateInitializerPlanMatchesType(
             .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
             else => false,
         },
-        .zero, .enum_case, .string_bytes, .global_address => false,
+        // Leaves whose identity lives in a module-owned table -- an enum case,
+        // a string backing, another global's address -- cannot be checked
+        // here, for the same reason `.struct_` above cannot: this layer owns
+        // only the signature table. Apply the same policy: keep the narrow
+        // shape invariant visible here and let Module admission
+        // (`aggregateInitializerPlanMatchesModule`) check the identity.
+        // Rejecting them outright made every `[N]Enum` global unadmittable.
+        .enum_case => switch (shape) {
+            .name => true,
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
+            else => false,
+        },
+        .string_bytes, .global_address => switch (shape) {
+            .name, .pointer, .raw_many_pointer, .slice => true,
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
+            else => false,
+        },
+        // An aggregate leaf never uses implicit zeroing: an omitted
+        // initializer has its own top-level `.zero` plan.
+        .zero => false,
     };
 }
 
@@ -4900,13 +4925,35 @@ pub const Module = struct {
 
 fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module: Module, owner_global: CheckedGlobalFact, type_id: SignatureTypeId) bool {
     return switch (plan) {
-        .scalar, .function_symbol, .array => aggregateInitializerPlanMatchesType(
+        // Resolve aliases before handing the leaf to the signature-only
+        // matcher: `type Count = u32;` makes the element's written type a
+        // bare name that matcher cannot recognize as a scalar.
+        .scalar, .function_symbol => aggregateInitializerPlanMatchesType(
             plan,
             module.signature_types,
-            type_id,
+            transparentSignatureTypeId(module, type_id) orelse type_id,
             module.checked_callables,
             owner_global.initializer_body_id.index(),
         ),
+        // Array elements are validated against the module, not against the
+        // signature table alone. The type-only matcher cannot see enum,
+        // string-bytes or global-address leaves -- those need the module's
+        // enum, string and global tables -- so routing arrays through it
+        // rejected every `[N]Enum` initializer the builder had correctly
+        // planned. Alias transparency comes along for free, which is what a
+        // `global xs: Counts = .{ ... }` needs.
+        .array => |items| blk: {
+            const array = switch (transparentSignatureShape(module, type_id) orelse break :blk false) {
+                .array => |shape| shape,
+                else => break :blk false,
+            };
+            const length = array.length orelse break :blk false;
+            if (items.len != length) break :blk false;
+            for (items) |item| {
+                if (!aggregateInitializerPlanMatchesModule(item, module, owner_global, array.child)) break :blk false;
+            }
+            break :blk true;
+        },
         .struct_ => |struct_plan| structInitializerPlanMatchesType(struct_plan, module, owner_global, type_id),
         // Aggregate leaves never use implicit zeroing: a missing top-level
         // initializer has its own GlobalInitializerPlan.zero, while an

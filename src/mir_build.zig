@@ -1831,6 +1831,23 @@ fn directExactGlobalCopySourceName(
 /// function globals retain their existing top-level plans. Recursive children
 /// enable leaves, which lets arrays and structs mix scalar, enum, string,
 /// global-address and function-symbol values without family-specific builders.
+/// The written element type of an array whose own type was spelled through an
+/// alias. Only a nominal element is recovered: that is what a scalar leaf needs
+/// to fold against, and reconstructing nested array or pointer syntax here
+/// would be rebuilding type syntax from the signature table rather than
+/// recovering one name from it.
+fn aliasedArrayElementSourceType(
+    child_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    span: ast.Span,
+) ?ast.TypeExpr {
+    return switch (signature_types.get(child_id) orelse return null) {
+        .name => |name| ast_query.simpleNameType(name, span),
+        .qualified => |node| aliasedArrayElementSourceType(node.child, signature_types, span),
+        else => null,
+    };
+}
+
 fn buildGlobalAggregateInitializerPlan(
     allocator: std.mem.Allocator,
     initializer: ast.Expr,
@@ -1915,9 +1932,14 @@ fn buildGlobalAggregateInitializerPlan(
                 .array_literal => |value| value,
                 else => break :blk null,
             };
-            const source_array = switch (source_type.kind) {
-                .array => |value| value,
-                else => break :blk null,
+            // The written type may be an alias (`type Counts = [4]Count;`), in
+            // which case the syntax is a bare name while the signature table
+            // already knows the array. Recover the element's written type from
+            // the alias target when the syntax does not spell it; a leaf still
+            // needs one to fold its scalar value against.
+            const element_source_type: ast.TypeExpr = switch (source_type.kind) {
+                .array => |value| value.child.*,
+                else => aliasedArrayElementSourceType(array.child, signature_types, source_type.span) orelse break :blk null,
             };
             const length = array.length orelse break :blk null;
             if (items.len != length) break :blk null;
@@ -1928,7 +1950,7 @@ fn buildGlobalAggregateInitializerPlan(
                 plans.deinit(allocator);
             };
             for (items) |item| {
-                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, source_array.child.*, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true)) orelse break :blk null;
+                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, element_source_type, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true)) orelse break :blk null;
                 var child_transferred = false;
                 errdefer if (!child_transferred) child.deinit(allocator);
                 try plans.append(allocator, child);
@@ -1946,7 +1968,9 @@ fn buildGlobalAggregateInitializerPlan(
     if (try directStringBytesAggregateInitializerPlan(allocator, ungrouped, type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids, owner_global_symbol_id, next_string_backing_ordinal)) |plan| return .{ .string_bytes = plan };
     if (try directGlobalAddressInitializerPlanForType(allocator, prior_initializer_facts, const_fns, const_globals, ungrouped, type_id, prior_globals, signature_types, type_aliases, symbol_ids, struct_facts)) |plan| return .{ .global_address = plan };
     if (directFunctionSymbolGlobalInitializerPlan(ungrouped, type_id, source_order, callables, signature_types, symbol_ids)) |plan| return .{ .function_symbol = plan };
-    if (signatureTypeIsDirectScalarLeaf(type_id, signature_types)) {
+    // Ask about the canonical type, not the written one: a leaf spelled
+    // through an alias (`type Count = u32;`) is still a scalar leaf.
+    if (signatureTypeIsDirectScalarLeaf(canonical_id, signature_types)) {
         if (try foldMutableScalarGlobalInitializer(allocator, ungrouped, source_type, const_fns, const_globals, reflect_env)) |value| return .{ .scalar = value };
     }
     return null;
