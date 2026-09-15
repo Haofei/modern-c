@@ -3093,6 +3093,80 @@ test "MIR integer facts are the complete typed authority for integer literals" {
     }
     try std.testing.expect(!mismatched_fact.target_type_id.eql(.invalid));
     try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(mismatched));
+
+    var invalid_inst = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer invalid_inst.deinit();
+    const invalid_inst_fact = &((functionByNameMut(&invalid_inst, "integer_value") orelse return error.TestUnexpectedResult).integer_facts[0]);
+    invalid_inst_fact.typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(invalid_inst));
+}
+
+test "integer facts distinguish two literal conversions that share one span" {
+    // The async transform stamps the function-name span onto every node it
+    // synthesizes, so a generated body routinely contains several literal
+    // conversions at one span. They are distinct instructions and must each
+    // keep their own fact; the join key is the instruction identity, not the
+    // span. This reproduces that shape without the transform.
+    const source =
+        \\fn integer_value(other: u16) -> u8 {
+        \\    let value: u8 = 7;
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_integer_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const function = functionByNameMut(&module_mir, "integer_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.integer_facts.len);
+
+    // Clone the conversion instruction and its fact, giving the copy a fresh
+    // instruction identity but the original's span -- exactly what a copied
+    // AST node produces.
+    const original_fact = function.integer_facts[0];
+    var next_inst: usize = 0;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!instruction.typed_inst_id.isValid()) continue;
+            if (instruction.typed_inst_id.index() + 1 > next_inst) next_inst = instruction.typed_inst_id.index() + 1;
+        }
+    }
+    const copy_inst_id = mir.InstId.fromIndex(next_inst);
+
+    var cloned = false;
+    for (function.blocks) |*block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .integer_literal_conversion) continue;
+            const instructions = try std.testing.allocator.alloc(mir.Instruction, block.instructions.len + 1);
+            @memcpy(instructions[0..block.instructions.len], block.instructions);
+            var copy = instruction;
+            copy.typed_inst_id = copy_inst_id;
+            instructions[block.instructions.len] = copy;
+            std.testing.allocator.free(block.instructions);
+            block.instructions = instructions;
+            cloned = true;
+            break;
+        }
+        if (cloned) break;
+    }
+    try std.testing.expect(cloned);
+
+    const facts = try std.testing.allocator.alloc(mir.IntegerFact, 2);
+    facts[0] = original_fact;
+    facts[1] = original_fact;
+    facts[1].typed_inst_id = copy_inst_id;
+    std.testing.allocator.free(function.integer_facts);
+    function.integer_facts = facts;
+
+    // Same span, same type, same literal, two instructions: admitted, because
+    // each fact names exactly one instruction by identity.
+    try mir.validateLoweringAdmission(module_mir);
+
+    // The exactly-one invariant is unchanged: pointing both facts at the same
+    // instruction is still a duplicate.
+    function.integer_facts[1].typed_inst_id = original_fact.typed_inst_id;
+    try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(module_mir));
 }
 
 test "MIR exposes generic typed span identity matching for codegen facts" {

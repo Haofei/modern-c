@@ -387,6 +387,15 @@ pub const Instruction = struct {
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     detail: []const u8,
+    /// This instruction's identity within its function, assigned by the
+    /// builder at the moment it is emitted.
+    ///
+    /// Per-instruction facts join on this, not on the source span. A span is
+    /// not an identity: the async transform stamps one function-name span
+    /// onto every node it synthesizes, and monomorphization copies spans
+    /// wholesale, so two distinct instructions routinely share one. The span
+    /// remains on the instruction for diagnostics.
+    typed_inst_id: InstId = .invalid,
     /// Module-owned source type shape for target-type instructions.  This is
     /// the verifier join key for the syntax-free target-type fact.  The
     /// instruction deliberately retains no AST type payload: syntax is only
@@ -3335,6 +3344,9 @@ pub const IntegerFact = struct {
     /// duplicate its structural `ValueType`; consumers resolve it through the
     /// owning function's type-identity table.
     target_type_id: TypeId = .invalid,
+    /// The instruction this fact describes. This is the join key; the span
+    /// below is for diagnostics and source maps.
+    typed_inst_id: InstId = .invalid,
     typed_span_id: SpanId = .invalid,
 };
 
@@ -3344,6 +3356,9 @@ pub const FloatFact = struct {
     /// its structural `ValueType`; consumers resolve it through the owning
     /// function's type-identity table.
     target_type_id: TypeId = .invalid,
+    /// The instruction this fact describes. This is the join key; the span
+    /// below is for diagnostics and source maps.
+    typed_inst_id: InstId = .invalid,
     typed_span_id: SpanId = .invalid,
 };
 

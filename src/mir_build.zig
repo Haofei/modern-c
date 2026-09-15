@@ -4992,6 +4992,13 @@ pub const FunctionBuilder = struct {
     // Types sema already resolved for this compilation; set from BuildOptions.
     // Where this answers, it is the authority and the builder does not infer.
     resolved_types: ?*const sema_types.Resolved = null,
+    // Identity counter for emitted instructions. Per-instruction facts join on
+    // this rather than on the source span, which is not unique: the async
+    // transform stamps one function-name span onto every node it synthesizes.
+    next_inst_id: usize = 0,
+    // The identity of the most recently emitted instruction, so a fact
+    // appended right after `addInstr` can name it.
+    last_inst_id: InstId = .invalid,
     active_contract: ?[]const u8 = null,
     active_contract_region_id: ?usize = null,
     active_unsafe: bool = false,
@@ -12986,10 +12993,13 @@ pub const FunctionBuilder = struct {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
             },
             .float_literal => {
-                if (self.assignment_target_ty != .unknown) {
-                    try self.addFloatLiteralFact(self.assignment_target_ty, expr, expr.span);
-                }
+                // The instruction is emitted first so its fact can name it by
+                // identity rather than by span.
+                const float_target_ty = self.assignment_target_ty;
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+                if (float_target_ty != .unknown) {
+                    try self.addFloatLiteralFact(float_target_ty, expr, expr.span);
+                }
             },
             .string_literal, .char_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
@@ -15711,6 +15721,9 @@ pub const FunctionBuilder = struct {
         const typed_span_id = try self.internSpanId(source);
         const typed_result_ty = try self.internTypeId(ty);
         const typed_value_id = if (resolved_value_id) |id| try self.internValueId(id) else null;
+        const typed_inst_id = InstId.fromIndex(self.next_inst_id);
+        self.next_inst_id += 1;
+        self.last_inst_id = typed_inst_id;
         try self.blocks.items[self.current].instructions.append(self.allocator, .{
             .kind = kind,
             .result_ty = ty,
@@ -15718,6 +15731,7 @@ pub const FunctionBuilder = struct {
             .detail = detail,
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
             .typed_value_id = typed_value_id,
+            .typed_inst_id = typed_inst_id,
             .typed_span_id = typed_span_id,
         });
         if (representationFactKind(kind, ty)) {
@@ -16033,15 +16047,19 @@ pub const FunctionBuilder = struct {
         try self.integer_facts.append(self.allocator, .{
             .literal = literal,
             .target_type_id = try self.internTypeId(target_ty),
+            .typed_inst_id = self.last_inst_id,
             .typed_span_id = try self.internSpanId(source),
         });
     }
 
+    /// Record the float literal fact for the instruction just emitted. The
+    /// caller emits the `.expr` instruction first so the fact can name it.
     fn addFloatLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
         const source = self.sourcePoint(span);
         try self.float_facts.append(self.allocator, .{
             .literal = floatFactLiteralText(expr),
             .target_type_id = try self.internTypeId(target_ty),
+            .typed_inst_id = self.last_inst_id,
             .typed_span_id = try self.internSpanId(source),
         });
     }

@@ -1940,6 +1940,7 @@ fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bo
 
 fn integerFactTypedIdentitiesValid(function: Function, fact: IntegerFact) bool {
     if (integerFactTargetType(&function, fact) == null) return false;
+    if (!fact.typed_inst_id.isValid()) return false;
     return sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
@@ -1947,9 +1948,17 @@ fn isIntegerLiteralConversionInstruction(instruction: Instruction) bool {
     return instruction.kind == .integer_literal_conversion;
 }
 
+/// A fact describes an instruction when it names it by identity and still
+/// agrees with it about type and literal.
+///
+/// The identity, not the span, is the join key. A span is not unique: the
+/// async transform stamps one function-name span onto every node it
+/// synthesizes, so two distinct literal conversions in a generated body share
+/// one span and would otherwise collapse into a single key.
 fn integerFactMatchesInstruction(fact: IntegerFact, instruction: Instruction) bool {
-    return fact.target_type_id.eql(instruction.typed_result_ty) and
-        fact.typed_span_id.eql(instruction.typed_span_id) and
+    return fact.typed_inst_id.isValid() and
+        fact.typed_inst_id.eql(instruction.typed_inst_id) and
+        fact.target_type_id.eql(instruction.typed_result_ty) and
         std.mem.eql(u8, fact.literal, instruction.detail);
 }
 
@@ -1966,8 +1975,7 @@ fn countMatchingIntegerInstructions(function: Function, fact: IntegerFact) usize
 fn countMatchingIntegerFacts(function: Function, target: IntegerFact) usize {
     var count: usize = 0;
     for (function.integer_facts) |fact| {
-        if (!fact.target_type_id.eql(target.target_type_id) or !fact.typed_span_id.eql(target.typed_span_id)) continue;
-        if (!std.mem.eql(u8, fact.literal, target.literal)) continue;
+        if (!fact.typed_inst_id.eql(target.typed_inst_id)) continue;
         count += 1;
     }
     return count;
@@ -1983,6 +1991,7 @@ fn countMatchingIntegerFactsForInstruction(function: Function, instruction: Inst
 
 fn floatFactTypedIdentitiesValid(function: Function, fact: FloatFact) bool {
     if (floatFactTargetType(&function, fact) == null) return false;
+    if (!fact.typed_inst_id.isValid()) return false;
     return sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
@@ -2036,8 +2045,10 @@ fn isFloatLiteralInstruction(instruction: Instruction) bool {
         std.mem.eql(u8, instruction.detail, "float");
 }
 
+/// Float literal facts join on the instruction identity for the same reason
+/// integer facts do; see `integerFactMatchesInstruction`.
 fn floatFactMatchesInstruction(fact: FloatFact, instruction: Instruction) bool {
-    return fact.typed_span_id.eql(instruction.typed_span_id);
+    return fact.typed_inst_id.isValid() and fact.typed_inst_id.eql(instruction.typed_inst_id);
 }
 
 fn countMatchingFloatInstructions(function: Function, fact: FloatFact) usize {
@@ -2053,8 +2064,7 @@ fn countMatchingFloatInstructions(function: Function, fact: FloatFact) usize {
 fn countMatchingFloatFacts(function: Function, target: FloatFact) usize {
     var count: usize = 0;
     for (function.float_facts) |fact| {
-        if (!fact.target_type_id.eql(target.target_type_id) or !fact.typed_span_id.eql(target.typed_span_id)) continue;
-        if (!std.mem.eql(u8, fact.literal, target.literal)) continue;
+        if (!fact.typed_inst_id.eql(target.typed_inst_id)) continue;
         count += 1;
     }
     return count;
