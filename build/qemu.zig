@@ -36,6 +36,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTestOpts(ctx, "diagnostics-reference-test", "Check docs/diagnostics.md covers every compiler E_* diagnostic code", &.{ "python3", "tools/toolchain/diagnostics-reference.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "diagnostic-code-inventory-test", "Check every emitted E_* diagnostic has a negative fixture or documented allowlist entry", &.{ "python3", "tools/toolchain/diagnostic-code-inventory.py", "--check" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "backend-expected-failures-test", "Check the c-test known-failing manifest stays well formed and fixture-backed", &.{ "python3", "tools/toolchain/backend-expected-failures-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "feature-maturity-test", "Check Core/Experimental/Validation feature maturity stays machine-readable and frozen", &.{ "python3", "tools/toolchain/feature-maturity-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "std-api-docs-test", "Check docs/std-api.md covers exported stdlib declarations", &.{ "python3", "tools/toolchain/std-api-docs.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "no-committed-private-keys-test", "Reject committed PEM private keys", &.{ "python3", "tools/toolchain/no-committed-private-keys.py" }, .{ .install = false });

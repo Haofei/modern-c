@@ -5,6 +5,11 @@
 #      under -std=c11 -Wall -Wextra -Werror.
 #   2. REJECT corpus (tests/c_emit/bad/*.mc) — every fixture must be REJECTED by emit-c with
 #      the diagnostic its `EXPECT: E_CODE` line names.
+#   3. KNOWN-FAILING corpus (docs/backend-expected-failures.json) — fixtures the C backend
+#      cannot compile today. They are held out of phase 1 but still asserted: each must fail,
+#      and fail for its recorded reason. A known-failing fixture that starts passing, or fails
+#      for a different reason, fails the gate — so the list can only shrink deliberately, and a
+#      NEW failure is never mistaken for standing debt.
 #
 # The non-recursive `tests/c_emit/*.mc` glob naturally excludes bad/, so a reject fixture is
 # never fed to the must-compile phase.
@@ -61,9 +66,23 @@ run_pass_fixture() {
 }
 export -f run_pass_fixture
 
+expected_manifest="$ROOT/docs/backend-expected-failures.json"
+known_list="$out_dir/known-failing.list"
+python3 - "$expected_manifest" > "$known_list" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+for entry in manifest["emit_c"]:
+    print(entry["fixture"] + "\t" + entry["reason"])
+PY
+
+is_known_failing() {
+    cut -f1 < "$known_list" | grep -Fxq "$1"
+}
+
 pass_list="$out_dir/pass-fixtures.list"
 : > "$pass_list"
 for fixture in $fixture_glob; do
+    is_known_failing "$fixture" && continue
     printf '%s\n' "$fixture" >> "$pass_list"
 done
 pass=$(mc_count_lines "$pass_list")
@@ -114,4 +133,39 @@ if [ "$reject" -gt 0 ]; then
     xargs -P "$jobs" -n 1 bash -c 'run_reject_fixture "$0" "$1"' "$exe" < "$reject_list"
 fi
 
-echo "PASS: c-test — $pass fixtures compile; $reject reject fixtures diagnosed"
+# Phase 3 — known-failing fixtures must still fail, for their recorded reason.
+run_known_fixture() {
+    local exe="$1"
+    local fixture="$2"
+    local want="$3"
+    local out rc
+    if [ ! -e "$fixture" ]; then
+        echo "FAIL: c-test — docs/backend-expected-failures.json names missing fixture $fixture" >&2
+        return 1
+    fi
+    set +e
+    out=$("$exe" emit-c "$fixture" 2>&1)
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        echo "FAIL: c-test — $fixture is listed as known-failing but emit-c now succeeds; remove its entry from docs/backend-expected-failures.json" >&2
+        return 1
+    fi
+    if [ -z "$out" ]; then
+        echo "FAIL: c-test — $fixture failed with no diagnostic at all" >&2
+        return 1
+    fi
+    if ! printf '%s' "$out" | grep -q "$want"; then
+        echo "FAIL: c-test — $fixture no longer fails with $want; update docs/backend-expected-failures.json" >&2
+        printf '%s\n' "$out" | head >&2
+        return 1
+    fi
+}
+export -f run_known_fixture
+
+known=$(mc_count_lines "$known_list")
+if [ "$known" -gt 0 ]; then
+    tr '\t' '\n' < "$known_list" | xargs -P "$jobs" -n 2 bash -c 'run_known_fixture "$0" "$1" "$2"' "$exe"
+fi
+
+echo "PASS: c-test — $pass fixtures compile; $reject reject fixtures diagnosed; $known known-failing fixtures still fail for their recorded reason"

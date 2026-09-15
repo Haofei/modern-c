@@ -13,7 +13,7 @@
   "ci_pass_assertions": {
     "ci-m0-pass": {
       "build_tier": "m0",
-      "min_count": 14,
+      "min_count": 15,
       "gates": [
         "test-lint",
         "bad-diagnostics-test",
@@ -28,7 +28,8 @@
         "feature-maturity-test",
         "std-api-docs-test",
         "no-committed-private-keys-test",
-        "backend-regressions-test"
+        "backend-regressions-test",
+        "backend-expected-failures-test"
       ]
     }
   },
@@ -100,6 +101,21 @@
       "tier": "pr",
       "required_tools": [
         "zig"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "backend-expected-failures-test",
+      "owner": "compiler-architecture",
+      "category": "known-debt-manifest",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
       ],
       "build_tiers": [
         "m0",

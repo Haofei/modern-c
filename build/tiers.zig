@@ -17,6 +17,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("test-lint"));
     m0_full_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     m0_full_step.dependOn(ctx.cmd("architecture-boundary-test"));
+    m0_full_step.dependOn(ctx.cmd("backend-expected-failures-test"));
     m0_full_step.dependOn(ctx.cmd("test"));
     m0_full_step.dependOn(ctx.cmd("test-unit-shards"));
     m0_full_step.dependOn(ctx.cmd("c-test"));
@@ -244,6 +245,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     m0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     m0_step.dependOn(ctx.cmd("architecture-boundary-test"));
+    m0_step.dependOn(ctx.cmd("backend-expected-failures-test"));
     m0_step.dependOn(ctx.cmd("gate-manifest-test"));
     m0_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     m0_step.dependOn(ctx.cmd("dev-gates-test"));
@@ -268,6 +270,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     fast_step.dependOn(ctx.cmd("architecture-boundary-test"));
+    fast_step.dependOn(ctx.cmd("backend-expected-failures-test"));
     fast_step.dependOn(ctx.cmd("feature-maturity-test"));
     fast_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     fast_step.dependOn(ctx.cmd("parallel-runner-test"));
@@ -300,6 +303,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
     c0_step.dependOn(ctx.cmd("architecture-boundary-test")); // backends/MIR body modules stay off the syntax front end
+    c0_step.dependOn(ctx.cmd("backend-expected-failures-test")); // known C-backend debt stays named, so a new failure is not mistaken for it
     c0_step.dependOn(ctx.cmd("feature-maturity-test")); // feature maturity stays Core/Experimental/Validation classified
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget

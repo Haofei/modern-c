@@ -73,7 +73,14 @@ pub fn emitBodyWithOptions(
         // materialization point instead of reconstructing syntax here.
         if (isSliceType(expression.result_ty) or expression.result_ty == .value) continue;
         try writeIndent(allocator, out, indent);
-        if (expression.operation == .optional_none) try out.appendSlice(allocator, "MC_UNUSED ");
+        // Canonical temporaries are declared for every materialized value, in
+        // ExprId order, so that C cannot reorder evaluation. Whether a given
+        // slot is later read depends on the operation's shape, not on user
+        // code: `compiler.assume_noalias_unchecked(p, n)` evaluates both
+        // arguments but consumes only the pointer. Such a slot is written and
+        // never read, which -Wunused-but-set-variable rejects under -Werror,
+        // so declare them all as deliberately-unused.
+        try out.appendSlice(allocator, "MC_UNUSED ");
         switch (expression.operation) {
             .address_of => |address| {
                 const place = placeById(body, address.place) orelse return error.InvalidPlace;
@@ -5777,10 +5784,10 @@ test "executable C renderer emits typed CFG labels and branches" {
     try emitBody(std.testing.allocator, &output, &body, 0);
     try std.testing.expectEqualStrings(
         \\/* canonical executable MIR */
-        \\bool mc_exec_tmp_0;
-        \\uint32_t mc_exec_tmp_1;
-        \\uint32_t mc_exec_tmp_2;
-        \\uint32_t mc_exec_tmp_3;
+        \\MC_UNUSED bool mc_exec_tmp_0;
+        \\MC_UNUSED uint32_t mc_exec_tmp_1;
+        \\MC_UNUSED uint32_t mc_exec_tmp_2;
+        \\MC_UNUSED uint32_t mc_exec_tmp_3;
         \\    mc_exec_tmp_0 = flag;
         \\    if (mc_exec_tmp_0) goto mc_bb_1; else goto mc_bb_2;
         \\mc_bb_1: ;
