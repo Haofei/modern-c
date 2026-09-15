@@ -24,3 +24,16 @@ pub const DefId = struct {
         return self.file_id == other.file_id and self.ordinal == other.ordinal;
     }
 };
+
+/// The ordinal range reserved for body-local declarations — parameters,
+/// `let`/`var` bindings, pattern and loop bindings.
+///
+/// A local is a declaration and deserves an identity, but it is not one of the
+/// file's top-level declarations, whose ordinals are dense from zero and are
+/// the codegen declaration join key. Splitting the range keeps one `DefId`
+/// space for both kinds without letting the two numberings collide.
+pub const local_ordinal_base: u32 = 1 << 31;
+
+pub fn isLocalOrdinal(ordinal: u32) bool {
+    return ordinal >= local_ordinal_base and ordinal != DefId.invalid.ordinal;
+}

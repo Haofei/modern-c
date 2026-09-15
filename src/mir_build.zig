@@ -12263,7 +12263,9 @@ pub const FunctionBuilder = struct {
         const declared = if (summary) |found| found.return_type_expr else null;
         const table = self.resolved_types orelse return declared;
         const recorded = table.lookup(callee_expr.span) orelse return declared;
-        const spelling = table.spelling(recorded);
+        // A nominal whose spelling the table never recorded cannot be
+        // rendered back to syntax here; fall back rather than emit a guess.
+        const spelling = table.spelling(recorded) orelse return declared;
         if (declared) |own| {
             if (ast_query.typeName(own)) |own_name| std.debug.assert(std.mem.eql(u8, own_name, spelling));
         }
@@ -15224,7 +15226,7 @@ pub const FunctionBuilder = struct {
         if (self.resolved_types) |table| {
             if (table.lookup(expr.span)) |recorded| {
                 std.debug.assert(recorded.eql(.boolean));
-                return ast_query.simpleNameType(table.spelling(recorded), expr.span);
+                return ast_query.simpleNameType(table.spelling(recorded).?, expr.span);
             }
         }
         return ast_query.simpleNameType("bool", expr.span);
@@ -18428,7 +18430,9 @@ pub const FunctionBuilder = struct {
         const declared = self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text);
         const table = self.resolved_types orelse return declared;
         const recorded = table.lookup(expr.span) orelse return declared;
-        const spelling = table.spelling(recorded);
+        // A nominal whose spelling the table never recorded cannot be
+        // rendered back to syntax here; fall back rather than emit a guess.
+        const spelling = table.spelling(recorded) orelse return declared;
         if (declared) |own| {
             // A disagreement on a shape the table models is a bug in the
             // handoff, not a tie to break silently.

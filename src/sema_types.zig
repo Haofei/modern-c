@@ -16,14 +16,24 @@
 //! Everything sema resolves that this table does not yet model structurally is
 //! simply absent: `lookup` returns null and the caller keeps its existing
 //! path. The table is authoritative where it answers, never a second guess.
-//! `docs/typed-semantic-facts.md` has the full split and the two known
-//! limitations (nominal types interned by name rather than symbol id, and
-//! expression identity keyed by source span).
+//! `docs/typed-semantic-facts.md` has the full split and the remaining known
+//! limitation (expression identity keyed by source span).
+//!
+//! A nominal type is the declaration it names: `src/sema_symbols.zig` gives
+//! every declaration a `DefId` and this table carries that identity. The
+//! spelling travels beside the type, in `Resolved.nominal_names`, for the
+//! emitters that still take type names from syntax.
 
 const std = @import("std");
 
 const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
+const semantic_ids = @import("semantic_ids.zig");
+
+/// Declaration identity. A nominal type is the declaration it names, not the
+/// spelling of that declaration: `src/sema_symbols.zig` gives every
+/// declaration a `DefId` during checking and this table carries it.
+pub const DefId = semantic_ids.DefId;
 
 /// Integer width as a fact, not a spelling. `pointer` is `usize`/`isize`,
 /// whose bit count is a target property rather than a literal one.
@@ -36,20 +46,6 @@ pub const IntWidth = enum {
     pointer,
 };
 
-/// A declaration this table refers to by identity rather than by spelling.
-///
-/// Sema has no symbol-id table of its own yet — its scopes and registries are
-/// keyed by name — so this is a dense index into the `Resolved` name table,
-/// which owns the one copy of the spelling. That is a stopgap for a real
-/// `SymbolId`/`DefId`, but it already keeps the spelling out of the type.
-pub const NameId = struct {
-    value: u32,
-
-    pub fn eql(self: NameId, other: NameId) bool {
-        return self.value == other.value;
-    }
-};
-
 /// A resolved type. Scalars are structural; a nominal type is an identity.
 /// Everything else (pointers, slices, arrays, optionals, generics, qualified
 /// types) is out of scope for this slice and is not interned at all.
@@ -57,7 +53,7 @@ pub const ResolvedType = union(enum) {
     void_,
     boolean,
     integer: Integer,
-    nominal: NameId,
+    nominal: DefId,
 
     pub const Integer = struct {
         signed: bool,
@@ -187,16 +183,29 @@ const Entry = struct {
     ambiguous: bool = false,
 };
 
-/// Sema's output: the interned types plus where each resolved expression
-/// landed.
+const IdentEntry = struct {
+    def_id: DefId,
+    /// Two identifier occurrences at one span resolved to different
+    /// declarations, so the span is not an identity here. Fail closed, the
+    /// way the type entry does.
+    ambiguous: bool = false,
+};
+
+/// Sema's output: the interned types, where each resolved expression landed,
+/// and which declaration each resolved identifier named.
 pub const Resolved = struct {
     allocator: std.mem.Allocator,
     table: Table = .{},
     exprs: std.AutoHashMapUnmanaged(ExprKey, Entry) = .empty,
-    /// Spellings of nominal declarations, owned here so `ResolvedType` can
-    /// carry an identity instead of a string. Entries are borrowed slices of
+    /// Identifier occurrence -> the declaration it resolved to. Sema's scopes
+    /// answer this while checking; recording it keeps the answer instead of
+    /// making a later layer recover it from a name.
+    ident_defs: std.AutoHashMapUnmanaged(ExprKey, IdentEntry) = .empty,
+    /// Spellings of nominal declarations, keyed by the declaration's identity.
+    /// `ResolvedType` carries the identity; the spelling lives here for the
+    /// boundaries that still emit syntax. Entries are borrowed slices of
     /// source text, which outlive the table within one request.
-    names: std.ArrayList([]const u8) = .empty,
+    nominal_names: std.AutoHashMapUnmanaged(DefId, []const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Resolved {
         return .{ .allocator = allocator };
@@ -204,26 +213,43 @@ pub const Resolved = struct {
 
     pub fn deinit(self: *Resolved) void {
         self.exprs.deinit(self.allocator);
+        self.ident_defs.deinit(self.allocator);
         self.table.deinit(self.allocator);
-        self.names.deinit(self.allocator);
+        self.nominal_names.deinit(self.allocator);
     }
 
-    pub fn internName(self: *Resolved, name: []const u8) !NameId {
-        for (self.names.items, 0..) |existing, index| {
-            if (std.mem.eql(u8, existing, name)) return .{ .value = @intCast(index) };
-        }
-        try self.names.append(self.allocator, name);
-        return .{ .value = @intCast(self.names.items.len - 1) };
-    }
-
-    pub fn nominal(self: *Resolved, name: []const u8) !ResolvedType {
-        return .{ .nominal = try self.internName(name) };
+    /// The nominal type of a declaration, remembering its spelling for the
+    /// syntax boundary.
+    pub fn nominal(self: *Resolved, def_id: DefId, name: []const u8) !ResolvedType {
+        try self.nominal_names.put(self.allocator, def_id, name);
+        return .{ .nominal = def_id };
     }
 
     /// The MC spelling of a resolved type: structural for a scalar, the
-    /// interned declaration name for a nominal.
-    pub fn spelling(self: Resolved, ty: ResolvedType) []const u8 {
-        return ty.scalarSpelling() orelse self.names.items[ty.nominal.value];
+    /// declaration's own name for a nominal. Null for a nominal this table
+    /// never recorded, so a caller falls back instead of emitting a guess.
+    pub fn spelling(self: Resolved, ty: ResolvedType) ?[]const u8 {
+        if (ty.scalarSpelling()) |name| return name;
+        return self.nominal_names.get(ty.nominal);
+    }
+
+    /// Record which declaration an identifier occurrence named.
+    pub fn recordIdentDef(self: *Resolved, span: ast.Span, def_id: DefId) !void {
+        const key = ExprKey.fromSpan(span);
+        const slot = try self.ident_defs.getOrPut(self.allocator, key);
+        if (slot.found_existing) {
+            if (!slot.value_ptr.def_id.eql(def_id)) slot.value_ptr.ambiguous = true;
+            return;
+        }
+        slot.value_ptr.* = .{ .def_id = def_id };
+    }
+
+    /// The declaration an identifier occurrence named, or null when nothing
+    /// was recorded or the span resolved two ways.
+    pub fn identDef(self: Resolved, span: ast.Span) ?DefId {
+        const entry = self.ident_defs.get(ExprKey.fromSpan(span)) orelse return null;
+        if (entry.ambiguous) return null;
+        return entry.def_id;
     }
 
     pub fn record(self: *Resolved, span: ast.Span, ty: ResolvedType) !void {

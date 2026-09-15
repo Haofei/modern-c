@@ -86,13 +86,20 @@ the builder does not infer.
 
 Two limitations worth naming:
 
-- **Nominal types are interned by name, not by symbol id.** Sema has no
-  symbol-id table — its scopes and registries are keyed by name — so
-  `ResolvedType.nominal` is a dense index into a name table the `Resolved`
-  owns. That keeps the spelling out of the type, but it is a stopgap for a real
-  `SymbolId`/`DefId`. A type alias is recorded as written rather than resolved
-  to its target, because the alias spelling is what reaches the C and LLVM type
-  emitters.
+- **Nominal types are declarations, but a type alias is still recorded as
+  written.** `src/sema_symbols.zig` gives every declaration — function, global,
+  struct, enum, tagged union, overlay union, packed bits, alias, trait,
+  parameter, local — a `DefId` at the start of checking, and
+  `ResolvedType.nominal` is that id. Top-level ids are numbered by the same
+  per-file-ordinal rule `compiler_session.prepareResolvedProgram` uses, so
+  sema's identities and the session's are one space rather than two; body
+  locals take ids from the reserved local half of the ordinal range
+  (`semantic_ids.local_ordinal_base`). Sema's registries stay name-keyed for
+  the shape questions they answer, and name lookup is a thin layer over the id
+  table (`Table.typeDef` / `Table.valueDef`, first-wins, exactly as the
+  registries always resolved a name). What is still a stopgap is aliases: an
+  alias is recorded as the alias declaration, not resolved to its target,
+  because the alias spelling is what reaches the C and LLVM type emitters.
 - **Expression identity is the source span.** `ast.Expr` carries no node id.
   Giving it one is not cheap: `parser.zig` alone produces expressions at ~69
   anonymous literal sites with no constructor to funnel through, and

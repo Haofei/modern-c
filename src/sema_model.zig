@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const semantic_ids = @import("semantic_ids.zig");
 
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
 
@@ -837,6 +838,12 @@ pub const LocalInfo = struct {
     origin: BindingOrigin,
     scope_depth: usize = 0,
     address_origin: AddressOrigin = .none,
+    /// This binding's identity, assigned when it was declared
+    /// (`sema_symbols.Table.declareLocal`). A binding is a declaration, and
+    /// unlike a top-level declaration its identity cannot be recovered from
+    /// its spelling: the map is keyed by name and a sibling block may reuse
+    /// one. Two bindings that share a spelling have different ids.
+    def_id: semantic_ids.DefId = .invalid,
 };
 
 pub const BindingOrigin = enum {

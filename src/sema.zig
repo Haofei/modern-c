@@ -21,7 +21,10 @@ const sema_expr = @import("sema_expr.zig");
 const sema_flow = @import("sema_flow.zig");
 const sema_lookup = @import("sema_lookup.zig");
 const sema_reflect = @import("sema_reflect.zig");
+const sema_symbols = @import("sema_symbols.zig");
 const sema_type = @import("sema_type.zig");
+
+pub const DefId = sema_symbols.DefId;
 
 pub const Context = sema_model.Context;
 pub const MoveSlot = sema_model.MoveSlot;
@@ -363,6 +366,12 @@ pub const Checker = struct {
     // questions outside expression-checking code paths.
     active_structs: ?*const std.StringHashMap(StructInfo) = null,
     active_tagged_unions: ?*const std.StringHashMap(UnionInfo) = null,
+    // Every declaration's identity for this request: functions, globals,
+    // aggregates, aliases, traits, parameters, and body locals. Sema's
+    // registries and scopes stay name-keyed for the shape questions they
+    // answer, but "which declaration is this?" is now an id, not a spelling.
+    // Set for the duration of checkDecls.
+    defs: ?*sema_symbols.Table = null,
     // Where the checker records resolved expression types for the MIR builder
     // to read instead of re-inferring them (see `sema_types.zig`). Null when
     // nobody downstream wants the table, so plain `mcc check` pays nothing.
@@ -466,6 +475,16 @@ pub const Checker = struct {
 
     pub fn checkDecls(self: *Checker, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8) void {
         defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
+        // Identity before shape: every declaration gets its `DefId` before any
+        // registry is collected, so a registry entry can carry the identity of
+        // the declaration it describes rather than standing in for it.
+        var defs = sema_symbols.Table.init(self.reporter.allocator);
+        defer defs.deinit();
+        sema_symbols.declareAll(&defs, decls) catch {
+            self.oom = true;
+        };
+        self.defs = &defs;
+        defer self.defs = null;
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
         var structs = std.StringHashMap(StructInfo).init(self.reporter.allocator);
@@ -2327,7 +2346,7 @@ pub const Checker = struct {
             } else {
                 const param_class = classifyTypeCtx(param.ty, sig_ctx);
                 const param_address_origin: AddressOrigin = if (param_class == .closure) .{ .local = .{ .scope_depth = self.current_scope_depth } } else .none;
-                scope.put(param.name.text, .{ .class = param_class, .mutable = false, .ty = param.ty, .origin = .param, .address_origin = param_address_origin }) catch {
+                scope.put(param.name.text, .{ .class = param_class, .mutable = false, .ty = param.ty, .origin = .param, .address_origin = param_address_origin, .def_id = self.declareLocalDef(.param, param.name) }) catch {
                     self.oom = true;
                 };
                 // Params are live for the whole body, so a local may not shadow one (G20).
@@ -3567,6 +3586,31 @@ pub const Checker = struct {
         if (self.current_scope_depth > 0) self.current_scope_depth -= 1;
     }
 
+    /// Give a body-local binding its identity. Allocation failure is an OOM
+    /// like any other: the binding keeps an invalid id and the incomplete
+    /// table is reported rather than quietly relied on.
+    fn declareLocalDef(self: *Checker, kind: sema_symbols.DefKind, name: ast.Ident) DefId {
+        const defs = self.defs orelse return .invalid;
+        return defs.declareLocal(kind, name.text, name.span) catch {
+            self.oom = true;
+            return .invalid;
+        };
+    }
+
+    /// The declaration an identifier names: the in-scope binding if there is
+    /// one, otherwise the module-scope declaration the name denotes. This is
+    /// the name-keyed lookup sema has always done, with an identity as its
+    /// answer instead of the name it started from.
+    fn identDefId(self: *Checker, name: []const u8, ctx: Context) ?DefId {
+        if (ctx.scope) |scope| {
+            if (scope.get(name)) |binding| {
+                return if (binding.def_id.isValid()) binding.def_id else null;
+            }
+        }
+        const defs = self.defs orelse return null;
+        return defs.valueDef(name);
+    }
+
     fn addLocalBinding(self: *Checker, scope: *Scope, name: ast.Ident, info: LocalInfo) void {
         if (isCBackendReservedLocalName(name.text)) {
             self.errorCode(name.span, "E_RESERVED_C_IDENTIFIER", "local binding name is reserved by the C backend or C headers; choose a different source name");
@@ -3585,6 +3629,11 @@ pub const Checker = struct {
         }
         var scoped_info = info;
         scoped_info.scope_depth = self.current_scope_depth;
+        // The binding is a declaration: give it an identity here, where it is
+        // introduced. A sibling block that reuses the spelling later gets its
+        // own id, so the two are distinguishable downstream even though the
+        // scope map can only hold one of them under that name.
+        scoped_info.def_id = self.declareLocalDef(.local, name);
         scope.put(name.text, scoped_info) catch {
             self.oom = true;
             return;
@@ -3778,8 +3827,24 @@ pub const Checker = struct {
     /// the builder keeps its existing path.
     fn recordResolvedType(self: *Checker, expr: ast.Expr, ctx: Context) void {
         const resolved = self.resolved_types orelse return;
+        self.recordResolvedIdentDef(resolved, expr, ctx);
         const ty = self.resolvedTypeOfExpr(resolved, expr, ctx) orelse return;
         resolved.record(expr.span, ty) catch {
+            self.oom = true;
+        };
+    }
+
+    /// Record which declaration an identifier occurrence resolved to. Sema
+    /// answers this from the scope or the module namespace while checking;
+    /// keeping the answer is what lets a later layer ask about the binding
+    /// rather than about the spelling.
+    fn recordResolvedIdentDef(self: *Checker, resolved: *sema_types.Resolved, expr: ast.Expr, ctx: Context) void {
+        const ident = switch (expr.kind) {
+            .ident => |node| node,
+            else => return,
+        };
+        const def_id = self.identDefId(ident.text, ctx) orelse return;
+        resolved.recordIdentDef(expr.span, def_id) catch {
             self.oom = true;
         };
     }
@@ -3855,7 +3920,12 @@ pub const Checker = struct {
         };
         if (sema_types.scalarByName(name)) |scalar| return scalar;
         if (!isNominalTypeName(name, ctx)) return null;
-        return resolved.nominal(name) catch {
+        // The nominal type is the declaration, not its spelling. The spelling
+        // travels alongside, for the emitters that still take type names from
+        // syntax; it is no longer what the type is made of.
+        const defs = self.defs orelse return null;
+        const def_id = defs.typeDef(name) orelse return null;
+        return resolved.nominal(def_id, name) catch {
             self.oom = true;
             return null;
         };

@@ -6,6 +6,7 @@ const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const sema_model = @import("sema_model.zig");
+const sema_symbols = @import("sema_symbols.zig");
 const sema_types = @import("sema_types.zig");
 
 fn checkSource(source: []const u8, reporter: *diagnostics.Reporter) !void {
@@ -3630,7 +3631,7 @@ test "sema records identifier types for scalars and nominal declarations" {
     var saw_word = false;
     var saw_bool = false;
     for (resolved.table.types.items) |ty| {
-        const name = resolved.spelling(ty);
+        const name = resolved.spelling(ty) orelse continue;
         if (ty == .nominal and std.mem.eql(u8, name, "Point")) saw_point = true;
         if (ty == .nominal and std.mem.eql(u8, name, "Mode")) saw_mode = true;
         if (ty == .nominal and std.mem.eql(u8, name, "Word")) saw_word = true;
@@ -3646,7 +3647,7 @@ test "sema records identifier types for scalars and nominal declarations" {
     // A pointer type is not a shape this table models, so nothing is recorded
     // for it and its consumers keep their existing path.
     for (resolved.table.types.items) |ty| {
-        try std.testing.expect(ty != .nominal or !std.mem.eql(u8, resolved.spelling(ty), "ptr"));
+        try std.testing.expect(ty != .nominal or !std.mem.eql(u8, resolved.spelling(ty).?, "ptr"));
     }
 }
 
@@ -3691,4 +3692,144 @@ test "sema records boolean operator results and direct call return types" {
     // declared u16 return type, recorded against the callee's span.
     try std.testing.expect(saw_bool);
     try std.testing.expect(saw_u16);
+}
+
+/// The span of `name` at its occurrence inside `needle`, which must appear
+/// once in `source`. Tests use it to ask the resolved table about one exact
+/// identifier occurrence rather than about a spelling.
+fn identOccurrenceSpan(source: []const u8, needle: []const u8, name: []const u8) ast.Span {
+    const at = std.mem.indexOf(u8, source, needle).?;
+    const offset = at + std.mem.indexOf(u8, source[at..], name).?;
+    return .{ .offset = offset, .len = name.len, .line = 1, .column = 1 };
+}
+
+test "sema gives same-spelled bindings in different scopes distinct identities" {
+    const source =
+        \\fn first(value: u32) -> u32 {
+        \\    return value;
+        \\}
+        \\fn second(value: u32) -> u32 {
+        \\    return value + 1_u32;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "def_ids_scopes.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    const first_use = resolved.identDef(identOccurrenceSpan(source, "return value;", "value")).?;
+    const second_use = resolved.identDef(identOccurrenceSpan(source, "return value + 1_u32;", "value")).?;
+    try std.testing.expect(first_use.isValid() and second_use.isValid());
+    // Two parameters spelled `value`, one per function: the spelling is shared
+    // and the identity is not.
+    try std.testing.expect(!first_use.eql(second_use));
+}
+
+test "sema gives a sibling-block local that reuses a name its own identity" {
+    const source =
+        \\fn reuse(flag: bool) -> u32 {
+        \\    {
+        \\        let scratch: u32 = 1_u32;
+        \\        if (scratch == 1_u32) { return scratch; }
+        \\    }
+        \\    {
+        \\        let scratch: u32 = 2_u32;
+        \\        if (flag) { return scratch; }
+        \\    }
+        \\    return 0_u32;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "def_ids_shadow.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    const first_use = resolved.identDef(identOccurrenceSpan(source, "if (scratch == 1_u32)", "scratch")).?;
+    const second_use = resolved.identDef(identOccurrenceSpan(source, "if (flag) { return scratch; }", "scratch")).?;
+    try std.testing.expect(first_use.isValid() and second_use.isValid());
+    // The second block reuses a name the first block's scope has released.
+    // The binding it reuses the name of is a different declaration, and the
+    // scope map, which can only hold one `scratch` at a time, is no longer
+    // what decides that.
+    try std.testing.expect(!first_use.eql(second_use));
+}
+
+test "sema gives same-spelled declarations in different modules distinct identities" {
+    // Two files, each with its own `Config` and `setup`, as the session hands
+    // them to the checker: one declaration list, per-file spans.
+    const first_source =
+        \\struct Config { size: u32 }
+        \\fn setup() -> u32 { return 1_u32; }
+    ;
+    const second_source =
+        \\struct Config { count: u32 }
+        \\fn setup() -> u32 { return 2_u32; }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "def_ids_modules.mc", first_source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var first_parser = parser.Parser.initWithFileId(first_source, &reporter, 0);
+    const first_module = try first_parser.parseModule(arena.allocator());
+    defer first_module.deinit(arena.allocator());
+    var second_parser = parser.Parser.initWithFileId(second_source, &reporter, 1);
+    const second_module = try second_parser.parseModule(arena.allocator());
+    defer second_module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var decls: std.ArrayList(ast.Decl) = .empty;
+    defer decls.deinit(std.testing.allocator);
+    try decls.appendSlice(std.testing.allocator, first_module.decls);
+    try decls.appendSlice(std.testing.allocator, second_module.decls);
+
+    var table = sema_symbols.Table.init(std.testing.allocator);
+    defer table.deinit();
+    try sema_symbols.declareAll(&table, decls.items);
+
+    try std.testing.expectEqual(@as(usize, 4), table.count());
+    const first_config = table.defs.items[0].id;
+    const second_config = table.defs.items[2].id;
+    try std.testing.expect(!first_config.eql(second_config));
+    // Both are `Config`; the name resolves to one of them, as every name-keyed
+    // registry in sema already resolved it, and both keep their own identity.
+    try std.testing.expectEqualStrings("Config", table.spelling(first_config).?);
+    try std.testing.expectEqualStrings("Config", table.spelling(second_config).?);
+    try std.testing.expect(table.typeDef("Config").?.eql(first_config));
+    // The two `setup` functions are distinct declarations too.
+    try std.testing.expect(!table.defs.items[1].id.eql(table.defs.items[3].id));
 }
