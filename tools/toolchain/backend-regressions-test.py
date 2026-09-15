@@ -132,8 +132,9 @@ int main(void) {
     run([CLANG, '-Wno-override-module', '-c', llvm_closure, '-o', work / 'closure.o'])
     print('PASS: closure field and aggregate race accesses (C runtime, LLVM compilation)')
 
-    # Existing imported async fixture exercises generated declarations across files.
-    run([MCC, 'check', ROOT / 'tests/c_emit/fuzz_async_syntax.mc'])
-    print('PASS: imported async source identity')
+    # Cross-file generated-declaration identity used to be covered by an async
+    # fixture, which moved to the experimental-surface branch with the rest of
+    # that surface. The import fixtures in tests/spec and the module gates
+    # (import-test, mod-visibility-test) carry that coverage.
 
 print("PASS: backend-regressions-test")

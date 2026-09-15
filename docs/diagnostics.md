@@ -7,7 +7,7 @@ Regenerate it with:
 python3 tools/toolchain/diagnostics-reference.py --write
 ```
 
-Total codes: **283**.
+Total codes: **277**.
 
 | Code | Message examples | Source references |
 |---|---|---|
@@ -29,17 +29,11 @@ Total codes: **283**.
 | `E_ASM_UNKNOWN_REGISTER` | inline-asm names a register that is not valid on any supported architecture | `src/sema.zig:6038` |
 | `E_ASSIGN_THROUGH_CONST_VIEW` | cannot assign through a const pointer or view | `src/mir_verify_util.zig:137`<br>`src/sema.zig:3614`<br>`src/sema.zig:3619`<br>`src/sema.zig:3627` |
 | `E_ASSIGN_TO_IMMUTABLE_LOCAL` | cannot assign to immutable local binding | `src/mir_verify_util.zig:136`<br>`src/sema.zig:3343`<br>`src/sema.zig:3608`<br>`src/sema.zig:3622`<br>`src/sema.zig:3630` |
-| `E_ASYNC_AWAIT_UNRESOLVED` | \`await e\` requires \`e\`'s future type be resolvable without sema — a call \`g(args)\`/\`Owner.m(args)\`, a parenthesized such expr, a struct-FIELD future \`base.fut\`, or an array element \`arr[i]\` (base a param/field of a known struct/array-of-future type); \`*dyn Future\` await and other expression shapes are deferred (Phase E) | `src/async_lower.zig:2437` |
-| `E_ASYNC_BORROW_ACROSS_AWAIT` | explicit \`borrow\` / \`borrow mut\` cannot be captured by an awaited future in async v0; end the borrow before \`await\`, move owned state into the future, or rebuild the view after the await<br>explicit \`borrow\` / \`borrow mut\` cannot be formed in the same async statement that awaits; split the borrow into a post-await lexical scope<br>explicit \`borrow\` / \`borrow mut\` local in async fn '{s}' cannot live across an \`await\`; end the borrow with a smaller lexical block before awaiting<br>_+1 more_ | `src/async_lower.zig:2452`<br>`src/async_lower.zig:2686`<br>`src/async_lower.zig:2699`<br>`src/async_lower.zig:2702` |
-| `E_ASYNC_BRANCH_UNSUPPORTED` | a pre-branch \`let\`/\`var\` live across an await-bearing if/else must have an initializer in async v0<br>a pre-branch \`let\`/\`var\` live across an await-bearing if/else needs an explicit type annotation in async v0<br>a pre-branch \`let\`/\`var\` must bind exactly one name in async v0<br>_+3 more_ | `src/async_lower.zig:641`<br>`src/async_lower.zig:650`<br>`src/async_lower.zig:652`<br>`src/async_lower.zig:704`<br>`src/async_lower.zig:705`<br>`src/async_lower.zig:2501`<br>_+1 more_ |
-| `E_ASYNC_FORBIDDEN_CONTEXT` | \`async fn\` is forbidden in a #[{s}] context (it suspends and uses indirect dispatch) | `src/async_lower.zig:544` |
-| `E_ASYNC_GENERAL_UNSUPPORTED` | \`{s}\` outside an await-bearing loop in async E3c<br>a \`let\`/\`var\` live across the await regions must bind exactly one name in async E3c<br>a \`let\`/\`var\` live across the await regions needs an explicit type annotation in async E3c<br>_+3 more_ | `src/async_lower.zig:1783`<br>`src/async_lower.zig:1864`<br>`src/async_lower.zig:1867`<br>`src/async_lower.zig:1973`<br>`src/async_lower.zig:2188`<br>`src/async_lower.zig:2226` |
-| `E_ASYNC_LOOP_UNSUPPORTED` | a \`while\` loop must have a condition in async v0<br>a pre-loop \`let\`/\`var\` live across the loop needs an explicit type annotation in async v0<br>a pre-loop \`let\`/\`var\` must bind exactly one name in async v0<br>_+5 more_ | `src/async_lower.zig:1028`<br>`src/async_lower.zig:1030`<br>`src/async_lower.zig:1031`<br>`src/async_lower.zig:1034`<br>`src/async_lower.zig:1039`<br>`src/async_lower.zig:1061`<br>_+2 more_ |
+| `E_ASYNC_ON_BRANCH` | '{s}' is not available here; the async/await surface lives on the experimental-surface branch | `src/parser.zig:2289` |
 | `E_ATOMIC_OPERATION` | atomic fetch_add/fetch_sub requires an integer payload type<br>unknown atomic operation | `src/mir_verify_util.zig:189`<br>`src/sema.zig:4855`<br>`src/sema.zig:4882` |
 | `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:191`<br>`src/sema.zig:4941`<br>`src/sema.zig:4945`<br>`src/sema.zig:4951`<br>`src/sema.zig:4955`<br>`src/sema.zig:4961`<br>_+1 more_ |
 | `E_ATOMIC_RESOURCE_PAYLOAD` | atomic payloads cannot be \`move\`/\`linear\`, \`region\`, or \`view struct\` resources; store a copyable handle or integer state instead<br>atomic.init cannot materialize \`move\`/\`linear\`, \`region\`, or \`view struct\` resources; store a copyable handle or integer state instead | `src/sema.zig:4846`<br>`src/sema.zig:4893` |
 | `E_AUTO_DROP_UNSUPPORTED` | cannot reinitialize an auto-dropped \`move\` binding after it was moved in ownership v0; bind the replacement to a fresh local or disable auto-drop with an explicit release path<br>cannot use \`forget_unchecked\` on an auto-dropped \`move\` binding in ownership v0; use an explicit release path or a non-auto-drop resource handoff API | `src/sema_move.zig:733`<br>`src/sema_move.zig:3415` |
-| `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:270` |
 | `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/driver_build.zig:154`<br>`src/lower_c_emitter.zig:2152`<br>`src/lower_llvm.zig:1207`<br>`src/lower_llvm.zig:1214` |
 | `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of a \`move\`/\`linear\` resource pointee; use a typed resource API or an explicit unsafe raw handle<br>bitcast pointer-reinterpret may not cross into or out of a \`region struct\` pointee; use a region-aware view or stable ID<br>bitcast pointer-reinterpret may not cross into or out of a \`view struct\` pointee; rebuild the view from its source inside the lexical scope<br>_+5 more_ | `src/mir_verify_util.zig:194`<br>`src/sema.zig:5319`<br>`src/sema.zig:5329`<br>`src/sema.zig:5332`<br>`src/sema.zig:5347`<br>`src/sema.zig:5351`<br>_+3 more_ |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:3953`<br>`src/sema.zig:4034` |
@@ -95,10 +89,10 @@ Total codes: **283**.
 | `E_DUPLICATE_DROP_GLUE` | a checked resource type may declare exactly one #[drop] release function | `src/sema.zig:1061` |
 | `E_DUPLICATE_ENUM_CASE` | enum case names must be unique | `src/sema.zig:1314` |
 | `E_DUPLICATE_ENUM_VALUE` | enum case representation values must be unique | `src/sema.zig:1337` |
-| `E_DUPLICATE_LOCAL` | local bindings must have unique names in the current scope | `src/async_lower.zig:1452`<br>`src/sema.zig:3583`<br>`src/sema.zig:8386` |
+| `E_DUPLICATE_LOCAL` | local bindings must have unique names in the current scope | `src/sema.zig:3583`<br>`src/sema.zig:8386` |
 | `E_DUPLICATE_OVERLAY_FIELD` | overlay union field names must be unique | `src/sema.zig:2161` |
 | `E_DUPLICATE_PACKED_BITS_FIELD` | packed bits field names must be unique | `src/sema.zig:2133` |
-| `E_DUPLICATE_PARAMETER` | function parameter names must be unique | `src/async_lower.zig:1471`<br>`src/sema.zig:2326` |
+| `E_DUPLICATE_PARAMETER` | function parameter names must be unique | `src/sema.zig:2326` |
 | `E_DUPLICATE_STRUCT_FIELD` | struct field names must be unique | `src/sema.zig:1399` |
 | `E_DUPLICATE_STRUCT_LITERAL_FIELD` | struct literal field names must be unique | `src/mir_verify_util.zig:103`<br>`src/sema.zig:6475`<br>`src/sema.zig:6529` |
 | `E_DUPLICATE_SWITCH_CASE` | switch case pattern is already covered | `src/mir_verify_util.zig:126`<br>`src/mir_verify_util.zig:132`<br>`src/sema.zig:8183`<br>`src/sema.zig:8201`<br>`src/sema.zig:8219`<br>`src/sema.zig:8233`<br>_+4 more_ |
@@ -117,7 +111,7 @@ Total codes: **283**.
 | `E_FN_POINTER_SIGNATURE_MISMATCH` | a variadic function cannot be converted to a non-variadic function pointer<br>a variadic function cannot be inferred as a non-variadic function pointer<br>a variadic function cannot be passed as a non-variadic function pointer<br>_+5 more_ | `src/sema.zig:6582`<br>`src/sema.zig:6590`<br>`src/sema.zig:6594`<br>`src/sema.zig:6602`<br>`src/sema.zig:6612`<br>`src/sema.zig:6620`<br>_+4 more_ |
 | `E_FOR_BASE_NOT_ARRAY_OR_SLICE` | for loops iterate over arrays and slices | `src/mir_verify_util.zig:84`<br>`src/sema.zig:3249` |
 | `E_GENERATED_NAME_COLLISION` | generic specialization would collide with user declaration \`{s}\` | `src/monomorphize.zig:1339` |
-| `E_GENERIC_LOOKAHEAD_LIMIT` | generic-call lookahead exceeds {d} tokens | `src/parser.zig:1865` |
+| `E_GENERIC_LOOKAHEAD_LIMIT` | generic-call lookahead exceeds {d} tokens | `src/parser.zig:1854` |
 | `E_GENERIC_TYPE_ARG_COUNT` | generic type has the wrong number of type arguments | `src/sema.zig:4627`<br>`src/sema.zig:4636` |
 | `E_GLOBAL_INITIALIZER_NOT_STATIC` | global initializer must be a compile-time static value for M0 C emission | `src/sema.zig:2214` |
 | `E_GLOBAL_REQUIRES_TYPE` | global declarations require an explicit storage type | `src/sema.zig:1288` |
@@ -181,7 +175,7 @@ Total codes: **283**.
 | `E_MOVE_UNION_RESOURCE` | \`#[c_union]\` fields cannot contain \`move\`/\`linear\` resources by value; store a pointer or stable handle instead<br>overlay union fields cannot contain \`move\`/\`linear\` resources by value; store a pointer or stable handle instead<br>tagged union cases cannot contain \`move\`/\`linear\` resources by value; store a pointer or stable handle instead | `src/sema.zig:1380`<br>`src/sema.zig:2097`<br>`src/sema.zig:2149` |
 | `E_NAKED_BODY` | a #[naked] function body must be exactly one \`asm\` block (optionally wrapped in one \`unsafe {}\`); there is no frame for locals, statements, or expressions | `src/sema.zig:2370` |
 | `E_NAKED_RETURN` | a #[naked] function must return \`never\` or \`void\`; it cannot synthesize a value return (the asm body owns the calling convention) | `src/sema.zig:2365` |
-| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:2292` |
+| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:2298` |
 | `E_NEVER_FALLTHROUGH` | function declared -&gt; never can fall off the end | `src/hir_inspection.zig:187`<br>`src/mir_verify.zig:114`<br>`src/sema.zig:2414` |
 | `E_NEVER_RETURNS` | function declared -&gt; never cannot return normally | `src/sema.zig:3374`<br>`src/sema.zig:3381` |
 | `E_NEVER_STORAGE` | never is a control-flow type and cannot be used for storage | `src/sema.zig:4582`<br>`src/sema.zig:4764` |
@@ -203,9 +197,9 @@ Total codes: **283**.
 | `E_PACKED_BITS_FIELD_NOT_BOOL` | packed bits fields must be bool | `src/sema.zig:2130` |
 | `E_PACKED_BITS_REPR_NOT_INTEGER` | packed bits representation type must be an integer type | `src/sema.zig:2122` |
 | `E_PADDR_DEREF` | _see source_ | `src/mir_verify_util.zig:168`<br>`src/sema.zig:9606` |
-| `E_PARSE` | _see source_ | `src/parser.zig:2270` |
-| `E_PARSE_EXPECTED_EXPRESSION` | _see source_ | `src/parser.zig:2268` |
-| `E_PARSE_EXPECTED_PARAMETER_NAME` | _see source_ | `src/parser.zig:2269` |
+| `E_PARSE` | _see source_ | `src/parser.zig:2259` |
+| `E_PARSE_EXPECTED_EXPRESSION` | _see source_ | `src/parser.zig:2257` |
+| `E_PARSE_EXPECTED_PARAMETER_NAME` | _see source_ | `src/parser.zig:2258` |
 | `E_PHYS_PTR_DEREF` | _see source_ | `src/mir_verify_util.zig:173`<br>`src/sema.zig:9611` |
 | `E_POINTER_ARITH_SINGLE_OBJECT` | single-object pointers do not support arithmetic | `src/mir_verify_util.zig:161`<br>`src/sema.zig:4011` |
 | `E_POINTER_ORDERING` | optional values support only equality comparisons against null<br>pointer and view values support only equality comparisons | `src/mir_verify_util.zig:162`<br>`src/sema.zig:7609`<br>`src/sema.zig:7625` |

@@ -19,6 +19,10 @@ KNOWN_STATUSES = {
     "experimental",
     "validation-only",
     "reserved-or-unsupported",
+    # The feature is not in this tree at all: its implementation, fixtures and
+    # spec behaviour live on the named branch. Distinct from "experimental",
+    # which still ships and still has to keep working.
+    "on-branch:experimental-surface",
 }
 
 REQUIRED_FEATURES = {
@@ -99,13 +103,26 @@ def main() -> int:
 
         for feature_id in FROZEN_EXPERIMENTAL:
             status = next(item["status"] for item in data["features"] if item["id"] == feature_id)
-            require(status == "experimental", f"{feature_id} must stay experimental while backend authority boundary is open")
+            # A frozen feature may not be promoted while the backend authority
+            # boundary is open. Moving it out of the tree onto a branch is the
+            # other direction and is allowed: nothing in this tree then claims
+            # to support it.
+            require(
+                status in ("experimental", "on-branch:experimental-surface"),
+                f"{feature_id} must stay experimental, or move to the experimental-surface branch, "
+                "while the backend authority boundary is open",
+            )
+
+        require(
+            "experimental-surface" in readme_text,
+            "README must say where a feature moved off this tree went",
+        )
 
         qemu_status = next(item["status"] for item in data["features"] if item["id"] == "freestanding-qemu-fixtures")
         require(qemu_status == "validation-only", "freestanding-qemu-fixtures must stay validation-only")
 
         require(
-            "Traits, closures, broad generics, async/await" in readme_text,
+            "Traits, closures, broad generics, and advanced ownership forms" in readme_text,
             "README must state advanced language forms are experimental/frozen",
         )
     except AssertionError as exc:

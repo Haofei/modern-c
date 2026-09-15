@@ -3,7 +3,6 @@ const std = @import("std");
 const artifact_model = @import("artifact_model.zig");
 const artifact_publisher = @import("artifact_publisher.zig");
 const ast = @import("ast.zig");
-const async_lower = @import("async_lower.zig");
 const backend = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const generic_precheck = @import("generic_precheck.zig");
@@ -152,11 +151,7 @@ pub const CompilationSession = struct {
         var decls = try allocator.alloc(ast.Decl, resolved.len);
         for (resolved, 0..) |entry, index| decls[index] = entry.decl;
 
-        var qualified_owners = try sources.collectQualifiedOwners(allocator);
-        const lowered = try async_lower.transformDecls(allocator, decls, qualified_owners, diag);
-        if (diag.has_errors) return error.ParseFailed;
-        decls = lowered.decls;
-        qualified_owners = lowered.qualified_owners;
+        const qualified_owners = try sources.collectQualifiedOwners(allocator);
         try generic_precheck.checkDecls(allocator, decls, self.visibility_mode, diag);
         if (diag.has_errors) return error.ParseFailed;
         decls = try monomorphize.transformDeclsReport(allocator, decls, diag);

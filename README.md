@@ -38,10 +38,16 @@ The language currently includes:
 - a rule that optimization mode cannot silently change the semantics of an
   already accepted program.
 
-Traits, closures, broad generics, async/await, and advanced ownership forms such
-as `view struct`, `region struct`, `thread_move`, and borrowed-return contracts
+Traits, closures, broad generics, and advanced ownership forms such as
+`view struct`, `region struct`, `thread_move`, and borrowed-return contracts
 exist as experimental or validation surfaces. They are frozen while compiler
 work focuses on closing the typed MIR / `VerifiedProgram` backend boundary.
+
+Async/await is not in this tree. Its transform, `std/task.mc` and its fixtures
+live on the `experimental-surface` branch, and the parser here rejects `async`
+and `await` with `E_ASYNC_ON_BRANCH` naming that branch. Spec section 33 is kept
+as the design of record for it.
+
 The machine-readable status table is
 [`docs/feature-maturity.json`](docs/feature-maturity.json).
 

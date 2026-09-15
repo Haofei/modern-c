@@ -3620,6 +3620,12 @@ dynamic trait objects at admission rather than claiming a backend conformance gu
 
 # 33. Async and Await
 
+> **Not implemented in this tree.** The async/await surface -- the pre-sema
+> transform, `std/task.mc`, and its fixtures -- lives on the
+> `experimental-surface` branch. The parser here rejects `async` and `await`
+> with `E_ASYNC_ON_BRANCH`. The section below is kept as the design of record
+> for that branch; nothing is deleted.
+
 `async`/`await` is **sugar over the `Future` trait (section 32)**: an `async fn` lowers to a
 fixed-size, **stackless** state machine — a plain `struct` plus an `impl Future` — with no hidden
 heap, no stackful coroutine, and no runtime beyond the executor that drives it. It is a pre-sema

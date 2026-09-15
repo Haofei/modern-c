@@ -10,11 +10,11 @@ python3 tools/toolchain/std-api-docs.py --write
 The extractor is static: it records `pub`/`export` function signatures, public constants,
 public type declarations, and local types named by public declarations.
 
-Total modules: **39**.
-Total public functions: **338**.
+Total modules: **38**.
+Total public functions: **330**.
 Total public constants: **6**.
 Total public type declarations: **35**.
-Total referenced local types: **13**.
+Total referenced local types: **8**.
 
 ## Modules
 
@@ -852,33 +852,6 @@ Source: `std/sync/sync.mc`
 | <code>pub fn unlock(g: Guard) -&gt; void</code> | `std/sync/sync.mc:43` |
 | <code>pub fn lock_irqsave(l: *SpinLock) -&gt; IrqGuard</code> | `std/sync/sync.mc:51` |
 | <code>pub fn unlock_irqrestore(g: IrqGuard) -&gt; void</code> | `std/sync/sync.mc:55` |
-
-## `std/task`
-
-Source: `std/task.mc`
-
-### Referenced local types
-
-| Signature | Source |
-|---|---|
-| <code>trait Future</code> | `std/task.mc:24` |
-| <code>struct SlotFuture</code> | `std/task.mc:39` |
-| <code>struct Join2</code> | `std/task.mc:79` |
-| <code>struct Race2</code> | `std/task.mc:114` |
-| <code>struct Timeout</code> | `std/task.mc:155` |
-
-### Public functions
-
-| Signature | Source |
-|---|---|
-| <code>export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -&gt; bool, cancel: fn(u64) -&gt; void) -&gt; void</code> | `std/task.mc:47` |
-| <code>export fn slot_future_cancel(s: *mut SlotFuture) -&gt; void</code> | `std/task.mc:71` |
-| <code>export fn join2_init(j: *mut Join2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:87` |
-| <code>export fn race2_init(r: *mut Race2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:121` |
-| <code>export fn race2_winner(r: *Race2) -&gt; i32</code> | `std/task.mc:127` |
-| <code>export fn timeout_init(t: *mut Timeout, inner: *mut dyn Future, budget_ticks: u64) -&gt; void</code> | `std/task.mc:163` |
-| <code>export fn timeout_timed_out(t: *Timeout) -&gt; bool</code> | `std/task.mc:170` |
-| <code>export fn run_to_completion(f: *mut dyn Future, idle: fn() -&gt; void) -&gt; u64</code> | `std/task.mc:206` |
 
 ## `std/time`
 

@@ -10,7 +10,8 @@
     "core-qualified",
     "experimental",
     "validation-only",
-    "reserved-or-unsupported"
+    "reserved-or-unsupported",
+    "on-branch:experimental-surface"
   ],
   "features": [
     {
@@ -95,13 +96,14 @@
     },
     {
       "id": "async-await",
-      "status": "experimental",
+      "status": "on-branch:experimental-surface",
       "area": "language-surface",
       "spec_anchor": "Async and Await",
       "evidence": [
-        "src/async_lower.zig",
-        "tests/experimental/async/fuzz_async_lowering.mc"
-      ]
+        "tests/c_emit/bad/async_on_branch.mc",
+        "docs/spec/MC_0.7_Final_Design.md"
+      ],
+      "note": "The stackless async/await surface, its lowering (src/async_lower.zig and friends), its fixtures and std/task.mc live on the experimental-surface branch. The parser in this tree rejects `async` and `await` with E_ASYNC_ON_BRANCH."
     },
     {
       "id": "advanced-ownership-views",

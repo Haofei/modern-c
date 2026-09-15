@@ -33,12 +33,11 @@ EMIT_LLVM_BAD_FIXTURES = (
 )
 
 
-ASYNC_CHECK_BAD_FIXTURES = (
-    "tests/c_emit/bad/async_await_unresolved_dyn.mc",
-    "tests/c_emit/bad/async_borrow_across_await.mc",
-    "tests/c_emit/bad/async_borrow_pinning.mc",
-    "tests/c_emit/bad/async_for_await_nested.mc",
-)
+# The async/await surface moved to the `experimental-surface` branch, so the
+# fixtures that exercised its checker-stage diagnostics went with it. The
+# parser now rejects the keywords outright, which the ordinary
+# `tests/c_emit/bad/*.mc` sweep covers.
+CHECK_ONLY_BAD_FIXTURES: tuple[str, ...] = ()
 
 
 def fixture_plan(root: Path) -> list[Fixture]:
@@ -50,7 +49,7 @@ def fixture_plan(root: Path) -> list[Fixture]:
     ):
         for path in sorted(root.glob(pattern)):
             specs.append(Fixture(command=command, path=path.relative_to(root)))
-    for fixture in ASYNC_CHECK_BAD_FIXTURES:
+    for fixture in CHECK_ONLY_BAD_FIXTURES:
         specs.append(Fixture(command="check", path=Path(fixture)))
     for fixture in EMIT_LLVM_BAD_FIXTURES:
         specs.append(Fixture(command="emit-llvm", path=Path(fixture)))
