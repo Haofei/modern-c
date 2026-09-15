@@ -175,6 +175,16 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            "docs/backend-expected-failures.json",
+            "tools/toolchain/backend-expected-failures-test.py",
+            "tools/toolchain/check-generated-c.sh",
+            "tools/toolchain/spec-emit-sweep.py",
+        ),
+        ("backend-expected-failures-test", "c-test", "sweep"),
+        "known-backend-gap manifest changes need the manifest contract and both harnesses that consult it",
+    ),
+    Rule(
+        (
             "src/architecture_boundary_tests.zig",
             "src/backend.zig",
             "src/backend_cleanup.zig",

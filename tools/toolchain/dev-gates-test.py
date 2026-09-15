@@ -234,7 +234,16 @@ def main() -> None:
         ["tools/toolchain/llvm-new-harness.sh"],
         ["llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"],
     )
-    assert_gates(module, ["tools/toolchain/spec-emit-sweep.py"], ["test-lint", "sweep"])
+    assert_gates(
+        module,
+        ["tools/toolchain/spec-emit-sweep.py"],
+        ["backend-expected-failures-test", "c-test", "sweep", "test-lint"],
+    )
+    assert_gates(
+        module,
+        ["docs/backend-expected-failures.json"],
+        ["backend-expected-failures-test", "c-test", "sweep"],
+    )
     assert_gates(module, ["tools/toolchain/spec-llvm-sweep.py"], ["test-lint", "llvm-sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-obj-sweep.py"], ["test-lint", "llvm-spec-obj-sweep"])
     assert_gates(module, ["tools/toolchain/llvm-opt-sweep.py"], ["test-lint", "llvm-opt-sweep"])

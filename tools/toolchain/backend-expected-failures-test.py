@@ -22,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "docs" / "backend-expected-failures.json"
 HARNESS = ROOT / "tools" / "toolchain" / "check-generated-c.sh"
+SWEEP_HARNESS = ROOT / "tools" / "toolchain" / "spec-emit-sweep.py"
 
 # A reason is either a diagnostic code the user sees, or the name of a
 # fail-closed admission error. Both are stable identifiers; free text is not.
@@ -53,6 +54,10 @@ def main() -> None:
     if not isinstance(entries, list):
         fail("emit_c must be a list")
 
+    sweep_entries = manifest.get("sweep")
+    if not isinstance(sweep_entries, list):
+        fail("sweep must be a list")
+
     seen: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -78,17 +83,54 @@ def main() -> None:
         if not isinstance(note, str) or not note.strip():
             fail(f"{fixture} must carry a note saying why it cannot compile today")
 
-    # The manifest is only meaningful if the harness actually consults it.
+    sweep_seen: set[str] = set()
+    for entry in sweep_entries:
+        if not isinstance(entry, dict):
+            fail("each sweep entry must be an object")
+        fixture = entry.get("fixture")
+        stage = entry.get("stage")
+        reason = entry.get("reason")
+        note = entry.get("note")
+        if not isinstance(fixture, str) or not fixture:
+            fail("each sweep entry must name a fixture")
+        if fixture in sweep_seen:
+            fail(f"duplicate sweep entry for {fixture}")
+        sweep_seen.add(fixture)
+        # The sweep keys on the fixture's basename inside tests/spec.
+        if not (ROOT / "tests" / "spec" / fixture).is_file():
+            fail(f"sweep entry {fixture} does not exist under tests/spec; delete the entry")
+        if stage not in ("EMIT", "CLANG"):
+            fail(f"sweep entry {fixture} has unknown stage {stage!r}")
+        if not isinstance(reason, str) or not reason:
+            fail(f"sweep entry {fixture} must record the reason it fails")
+        if stage == "EMIT" and not (DIAGNOSTIC_RE.match(reason) or INTERNAL_RE.match(reason)):
+            fail(f"sweep entry {fixture} reason {reason!r} is neither an E_* code nor an error name")
+        if not isinstance(note, str) or not note.strip():
+            fail(f"sweep entry {fixture} must carry a note saying why it cannot compile today")
+
+    # A manifest is only meaningful if the harnesses actually consult it.
     harness = HARNESS.read_text(encoding="utf-8")
     for needle in ("docs/backend-expected-failures.json", "run_known_fixture"):
         if needle not in harness:
             fail(f"{HARNESS.relative_to(ROOT)} no longer consults the manifest ({needle!r} missing)")
+    sweep_harness = SWEEP_HARNESS.read_text(encoding="utf-8")
+    for needle in ("backend-expected-failures.json", "load_expected_failures", "failure_matches"):
+        if needle not in sweep_harness:
+            fail(f"{SWEEP_HARNESS.relative_to(ROOT)} no longer consults the manifest ({needle!r} missing)")
 
     reasons: dict[str, int] = {}
     for entry in entries:
         reasons[entry["reason"]] = reasons.get(entry["reason"], 0) + 1
     summary = ", ".join(f"{count} {reason}" for reason, count in sorted(reasons.items()))
-    print(f"PASS: backend-expected-failures-test - {len(entries)} known-failing c_emit fixtures ({summary})")
+    sweep_reasons: dict[str, int] = {}
+    for entry in sweep_entries:
+        key = entry["reason"] if entry["stage"] == "EMIT" else "clang-compile"
+        sweep_reasons[key] = sweep_reasons.get(key, 0) + 1
+    sweep_summary = ", ".join(f"{count} {reason}" for reason, count in sorted(sweep_reasons.items()))
+    print(
+        f"PASS: backend-expected-failures-test - {len(entries)} known-failing c_emit fixtures ({summary}); "
+        f"{len(sweep_entries)} known-failing spec sweep fixtures ({sweep_summary})"
+    )
 
 
 if __name__ == "__main__":

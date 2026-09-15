@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/backend-expected-failures.json",
-  "purpose": "Fixtures under tests/c_emit that mcc emit-c cannot compile today. Each is still asserted: it must fail, and fail for the recorded reason. A fixture that starts passing, stops failing for its recorded reason, or begins failing without an entry here fails the c-test gate.",
+  "purpose": "Fixtures the C backend cannot compile today. `emit_c` covers tests/c_emit (checked by c-test); `sweep` covers the tests/spec corpus as the emit sweep chunks it (checked by spec-emit-sweep.py). Each entry is still asserted: it must fail, and fail for the recorded reason. A fixture that starts passing, stops failing for its recorded reason, or begins failing without an entry here fails its gate.",
   "emit_c": [
     {
       "fixture": "tests/c_emit/global_initializers.mc",
@@ -37,6 +37,194 @@
       "fixture": "tests/c_emit/type_aliases.mc",
       "reason": "InvalidMirGlobalInitializerFacts",
       "note": "A non-extern global whose initializer shape has no admitted syntax-free plan; MIR admission fails closed rather than letting codegen re-read the AST."
+    }
+  ],
+  "sweep": [
+    {
+      "fixture": "address_classes.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "cast_class_strip.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "comptime_params.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "data_race_semantics.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "defer_cleanup.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "enums.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "generic_region_view_containers.mc",
+      "stage": "EMIT",
+      "reason": "E_UNKNOWN_TYPE",
+      "note": "Stripping the fixture's EXPECT_ERROR declarations removes a generic type the kept chunk still names, so the chunk does not resolve on its own."
+    },
+    {
+      "fixture": "global_initializers.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirGlobalInitializerFacts",
+      "note": "A non-extern global whose initializer shape has no admitted syntax-free plan. The known case is a `packed bits` global with a struct-literal initializer: PackedBitsFieldFact carries only a field spelling, no bit offset or width, so the planner cannot fold the literal into the packed scalar."
+    },
+    {
+      "fixture": "hosted_io.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "initialization.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "kernel_region_tokens.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "local_address_escape.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "lock_guards_data.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "mmio_ordering.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirExecutableBody",
+      "note": "The typed executable body is incomplete for the kept chunk, so both emitters decline it at admission rather than rendering a partial body."
+    },
+    {
+      "fixture": "move_borrow_escape.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirOwnershipEvents",
+      "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
+    },
+    {
+      "fixture": "move_cfg.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "move_diverge.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirOwnershipEvents",
+      "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
+    },
+    {
+      "fixture": "move_linear.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirOwnershipEvents",
+      "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
+    },
+    {
+      "fixture": "packed_bits_overlay.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirGlobalInitializerFacts",
+      "note": "A non-extern global whose initializer shape has no admitted syntax-free plan. The known case is a `packed bits` global with a struct-literal initializer: PackedBitsFieldFact carries only a field spelling, no bit offset or width, so the planner cannot fold the literal into the packed scalar."
+    },
+    {
+      "fixture": "sanitizer_hook_override.mc",
+      "stage": "EMIT",
+      "reason": "InternalLoweringFailure",
+      "note": "The C lowering path reports an internal failure for the kept chunk; the construct has not been identified."
+    },
+    {
+      "fixture": "serial_counter_ops.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "slice_ranges.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "tagged_union.mc",
+      "stage": "CLANG",
+      "reason": "error: use of undeclared identifier 'TokenTag_int_'; did you mean 'TokenTag_int'?",
+      "note": "The emitted C does not compile. This is a real code-generation defect in the kept chunk, not an admission or policy rejection."
+    },
+    {
+      "fixture": "traits_dyn_accept.mc",
+      "stage": "EMIT",
+      "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
+      "note": "The kept chunk dispatches through a dynamic trait object. The qualified C and LLVM backends refuse dyn trait objects by design, so this fixture cannot emit C as written."
+    },
+    {
+      "fixture": "traits_dyn_coerce_positions_accept.mc",
+      "stage": "EMIT",
+      "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
+      "note": "The kept chunk dispatches through a dynamic trait object. The qualified C and LLVM backends refuse dyn trait objects by design, so this fixture cannot emit C as written."
+    },
+    {
+      "fixture": "traits_dyn_forge_arg_reject.mc",
+      "stage": "EMIT",
+      "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
+      "note": "The kept chunk dispatches through a dynamic trait object. The qualified C and LLVM backends refuse dyn trait objects by design, so this fixture cannot emit C as written."
+    },
+    {
+      "fixture": "traits_dyn_forge_field_reject.mc",
+      "stage": "CLANG",
+      "reason": "error: unknown type name 'mc_dyn_Shape'",
+      "note": "The emitted C does not compile. This is a real code-generation defect in the kept chunk, not an admission or policy rejection."
+    },
+    {
+      "fixture": "traits_dyn_nullable_no_dispatch.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "try_propagation.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+    },
+    {
+      "fixture": "type_aliases.mc",
+      "stage": "EMIT",
+      "reason": "InvalidMirGlobalInitializerFacts",
+      "note": "A non-extern global whose initializer shape has no admitted syntax-free plan. The known case is a `packed bits` global with a struct-literal initializer: PackedBitsFieldFact carries only a field spelling, no bit offset or width, so the planner cannot fold the literal into the packed scalar."
+    },
+    {
+      "fixture": "type_arg_and_trivial_drop_reject.mc",
+      "stage": "EMIT",
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
     }
   ]
 }

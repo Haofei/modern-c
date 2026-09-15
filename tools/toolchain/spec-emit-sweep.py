@@ -13,7 +13,7 @@ Usage:
 Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/spec. Exit status is non-zero if any valid
 fixture fails to emit or compile.
 """
-import sys, os, re, glob, subprocess, tempfile, concurrent.futures
+import sys, os, re, glob, json, subprocess, tempfile, concurrent.futures
 from spec_sweep_lib import strip_expect_error  # shared comment-aware negative-fixture stripping
 
 # Fixtures excluded from the C-emit sweep, each mapped to the reason it is not a
@@ -99,12 +99,42 @@ def sweep_one(mcc, path):
     return (name, kept, None)
 
 
+# Fixtures whose kept chunk the C backend cannot emit today. This is the same
+# mechanism c-test uses (docs/backend-expected-failures.json): each entry
+# records the reason it fails, the sweep asserts it still fails for that
+# reason, and the gate fails if one starts passing or fails differently. The
+# list can only shrink deliberately, and a NEW failure is never mistaken for
+# standing debt.
+#
+# Distinct from OUT_OF_SCOPE above, which is about the fixture's contract --
+# a chunk the EXPECT_ERROR strip cannot isolate -- not about a backend gap.
+MANIFEST_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "docs", "backend-expected-failures.json",
+)
+
+
+def load_expected_failures():
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    entries = {}
+    for entry in manifest.get("sweep", []):
+        entries[entry["fixture"]] = entry
+    return entries
+
+
+def failure_matches(entry, kind, message):
+    return entry["stage"] == kind and entry["reason"] in message
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
 
     fixtures = sorted(glob.glob(os.path.join(spec_dir, "*.mc")))
+    expected = load_expected_failures()
     failures, oos_failures, swept, kept_fns = [], [], len(fixtures), 0
+    fixed = []
     jobs = int(os.environ.get("JOBS") or (os.cpu_count() or 4))
     workers = max(1, min(jobs, len(fixtures))) if fixtures else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -112,20 +142,53 @@ def main():
             kept_fns += kept
             if failure:
                 (oos_failures if name in OUT_OF_SCOPE else failures).append(failure)
+            elif name in expected:
+                fixed.append(name)
     failures.sort()
     oos_failures.sort()
+
+    # Split the in-scope failures into the ones this tree already knows about
+    # and the ones it does not.
+    known, unexpected, drifted = [], [], []
+    for failure in failures:
+        name, kind, message = failure
+        entry = expected.get(name)
+        if entry is None:
+            unexpected.append(failure)
+        elif failure_matches(entry, kind, message):
+            known.append(failure)
+        else:
+            drifted.append(failure)
 
     print(f"spec fixtures swept: {swept}, valid functions checked: {kept_fns}")
     if oos_failures:
         print("known out-of-scope (allowlisted, not failing the gate):")
         for n, k, m in oos_failures:
             print(f"  [{k}] {n}: {m}\n        reason: {OUT_OF_SCOPE[n]}")
-    if failures:
-        print(f"FAIL: {len(failures)} in-scope fixture(s) did not emit/compile:")
-        for n, k, m in failures:
+    if known:
+        print(f"known backend gaps (docs/backend-expected-failures.json, {len(known)} fixture(s)):")
+        for n, k, m in known:
+            print(f"  [{k}] {n}: {m}\n        reason: {expected[n]['note']}")
+
+    status = 0
+    if unexpected:
+        print(f"FAIL: {len(unexpected)} in-scope fixture(s) did not emit/compile:")
+        for n, k, m in unexpected:
             print(f"  [{k}] {n}: {m}")
-        return 1
-    print("PASS: all in-scope spec fixtures emit compilable C")
+        status = 1
+    if drifted:
+        print(f"FAIL: {len(drifted)} known-failing fixture(s) now fail differently; update docs/backend-expected-failures.json:")
+        for n, k, m in drifted:
+            print(f"  [{k}] {n}: {m}\n        recorded: [{expected[n]['stage']}] {expected[n]['reason']}")
+        status = 1
+    if fixed:
+        print(f"FAIL: {len(fixed)} fixture(s) listed as known-failing now emit; remove their entries from docs/backend-expected-failures.json:")
+        for n in sorted(fixed):
+            print(f"  {n}")
+        status = 1
+    if status != 0:
+        return status
+    print(f"PASS: all in-scope spec fixtures emit compilable C ({len(known)} known backend gaps still failing for their recorded reason)")
     return 0
 
 
