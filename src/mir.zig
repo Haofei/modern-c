@@ -205,6 +205,7 @@ pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInf
     };
 }
 pub const SourcePoint = mir_model.SourcePoint;
+pub const transparentSignatureTypeId = mir_model.transparentSignatureTypeId;
 
 // MIR construction lives in `mir_build.zig`.
 const mir_build = @import("mir_build.zig");

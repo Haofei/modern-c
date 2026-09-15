@@ -5173,7 +5173,14 @@ fn transparentSignatureShape(module: Module, initial_type_id: SignatureTypeId) ?
     return module.signature_types.get(type_id);
 }
 
-fn transparentSignatureTypeId(module: Module, initial_type_id: SignatureTypeId) ?SignatureTypeId {
+/// Resolve a signature type through type aliases and transparent qualifiers.
+///
+/// Consumers that must know the *shape* of a declared type -- an aggregate
+/// global renderer, for instance -- need this: `type Counts = [3]Count;`
+/// reaches them as a bare name, and the answer lives in the module's own
+/// type-alias table. This is the MIR-owned way to ask; recovering it from
+/// declaration syntax would be the backend inferring again.
+pub fn transparentSignatureTypeId(module: Module, initial_type_id: SignatureTypeId) ?SignatureTypeId {
     var current_type_id = initial_type_id;
     var steps: usize = 0;
     while (steps <= module.type_aliases.len) : (steps += 1) {

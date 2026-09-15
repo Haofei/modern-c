@@ -967,12 +967,27 @@ pub const CEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{s}_{s}", .{ identity.spelling, value.spelling });
     }
 
+    /// The declared shape of a signature type, seen through type aliases.
+    ///
+    /// A global spelled `Counts` where `type Counts = [3]Count;` reaches the
+    /// renderer as a bare name. The module's own alias table is the authority
+    /// on what that name denotes, so ask it rather than re-reading the
+    /// declaration's syntax.
+    fn transparentSignatureId(self: *const CEmitter, id: mir.SignatureTypeId) mir.SignatureTypeId {
+        return mir.transparentSignatureTypeId(self.mir_module.*, id) orelse id;
+    }
+
     fn cAggregateGlobalInitializer(self: *CEmitter, plan: mir.AggregateInitializerPlan, id: mir.SignatureTypeId) ![]const u8 {
         return switch (plan) {
             .scalar => |value| self.cScalarGlobalValue(value),
             .function_symbol => |value| self.checkedFunctionSymbolId(value.target_symbol_id) orelse error.UnsupportedCEmission,
             .array => |items| blk: {
-                const shape = signature_type_mechanics.shape(self.mir_module.signature_types, id) catch return error.UnsupportedCEmission;
+                // An array spelled through an alias (`type Counts = [3]Count;`)
+                // arrives as a bare name; resolve it here rather than in the
+                // caller, so the other leaf kinds keep the exact id they were
+                // rendered with.
+                const array_id = self.transparentSignatureId(id);
+                const shape = signature_type_mechanics.shape(self.mir_module.signature_types, array_id) catch return error.UnsupportedCEmission;
                 const array = switch (shape) {
                     .array => |value| value,
                     else => return error.UnsupportedCEmission,
