@@ -73,12 +73,12 @@ const parseArrayLenWithReflect = array_len.parseArrayLenWithReflect;
 // no recording is available. These two render that one answer back to the
 // `ast.TypeExpr` the builder still passes around.
 pub fn integerLiteralTypeExpr(literal: []const u8, span: ast.Span) ast.TypeExpr {
-    return ast_query.simpleNameType(sema_types.integerOfLiteral(literal).spelling(), span);
+    return ast_query.simpleNameType(sema_types.integerOfLiteral(literal).scalarSpelling().?, span);
 }
 
 pub fn suffixedIntegerLiteralTypeExpr(literal: []const u8, span: ast.Span) ?ast.TypeExpr {
     const resolved = sema_types.suffixedIntegerOfLiteral(literal) orelse return null;
-    return ast_query.simpleNameType(resolved.spelling(), span);
+    return ast_query.simpleNameType(resolved.scalarSpelling().?, span);
 }
 
 const mir_model = @import("mir_model.zig");

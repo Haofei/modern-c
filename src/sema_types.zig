@@ -34,12 +34,28 @@ pub const IntWidth = enum {
     pointer,
 };
 
-/// A resolved type. Scalars are structural; everything else is out of scope
-/// for this slice and is not interned at all.
+/// A declaration this table refers to by identity rather than by spelling.
+///
+/// Sema has no symbol-id table of its own yet — its scopes and registries are
+/// keyed by name — so this is a dense index into the `Resolved` name table,
+/// which owns the one copy of the spelling. That is a stopgap for a real
+/// `SymbolId`/`DefId`, but it already keeps the spelling out of the type.
+pub const NameId = struct {
+    value: u32,
+
+    pub fn eql(self: NameId, other: NameId) bool {
+        return self.value == other.value;
+    }
+};
+
+/// A resolved type. Scalars are structural; a nominal type is an identity.
+/// Everything else (pointers, slices, arrays, optionals, generics, qualified
+/// types) is out of scope for this slice and is not interned at all.
 pub const ResolvedType = union(enum) {
     void_,
     boolean,
     integer: Integer,
+    nominal: NameId,
 
     pub const Integer = struct {
         signed: bool,
@@ -51,14 +67,16 @@ pub const ResolvedType = union(enum) {
         return switch (self) {
             .void_, .boolean => true,
             .integer => |lhs| lhs.signed == other.integer.signed and lhs.width == other.integer.width,
+            .nominal => |lhs| lhs.eql(other.nominal),
         };
     }
 
-    /// Render the resolved type back to its MC spelling. This is the one
-    /// place a name is produced, at the boundary with code that still speaks
-    /// `ast.TypeExpr`; it is a rendering of the fact, not a second source of
-    /// it. The result is a static string, so it outlives any arena.
-    pub fn spelling(self: ResolvedType) []const u8 {
+    /// Render a scalar back to its MC spelling, or null for a nominal type,
+    /// whose spelling only the owning `Resolved` can supply. This is the one
+    /// place a scalar name is produced, at the boundary with code that still
+    /// speaks `ast.TypeExpr`; it is a rendering of the fact, not a second
+    /// source of it. The result is a static string, so it outlives any arena.
+    pub fn scalarSpelling(self: ResolvedType) ?[]const u8 {
         return switch (self) {
             .void_ => "void",
             .boolean => "bool",
@@ -77,9 +95,35 @@ pub const ResolvedType = union(enum) {
                 .w128 => "u128",
                 .pointer => "usize",
             },
+            .nominal => null,
         };
     }
 };
+
+/// The scalar type a builtin type name denotes, or null if the name is not a
+/// builtin scalar.
+pub fn scalarByName(name: []const u8) ?ResolvedType {
+    const table = .{
+        .{ "void", ResolvedType{ .void_ = {} } },
+        .{ "bool", ResolvedType{ .boolean = {} } },
+        .{ "u8", ResolvedType{ .integer = .{ .signed = false, .width = .w8 } } },
+        .{ "u16", ResolvedType{ .integer = .{ .signed = false, .width = .w16 } } },
+        .{ "u32", ResolvedType{ .integer = .{ .signed = false, .width = .w32 } } },
+        .{ "u64", ResolvedType{ .integer = .{ .signed = false, .width = .w64 } } },
+        .{ "u128", ResolvedType{ .integer = .{ .signed = false, .width = .w128 } } },
+        .{ "usize", ResolvedType{ .integer = .{ .signed = false, .width = .pointer } } },
+        .{ "i8", ResolvedType{ .integer = .{ .signed = true, .width = .w8 } } },
+        .{ "i16", ResolvedType{ .integer = .{ .signed = true, .width = .w16 } } },
+        .{ "i32", ResolvedType{ .integer = .{ .signed = true, .width = .w32 } } },
+        .{ "i64", ResolvedType{ .integer = .{ .signed = true, .width = .w64 } } },
+        .{ "i128", ResolvedType{ .integer = .{ .signed = true, .width = .w128 } } },
+        .{ "isize", ResolvedType{ .integer = .{ .signed = true, .width = .pointer } } },
+    };
+    inline for (table) |entry| {
+        if (std.mem.eql(u8, name, entry[0])) return entry[1];
+    }
+    return null;
+}
 
 /// Index into a `Table`. Opaque on purpose: consumers ask the table, they do
 /// not do arithmetic on ids.
@@ -147,6 +191,10 @@ pub const Resolved = struct {
     allocator: std.mem.Allocator,
     table: Table = .{},
     exprs: std.AutoHashMapUnmanaged(ExprKey, Entry) = .empty,
+    /// Spellings of nominal declarations, owned here so `ResolvedType` can
+    /// carry an identity instead of a string. Entries are borrowed slices of
+    /// source text, which outlive the table within one request.
+    names: std.ArrayList([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Resolved {
         return .{ .allocator = allocator };
@@ -155,6 +203,25 @@ pub const Resolved = struct {
     pub fn deinit(self: *Resolved) void {
         self.exprs.deinit(self.allocator);
         self.table.deinit(self.allocator);
+        self.names.deinit(self.allocator);
+    }
+
+    pub fn internName(self: *Resolved, name: []const u8) !NameId {
+        for (self.names.items, 0..) |existing, index| {
+            if (std.mem.eql(u8, existing, name)) return .{ .value = @intCast(index) };
+        }
+        try self.names.append(self.allocator, name);
+        return .{ .value = @intCast(self.names.items.len - 1) };
+    }
+
+    pub fn nominal(self: *Resolved, name: []const u8) !ResolvedType {
+        return .{ .nominal = try self.internName(name) };
+    }
+
+    /// The MC spelling of a resolved type: structural for a scalar, the
+    /// interned declaration name for a nominal.
+    pub fn spelling(self: Resolved, ty: ResolvedType) []const u8 {
+        return ty.scalarSpelling() orelse self.names.items[ty.nominal.value];
     }
 
     pub fn record(self: *Resolved, span: ast.Span, ty: ResolvedType) !void {
@@ -243,16 +310,16 @@ test "resolved scalar types intern structurally" {
 
 test "literal scalar rule covers suffixed, unsuffixed, bool and void" {
     const span: ast.Span = .{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    try std.testing.expectEqualStrings("u32", integerOfLiteral("7").spelling());
-    try std.testing.expectEqualStrings("i64", integerOfLiteral("7_i64").spelling());
-    try std.testing.expectEqualStrings("usize", integerOfLiteral("7_usize").spelling());
+    try std.testing.expectEqualStrings("u32", integerOfLiteral("7").scalarSpelling().?);
+    try std.testing.expectEqualStrings("i64", integerOfLiteral("7_i64").scalarSpelling().?);
+    try std.testing.expectEqualStrings("usize", integerOfLiteral("7_usize").scalarSpelling().?);
     try std.testing.expect(suffixedIntegerOfLiteral("7") == null);
 
     const bool_expr: ast.Expr = .{ .span = span, .kind = .{ .bool_literal = true } };
-    try std.testing.expectEqualStrings("bool", scalarOfLiteral(bool_expr).?.spelling());
+    try std.testing.expectEqualStrings("bool", scalarOfLiteral(bool_expr).?.scalarSpelling().?);
 
     const void_expr: ast.Expr = .{ .span = span, .kind = .void_literal };
-    try std.testing.expectEqualStrings("void", scalarOfLiteral(void_expr).?.spelling());
+    try std.testing.expectEqualStrings("void", scalarOfLiteral(void_expr).?.scalarSpelling().?);
 
     const ident_expr: ast.Expr = .{ .span = span, .kind = .{ .ident = .{ .text = "x", .span = span } } };
     try std.testing.expect(scalarOfLiteral(ident_expr) == null);

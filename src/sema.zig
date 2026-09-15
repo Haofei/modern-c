@@ -3776,16 +3776,54 @@ pub const Checker = struct {
     /// back instead of inferring it a second time. Only the scalar-literal
     /// slice is modelled structurally so far; everything else is skipped and
     /// the builder keeps its existing path.
-    fn recordResolvedType(self: *Checker, expr: ast.Expr) void {
+    fn recordResolvedType(self: *Checker, expr: ast.Expr, ctx: Context) void {
         const resolved = self.resolved_types orelse return;
-        const ty = sema_types.scalarOfLiteral(expr) orelse return;
+        const ty = self.resolvedTypeOfExpr(resolved, expr, ctx) orelse return;
         resolved.record(expr.span, ty) catch {
             self.oom = true;
         };
     }
 
+    fn resolvedTypeOfExpr(self: *Checker, resolved: *sema_types.Resolved, expr: ast.Expr, ctx: Context) ?sema_types.ResolvedType {
+        return switch (expr.kind) {
+            .bool_literal, .void_literal, .int_literal => sema_types.scalarOfLiteral(expr),
+            // A local, parameter, or global: its declared type, as the scope
+            // or the global registry already resolved it.
+            .ident => |ident| blk: {
+                const declared = identDeclaredType(ident.text, ctx) orelse break :blk null;
+                break :blk self.resolvedTypeOfDeclared(resolved, declared, ctx);
+            },
+            else => null,
+        };
+    }
+
+    /// Classify a declared type expression into the resolved-type vocabulary.
+    ///
+    /// Only the two shapes the table models are recorded: a builtin scalar,
+    /// and a simple name that denotes a struct, enum, tagged union, or type
+    /// alias. Pointers, slices, arrays, optionals, generics, and qualified
+    /// types are left unrecorded, and their consumers keep their existing
+    /// path.
+    ///
+    /// A type alias is deliberately recorded under the name as written rather
+    /// than resolved to its target: the alias spelling is what reaches the C
+    /// and LLVM type emitters, so collapsing it here would change generated
+    /// output, which this pass does not do.
+    fn resolvedTypeOfDeclared(self: *Checker, resolved: *sema_types.Resolved, declared: ast.TypeExpr, ctx: Context) ?sema_types.ResolvedType {
+        const name = switch (declared.kind) {
+            .name => |node| node.text,
+            else => return null,
+        };
+        if (sema_types.scalarByName(name)) |scalar| return scalar;
+        if (!isNominalTypeName(name, ctx)) return null;
+        return resolved.nominal(name) catch {
+            self.oom = true;
+            return null;
+        };
+    }
+
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
-        self.recordResolvedType(expr);
+        self.recordResolvedType(expr, ctx);
         return switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
             .await_expr => unreachable,
@@ -9783,6 +9821,35 @@ fn arithmeticBinaryType(node: anytype, ctx: Context) ?ast.TypeExpr {
     // For a shift, the result type is the left (shifted) operand's type.
     if (node.op == .shl or node.op == .shr) return exprResultType(node.left.*, ctx);
     return exprResultType(node.left.*, ctx) orelse exprResultType(node.right.*, ctx);
+}
+
+/// The declared type of an identifier: the in-scope binding (local or
+/// parameter) if there is one, otherwise the global registry's entry. This is
+/// the same lookup `exprStorageType` performs for `.ident`; it is factored out
+/// so the resolved-type recorder can use it without duplicating the rule.
+fn identDeclaredType(name: []const u8, ctx: Context) ?ast.TypeExpr {
+    if (ctx.scope) |scope| {
+        if (scope.get(name)) |entry| return entry.ty;
+    }
+    return globalType(name, ctx);
+}
+
+/// Whether a simple type name denotes a declaration this table can refer to by
+/// identity: a struct, enum, tagged union, or type alias.
+fn isNominalTypeName(name: []const u8, ctx: Context) bool {
+    if (ctx.structs) |structs| {
+        if (structs.contains(name)) return true;
+    }
+    if (ctx.enums) |enums| {
+        if (enums.contains(name)) return true;
+    }
+    if (ctx.tagged_unions) |unions| {
+        if (unions.contains(name)) return true;
+    }
+    if (ctx.type_aliases) |aliases| {
+        if (aliases.contains(name)) return true;
+    }
+    return false;
 }
 
 fn globalType(name: []const u8, ctx: Context) ?ast.TypeExpr {

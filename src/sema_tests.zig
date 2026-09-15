@@ -3587,3 +3587,65 @@ test "sema records resolved scalar literal types for the MIR builder" {
     try std.testing.expect(saw_i64);
     try std.testing.expect(saw_u32);
 }
+
+test "sema records identifier types for scalars and nominal declarations" {
+    const source =
+        \\struct Point { x: u32, y: u32 }
+        \\enum Mode { idle, busy }
+        \\type Word = u32;
+        \\fn use(p: Point, m: Mode, w: Word, flag: bool, ptr: *const u32) -> bool {
+        \\    let a = p;
+        \\    let b = m;
+        \\    let c = w;
+        \\    let d = flag;
+        \\    let e = ptr;
+        \\    return d;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "resolved_idents.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    // A nominal type is carried as an identity into the table's own name
+    // table, not as a string inside the type.
+    var saw_point = false;
+    var saw_mode = false;
+    var saw_word = false;
+    var saw_bool = false;
+    for (resolved.table.types.items) |ty| {
+        const name = resolved.spelling(ty);
+        if (ty == .nominal and std.mem.eql(u8, name, "Point")) saw_point = true;
+        if (ty == .nominal and std.mem.eql(u8, name, "Mode")) saw_mode = true;
+        if (ty == .nominal and std.mem.eql(u8, name, "Word")) saw_word = true;
+        if (ty == .boolean) saw_bool = true;
+    }
+    try std.testing.expect(saw_point);
+    try std.testing.expect(saw_mode);
+    // A type alias is recorded as written, not collapsed to its target: the
+    // alias spelling is what reaches the backends' type emitters.
+    try std.testing.expect(saw_word);
+    try std.testing.expect(saw_bool);
+
+    // A pointer type is not a shape this table models, so nothing is recorded
+    // for it and its consumers keep their existing path.
+    for (resolved.table.types.items) |ty| {
+        try std.testing.expect(ty != .nominal or !std.mem.eql(u8, resolved.spelling(ty), "ptr"));
+    }
+}

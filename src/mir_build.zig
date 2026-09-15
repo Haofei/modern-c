@@ -15124,7 +15124,7 @@ pub const FunctionBuilder = struct {
     /// not a second implementation living in the builder.
     fn scalarLiteralTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         const resolved = self.resolvedScalarType(expr) orelse return null;
-        return ast_query.simpleNameType(resolved.spelling(), expr.span);
+        return ast_query.simpleNameType(resolved.scalarSpelling().?, expr.span);
     }
 
     fn resolvedScalarType(self: *FunctionBuilder, expr: ast.Expr) ?sema_types.ResolvedType {
@@ -18299,9 +18299,38 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// The declared type of an identifier occurrence.
+    ///
+    /// Sema resolved this while checking -- the scope binding for a local or
+    /// parameter, the global registry entry otherwise -- and recorded it
+    /// against this occurrence's span. Where the table answers it is the
+    /// authority, and the builder does not consult its own name maps for the
+    /// type.
+    ///
+    /// Those maps remain because the table models only builtin scalars and
+    /// simple nominal names; pointers, slices, arrays, optionals, generics
+    /// and qualified types are still answered here. In debug builds the two
+    /// are cross-checked wherever both answer.
+    fn identTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        const ident = switch (expr.kind) {
+            .ident => |node| node,
+            else => return null,
+        };
+        const declared = self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text);
+        const table = self.resolved_types orelse return declared;
+        const recorded = table.lookup(expr.span) orelse return declared;
+        const spelling = table.spelling(recorded);
+        if (declared) |own| {
+            // A disagreement on a shape the table models is a bug in the
+            // handoff, not a tie to break silently.
+            if (ast_query.typeName(own)) |own_name| std.debug.assert(std.mem.eql(u8, own_name, spelling));
+        }
+        return ast_query.simpleNameType(spelling, expr.span);
+    }
+
     fn typeExprForExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .ident => |ident| self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text),
+            .ident => self.identTypeExpr(expr),
             .member => |node| self.memberTypeExpr(node, expr.span),
             .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
                 self.reflectionOrByteViewCallTypeExpr(node) orelse
