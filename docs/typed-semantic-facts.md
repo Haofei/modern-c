@@ -16,11 +16,13 @@ source ──► parser ──► AST
                        │
                        ▼
                     sema.zig                 resolves names, types, effects,
-                       │                     ownership, and safety policy
-                       ▼
+                       │    │                ownership, and safety policy
+                       │    └──► sema_types.Resolved   interned resolved types,
+                       │              │                keyed by expression
+                       ▼              │
              CheckedProgram (syntax-free)    callable/global/signature facts
-                       │
-                       ▼
+                       │              │
+                       ▼              ▼
                    MIR builder               blocks, instructions, typed facts
                        │
                        ▼
@@ -49,21 +51,58 @@ Typed:
 
 Not yet typed — the honest list:
 
-- **Sema does not produce a typed program.** `src/sema.zig` exposes queries such
-  as `exprResultType(expr, ctx) ?ast.TypeExpr`, so the type representation is
-  still syntax. `src/mir.zig` is built straight from the AST via
-  `buildOptFromDecls(decls)` and re-derives types; it does not import `sema.zig`.
 - **MIR carries two body representations.** `Function.blocks[].instructions`
   is a `kind` enum plus a `detail: []const u8` string, alongside the typed
   `executable_body`. The verifier still string-compares `instruction.detail`.
 - **`ValueType` is stringly typed** (`integer: []const u8`, `struct_: []const u8`)
   and mirrored by parallel `TypeId` / `SignatureTypeId` fields; `Instruction`
   carries both `result_ty: ValueType` and `typed_result_ty: TypeId`.
-- **Facts are joined by `SpanId`** across ~31 `*Fact` tables rather than hanging
+- **Facts are joined by `SpanId`** across 31 `*Fact` tables rather than hanging
   off typed nodes.
 
-Closing these is the remaining work. It is tracked in
-[`refactoring-plan.md`](refactoring-plan.md), not here.
+## The sema-to-MIR handoff
+
+Sema used to answer every type question with an `ast.TypeExpr` — syntax — and
+the MIR builder re-derived the same answers from the AST. One judgement, two
+implementations, free to drift.
+
+`src/sema_types.zig` is the replacement: a structurally interned
+`ResolvedType` table (an integer is a signedness plus a width, not the string
+`"u32"`), plus an expression → `TypeId` side table the checker fills during its
+walk. `CompilationSession` owns it for a request and hands it to the builder
+through `BuildOptions.resolved_types`. Where it answers, it is the authority;
+the builder does not infer.
+
+| Expression form | Type authority | Notes |
+|---|---|---|
+| `int_literal`, `bool_literal`, `void_literal` | sema table | The literal→scalar rule has one implementation, in `sema_types.zig`. |
+| identifier (local, param, global) | sema table | Only when the declared type is a builtin scalar or a simple nominal name. |
+| comparison / `&&` / `\|\|` / `!` | sema table | Always `bool`; four restatements in `mir_build.zig` were deleted. |
+| direct call return | sema table | Bare-identifier callee, no type args, declared function; read at the same fallback position where sema's own chain lands. |
+| arithmetic / bitwise binary, unary `-` | builder | Result is an operand's type; sema and the builder consult different fallbacks when neither operand carries one. |
+| member, index, slice, deref, cast, `try`, `address_of` | builder | Not modelled by the table yet. |
+| intrinsic calls (atomic, MMIO, DMA, reflection, bitcast, conversion, `const_get`, dyn dispatch) | builder | Each has its own rule on both sides; the table must not answer where the chains could diverge. |
+| pointer, slice, array, optional, generic, qualified types | builder | `ResolvedType` models scalars and nominal identities only. |
+
+Two limitations worth naming:
+
+- **Nominal types are interned by name, not by symbol id.** Sema has no
+  symbol-id table — its scopes and registries are keyed by name — so
+  `ResolvedType.nominal` is a dense index into a name table the `Resolved`
+  owns. That keeps the spelling out of the type, but it is a stopgap for a real
+  `SymbolId`/`DefId`. A type alias is recorded as written rather than resolved
+  to its target, because the alias spelling is what reaches the C and LLVM type
+  emitters.
+- **Expression identity is the source span.** `ast.Expr` carries no node id.
+  Giving it one is not cheap: `parser.zig` alone produces expressions at ~69
+  anonymous literal sites with no constructor to funnel through, and
+  `monomorphize.zig`, `eval.zig`, `sema_move.zig`, `ast_query.zig` and
+  `signature_type_materializer.zig` synthesize more. A copied node would also
+  duplicate its id exactly as it duplicates its span, so a naive `NodeId` would
+  not fix the ambiguity the span key has. Where one span resolves two ways the
+  entry stops answering and the builder falls back, so the key fails closed.
+
+The rest is tracked in [`refactoring-plan.md`](refactoring-plan.md).
 
 ## The rule
 

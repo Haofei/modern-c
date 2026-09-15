@@ -7,16 +7,18 @@
 //! judgement drift. The fix is for sema to resolve once, into a
 //! representation that is not syntax, and for MIR to read it.
 //!
-//! Scope of this slice, deliberately small and complete rather than broad and
-//! scaffolded: the scalar literal result types (`int_literal`, `bool_literal`,
-//! `void_literal`). For those, `ResolvedType` is structural — an integer is a
-//! signedness plus a width, not the string "u32" — and `scalarOfLiteral` below
-//! is the single implementation of the rule. Sema records it during its walk;
-//! the MIR builder reads the recording. Neither has its own copy.
+//! What the table answers today: scalar literal results, identifier types
+//! (locals, parameters, globals) whose declared type is a builtin scalar or a
+//! simple nominal name, the `bool` result of comparison/logical/`!` operators,
+//! and the declared return type of an ordinary direct call. Scalars are fully
+//! structural — an integer is a signedness plus a width, not the string "u32".
 //!
 //! Everything sema resolves that this table does not yet model structurally is
 //! simply absent: `lookup` returns null and the caller keeps its existing
 //! path. The table is authoritative where it answers, never a second guess.
+//! `docs/typed-semantic-facts.md` has the full split and the two known
+//! limitations (nominal types interned by name rather than symbol id, and
+//! expression identity keyed by source span).
 
 const std = @import("std");
 
