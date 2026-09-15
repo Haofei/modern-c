@@ -12201,6 +12201,30 @@ pub const FunctionBuilder = struct {
     // extraction already own their payload type facts. Mirror each established
     // return type into the destination local so neither backend has to
     // rediscover a type merely to allocate an unannotated binding.
+    /// The declared return type of an ordinary direct call.
+    ///
+    /// Sema resolved the callee and recorded its return type against the
+    /// callee identifier's span; where the table answers it is the authority.
+    /// The function-summary lookup remains for the shapes the table does not
+    /// model -- pointers, slices, arrays, optionals, generics, qualified
+    /// types -- and, in debug builds, cross-checks the table wherever both
+    /// answer.
+    ///
+    /// This sits after every intrinsic branch in `inferredLocalCallType`, the
+    /// same place sema's own chain falls through to its direct-call rule, so
+    /// the two layers cannot land on different rules for one call.
+    fn directCallReturnTypeExpr(self: *FunctionBuilder, callee_expr: ast.Expr, callee: []const u8) ?ast.TypeExpr {
+        const summary = self.summaries.get(callee);
+        const declared = if (summary) |found| found.return_type_expr else null;
+        const table = self.resolved_types orelse return declared;
+        const recorded = table.lookup(callee_expr.span) orelse return declared;
+        const spelling = table.spelling(recorded);
+        if (declared) |own| {
+            if (ast_query.typeName(own)) |own_name| std.debug.assert(std.mem.eql(u8, own_name, spelling));
+        }
+        return ast_query.simpleNameType(spelling, callee_expr.span);
+    }
+
     fn inferredLocalCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
         if (self.qualifiedUnionConstructorTypeExpr(call)) |ty| return ty;
         if (self.dynDispatchCallTarget(call)) |target| return target.result_type_expr;
@@ -12228,7 +12252,7 @@ pub const FunctionBuilder = struct {
             else => unreachable,
         };
         if (directCalleeName(call.callee.*)) |callee| {
-            if (self.summaries.get(callee)) |summary| return summary.return_type_expr;
+            if (self.directCallReturnTypeExpr(call.callee.*, callee)) |ty| return ty;
         }
         const target = self.indirectCallTarget(call) orelse return null;
         return target.result_type_expr;
@@ -15138,6 +15162,22 @@ pub const FunctionBuilder = struct {
         return recorded;
     }
 
+    /// The result type of a comparison, logical, or logical-not operator.
+    ///
+    /// The rule is `bool` whatever the operands are, and sema already recorded
+    /// that; read it. With no recording -- MIR built without a preceding
+    /// check -- the same constant answer is produced directly, which is the
+    /// rule itself rather than a second inference.
+    fn booleanOperatorTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ast.TypeExpr {
+        if (self.resolved_types) |table| {
+            if (table.lookup(expr.span)) |recorded| {
+                std.debug.assert(recorded.eql(.boolean));
+                return ast_query.simpleNameType(table.spelling(recorded), expr.span);
+            }
+        }
+        return ast_query.simpleNameType("bool", expr.span);
+    }
+
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
@@ -15157,13 +15197,13 @@ pub const FunctionBuilder = struct {
             .borrow_expr => |node| try self.inferredLocalAddressTypeExpr(expr.span, node.value.*),
             .deref => |inner| self.directAddressDerefTypeExpr(inner.*) orelse self.assignment_target_type_expr,
             .unary => |node| if (node.op == .logical_not)
-                ast_query.simpleNameType("bool", expr.span)
+                self.booleanOperatorTypeExpr(expr)
             else
                 self.knownExpressionResultTypeExpr(node.expr.*) orelse
                     self.assignment_target_type_expr orelse
                     (try self.expressionResultTypeExpr(node.expr.*)),
             .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
-                ast_query.simpleNameType("bool", expr.span)
+                self.booleanOperatorTypeExpr(expr)
             else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
                 self.knownExpressionResultTypeExpr(node.left.*) orelse
                     self.knownExpressionResultTypeExpr(node.right.*) orelse
@@ -18111,11 +18151,11 @@ pub const FunctionBuilder = struct {
             .bool_literal => ast_query.simpleNameType("bool", expr.span),
             .grouped => |inner| self.explicitCastSourceTypeExpr(inner.*, target_ty),
             .unary => |node| if (node.op == .logical_not)
-                ast_query.simpleNameType("bool", expr.span)
+                self.booleanOperatorTypeExpr(expr)
             else
                 self.explicitCastSourceTypeExpr(node.expr.*, target_ty),
             .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op))
-                ast_query.simpleNameType("bool", expr.span)
+                self.booleanOperatorTypeExpr(expr)
             else
                 self.typeExprForExpr(node.left.*) orelse
                     self.typeExprForExpr(node.right.*) orelse

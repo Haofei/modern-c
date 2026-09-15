@@ -3649,3 +3649,46 @@ test "sema records identifier types for scalars and nominal declarations" {
         try std.testing.expect(ty != .nominal or !std.mem.eql(u8, resolved.spelling(ty), "ptr"));
     }
 }
+
+test "sema records boolean operator results and direct call return types" {
+    const source =
+        \\fn width() -> u16 { return 3_u16; }
+        \\fn compare(a: u32, b: u32) -> bool {
+        \\    let less = a < b;
+        \\    let negated = !less;
+        \\    let w = width();
+        \\    return less && negated && w == 3_u16;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "resolved_ops.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    var saw_bool = false;
+    var saw_u16 = false;
+    for (resolved.table.types.items) |ty| {
+        if (ty.eql(.boolean)) saw_bool = true;
+        if (ty.eql(.{ .integer = .{ .signed = false, .width = .w16 } })) saw_u16 = true;
+    }
+    // `a < b`, `!less` and `&&` all resolve to bool; `width()` contributes the
+    // declared u16 return type, recorded against the callee's span.
+    try std.testing.expect(saw_bool);
+    try std.testing.expect(saw_u16);
+}

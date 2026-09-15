@@ -3793,7 +3793,46 @@ pub const Checker = struct {
                 const declared = identDeclaredType(ident.text, ctx) orelse break :blk null;
                 break :blk self.resolvedTypeOfDeclared(resolved, declared, ctx);
             },
+            // A comparison or logical operator yields `bool` whatever its
+            // operands are. That is the whole rule, so it belongs here rather
+            // than being restated in the builder. The arithmetic and bitwise
+            // operators are not recorded: their result is an operand's type,
+            // and sema and the builder walk their operands in a different
+            // order when neither operand carries one.
+            .binary => |node| if (isComparisonBinary(node.op) or isLogicalBinary(node.op))
+                .boolean
+            else
+                null,
+            .unary => |node| if (node.op == .logical_not) .boolean else null,
             else => null,
+        };
+    }
+
+    /// The declared return type of an ordinary direct call, recorded against
+    /// the callee identifier's span.
+    ///
+    /// Only a bare identifier naming a declared function with no type
+    /// arguments is recorded. Every intrinsic and builtin call form -- atomic,
+    /// MMIO, DMA, reflection, bitcast, conversion, const_get, dyn dispatch --
+    /// is resolved by its own rule in both layers, and the table must not
+    /// answer where the two chains could land on different rules.
+    fn recordResolvedCallReturnType(self: *Checker, expr: ast.Expr, ctx: Context) void {
+        const resolved = self.resolved_types orelse return;
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            else => return,
+        };
+        if (call.type_args.len != 0) return;
+        const callee_name = switch (call.callee.*.kind) {
+            .ident => |ident| ident.text,
+            else => return,
+        };
+        const functions = ctx.functions orelse return;
+        if (!functions.contains(callee_name)) return;
+        const return_ty = directCallReturnType(call.callee.*, ctx) orelse return;
+        const ty = self.resolvedTypeOfDeclared(resolved, return_ty, ctx) orelse return;
+        resolved.record(call.callee.*.span, ty) catch {
+            self.oom = true;
         };
     }
 
@@ -3824,6 +3863,7 @@ pub const Checker = struct {
 
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         self.recordResolvedType(expr, ctx);
+        self.recordResolvedCallReturnType(expr, ctx);
         return switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
             .await_expr => unreachable,
