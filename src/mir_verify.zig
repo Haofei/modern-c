@@ -372,7 +372,11 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
             return;
         }
         for (function.access_facts[0..fact_index]) |prior| {
-            if (accessFactTag(prior) == accessFactTag(fact) and accessFactSpanId(prior).eql(accessFactSpanId(fact))) {
+            // One access, one fact. Checked on the access identity: two
+            // synthesized accesses in a generated body share a span but are
+            // not the same access, while a copied fact carries a copied
+            // identity and is still caught.
+            if (prior.accessId().eql(fact.accessId())) {
                 reporter.err(
                     sourcePointSpan(sourcePointForSpanId(function, accessFactSpanId(fact)) orelse .{ .line = 1, .column = 1 }),
                     "E_MIR_ACCESS_FACT: MIR verifier found duplicate resolved access fact",
@@ -403,6 +407,7 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
 }
 
 fn accessFactValid(function: Function, fact: AccessFact) bool {
+    if (!fact.accessId().isValid()) return false;
     const primary_span = accessFactSpanId(fact);
     if (!spanIdValid(function, primary_span)) return false;
     switch (fact) {

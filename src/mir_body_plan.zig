@@ -283,8 +283,11 @@ fn verifyAccessFacts(function: *const mir.Function) !void {
                 }
             },
         }
+        // One access, one fact, checked on the access identity rather than on
+        // a span that a generated body repeats. See `mir.AccessFact`.
+        if (!fact.accessId().isValid()) return error.InvalidAccessFact;
         for (function.access_facts[0..index]) |prior| {
-            if (std.meta.activeTag(prior) == std.meta.activeTag(fact) and accessFactSpanId(prior).eql(primary_span_id)) return error.DuplicateAccessFact;
+            if (prior.accessId().eql(fact.accessId())) return error.DuplicateAccessFact;
         }
     }
     for (function.blocks) |block| for (block.instructions) |instruction| {

@@ -92,6 +92,7 @@ const FunctionSymbolInitializerPlan = mir_model.FunctionSymbolInitializerPlan;
 const GlobalAddressInitializerPlan = mir_model.GlobalAddressInitializerPlan;
 const GlobalInitializerFact = mir_model.GlobalInitializerFact;
 const InstId = mir_model.InstId;
+const AccessId = mir_model.AccessId;
 const Instruction = mir_model.Instruction;
 const IntegerFact = mir_model.IntegerFact;
 const LiteralValue = numeric.LiteralValue;
@@ -5000,6 +5001,9 @@ pub const FunctionBuilder = struct {
     // The identity of the most recently emitted instruction, so a fact
     // appended right after `addInstr` can name it.
     last_inst_id: InstId = .invalid,
+    // Identity counter for resolved access facts, for the same reason: their
+    // one-fact-per-access rule cannot be checked on a span that repeats.
+    next_access_id: usize = 0,
     active_contract: ?[]const u8 = null,
     active_contract_region_id: ?usize = null,
     active_unsafe: bool = false,
@@ -13073,6 +13077,7 @@ pub const FunctionBuilder = struct {
                 try self.access_facts.append(self.allocator, .{ .address_of = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .operand_ty = try self.resolvedAccessValueType(inner.*),
+                    .typed_access_id = self.nextAccessId(),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
                 } });
@@ -13118,6 +13123,7 @@ pub const FunctionBuilder = struct {
                 try self.access_facts.append(self.allocator, .{ .deref = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .operand_ty = try self.resolvedAccessValueType(inner.*),
+                    .typed_access_id = self.nextAccessId(),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
                 } });
@@ -13764,6 +13770,7 @@ pub const FunctionBuilder = struct {
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
                     .index_ty = try self.resolvedAccessValueType(node.index.*),
+                    .typed_access_id = self.nextAccessId(),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .base_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span)),
                     .index_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
@@ -13821,6 +13828,7 @@ pub const FunctionBuilder = struct {
                 try self.access_facts.append(self.allocator, .{ .range_slice = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
+                    .typed_access_id = self.nextAccessId(),
                     .start_ty = try self.resolvedAccessValueType(node.start.*),
                     .end_ty = try self.resolvedAccessValueType(node.end.*),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
@@ -15751,6 +15759,12 @@ pub const FunctionBuilder = struct {
         var source = sourcePointFromSpan(span);
         if (source.file_id == diagnostics.invalid_file_id) source.file_id = self.source_file_id;
         return source;
+    }
+
+    fn nextAccessId(self: *FunctionBuilder) AccessId {
+        const id = AccessId.fromIndex(self.next_access_id);
+        self.next_access_id += 1;
+        return id;
     }
 
     fn internSpanId(self: *FunctionBuilder, source: SourcePoint) !SpanId {

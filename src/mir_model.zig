@@ -45,6 +45,8 @@ pub const BlockId = TypedIndex("BlockId");
 pub const SpanId = TypedIndex("SpanId");
 pub const BodyId = TypedIndex("BodyId");
 pub const InstId = TypedIndex("InstId");
+/// Identity of one resolved access occurrence within a function.
+pub const AccessId = TypedIndex("AccessId");
 pub const ExprId = TypedIndex("ExprId");
 pub const LocalId = TypedIndex("LocalId");
 pub const PlaceId = TypedIndex("PlaceId");
@@ -3305,11 +3307,21 @@ pub const BoundsFact = struct {
 /// structural types and stable source identities: backends do not need an AST
 /// to distinguish an element index, a range slice, address construction, or a
 /// dereference.
+/// A resolved access: an index, a range slice, an address-of, or a deref.
+///
+/// `typed_access_id` is the fact's identity within its function, assigned by
+/// the builder when the access is recorded. One access has exactly one fact,
+/// and that is checked on the identity rather than on the source span,
+/// because a span is not unique: the async transform stamps one function-name
+/// span onto every node it synthesizes, so a generated body holds several
+/// distinct `&self.field` accesses that all report the same span. Copying a
+/// fact copies its identity, so a duplicated fact is still caught.
 pub const AccessFact = union(enum) {
     index: struct {
         result_ty: ValueType,
         base_ty: ValueType,
         index_ty: ValueType,
+        typed_access_id: AccessId = .invalid,
         typed_span_id: SpanId,
         base_span_id: SpanId,
         index_span_id: SpanId,
@@ -3319,6 +3331,7 @@ pub const AccessFact = union(enum) {
         base_ty: ValueType,
         start_ty: ValueType,
         end_ty: ValueType,
+        typed_access_id: AccessId = .invalid,
         typed_span_id: SpanId,
         base_span_id: SpanId,
         start_span_id: SpanId,
@@ -3327,15 +3340,23 @@ pub const AccessFact = union(enum) {
     address_of: struct {
         result_ty: ValueType,
         operand_ty: ValueType,
+        typed_access_id: AccessId = .invalid,
         typed_span_id: SpanId,
         operand_span_id: SpanId,
     },
     deref: struct {
         result_ty: ValueType,
         operand_ty: ValueType,
+        typed_access_id: AccessId = .invalid,
         typed_span_id: SpanId,
         operand_span_id: SpanId,
     },
+
+    pub fn accessId(self: AccessFact) AccessId {
+        return switch (self) {
+            inline else => |access| access.typed_access_id,
+        };
+    }
 };
 
 pub const IntegerFact = struct {

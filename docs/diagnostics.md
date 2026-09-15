@@ -157,7 +157,7 @@ Total codes: **283**.
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:3531` |
 | `E_MAYBEUNINIT_RESOURCE_PAYLOAD` | MaybeUninit cannot store \`move\`/\`linear\`, \`region\`, or \`view struct\` payloads; use an ownership-aware resource container instead | `src/sema.zig:4919` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:4576` |
-| `E_MIR_ACCESS_FACT` | MIR verifier found duplicate resolved access fact<br>MIR verifier found index instruction without resolved access fact<br>MIR verifier found malformed resolved access fact | `src/mir_verify.zig:369`<br>`src/mir_verify.zig:378`<br>`src/mir_verify.zig:397` |
+| `E_MIR_ACCESS_FACT` | MIR verifier found duplicate resolved access fact<br>MIR verifier found index instruction without resolved access fact<br>MIR verifier found malformed resolved access fact | `src/mir_verify.zig:369`<br>`src/mir_verify.zig:382`<br>`src/mir_verify.zig:401` |
 | `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:622` |
 | `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir_verify.zig:355` |
 | `E_MIR_OWNERSHIP_EVENT` | MIR verifier found inconsistent ownership event sequence<br>MIR verifier found malformed ownership event | `src/mir_cleanup_cfg.zig:852`<br>`src/mir_cleanup_cfg.zig:859` |
