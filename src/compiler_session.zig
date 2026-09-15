@@ -11,6 +11,7 @@ const loader = @import("loader.zig");
 const mangle_private = @import("mangle_private.zig");
 const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
+const parser = @import("parser.zig");
 const monomorphize = @import("monomorphize.zig");
 const sema = @import("sema.zig");
 const sema_types = @import("sema_types.zig");
@@ -206,7 +207,10 @@ pub const CompilationSession = struct {
         const decls = try program.astDecls(allocator);
         defer allocator.free(decls);
         self.checkDecls(decls, program.visibility_mode, program.qualified_owners, diag, optimize);
-        if (diag.has_errors) return failure_error;
+        if (diag.has_errors) {
+            diag.render();
+            return failure_error;
+        }
     }
 
     fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {
@@ -236,10 +240,19 @@ pub const CompilationSession = struct {
         module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize, .resolved_types = self.resolvedTypeTable() });
         errdefer module_mir.deinit();
         const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
-            if (diag.has_errors) return failure_error;
+            // A stage that recorded diagnostics owns showing them. Returning
+            // the bare stage failure here is what used to make `mcc emit-c`
+            // exit 1 with nothing on stdout or stderr.
+            if (diag.has_errors) {
+                diag.render();
+                return failure_error;
+            }
             return err;
         };
-        if (diag.has_errors) return failure_error;
+        if (diag.has_errors) {
+            diag.render();
+            return failure_error;
+        }
         return program;
     }
 
@@ -254,10 +267,19 @@ pub const CompilationSession = struct {
         module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize, .resolved_types = self.resolvedTypeTable() });
         errdefer module_mir.deinit();
         const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
-            if (diag.has_errors) return failure_error;
+            // A stage that recorded diagnostics owns showing them. Returning
+            // the bare stage failure here is what used to make `mcc emit-c`
+            // exit 1 with nothing on stdout or stderr.
+            if (diag.has_errors) {
+                diag.render();
+                return failure_error;
+            }
             return err;
         };
-        if (diag.has_errors) return failure_error;
+        if (diag.has_errors) {
+            diag.render();
+            return failure_error;
+        }
         return program;
     }
 
@@ -349,4 +371,52 @@ test "CompilationSession diagnostic stage failures use a bounded error set" {
     };
     comptime std.debug.assert(@TypeOf(allowed[0]) == StageFailure);
     try std.testing.expectEqual(@as(usize, 8), allowed.len);
+}
+
+test "a failing stage shows its diagnostics instead of exiting in silence" {
+    // `mcc emit-c` used to exit 1 with nothing on stdout or stderr: a stage
+    // recorded diagnostics, returned its bounded stage failure, and no one
+    // rendered them. A stage that fails with diagnostics must show them.
+    const source =
+        \\fn broken() -> u32 {
+        \\    return missing_symbol;
+        \\}
+    ;
+    diagnostics.resetRenderedAnyForTest();
+    defer diagnostics.resetRenderedAnyForTest();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "silent_stage.mc", source);
+    defer reporter.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var session = CompilationSession.init(std.testing.allocator, std.testing.io);
+    defer session.deinit();
+
+    const program = module_parser.ResolvedProgram{
+        .decls = try arena.allocator().alloc(module_parser.ResolvedDecl, module.decls.len),
+        .visibility_mode = module.visibility_mode,
+        .qualified_owners = module.qualified_owners,
+    };
+    for (module.decls, 0..) |decl, index| {
+        program.decls[index] = .{
+            .def_id = .{ .file_id = 0, .ordinal = @intCast(index) },
+            .file_id = @enumFromInt(0),
+            .decl = decl,
+        };
+    }
+
+    try std.testing.expectError(
+        error.CheckFailed,
+        session.checkResolvedProgram(program, arena.allocator(), &reporter, false, error.CheckFailed),
+    );
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(reporter.rendered);
+    try std.testing.expect(diagnostics.renderedAny());
 }

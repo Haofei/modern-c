@@ -92,6 +92,30 @@ pub fn integerLiteralFitsTarget(target_ty: ValueType, expr: ast.Expr) bool {
     return mirCheckedIntBounds(target_ty) != null and integerLiteralRangeFinding(target_ty, expr) == null;
 }
 
+/// Whether an integer literal is admissible in an arithmetic-domain target.
+///
+/// A domain (`wrap<T>`, `sat<T>`) changes what overflow *does* at runtime, not
+/// what a literal can denote, so a literal fits `sat<u8>` exactly when it fits
+/// `u8`. Sema already reads it that way -- it rejects `let x: sat<u8> = 300`
+/// with E_INTEGER_LITERAL_OUT_OF_RANGE and accepts `250` -- and MIR's
+/// conversion check disagreed, rejecting the accepted case as an invalid
+/// implicit conversion.
+///
+/// This is deliberately separate from `integerLiteralFitsTarget`: it answers
+/// the admissibility question for the conversion check without also making the
+/// literal produce an integer-literal fact, whose consumers model only plain
+/// fixed-width targets.
+pub fn integerLiteralFitsDomainTarget(target_ty: ValueType, expr: ast.Expr) bool {
+    const shape = switch (target_ty) {
+        .domain_integer => |domain| domain,
+        else => return false,
+    };
+    const value = integerLiteralValue(expr) orelse return false;
+    const bounds = checkedIntBoundsByName(shape.child) orelse return false;
+    if (value.negative) return bounds.signed and value.magnitude <= bounds.min_abs;
+    return value.magnitude <= bounds.max;
+}
+
 fn mirCheckedIntBounds(ty: ValueType) ?IntBounds {
     return switch (ty) {
         .integer => |name| checkedIntBoundsByName(name),

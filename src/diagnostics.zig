@@ -61,6 +61,23 @@ pub const SourceLine = struct {
     highlight_len: usize,
 };
 
+/// Whether any reporter in this process has printed a diagnostic.
+///
+/// The CLI uses this to keep a promise the error plumbing cannot make on its
+/// own: a non-zero exit always tells the user something. A stage that fails
+/// after recording diagnostics but before rendering them would otherwise exit
+/// 1 in silence.
+var rendered_any: bool = false;
+
+pub fn renderedAny() bool {
+    return rendered_any;
+}
+
+/// Test-only: forget what this process has printed.
+pub fn resetRenderedAnyForTest() void {
+    rendered_any = false;
+}
+
 pub const Reporter = struct {
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -69,6 +86,8 @@ pub const Reporter = struct {
     owned_source_views: std.ArrayList(SourceView) = .empty,
     diagnostics: std.ArrayList(Diagnostic),
     has_errors: bool = false,
+    /// Set by `render`, so rendering twice prints once.
+    rendered: bool = false,
     diagnostic_oom: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8, source: []const u8) Reporter {
@@ -182,7 +201,16 @@ pub const Reporter = struct {
         self.diagnostic_oom = true;
     }
 
+    /// Print every recorded diagnostic.
+    ///
+    /// Rendering is idempotent: a stage that already rendered can be wrapped
+    /// by a caller that renders on failure without printing twice. It also
+    /// records, process-wide, that the user has been told something, so the
+    /// CLI can guarantee no non-zero exit is silent (see `renderedAny`).
     pub fn render(self: *Reporter) void {
+        if (self.rendered) return;
+        self.rendered = true;
+        if (self.diagnostics.items.len != 0) rendered_any = true;
         for (self.diagnostics.items) |diag| {
             const severity = switch (diag.severity) {
                 .error_ => "error",
@@ -584,4 +612,31 @@ test "Reporter uses per-file source views for diagnostics and notes" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"text\":\"    missing;\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"root.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"text\":\"fn root() -> void {}\"") != null);
+}
+
+test "rendering is idempotent and records that the user was told something" {
+    resetRenderedAnyForTest();
+    defer resetRenderedAnyForTest();
+    try std.testing.expect(!renderedAny());
+
+    const source = "fn root() -> void {}\n";
+    var reporter = Reporter.init(std.testing.allocator, "silent.mc", source);
+    defer reporter.deinit();
+
+    // Nothing recorded: rendering says nothing and claims nothing.
+    reporter.render();
+    try std.testing.expect(!renderedAny());
+
+    reporter.rendered = false;
+    reporter.err(.{ .offset = 3, .len = 4, .line = 1, .column = 4 }, "E_TEST: recorded but not yet shown", .{});
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(!renderedAny());
+
+    reporter.render();
+    try std.testing.expect(renderedAny());
+    try std.testing.expect(reporter.rendered);
+
+    // A second render is a no-op, so a stage that renders and a caller that
+    // renders on failure cannot print the same diagnostic twice.
+    reporter.render();
 }

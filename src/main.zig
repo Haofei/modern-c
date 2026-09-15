@@ -134,7 +134,13 @@ fn stdinLoaderRootPath(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
 
 pub fn main(init: std.process.Init) !void {
     runMain(init) catch |err| {
-        if (isExpectedCliFailure(err)) std.process.exit(1);
+        if (isExpectedCliFailure(err)) {
+            // A non-zero exit must always say something. Stages render their
+            // own diagnostics; this is the backstop for a failure that
+            // carried none, so the CLI never exits 1 in silence.
+            if (!diagnostics.renderedAny()) std.debug.print("error: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        }
         return err;
     };
 }

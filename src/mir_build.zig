@@ -212,6 +212,7 @@ const genericTypeExpr = mir_facade.genericTypeExpr;
 const hasAttr = mir_verify_util.hasAttr;
 const integerFactLiteralText = mir_facade.integerFactLiteralText;
 const integerLiteralFitsTarget = mir_type.integerLiteralFitsTarget;
+const integerLiteralFitsDomainTarget = mir_type.integerLiteralFitsDomainTarget;
 const integerLiteralRangeFinding = mir_type.integerLiteralRangeFinding;
 const integerLiteralTypeExpr = mir_facade.integerLiteralTypeExpr;
 const integerLiteralValue = numeric.integerLiteralValue;
@@ -16082,6 +16083,9 @@ pub const FunctionBuilder = struct {
             // `(TypeId, SpanId, literal)` pair here as well.
             return;
         }
+        // An in-range literal into an arithmetic domain is not an implicit
+        // conversion; see `integerLiteralFitsDomainTarget`.
+        if (integerLiteralFitsDomainTarget(target_ty, expr)) return;
         if (self.packedBitsRawInitializerFits(target_ty, source_ty, expr)) return;
         if (addressClassMismatch(target_ty, source_ty)) |source_class| {
             const target_class = switch (target_ty) {

@@ -81,7 +81,7 @@ Total codes: **283**.
 | `E_C_VOID_NO_LAYOUT` | c_void has no fields in MC<br>c_void has no size or alignment in MC<br>c_void has no size or layout in MC; use pointers to c_void at FFI boundaries | `src/mir_verify_util.zig:185`<br>`src/sema.zig:4457`<br>`src/sema.zig:4578`<br>`src/sema.zig:6133` |
 | `E_DECLASSIFY_NOT_SECRET` | declassify/reveal applies only to a Secret&lt;T&gt; value | `src/sema.zig:5481` |
 | `E_DEFER_CONTROL_FLOW` | defer is lexical cleanup and must not alter control flow | `src/sema.zig:3416` |
-| `E_DIAGNOSTIC_OOM` | compiler diagnostic allocation failed | `src/diagnostics.zig:232`<br>`src/diagnostics.zig:330`<br>`src/diagnostics.zig:550` |
+| `E_DIAGNOSTIC_OOM` | compiler diagnostic allocation failed | `src/diagnostics.zig:260`<br>`src/diagnostics.zig:358`<br>`src/diagnostics.zig:578` |
 | `E_DMA_ADDR_DEREF` | _see source_ | `src/mir_verify_util.zig:170`<br>`src/sema.zig:9608` |
 | `E_DMA_ADDR_NOT_PADDR` | _see source_ | `src/mir_verify_util.zig:178`<br>`src/sema.zig:9593` |
 | `E_DMA_ADDR_NOT_VADDR` | _see source_ | `src/mir_verify_util.zig:179`<br>`src/sema.zig:9594` |
@@ -130,7 +130,7 @@ Total codes: **283**.
 | `E_IMPORT_DEPTH_LIMIT` | import depth exceeds configured limit {d} | `src/loader.zig:307`<br>`src/loader.zig:455` |
 | `E_IMPORT_FILE_LIMIT` | import graph exceeds configured file limit {d} | `src/loader.zig:311`<br>`src/loader.zig:458` |
 | `E_IMPORT_INVALID_STRING` | import path cannot contain NUL<br>import path must be a valid string literal | `src/loader.zig:538`<br>`src/loader.zig:553` |
-| `E_IMPORT_NOT_FOUND` | cannot find import "{s}" (resolved candidate: {s})<br>missing | `src/diagnostics.zig:467`<br>`src/loader.zig:330` |
+| `E_IMPORT_NOT_FOUND` | cannot find import "{s}" (resolved candidate: {s})<br>missing | `src/diagnostics.zig:495`<br>`src/loader.zig:330` |
 | `E_IMPORT_OUTSIDE_SANDBOX` | import "{s}" resolves to {s}, outside the import sandbox rooted at {s} | `src/loader.zig:297` |
 | `E_IMPORT_TOTAL_BYTES_LIMIT` | import graph exceeds configured cumulative input limit {d} bytes | `src/loader.zig:461`<br>`src/loader.zig:464` |
 | `E_INDEX_BASE_NOT_ARRAY_OR_SLICE` | indexing is defined only for arrays and slices<br>slicing is defined only for arrays and slices | `src/mir_verify_util.zig:85`<br>`src/sema.zig:4389`<br>`src/sema.zig:4411` |
@@ -276,7 +276,7 @@ Total codes: **283**.
 | `E_UNION_CASE_HAS_NO_PAYLOAD` | union case binding requires a payload case<br>union case has no payload type | `src/mir_verify_util.zig:130`<br>`src/sema.zig:6288`<br>`src/sema.zig:8311` |
 | `E_UNKNOWN_ENUM_CASE` | enum has no case with this name | `src/mir_verify_util.zig:127`<br>`src/sema.zig:7161`<br>`src/sema.zig:8293` |
 | `E_UNKNOWN_FUNCTION` | unknown function | `src/sema.zig:4526` |
-| `E_UNKNOWN_IDENTIFIER` | asm output names an unknown local<br>unknown identifier<br>unknown identifier \`{s}\`<br>_+1 more_ | `src/diagnostics.zig:493`<br>`src/diagnostics.zig:501`<br>`src/diagnostics.zig:568`<br>`src/sema.zig:3346`<br>`src/sema.zig:4510` |
+| `E_UNKNOWN_IDENTIFIER` | asm output names an unknown local<br>unknown identifier<br>unknown identifier \`{s}\`<br>_+1 more_ | `src/diagnostics.zig:521`<br>`src/diagnostics.zig:529`<br>`src/diagnostics.zig:596`<br>`src/sema.zig:3346`<br>`src/sema.zig:4510` |
 | `E_UNKNOWN_LOOP_LABEL` | break targets a loop label that is not in scope<br>continue targets a loop label that is not in scope | `src/sema.zig:3394`<br>`src/sema.zig:3406` |
 | `E_UNKNOWN_STRUCT_FIELD` | layout type has no field with this name<br>member access requires a struct, packed-bits, or overlay-union value<br>packed bits type has no field with this name<br>_+1 more_ | `src/mir_verify_util.zig:104`<br>`src/sema.zig:6272`<br>`src/sema.zig:6284`<br>`src/sema.zig:6482`<br>`src/sema.zig:6536`<br>`src/sema.zig:7662`<br>_+1 more_ |
 | `E_UNKNOWN_TRAIT` | unknown trait in \`*dyn Trait\`<br>unknown trait in impl | `src/sema.zig:4672`<br>`src/sema.zig:7917` |
