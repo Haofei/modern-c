@@ -17,9 +17,17 @@ mir.verifyBuiltMir + mir.validateLoweringAdmission
         ▼
 backend.VerifiedProgram
         │
-        ├── C backend
-        └── LLVM backend
+        ├── C backend        (primary; the backend under test)
+        └── LLVM backend     (differential oracle)
 ```
+
+C is the primary backend. LLVM is retained as a differential oracle: it lowers
+the same verified program by an unrelated route, so a disagreement between the
+two is evidence that one of them is wrong. That is why the seam stays
+symmetric -- an oracle is only useful if it is reached the same way the backend
+under test is -- while validation is not: the LLVM gates live in the
+`llvm-oracle` tier and run from `m0-full`, not from the tiers that gate a
+change. New language work is expected to land in C first.
 
 Backends must not receive a raw `ast.Module` through the registry interface.
 CLI artifact paths build `VerifiedProgram` before invoking the selected backend.

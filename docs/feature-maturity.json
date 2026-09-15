@@ -1,6 +1,11 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/feature-maturity.json",
+  "backend_policy": {
+    "primary_backend": "c",
+    "llvm_role": "differential-oracle",
+    "note": "C is the backend under test. LLVM is retained as a differential oracle: `mcc emit-llvm` and the LLVM lowering stay in the tree, its gates live in the `llvm-oracle` build tier and run from m0-full, and a feature is qualified on C first. A status here describes the feature's standing on the C backend."
+  },
   "statuses": [
     "core-qualified",
     "experimental",

@@ -46,36 +46,11 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("fuzz-floatbits"));
     m0_full_step.dependOn(ctx.cmd("fuzz-corpus"));
     m0_full_step.dependOn(ctx.cmd("fuzz-reference"));
-    // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
-    // c_emit fixture sweeps, and host link/run smoke tests.
-    m0_full_step.dependOn(ctx.cmd("llvm-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-obj-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-debug-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sweep"));
-    m0_full_step.dependOn(ctx.cmd("llvm-spec-obj-sweep"));
-    m0_full_step.dependOn(ctx.cmd("llvm-c-sweep"));
-    m0_full_step.dependOn(ctx.cmd("llvm-opt-sweep"));
-    m0_full_step.dependOn(ctx.cmd("llvm-c-obj-sweep"));
-    m0_full_step.dependOn(ctx.cmd("llvm-cc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-move-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-runtime-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-std-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-toolchain-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-demo-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-hosted-demo-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-host-suite-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qemu-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-trap-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
     m0_full_step.dependOn(ctx.cmd("cstr-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-cstr-test"));
     m0_full_step.dependOn(ctx.cmd("cnum-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-cnum-test"));
     m0_full_step.dependOn(ctx.cmd("stdio-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -180,17 +155,14 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("libc-test"));
     // hosted-test runs the hosted-profile float I/O round-trip (needs clang+python3).
     m0_full_step.dependOn(ctx.cmd("hosted-test"));
-    // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
+    // showcase-test links + runs the language feature showcase (emit-c).
     m0_full_step.dependOn(ctx.cmd("showcase-test"));
-    // mc-test runs the native #[test] facility (process-isolated) on both backends.
+    // mc-test runs the native #[test] facility (process-isolated).
     m0_full_step.dependOn(ctx.cmd("mc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-mc-test"));
-    // mod-visibility-test checks opt-in `pub` module boundaries on both backends.
+    // mod-visibility-test checks opt-in `pub` module boundaries.
     m0_full_step.dependOn(ctx.cmd("mod-visibility-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-mod-visibility-test"));
-    // sort-test exercises std/sort on both backends.
+    // sort-test exercises std/sort.
     m0_full_step.dependOn(ctx.cmd("sort-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sort-test"));
     m0_full_step.dependOn(ctx.cmd("slotmap-test"));
     m0_full_step.dependOn(ctx.cmd("mask-test"));
     m0_full_step.dependOn(ctx.cmd("rights-test"));
@@ -215,16 +187,52 @@ pub fn register(ctx: *h.Ctx) void {
     // trap-test runs the typed-CPU trap/timer interrupt path under QEMU.
     m0_full_step.dependOn(ctx.cmd("trap-test"));
 
+    // LLVM is a differential oracle, not a shipped backend. `emit-llvm` stays
+    // in the CLI and the LLVM lowering code stays in the tree, but its gates
+    // are no longer part of the tiers that decide whether a change is good:
+    // C is the backend under test, and LLVM's job is to disagree with it when
+    // C is wrong. `diff-backend` is the oracle's whole point, so it lives
+    // here too. This tier runs from `m0-full` and nightly profiles only.
+    const llvm_oracle_step = b.step("llvm-oracle", "LLVM differential oracle: C-vs-LLVM differential plus the LLVM IR, object, sweep and host gates");
+    llvm_oracle_step.dependOn(ctx.cmd("diff-backend"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-obj-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-debug-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-sweep"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-spec-obj-sweep"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-c-sweep"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-opt-sweep"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-c-obj-sweep"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-cc-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-move-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-runtime-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-std-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-toolchain-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-demo-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-hosted-demo-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-host-suite-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-qemu-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-trap-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-vararg-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-cstr-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-cnum-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-stdio-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-mem-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-mc-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-mod-visibility-test"));
+    llvm_oracle_step.dependOn(ctx.cmd("llvm-sort-test"));
+
+    m0_full_step.dependOn(llvm_oracle_step);
+
     // fast: the inner-loop gate for deterministic host-only confidence. It
-    // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and
-    // the structural architecture-boundary check, while leaving fuzz, QEMU, and env-fragile LLVM/
-    // sanitizer sweeps to m0-full and nightly profiles. For process-level
-    // parallelism without nested-worker oversubscription, use
+    // covers the spec/unit harness, the emit-C sweep, and the structural
+    // architecture-boundary check, while leaving fuzz, QEMU, sanitizer sweeps
+    // and the whole LLVM oracle to m0-full and nightly profiles. For
+    // process-level parallelism without nested-worker oversubscription, use
     // `tools/fast-parallel.sh`.
-    const core_dev_step = b.step("core-dev", "Fast compiler-core development loop: cleanup/MIR authority, C sweep, LLVM smoke, and the architecture-boundary check");
+    const core_dev_step = b.step("core-dev", "Fast compiler-core development loop: cleanup/MIR authority, C sweep, and the architecture-boundary check");
     core_dev_step.dependOn(ctx.cmd("cleanup-fast"));
     core_dev_step.dependOn(ctx.cmd("c-test"));
-    core_dev_step.dependOn(ctx.cmd("llvm-test"));
     core_dev_step.dependOn(ctx.cmd("architecture-boundary-test"));
 
     const ownership_cleanup_dev_step = b.step("ownership-cleanup-dev", "Fast ownership cleanup authority loop: MIR cleanup shard and the architecture-boundary check");
@@ -285,7 +293,6 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("dev-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
-    fast_step.dependOn(ctx.cmd("diff-backend"));
 
     // Spec §L conformance-level tiers: subsets of the full m0 gate aligned to the
     // staged C-backend profiles, so a contributor can validate the level they touch.

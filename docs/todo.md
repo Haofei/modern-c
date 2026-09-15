@@ -20,13 +20,14 @@ history; this file should describe only current compiler-core direction.
 
 | Priority | Area | Next work |
 |---|---|---|
-| P0 | Backend semantic authority | Remove backend-local semantic inference and keep C/LLVM lowering driven by typed MIR, verified facts, layout/ABI tables, and `VerifiedProgram`. |
+| P0 | Backend semantic authority | Remove backend-local semantic inference and keep lowering driven by typed MIR, verified facts, layout/ABI tables, and `VerifiedProgram`. |
+| P0 | C first, LLVM as oracle | C is the primary backend. LLVM is a differential oracle: `emit-llvm` and its lowering stay, its gates live in the `llvm-oracle` tier and run from `m0-full` only, and new language work lands in C first. |
 | P0 | `VerifiedProgram` narrowing | Remove AST-shaped semantic ingress from backend entrypoints; keep source spelling and spans mechanics-only. |
 | P0 | Language surface freeze | Keep async, traits, closures, broad generics, `view struct`, `region struct`, `thread_move`, and borrowed-return contracts experimental until the backend authority boundary is closed. |
 | P0 | Test speed and sharding | Keep the cheap `m0`/`fast` loop focused; leave broad sweeps in `m0-full` and parallel runners. |
 | P1 | Module identity | Move away from text-inclusion identity toward per-file source, module, definition, type, and body IDs. |
 | P1 | QEMU validation boundary | Keep RISC-V/QEMU fixtures only where they validate language, ABI, MMIO, ownership, trap/interrupt behavior, or backend lowering. |
-| P2 | Fuzzing and independent oracles | Expand fuzz generators only where generated programs can lower into runnable C/LLVM comparisons. |
+| P2 | Fuzzing and independent oracles | Expand fuzz generators only where generated programs can lower into runnable C-vs-LLVM comparisons; that differential is what the LLVM oracle is for. |
 | P2 | Tooling polish | Improve formatter, diagnostics, and symbol output as needed by active language work. |
 
 ## Non-goals in the core backlog

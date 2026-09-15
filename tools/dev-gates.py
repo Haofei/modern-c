@@ -56,7 +56,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         ("src/mir*.zig", "src/ir_inspection.zig", "src/hir_inspection.zig", "src/eval.zig", "src/numeric.zig"),
         ("test", "c-test", "llvm-test", "diff-backend", "fuzz-reference"),
-        "middle-end and evaluator changes can affect both backends and the reference oracle",
+        "middle-end and evaluator changes can affect the C backend and the LLVM differential oracle",
         excludes=("src/*_tests.zig",),
     ),
     Rule(
@@ -68,7 +68,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         ("src/lower_llvm*.zig",),
         ("test", "llvm-test", "llvm-obj-test", "diff-backend", "lowering-coverage"),
-        "LLVM backend changes need textual/object LLVM gates, parity, and lowering coverage ratchet",
+        "LLVM oracle changes need textual/object LLVM gates, C-vs-LLVM parity, and the lowering coverage ratchet",
         excludes=("src/*_tests.zig",),
     ),
     Rule(

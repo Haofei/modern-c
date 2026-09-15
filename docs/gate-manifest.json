@@ -158,8 +158,8 @@
     },
     {
       "id": "diff-backend",
-      "owner": "backend-parity",
-      "category": "semantic-equivalence",
+      "owner": "llvm-oracle",
+      "category": "differential-oracle",
       "tier": "pr",
       "required_tools": [
         "bash",
@@ -168,7 +168,7 @@
         "llvm"
       ],
       "build_tiers": [
-        "fast"
+        "llvm-oracle"
       ],
       "skip_policy": "tool-required"
     },

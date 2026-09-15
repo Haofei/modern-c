@@ -26,7 +26,9 @@ REQUIRED_FIELDS = {
     "skip_policy",
 }
 KNOWN_EXECUTION_TIERS = {"pr", "nightly"}
-KNOWN_BUILD_TIERS = {"m0", "fast", "c0"}
+# `llvm-oracle` is the differential-oracle tier: it runs from m0-full and
+# nightly profiles, never from the tiers that gate a change.
+KNOWN_BUILD_TIERS = {"m0", "fast", "c0", "llvm-oracle"}
 KNOWN_SKIP_POLICIES = {"no-skip", "tool-required", "documented-skip"}
 KNOWN_CI_PASS_ASSERTIONS = {"ci-m0-pass"}
 REQUIRED_GOVERNANCE_GATES = {
@@ -155,9 +157,11 @@ def tier_dependencies() -> dict[str, set[str]]:
         "m0": block_after(source, 'const m0_step = b.step("m0"', 'const fast_step = b.step("fast"'),
         "fast": block_after(source, 'const fast_step = b.step("fast"', 'const c0_step = b.step("c0"'),
         "c0": block_after(source, 'const c0_step = b.step("c0"', 'const c1_step = b.step("c1"'),
+        "llvm-oracle": block_after(source, 'const llvm_oracle_step = b.step("llvm-oracle"', 'm0_full_step.dependOn(llvm_oracle_step)'),
     }
+    variables = {"m0": "m0_step", "fast": "fast_step", "c0": "c0_step", "llvm-oracle": "llvm_oracle_step"}
     return {
-        tier: set(re.findall(rf'{tier}_step\.dependOn\(ctx\.cmd\("([^"]+)"\)\);', block))
+        tier: set(re.findall(rf'{variables[tier]}\.dependOn\(ctx\.cmd\("([^"]+)"\)\);', block))
         for tier, block in blocks.items()
     }
 

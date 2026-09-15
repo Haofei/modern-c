@@ -184,13 +184,18 @@ changes with the milestone gate. Run retained QEMU gates only when the
 change touches freestanding, ABI, MMIO, interrupt, or backend-lowering behavior.
 
 ```sh
-zig build test       # compiler unit tests and spec conformance
-zig build c-test     # checked C backend
-zig build llvm-test  # LLVM backend
-zig build fast       # broad host-only development gate, no fuzz or QEMU
-zig build m0         # core compiler validation gate
-zig build m0-full    # broad compiler/backend/fuzz validation matrix
+zig build test         # compiler unit tests and spec conformance
+zig build c-test       # the C backend, which is the backend under test
+zig build fast         # broad host-only development gate, no fuzz or QEMU
+zig build m0           # core compiler validation gate
+zig build llvm-oracle  # C-vs-LLVM differential and the LLVM gates behind it
+zig build m0-full      # broad compiler/backend/fuzz validation matrix
 ```
+
+C is the primary backend. LLVM is kept as a differential oracle: its value is
+that it disagrees with C when C is wrong, so its gates live in `llvm-oracle`
+and run from `m0-full`, not from the tiers that decide whether a change is
+good. Feature work targets C first.
 
 Normal local gates may report a skip when an external tool is unavailable. A
 validation run must fail instead of skipping:
@@ -248,12 +253,21 @@ zig build sweep
 zig build cc-test
 ```
 
-### LLVM
+### LLVM (differential oracle)
 
-The LLVM backend consumes the same semantic and MIR verification pipeline, emits
-textual IR, and uses `llc` for object generation. Its validated surface is
-established by IR assembly, object, optimizer, differential, host-driver, and
-selected QEMU gates rather than by a claim that every language form is supported.
+LLVM is not a shipped backend. It consumes the same semantic and MIR
+verification pipeline, emits textual IR, and uses `llc` for object generation,
+and it is kept for one purpose: to lower the same verified MIR by a completely
+different route, so that a disagreement with the C backend is evidence that one
+of them is wrong. `mcc emit-llvm` stays in the CLI and the lowering code stays
+in the tree; what changed is its standing in validation. Its gates are grouped
+under `zig build llvm-oracle` and run from `m0-full` and nightly profiles, not
+from `m0`, `fast`, `c0` or `core-dev`. A new language feature is expected to
+work in C first; the oracle follows.
+
+Its validated surface is established by IR assembly, object, optimizer,
+differential, host-driver, and selected QEMU gates rather than by a claim that
+every language form is supported.
 Expected differential exclusions are explicit in the checked
 [`diff-backend-expected-skips.tsv`](tools/toolchain/diff-backend-expected-skips.tsv)
 manifest; an unlisted skip fails the gate.
