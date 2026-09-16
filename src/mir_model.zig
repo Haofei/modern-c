@@ -3506,6 +3506,13 @@ pub const CallTargetFact = struct {
 };
 
 pub const BindThunkFact = struct {
+    /// The `call_target bind` instruction this fact describes. This is the
+    /// join key to the call-target fact; see `BoundsFact.typed_inst_id` for
+    /// why a span is not.
+    typed_inst_id: InstId = .invalid,
+    /// The `target_type bind` instruction emitted for the same closure
+    /// value, the join key to its target-type fact.
+    typed_target_type_inst_id: InstId = .invalid,
     typed_target_fn_symbol_id: SymbolId = .invalid,
     target_span_id: SpanId = .invalid,
     target_param_count: usize = 0,

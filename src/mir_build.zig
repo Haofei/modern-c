@@ -14834,7 +14834,10 @@ pub const FunctionBuilder = struct {
         instruction.typed_callee_span_id = typed_span_id;
     }
 
-    fn addBindThunkFactForExpr(self: *FunctionBuilder, expr: ast.Expr, closure_type_expr: ast.TypeExpr, closure_ty: ValueType) !void {
+    /// Record the bind thunk fact for the `call_target bind` instruction just
+    /// emitted; `target_type_inst_id` is the closure's `target_type bind`
+    /// instruction emitted before it.
+    fn addBindThunkFactForExpr(self: *FunctionBuilder, expr: ast.Expr, closure_type_expr: ast.TypeExpr, closure_ty: ValueType, target_type_inst_id: InstId) !void {
         const call = switch (expr.kind) {
             .call => |call| call,
             else => return,
@@ -14858,6 +14861,8 @@ pub const FunctionBuilder = struct {
             else => return,
         }
         try self.bind_thunk_facts.append(self.allocator, .{
+            .typed_inst_id = self.last_inst_id,
+            .typed_target_type_inst_id = target_type_inst_id,
             .typed_target_fn_symbol_id = try self.internTargetOwnerId(target_fn),
             .target_span_id = try self.internSpanId(self.sourcePoint(call.args[1].span)),
             .target_param_count = target.params.len,
@@ -15436,6 +15441,7 @@ pub const FunctionBuilder = struct {
         else
             null;
         try self.appendTargetTypeFact(kind, target_ty, result_ty, expr.span);
+        const target_type_inst_id = self.last_inst_id;
         if (aggregate_construction) |construction| {
             const instructions = &self.blocks.items[self.current].instructions;
             instructions.items[instructions.items.len - 1].aggregate_construction = construction;
@@ -15450,7 +15456,7 @@ pub const FunctionBuilder = struct {
         if (call_kind) |owned_kind| {
             try self.addInstr(.call_target, @tagName(owned_kind), result_ty, expr.span);
             try self.addCallTargetFact(owned_kind, result_ty, expr.span);
-            if (owned_kind == .bind) try self.addBindThunkFactForExpr(expr, target_ty, result_ty);
+            if (owned_kind == .bind) try self.addBindThunkFactForExpr(expr, target_ty, result_ty, target_type_inst_id);
         }
     }
 

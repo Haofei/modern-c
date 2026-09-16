@@ -925,6 +925,7 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
 pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThunkFacts}!void {
     for (module.functions) |function| for (function.bind_thunk_facts) |fact| {
         if (!bindThunkFactIdentitiesValid(function, fact)) return error.InvalidMirBindThunkFacts;
+        if (countBindThunkFactsSharingIdentity(function, fact) != 1) return error.InvalidMirBindThunkFacts;
         const target = functionByTargetOwnerForBind(module, function, fact.typed_target_fn_symbol_id) orelse return error.InvalidMirBindThunkFacts;
         if (target.param_count != fact.target_param_count or !typeIdMatchesValueType(function, fact.target_return_ty, target.return_ty)) return error.InvalidMirBindThunkFacts;
         if (fact.target_param_count != fact.closure_param_count + 1 or !fact.target_return_ty.eql(fact.closure_return_ty)) return error.InvalidMirBindThunkFacts;
@@ -932,7 +933,17 @@ pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThu
     };
 }
 
+/// One bind instruction, one bind fact; counted on the identity.
+fn countBindThunkFactsSharingIdentity(function: Function, target: BindThunkFact) usize {
+    var count: usize = 0;
+    for (function.bind_thunk_facts) |fact| {
+        if (fact.typed_inst_id.eql(target.typed_inst_id)) count += 1;
+    }
+    return count;
+}
+
 fn bindThunkFactIdentitiesValid(function: Function, fact: BindThunkFact) bool {
+    if (!fact.typed_inst_id.isValid() or !fact.typed_target_type_inst_id.isValid()) return false;
     if (!fact.typed_target_fn_symbol_id.isValid() or !fact.target_span_id.isValid() or !fact.target_return_ty.isValid() or !fact.capture_value_id.isValid() or !fact.capture_span_id.isValid() or !fact.capture_operand_span_id.isValid() or !fact.capture_ty.isValid() or !fact.target_capture_ty.isValid() or !fact.closure_value_id.isValid() or !fact.closure_span_id.isValid() or !fact.closure_ty.isValid() or !fact.closure_return_ty.isValid()) return false;
     if (targetOwnerSpelling(function, fact.typed_target_fn_symbol_id) == null) return false;
     if (!spanIdValid(function, fact.closure_span_id) or !spanIdValid(function, fact.target_span_id) or !spanIdValid(function, fact.capture_span_id) or !spanIdValid(function, fact.capture_operand_span_id)) return false;
@@ -953,20 +964,26 @@ fn bindThunkFactIdentitiesValid(function: Function, fact: BindThunkFact) bool {
     };
 }
 
+/// The closure's `target_type bind` fact, found by the instruction identity
+/// the bind fact carries; it must still agree on the closure span and type.
 fn bindFactHasTargetType(function: Function, fact: BindThunkFact) bool {
     var count: usize = 0;
     for (function.target_type_facts) |target| {
-        if (target.kind != .bind or !target.typed_span_id.eql(fact.closure_span_id)) continue;
+        if (!target.typed_inst_id.eql(fact.typed_target_type_inst_id)) continue;
+        if (target.kind != .bind or !target.typed_span_id.eql(fact.closure_span_id)) return false;
         if (!target.typed_result_ty.eql(fact.closure_ty)) return false;
         count += 1;
     }
     return count == 1;
 }
 
+/// The `call_target bind` fact for the bind fact's own instruction; it must
+/// still agree on the closure span and type.
 fn bindFactHasCallTarget(function: Function, fact: BindThunkFact) bool {
     var count: usize = 0;
     for (function.call_target_facts) |target| {
-        if (target.kind != .bind or !target.typed_span_id.eql(fact.closure_span_id)) continue;
+        if (!target.typed_inst_id.eql(fact.typed_inst_id)) continue;
+        if (target.kind != .bind or !target.typed_span_id.eql(fact.closure_span_id)) return false;
         if (!sameValueType(target.result_ty, typeForId(function, fact.closure_ty) orelse return false)) return false;
         count += 1;
     }

@@ -15597,6 +15597,69 @@ test "MIR bind thunk facts resolve targets through SymbolId only" {
     try mir.validateBindThunkFactsForLowering(module_mir);
 }
 
+test "bind thunk facts distinguish two binds that share one span" {
+    // Copy the closure's `target_type bind` and `call_target bind`
+    // instructions with their facts under fresh identities, and a bind fact
+    // naming the copies: admitted. Two bind facts naming one instruction, or
+    // a bind fact whose identities name the wrong instructions, are rejected.
+    const source =
+        \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
+        \\fn make() -> closure(u32) -> u32 {
+        \\    var env: u32 = 3;
+        \\    let callback: closure(u32) -> u32 = bind(&env, add);
+        \\    return callback;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_shared_span_bind_thunk_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try mir.validateBindThunkFactsForLowering(module_mir);
+    const function = functionByNameMut(&module_mir, "make") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.bind_thunk_facts.len);
+    const original = function.bind_thunk_facts[0];
+    try std.testing.expect(original.typed_inst_id.isValid());
+    try std.testing.expect(original.typed_target_type_inst_id.isValid());
+
+    const target_type_copy_id = freshInstId(function);
+    const target_type_original_id = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "bind", target_type_copy_id);
+    try std.testing.expect(target_type_original_id.eql(original.typed_target_type_inst_id));
+    const call_target_copy_id = freshInstId(function);
+    const call_target_original_id = try cloneInstructionWithInstId(function, std.testing.allocator, .call_target, "bind", call_target_copy_id);
+    try std.testing.expect(call_target_original_id.eql(original.typed_inst_id));
+    try duplicateTargetTypeFactOfKind(function, module_mir.allocator, .bind);
+    function.target_type_facts[function.target_type_facts.len - 1].typed_inst_id = target_type_copy_id;
+    try duplicateCallTargetFact(function, module_mir.allocator);
+    function.call_target_facts[function.call_target_facts.len - 1].typed_inst_id = call_target_copy_id;
+
+    const facts = try std.testing.allocator.alloc(mir.BindThunkFact, 2);
+    facts[0] = original;
+    facts[1] = original;
+    facts[1].typed_inst_id = call_target_copy_id;
+    facts[1].typed_target_type_inst_id = target_type_copy_id;
+    std.testing.allocator.free(function.bind_thunk_facts);
+    function.bind_thunk_facts = facts;
+    try mir.validateBindThunkFactsForLowering(module_mir);
+    try mir.validateCallTargetFactsForLowering(module_mir);
+    try mir.validateTargetTypeFactsForLowering(module_mir);
+
+    // Duplicate: both bind facts name one bind instruction.
+    function.bind_thunk_facts[1].typed_inst_id = call_target_original_id;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+
+    // A target-type identity that names no `bind` target type.
+    function.bind_thunk_facts[1].typed_inst_id = call_target_copy_id;
+    function.bind_thunk_facts[1].typed_target_type_inst_id = call_target_copy_id;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+
+    // Absent identities fail closed.
+    function.bind_thunk_facts[1].typed_target_type_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+    function.bind_thunk_facts[1].typed_target_type_inst_id = target_type_copy_id;
+    function.bind_thunk_facts[1].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirBindThunkFacts, mir.validateBindThunkFactsForLowering(module_mir));
+}
+
 test "MIR reads sema's resolved scalar types and agrees with its own fallback" {
     const source =
         \\fn scalars() -> bool {
