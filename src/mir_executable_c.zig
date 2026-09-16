@@ -1046,6 +1046,20 @@ fn emitExpressionOperation(
             }
         },
         .cast => |cast| {
+            // A slice-to-slice cast is a const narrowing of the fat pointer.
+            // The two C slice structs differ only in the pointee's constness,
+            // and C cannot cast between struct types, so rebuild the target
+            // struct from the operand's parts, evaluating the operand once.
+            if (sliceConstNarrowCast(body, expression.result_ty, cast.operand)) |operand| {
+                try out.appendSlice(allocator, "({ ");
+                try appendSliceCType(allocator, out, operand.result_ty);
+                try out.print(allocator, " mc_cast_tmp_{d} = ", .{expression.id.raw});
+                try emitExpression(allocator, out, body, cast.operand, depth + 1);
+                try out.appendSlice(allocator, "; (");
+                try appendSliceCType(allocator, out, expression.result_ty);
+                try out.print(allocator, "){{ .ptr = mc_cast_tmp_{d}.ptr, .len = mc_cast_tmp_{d}.len }}; }})", .{ expression.id.raw, expression.id.raw });
+                return;
+            }
             try out.appendSlice(allocator, "((");
             try appendCType(allocator, out, body, expression.result_ty);
             try out.appendSlice(allocator, ")(");
@@ -1054,7 +1068,8 @@ fn emitExpressionOperation(
         },
         .direct_call => |call| {
             try appendSymbol(allocator, out, body, call.callee);
-            try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
+            const signature = if (symbolById(body, call.callee)) |symbol| symbol.callable_signature else null;
+            try emitPreparedArgumentsForSignature(allocator, out, body, call.arguments[0..call.argument_count], signature);
         },
         .closure_bind => |bind| try emitClosureBind(allocator, out, body, bind, depth),
         .indirect_call => |call| {
@@ -1073,7 +1088,7 @@ fn emitExpressionOperation(
                 try out.append(allocator, '(');
                 try emitExpression(allocator, out, body, call.callee, depth + 1);
                 try out.append(allocator, ')');
-                try emitPreparedArguments(allocator, out, body, call.arguments[0..call.argument_count]);
+                try emitPreparedArgumentsForSignature(allocator, out, body, call.arguments[0..call.argument_count], call.signature);
             }
         },
         .dyn_call => |call| {
@@ -2442,6 +2457,22 @@ fn emitRangeSlice(
         " + mc_range_start_{d}, .len = mc_range_end_{d} - mc_range_start_{d} }}; }})",
         .{ id, id, id },
     );
+}
+
+/// The operand of a cast whose source and target are both slices of the same
+/// primitive element type: a fat-pointer const narrowing.
+fn sliceConstNarrowCast(body: *const mir.ExecutableBody, target_ty: mir.ValueType, operand_id: mir.ExprId) ?*const mir.ExecutableExpression {
+    const target = switch (target_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape else return null,
+        else => return null,
+    };
+    const operand = expressionById(body, operand_id) orelse return null;
+    const source = switch (operand.result_ty) {
+        .pointer => |shape| if (shape.kind == .slice) shape else return null,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, source.child, target.child) or primitiveType(source.child) == null) return null;
+    return operand;
 }
 
 fn appendSliceCType(
@@ -4836,9 +4867,35 @@ fn writeSourceLineDirectiveForSpan(
 }
 
 fn emitPreparedArguments(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, arguments: []const mir.ExprId) (RenderError || std.mem.Allocator.Error)!void {
+    try emitPreparedArgumentsForSignature(allocator, out, body, arguments, null);
+}
+
+/// Emit call arguments, rebuilding a `[]mut T` argument into the callee's
+/// `[]const T` parameter struct where the signature asks for it. The body
+/// admits that const narrowing at an argument without a cast expression, and
+/// C cannot convert between the two slice structs implicitly.
+fn emitPreparedArgumentsForSignature(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *const mir.ExecutableBody, arguments: []const mir.ExprId, signature: ?mir.ExecutableCallSignature) (RenderError || std.mem.Allocator.Error)!void {
     try out.append(allocator, '(');
     for (arguments, 0..) |argument, index| {
         if (index != 0) try out.appendSlice(allocator, ", ");
+        const narrowed = if (signature) |call_signature|
+            if (index < call_signature.parameter_count) sliceConstNarrowCast(body, call_signature.parameter_types[index], argument) else null
+        else
+            null;
+        if (narrowed) |operand| {
+            if (sameValueType(operand.result_ty, signature.?.parameter_types[index])) {
+                try emitExpression(allocator, out, body, argument, 0);
+                continue;
+            }
+            try out.appendSlice(allocator, "({ ");
+            try appendSliceCType(allocator, out, operand.result_ty);
+            try out.print(allocator, " mc_arg_tmp_{d} = ", .{argument.raw});
+            try emitExpression(allocator, out, body, argument, 0);
+            try out.appendSlice(allocator, "; (");
+            try appendSliceCType(allocator, out, signature.?.parameter_types[index]);
+            try out.print(allocator, "){{ .ptr = mc_arg_tmp_{d}.ptr, .len = mc_arg_tmp_{d}.len }}; }})", .{ argument.raw, argument.raw });
+            continue;
+        }
         try emitExpression(allocator, out, body, argument, 0);
     }
     try out.append(allocator, ')');

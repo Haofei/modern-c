@@ -12,11 +12,6 @@
       "fixture": "tests/c_emit/pointer_field_addr.mc",
       "reason": "E_BACKEND_UNSUPPORTED",
       "note": "The C emitter cannot render this construct yet; emitVerifiedMirFunction declines it."
-    },
-    {
-      "fixture": "tests/c_emit/slice_const_u8.mc",
-      "reason": "InternalLoweringFailure",
-      "note": "The C lowering path reports an internal failure."
     }
   ],
   "sweep": [

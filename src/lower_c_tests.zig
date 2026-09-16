@@ -1261,6 +1261,49 @@ test "lower-c renders null and global-address leaves inside a nullable-pointer a
     try expectContains(output.items, "maybe_box = { .ptr = &seed };");
 }
 
+test "lower-c rebuilds slice const narrowing as the target slice struct" {
+    // `mc_slice_mut_u8` and `mc_slice_const_u8` are distinct C structs, so a
+    // const narrowing cannot be a C cast; the target struct is rebuilt from
+    // the operand's parts, at an explicit cast, a `let`, and a call argument.
+    const source =
+        \\fn len_of(s: []const u8) -> u32 { return s.len as u32; }
+        \\fn narrow(m: []mut u8) -> u32 {
+        \\    let explicit: []const u8 = m as []const u8;
+        \\    let implicit: []const u8 = m;
+        \\    return len_of(m) + len_of(explicit) + len_of(implicit);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_slice_const_narrow.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        &module_mir,
+        &output,
+        .kernel,
+        "c_slice_const_narrow.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "(mc_slice_const_u8){ .ptr = mc_cast_tmp_");
+    try expectContains(output.items, "(mc_slice_const_u8){ .ptr = mc_arg_tmp_");
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "slice_const_narrow.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "slice_const_narrow.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", generated_c },
+    });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+}
+
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";
