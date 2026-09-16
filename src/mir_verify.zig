@@ -658,12 +658,12 @@ pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRe
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
                 if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
-                if (!functionHasMatchingRepresentationFact(function, instruction)) return error.InvalidMirRepresentationFacts;
+                if (countMatchingRepresentationFacts(function, instruction) != 1) return error.InvalidMirRepresentationFacts;
             }
         }
         for (function.representation_facts) |fact| {
             if (!representationFactTypedIdentitiesValid(function, fact)) return error.InvalidMirRepresentationFacts;
-            if (!functionHasMatchingRepresentationInstruction(function, fact)) return error.InvalidMirRepresentationFacts;
+            if (countMatchingRepresentationInstructions(function, fact) != 1) return error.InvalidMirRepresentationFacts;
         }
     }
 }
@@ -717,28 +717,55 @@ pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}
     }
 }
 
-/// Bounds facts are keyed by the access operation's canonical SpanId. The
-/// executable body already owns complete trap-edge validation, so a missing
-/// legacy fact does not block canonical lowering; when a fact is present,
-/// admission requires it to name exactly one resolved access fact.
+/// A bounds fact names its `cmp_bounds` instruction by identity and the
+/// checked access by the operand's canonical SpanId. The executable body
+/// already owns complete trap-edge validation, so a missing legacy fact does
+/// not block canonical lowering; when a fact is present, admission requires it
+/// to name exactly one bounds-check instruction and exactly one resolved
+/// access fact, and to be that instruction's only fact.
 pub fn validateBoundsFactsForLowering(module: Module) error{InvalidMirBoundsFacts}!void {
     for (module.functions) |function| {
         for (function.bounds_facts) |fact| {
             if (!boundsFactTypedIdentityValid(function, fact)) return error.InvalidMirBoundsFacts;
             if (countMatchingBoundsFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
+            if (countMatchingBoundsInstructions(function, fact) != 1) return error.InvalidMirBoundsFacts;
             if (countMatchingBoundsAccessFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
         }
     }
 }
 
 fn boundsFactTypedIdentityValid(function: Function, fact: BoundsFact) bool {
-    return spanIdValid(function, fact.typed_span_id);
+    return fact.typed_inst_id.isValid() and spanIdValid(function, fact.typed_span_id);
 }
 
+/// One bounds check, one fact. Counted on the instruction identity rather than
+/// on the operand span, which two distinct checks can share.
 fn countMatchingBoundsFacts(function: Function, target: BoundsFact) usize {
     var count: usize = 0;
     for (function.bounds_facts) |fact| {
-        if (fact.kind == target.kind and fact.typed_span_id.eql(target.typed_span_id)) count += 1;
+        if (fact.typed_inst_id.eql(target.typed_inst_id)) count += 1;
+    }
+    return count;
+}
+
+/// The check an index fact describes is `i < len`; a slice fact's is
+/// `start <= end <= len`. The identity is the join key; the detail is the
+/// agreement check that catches a fact retargeted at the wrong kind of check.
+fn boundsFactMatchesInstruction(fact: BoundsFact, instruction: Instruction) bool {
+    if (instruction.kind != .cmp_bounds) return false;
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(instruction.typed_inst_id)) return false;
+    return switch (fact.kind) {
+        .index => std.mem.eql(u8, instruction.detail, "i < len"),
+        .slice => std.mem.eql(u8, instruction.detail, "start <= end <= len"),
+    };
+}
+
+fn countMatchingBoundsInstructions(function: Function, fact: BoundsFact) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (boundsFactMatchesInstruction(fact, instruction)) count += 1;
+        }
     }
     return count;
 }
@@ -2083,25 +2110,34 @@ fn countMatchingFloatFactsForInstruction(function: Function, instruction: Instru
     return count;
 }
 
-fn functionHasMatchingRepresentationFact(function: Function, instruction: Instruction) bool {
+/// One representation-sensitive instruction, one fact. Counted on the
+/// instruction identity: a span is shared by every node the async transform
+/// synthesizes, so it cannot tell two such instructions apart.
+fn countMatchingRepresentationFacts(function: Function, instruction: Instruction) usize {
+    var count: usize = 0;
     for (function.representation_facts) |fact| {
-        if (representationFactMatchesInstruction(instruction, fact)) return true;
+        if (representationFactMatchesInstruction(instruction, fact)) count += 1;
     }
-    return false;
+    return count;
 }
 
-fn functionHasMatchingRepresentationInstruction(function: Function, fact: RepresentationFact) bool {
+fn countMatchingRepresentationInstructions(function: Function, fact: RepresentationFact) usize {
+    var count: usize = 0;
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
             if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
-            if (representationFactMatchesInstruction(instruction, fact)) return true;
+            if (representationFactMatchesInstruction(instruction, fact)) count += 1;
         }
     }
-    return false;
+    return count;
 }
 
+/// A fact describes an instruction when it names it by identity and still
+/// agrees with it about kind, detail, result type, span and value identity.
 fn representationFactMatchesInstruction(instruction: Instruction, fact: RepresentationFact) bool {
-    return fact.kind == instruction.kind and
+    return fact.typed_inst_id.isValid() and
+        fact.typed_inst_id.eql(instruction.typed_inst_id) and
+        fact.kind == instruction.kind and
         sameRepresentationValueType(fact.result_ty, instruction.result_ty) and
         std.mem.eql(u8, fact.detail, instruction.detail) and
         representationTypedSpansCompatible(instruction, fact) and
@@ -2110,6 +2146,7 @@ fn representationFactMatchesInstruction(instruction: Instruction, fact: Represen
 }
 
 fn representationFactTypedIdentitiesValid(function: Function, fact: RepresentationFact) bool {
+    if (!fact.typed_inst_id.isValid()) return false;
     if (!fact.typed_result_ty.isValid()) return false;
     const result_index = fact.typed_result_ty.index();
     if (result_index >= function.type_identities.len) return false;

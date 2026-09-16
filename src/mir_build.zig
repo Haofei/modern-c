@@ -13830,6 +13830,7 @@ pub const FunctionBuilder = struct {
                     try self.attachExecutableTrapEdge(expr.span, .Bounds, .bounds_check);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .index,
+                        .typed_inst_id = self.last_inst_id,
                         .typed_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
                     });
                 }
@@ -13889,6 +13890,7 @@ pub const FunctionBuilder = struct {
                     try self.attachExecutableTrapEdge(expr.span, .Bounds, .bounds_check);
                     try self.bounds_facts.append(self.allocator, .{
                         .kind = .slice,
+                        .typed_inst_id = self.last_inst_id,
                         .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     });
                 }
@@ -15844,6 +15846,7 @@ pub const FunctionBuilder = struct {
                 .result_ty = ty,
                 .typed_result_ty = typed_result_ty,
                 .typed_value_id = typed_value_id orelse .invalid,
+                .typed_inst_id = typed_inst_id,
                 .typed_span_id = typed_span_id,
             });
         }

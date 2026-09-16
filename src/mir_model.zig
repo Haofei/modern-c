@@ -3297,8 +3297,14 @@ pub const BoundsFactKind = enum { index, slice };
 
 pub const BoundsFact = struct {
     kind: BoundsFactKind,
-    /// Sole source identity for the checked access. Display coordinates are
-    /// recovered from the owning function's span table.
+    /// The bounds-check instruction this fact describes. This is the join key.
+    /// A span is not one: the async transform used to stamp a single span onto
+    /// a whole generated body, and monomorphization still copies spans, so two
+    /// distinct checks can report the same one.
+    typed_inst_id: InstId = .invalid,
+    /// Source identity of the checked *operand*, which is deliberately not the
+    /// instruction's own span. Display coordinates are recovered from the
+    /// owning function's span table, and the access-fact join uses it.
     typed_span_id: SpanId = .invalid,
 };
 
@@ -3903,9 +3909,11 @@ pub const RepresentationFact = struct {
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     typed_value_id: ValueId = .invalid,
-    /// Sole source identity for this representation-sensitive operation.
-    /// Display coordinates are recovered from the owning function's span
-    /// table.
+    /// The instruction this fact describes. This is the join key; see
+    /// `BoundsFact.typed_inst_id` for why a span is not.
+    typed_inst_id: InstId = .invalid,
+    /// Source identity for this representation-sensitive operation. Display
+    /// coordinates are recovered from the owning function's span table.
     typed_span_id: SpanId = .invalid,
 };
 

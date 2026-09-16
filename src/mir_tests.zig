@@ -3169,6 +3169,122 @@ test "integer facts distinguish two literal conversions that share one span" {
     try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+/// An instruction identity no instruction in `function` holds yet.
+fn freshInstId(function: *const mir.Function) mir.InstId {
+    var next: usize = 0;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!instruction.typed_inst_id.isValid()) continue;
+            if (instruction.typed_inst_id.index() + 1 > next) next = instruction.typed_inst_id.index() + 1;
+        }
+    }
+    return mir.InstId.fromIndex(next);
+}
+
+/// Append a copy of the first `kind`/`detail` instruction to its block under
+/// the identity `copy_id`, keeping the original's span -- exactly what a
+/// copied AST node produces. Returns the original's identity.
+fn cloneInstructionWithInstId(function: *mir.Function, allocator: std.mem.Allocator, kind: mir.Instruction.Kind, detail: ?[]const u8, copy_id: mir.InstId) !mir.InstId {
+    for (function.blocks) |*block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != kind) continue;
+            if (detail) |expected| if (!std.mem.eql(u8, instruction.detail, expected)) continue;
+            const instructions = try allocator.alloc(mir.Instruction, block.instructions.len + 1);
+            @memcpy(instructions[0..block.instructions.len], block.instructions);
+            var copy = instruction;
+            copy.typed_inst_id = copy_id;
+            instructions[block.instructions.len] = copy;
+            allocator.free(block.instructions);
+            block.instructions = instructions;
+            return instruction.typed_inst_id;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "bounds facts distinguish two checks that share one span" {
+    // Two `cmp_bounds` instructions at one span, each with its own fact:
+    // admitted, because the join key is the instruction identity. Pointing
+    // both facts at one instruction, or a fact at the wrong kind of check,
+    // still fails the exactly-one rule.
+    const source =
+        \\fn read_at(values: [2]u32, index: usize) -> u32 {
+        \\    return values[index];
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_bounds_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const function = functionByNameMut(&module_mir, "read_at") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.bounds_facts.len);
+    const original_fact = function.bounds_facts[0];
+    try std.testing.expect(original_fact.typed_inst_id.isValid());
+
+    const copy_inst_id = freshInstId(function);
+    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .cmp_bounds, "i < len", copy_inst_id);
+    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+
+    const facts = try std.testing.allocator.alloc(mir.BoundsFact, 2);
+    facts[0] = original_fact;
+    facts[1] = original_fact;
+    facts[1].typed_inst_id = copy_inst_id;
+    std.testing.allocator.free(function.bounds_facts);
+    function.bounds_facts = facts;
+    try mir.validateLoweringAdmission(module_mir);
+
+    // Duplicate: both facts name one check.
+    function.bounds_facts[1].typed_inst_id = original_inst_id;
+    try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(module_mir));
+
+    // Retargeted: the fact names an instruction that is not a bounds check.
+    function.bounds_facts[1].typed_inst_id = copy_inst_id;
+    function.bounds_facts[0].typed_inst_id = mir.InstId.fromIndex(copy_inst_id.index() + 1);
+    try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(module_mir));
+
+    // Absent identity fails closed.
+    function.bounds_facts[0].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(module_mir));
+}
+
+test "representation facts distinguish two operations that share one span" {
+    const source =
+        \\fn read_ptr_param(p: *mut u8) -> u8 {
+        \\    return p.*;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_representation_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    const function = functionByNameMut(&module_mir, "read_ptr_param") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.representation_facts.len > 0);
+    const original_fact = function.representation_facts[0];
+    try std.testing.expect(original_fact.typed_inst_id.isValid());
+
+    const copy_inst_id = freshInstId(function);
+    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, original_fact.kind, original_fact.detail, copy_inst_id);
+    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+
+    const facts = try std.testing.allocator.alloc(mir.RepresentationFact, function.representation_facts.len + 1);
+    @memcpy(facts[0..function.representation_facts.len], function.representation_facts);
+    facts[function.representation_facts.len] = original_fact;
+    facts[function.representation_facts.len].typed_inst_id = copy_inst_id;
+    std.testing.allocator.free(function.representation_facts);
+    function.representation_facts = facts;
+    try mir.validateRepresentationFactsForLowering(module_mir);
+
+    // Duplicate: two facts for one instruction, and the copy has none.
+    function.representation_facts[facts.len - 1].typed_inst_id = original_inst_id;
+    try std.testing.expectError(error.InvalidMirRepresentationFacts, mir.validateRepresentationFactsForLowering(module_mir));
+
+    // Absent identity fails closed.
+    function.representation_facts[facts.len - 1].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirRepresentationFacts, mir.validateRepresentationFactsForLowering(module_mir));
+}
+
 test "MIR exposes generic typed span identity matching for codegen facts" {
     const source =
         \\extern fn close_a(value: u32) -> void;
