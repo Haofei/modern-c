@@ -3285,6 +3285,78 @@ test "representation facts distinguish two operations that share one span" {
     try std.testing.expectError(error.InvalidMirRepresentationFacts, mir.validateRepresentationFactsForLowering(module_mir));
 }
 
+test "range facts distinguish two unchecked operations that share one span" {
+    const source =
+        \\fn accumulate(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = a;
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        sum = unchecked.add(sum, b);
+        \\    }
+        \\    return sum;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_range_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    const function = functionByNameMut(&module_mir, "accumulate") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.range_facts.len);
+    const original_fact = function.range_facts[0];
+    try std.testing.expect(original_fact.typed_inst_id.isValid());
+
+    const copy_inst_id = freshInstId(function);
+    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .unchecked_assume, null, copy_inst_id);
+    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+
+    const facts = try std.testing.allocator.alloc(RangeFact, 2);
+    facts[0] = original_fact;
+    facts[1] = original_fact;
+    facts[1].typed_inst_id = copy_inst_id;
+    std.testing.allocator.free(function.range_facts);
+    function.range_facts = facts;
+    try mir.validateRangeFactsForLowering(module_mir);
+
+    // Duplicate: two facts with one target label name one instruction.
+    function.range_facts[1].typed_inst_id = original_inst_id;
+    try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateRangeFactsForLowering(module_mir));
+
+    // Absent identity fails closed.
+    function.range_facts[1].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirRangeFacts, mir.validateRangeFactsForLowering(module_mir));
+}
+
+test "range context facts recorded before their instruction take its identity" {
+    // The binary-operand and assigned-value facts for one unchecked
+    // operation are recorded at different times -- the operand one while the
+    // enclosing binary expression is walked, before the operation's
+    // instruction exists. Both must end up naming that one instruction.
+    const source =
+        \\fn scaled(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        let total: u32 = unchecked.add(a, b) + 1;
+        \\        return total;
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_range_context_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    const function = functionByName(module_mir, "scaled") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(function.range_facts.len >= 2);
+    var operand_fact = false;
+    for (function.range_facts) |fact| {
+        try std.testing.expect(fact.typed_inst_id.isValid());
+        try std.testing.expect(fact.typed_inst_id.eql(function.range_facts[0].typed_inst_id));
+        if (std.mem.eql(u8, fact.target, "binary_operand")) operand_fact = true;
+    }
+    try std.testing.expect(operand_fact);
+}
+
 test "MIR exposes generic typed span identity matching for codegen facts" {
     const source =
         \\extern fn close_a(value: u32) -> void;

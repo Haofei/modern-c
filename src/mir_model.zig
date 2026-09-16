@@ -3288,7 +3288,13 @@ pub const RangeFact = struct {
     left: []const u8,
     right: []const u8,
     result_ty: ValueType,
-    /// Sole source identity for the proved unchecked operation. Display
+    /// The `unchecked_assume` instruction this fact describes. This is the
+    /// join key; see `BoundsFact.typed_inst_id` for why a span is not. One
+    /// instruction may carry several facts that differ in `target` (the
+    /// operation as a binary operand, an aggregate element, a field, and as
+    /// the assigned value); each names the same instruction.
+    typed_inst_id: InstId = .invalid,
+    /// Source identity for the proved unchecked operation. Display
     /// coordinates are recovered from the owning function's span table.
     typed_span_id: SpanId = .invalid,
 };

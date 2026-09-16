@@ -13402,6 +13402,7 @@ pub const FunctionBuilder = struct {
                     ty
                 else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (indirect_call_target) |target| target.result_ty else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
+                const call_inst_id = self.last_inst_id;
                 var direct_callee_span_id: ?SpanId = null;
                 if (instr_kind == .call or instr_kind == .indirect_call) {
                     const callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span));
@@ -13721,7 +13722,7 @@ pub const FunctionBuilder = struct {
                     }
                 }
                 if (unchecked_target) |target|
-                    try self.addRangeFactForUncheckedCall(callee_name, node.args, target.result_ty, expr.span);
+                    try self.addRangeFactForUncheckedCall(callee_name, node.args, target.result_ty, expr.span, call_inst_id);
                 const preserves_pointer_provenance = raw_many_offset_target != null or reflectionCallPreservesPointerProvenance(node);
                 if (!preserves_pointer_provenance and instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
                 if (!preserves_pointer_provenance and instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
@@ -16092,18 +16093,30 @@ pub const FunctionBuilder = struct {
         }
     }
 
-    fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, args: []ast.Expr, result_ty: ValueType, span: ast.Span) !void {
+    /// Record the range fact for the `unchecked_assume` instruction
+    /// `inst_id`, which the caller has just emitted for this call.
+    ///
+    /// Context facts for the same operation (as a binary operand, an
+    /// aggregate element, a field, or a cast) were recorded by
+    /// `addAggregateRangeFactForUncheckedExpr` while walking the enclosing
+    /// expression, before this instruction existed; they are pending until
+    /// here, where they take its identity.
+    fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, args: []ast.Expr, result_ty: ValueType, span: ast.Span, inst_id: InstId) !void {
         const op = noOverflowUncheckedOp(callee_name) orelse return;
         if (args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
         if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow")) return;
         const target = self.assignment_target orelse "value";
         const typed_span_id = try self.internSpanId(self.sourcePoint(span));
+        for (self.range_facts.items) |*fact| {
+            if (fact.typed_inst_id.isValid()) continue;
+            if (fact.region_id == region_id and std.mem.eql(u8, fact.op, op) and fact.typed_span_id.eql(typed_span_id)) fact.typed_inst_id = inst_id;
+        }
         for (self.range_facts.items) |fact| {
             if (fact.region_id == region_id and
                 std.mem.eql(u8, fact.target, target) and
                 std.mem.eql(u8, fact.op, op) and
-                fact.typed_span_id.eql(typed_span_id)) return;
+                fact.typed_inst_id.eql(inst_id)) return;
         }
         try self.range_facts.append(self.allocator, .{
             .region_id = region_id,
@@ -16112,10 +16125,15 @@ pub const FunctionBuilder = struct {
             .left = exprText(args[0]),
             .right = exprText(args[1]),
             .result_ty = result_ty,
+            .typed_inst_id = inst_id,
             .typed_span_id = typed_span_id,
         });
     }
 
+    /// Record a context fact for an unchecked operation nested in `expr`. The
+    /// operation's instruction is not emitted yet, so the fact is recorded
+    /// without an identity and named by `addRangeFactForUncheckedCall` when
+    /// the operation itself is built.
     fn addAggregateRangeFactForUncheckedExpr(self: *FunctionBuilder, target: []const u8, expr: ast.Expr) !void {
         const call = switch (expr.kind) {
             .grouped => |inner| return self.addAggregateRangeFactForUncheckedExpr(target, inner.*),

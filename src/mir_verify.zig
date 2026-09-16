@@ -702,9 +702,10 @@ pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}
     }
 }
 
-/// No-overflow facts are keyed solely by the unchecked MIR operation's SpanId.
+/// No-overflow facts name their `unchecked_assume` instruction by identity.
 /// They remain separately useful to C/LLVM for target-label diagnostics, but
-/// an admission candidate must still name exactly one unchecked instruction.
+/// an admission candidate must still name exactly one unchecked instruction,
+/// and be the only fact for that instruction and target label.
 /// Executable-body completeness separately proves that every unchecked
 /// executable projection has a fact, because one source operation can have
 /// several such projections.
@@ -1940,6 +1941,7 @@ fn floatFactTypedIdentitiesValid(function: Function, fact: FloatFact) bool {
 
 fn rangeFactTypedIdentityValid(function: Function, fact: RangeFact) bool {
     if (fact.target.len == 0 or fact.op.len == 0 or fact.left.len == 0 or fact.right.len == 0) return false;
+    if (!fact.typed_inst_id.isValid()) return false;
     if (sourcePointForSpanId(function, fact.typed_span_id) == null) return false;
     for (function.contract_regions) |region| {
         if (region.id == fact.region_id) return std.mem.eql(u8, region.kind, "no_overflow");
@@ -1947,10 +1949,14 @@ fn rangeFactTypedIdentityValid(function: Function, fact: RangeFact) bool {
     return false;
 }
 
+/// A fact describes an unchecked instruction when it names it by identity
+/// and still agrees with it about region, span, operation and type.
 fn rangeFactMatchesInstruction(fact: RangeFact, instruction: Instruction) bool {
     if (instruction.kind != .unchecked_assume or instruction.contract_region_id == null) return false;
     const op = noOverflowUncheckedOp(instruction.detail) orelse return false;
-    return fact.region_id == instruction.contract_region_id.? and
+    return fact.typed_inst_id.isValid() and
+        fact.typed_inst_id.eql(instruction.typed_inst_id) and
+        fact.region_id == instruction.contract_region_id.? and
         fact.typed_span_id.eql(instruction.typed_span_id) and
         std.mem.eql(u8, fact.op, op) and
         sameValueType(fact.result_ty, instruction.result_ty);
@@ -1966,9 +1972,10 @@ fn countMatchingRangeInstructions(function: Function, fact: RangeFact) usize {
     return count;
 }
 
+/// One instruction, one fact per target label; counted on the identity.
 fn rangeFactSameOwnershipGroup(left: RangeFact, right: RangeFact) bool {
     return left.region_id == right.region_id and
-        left.typed_span_id.eql(right.typed_span_id) and
+        left.typed_inst_id.eql(right.typed_inst_id) and
         std.mem.eql(u8, left.target, right.target) and
         std.mem.eql(u8, left.op, right.op) and
         sameValueType(left.result_ty, right.result_ty);
