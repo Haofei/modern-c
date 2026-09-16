@@ -12192,6 +12192,8 @@ pub const FunctionBuilder = struct {
             .int_literal => |literal| integerLiteralTypeExpr(literal, subject.span),
             .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op))
                 ast_query.simpleNameType("bool", subject.span)
+            else if (self.recordedOperatorTypeExpr(subject)) |recorded|
+                recorded.ty
             else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
                 self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
             else
@@ -15231,6 +15233,26 @@ pub const FunctionBuilder = struct {
         return (table.toTypeExpr(self.rendered_types.allocator(), id, span) catch null) orelse own;
     }
 
+    /// The result type of an arithmetic, bitwise or shift operator, or of
+    /// unary `-`, when sema's recordings are available: sema's answer, and
+    /// nothing else.
+    ///
+    /// Sema's rule is an operand's type -- the left operand's for a shift,
+    /// otherwise the first operand that carries one -- and when neither
+    /// operand carries a type the expression is literal-class and its
+    /// context decides. The builder used to fall back to the assignment
+    /// target and to the literal default here, which sema never consults;
+    /// sema's rule produces the diagnostics users see, so it wins outright
+    /// and is not cross-checked against a chain the builder no longer runs.
+    ///
+    /// Null-outer (`.none`) means there is no table at all -- MIR built without
+    /// a preceding check, as the unit tests do -- and the caller keeps its
+    /// pre-check-less chain for that path only.
+    fn recordedOperatorTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?struct { ty: ?ast.TypeExpr } {
+        if (self.resolved_types == null) return null;
+        return .{ .ty = self.recordedTypeExpr(expr.span) };
+    }
+
     fn resolvedScalarType(self: *FunctionBuilder, expr: ast.Expr) ?sema_types.ResolvedType {
         const shared = sema_types.scalarOfLiteral(expr);
         const table = self.resolved_types orelse return shared;
@@ -15278,12 +15300,16 @@ pub const FunctionBuilder = struct {
             .deref => |inner| self.directAddressDerefTypeExpr(inner.*) orelse self.assignment_target_type_expr,
             .unary => |node| if (node.op == .logical_not)
                 self.booleanOperatorTypeExpr(expr)
+            else if (node.op == .neg and self.recordedOperatorTypeExpr(expr) != null)
+                self.recordedOperatorTypeExpr(expr).?.ty
             else
                 self.knownExpressionResultTypeExpr(node.expr.*) orelse
                     self.assignment_target_type_expr orelse
                     (try self.expressionResultTypeExpr(node.expr.*)),
             .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
                 self.booleanOperatorTypeExpr(expr)
+            else if (self.recordedOperatorTypeExpr(expr)) |recorded|
+                recorded.ty
             else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
                 self.knownExpressionResultTypeExpr(node.left.*) orelse
                     self.knownExpressionResultTypeExpr(node.right.*) orelse
@@ -15325,9 +15351,19 @@ pub const FunctionBuilder = struct {
     fn knownExpressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
-            .unary => |node| self.knownExpressionResultTypeExpr(node.expr.*),
-            .binary => |node| self.knownExpressionResultTypeExpr(node.left.*) orelse
-                self.knownExpressionResultTypeExpr(node.right.*),
+            .unary => |node| if (node.op == .logical_not)
+                self.booleanOperatorTypeExpr(expr)
+            else if (node.op == .neg and self.recordedOperatorTypeExpr(expr) != null)
+                self.recordedOperatorTypeExpr(expr).?.ty
+            else
+                self.knownExpressionResultTypeExpr(node.expr.*),
+            .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
+                self.booleanOperatorTypeExpr(expr)
+            else if (self.recordedOperatorTypeExpr(expr)) |recorded|
+                recorded.ty
+            else
+                self.knownExpressionResultTypeExpr(node.left.*) orelse
+                    self.knownExpressionResultTypeExpr(node.right.*),
             .cast => |node| node.ty.*,
             .grouped => |inner| self.knownExpressionResultTypeExpr(inner.*),
             else => null,
@@ -18249,10 +18285,16 @@ pub const FunctionBuilder = struct {
             .grouped => |inner| self.explicitCastSourceTypeExpr(inner.*, target_ty),
             .unary => |node| if (node.op == .logical_not)
                 self.booleanOperatorTypeExpr(expr)
+            else if (node.op == .neg and self.recordedOperatorTypeExpr(expr) != null)
+                // An unrecorded `-x` is literal-class; like a bare literal it
+                // takes the cast target.
+                self.recordedOperatorTypeExpr(expr).?.ty orelse target_ty
             else
                 self.explicitCastSourceTypeExpr(node.expr.*, target_ty),
             .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op))
                 self.booleanOperatorTypeExpr(expr)
+            else if (self.recordedOperatorTypeExpr(expr)) |recorded|
+                recorded.ty orelse target_ty
             else
                 self.typeExprForExpr(node.left.*) orelse
                     self.typeExprForExpr(node.right.*) orelse

@@ -90,7 +90,8 @@ second source of it.
 | comparison / `&&` / `\|\|` / `!` | sema table | Always `bool`; four restatements in `mir_build.zig` were deleted. |
 | direct call return | sema table | Bare-identifier callee, no type args, declared function; keyed on the call expression's span and read at the same fallback position where sema's own chain lands. |
 | member, index, slice, deref, cast, `try`, grouped, `move` | sema table | Sema's `exprResultType` rule, recorded at the expression's own span. |
-| arithmetic / bitwise binary, unary `-` | builder | Result is an operand's type; sema and the builder consult different fallbacks when neither operand carries one. |
+| arithmetic / bitwise / shift binary, unary `-` | sema table | An operand's type: the left operand's for a shift, otherwise the first operand that carries one. When neither does, nothing is recorded and the builder does not fall back to the assignment target or the literal default either: the expression is literal-class and its context decides downstream. Sema's rule wins because it produces the diagnostics users see. |
+| unary `~` | builder | Sema has no rule for it. |
 | `address_of`, `borrow` | builder | Sema computes no type for these; the builder's bounded place-and-mutability rule is the only one. |
 | intrinsic calls (atomic, MMIO, DMA, reflection, bitcast, conversion, `const_get`, dyn dispatch) | builder | Each has its own rule on both sides; the table must not answer where the chains could diverge. |
 | `.len` on a slice or array, struct-literal / array-literal / enum-literal results | builder | Sema types these from context rather than from the expression. |

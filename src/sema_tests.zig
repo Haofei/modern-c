@@ -3793,6 +3793,59 @@ test "sema records boolean operator results and direct call return types" {
     try std.testing.expect(saw_u16);
 }
 
+test "sema records arithmetic, shift and negation results by its own operand rule" {
+    const source =
+        \\fn width() -> u8 { return 3_u8; }
+        \\fn probe(n: u32, x: i64, b: u8) -> u32 {
+        \\    let sum = b + 1;
+        \\    let call_sum = 1 + width();
+        \\    let shifted = 1 << n;
+        \\    let typed: u64 = 1 + 2;
+        \\    let neg = -x;
+        \\    let inv = ~b;
+        \\    return n + 1;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "resolved_arith.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    const u8_ty: sema_types.ResolvedType = .{ .integer = .{ .signed = false, .width = .w8 } };
+    const u32_ty: sema_types.ResolvedType = .{ .integer = .{ .signed = false, .width = .w32 } };
+    const i64_ty: sema_types.ResolvedType = .{ .integer = .{ .signed = true, .width = .w64 } };
+
+    // The first operand that carries a type decides, on either side.
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "b + 1;", "b + 1")).?.eql(u8_ty));
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "1 + width();", "1 + width()")).?.eql(u8_ty));
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "return n + 1;", "n + 1")).?.eql(u32_ty));
+    // A shift is the left operand's type, and a bare literal carries none:
+    // `1 << n` is literal-class and stays unrecorded even though `n` is typed.
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "1 << n;", "1 << n")) == null);
+    // Neither operand carries a type: the binding's annotation is not
+    // consulted, so nothing is recorded and the context decides downstream.
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "1 + 2;", "1 + 2")) == null);
+    // Unary `-` is its operand's type; `~` has no rule in sema.
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "-x;", "-x")).?.eql(i64_ty));
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "~b;", "~b")) == null);
+}
+
 /// The span of `name` at its occurrence inside `needle`, which must appear
 /// once in `source`. Tests use it to ask the resolved table about one exact
 /// identifier occurrence rather than about a spelling.

@@ -3863,15 +3863,27 @@ pub const Checker = struct {
             .member, .index, .slice, .deref, .cast, .try_expr, .grouped, .move_expr => exprResultType(expr, ctx),
             // A comparison or logical operator yields `bool` whatever its
             // operands are. That is the whole rule, so it belongs here rather
-            // than being restated in the builder. The arithmetic and bitwise
-            // operators are not recorded: their result is an operand's type,
-            // and sema and the builder walk their operands in a different
-            // order when neither operand carries one.
+            // than being restated in the builder.
+            //
+            // An arithmetic, bitwise or shift operator yields an operand's
+            // type: the left operand's for a shift, otherwise the first
+            // operand that carries one (`arithmeticBinaryType`). When neither
+            // operand carries a type nothing is recorded -- the expression is
+            // literal-class and its context decides -- and the builder does
+            // not consult its own fallbacks either: this rule produces the
+            // diagnostics users see, so it is the one the builder follows.
             .binary => |node| if (isComparisonBinary(node.op) or isLogicalBinary(node.op))
                 return self.internResolved(resolved, .boolean)
             else
+                exprResultType(expr, ctx),
+            // Unary `-` yields its operand's storage type; `~` has no rule in
+            // sema and is not recorded.
+            .unary => |node| if (node.op == .logical_not)
+                return self.internResolved(resolved, .boolean)
+            else if (node.op == .neg)
+                exprResultType(expr, ctx)
+            else
                 null,
-            .unary => |node| if (node.op == .logical_not) return self.internResolved(resolved, .boolean) else null,
             else => null,
         };
         return self.resolveDeclaredType(resolved, declared orelse return null, ctx, 0);
