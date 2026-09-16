@@ -3822,14 +3822,16 @@ pub const Checker = struct {
     }
 
     /// Record what this expression resolved to, for the MIR builder to read
-    /// back instead of inferring it a second time. Only the scalar-literal
-    /// slice is modelled structurally so far; everything else is skipped and
-    /// the builder keeps its existing path.
+    /// back instead of inferring it a second time. Every expression form
+    /// whose type sema already computes -- literals, identifiers, member
+    /// access, index, slice, deref, cast, `?`, and the boolean operators --
+    /// is recorded when its type is one the table models; anything else is
+    /// skipped and the builder keeps its existing path.
     fn recordResolvedType(self: *Checker, expr: ast.Expr, ctx: Context) void {
         const resolved = self.resolved_types orelse return;
         self.recordResolvedIdentDef(resolved, expr, ctx);
-        const ty = self.resolvedTypeOfExpr(resolved, expr, ctx) orelse return;
-        resolved.record(expr.span, ty) catch {
+        const id = self.resolvedTypeIdOfExpr(resolved, expr, ctx) orelse return;
+        resolved.recordId(expr.span, id) catch {
             self.oom = true;
         };
     }
@@ -3849,15 +3851,16 @@ pub const Checker = struct {
         };
     }
 
-    fn resolvedTypeOfExpr(self: *Checker, resolved: *sema_types.Resolved, expr: ast.Expr, ctx: Context) ?sema_types.ResolvedType {
-        return switch (expr.kind) {
-            .bool_literal, .void_literal, .int_literal => sema_types.scalarOfLiteral(expr),
+    fn resolvedTypeIdOfExpr(self: *Checker, resolved: *sema_types.Resolved, expr: ast.Expr, ctx: Context) ?sema_types.TypeId {
+        const declared: ?ast.TypeExpr = switch (expr.kind) {
+            .bool_literal, .void_literal, .int_literal => return self.internResolved(resolved, sema_types.scalarOfLiteral(expr) orelse return null),
             // A local, parameter, or global: its declared type, as the scope
             // or the global registry already resolved it.
-            .ident => |ident| blk: {
-                const declared = identDeclaredType(ident.text, ctx) orelse break :blk null;
-                break :blk self.resolvedTypeOfDeclared(resolved, declared, ctx);
-            },
+            .ident => |ident| identDeclaredType(ident.text, ctx),
+            // Each of these has exactly one rule in sema, `exprResultType`.
+            // The builder's own chain for the same forms is cross-checked
+            // against this recording in debug builds.
+            .member, .index, .slice, .deref, .cast, .try_expr, .grouped, .move_expr => exprResultType(expr, ctx),
             // A comparison or logical operator yields `bool` whatever its
             // operands are. That is the whole rule, so it belongs here rather
             // than being restated in the builder. The arithmetic and bitwise
@@ -3865,16 +3868,24 @@ pub const Checker = struct {
             // and sema and the builder walk their operands in a different
             // order when neither operand carries one.
             .binary => |node| if (isComparisonBinary(node.op) or isLogicalBinary(node.op))
-                .boolean
+                return self.internResolved(resolved, .boolean)
             else
                 null,
-            .unary => |node| if (node.op == .logical_not) .boolean else null,
+            .unary => |node| if (node.op == .logical_not) return self.internResolved(resolved, .boolean) else null,
             else => null,
+        };
+        return self.resolveDeclaredType(resolved, declared orelse return null, ctx, 0);
+    }
+
+    fn internResolved(self: *Checker, resolved: *sema_types.Resolved, ty: sema_types.ResolvedType) ?sema_types.TypeId {
+        return resolved.intern(ty) catch {
+            self.oom = true;
+            return null;
         };
     }
 
     /// The declared return type of an ordinary direct call, recorded against
-    /// the callee identifier's span.
+    /// the call expression's span.
     ///
     /// Only a bare identifier naming a declared function with no type
     /// arguments is recorded. Every intrinsic and builtin call form -- atomic,
@@ -3895,40 +3906,152 @@ pub const Checker = struct {
         const functions = ctx.functions orelse return;
         if (!functions.contains(callee_name)) return;
         const return_ty = directCallReturnType(call.callee.*, ctx) orelse return;
-        const ty = self.resolvedTypeOfDeclared(resolved, return_ty, ctx) orelse return;
-        resolved.record(call.callee.*.span, ty) catch {
+        const id = self.resolveDeclaredType(resolved, return_ty, ctx, 0) orelse return;
+        resolved.recordId(expr.span, id) catch {
             self.oom = true;
         };
     }
 
-    /// Classify a declared type expression into the resolved-type vocabulary.
+    /// Resolve a declared type expression into the table, bottom-up: each
+    /// child is interned first and the composite refers to it by id, so two
+    /// spellings of one type land on one id.
     ///
-    /// Only the two shapes the table models are recorded: a builtin scalar,
-    /// and a simple name that denotes a struct, enum, tagged union, or type
-    /// alias. Pointers, slices, arrays, optionals, generics, and qualified
-    /// types are left unrecorded, and their consumers keep their existing
-    /// path.
+    /// Null for anything the table does not model -- a generic type
+    /// parameter, an array whose length does not fold, a generic with a
+    /// non-type argument, a `Type.member` path -- and its consumers keep
+    /// their existing path.
     ///
-    /// A type alias is deliberately recorded under the name as written rather
-    /// than resolved to its target: the alias spelling is what reaches the C
-    /// and LLVM type emitters, so collapsing it here would change generated
-    /// output, which this pass does not do.
-    fn resolvedTypeOfDeclared(self: *Checker, resolved: *sema_types.Resolved, declared: ast.TypeExpr, ctx: Context) ?sema_types.ResolvedType {
-        const name = switch (declared.kind) {
-            .name => |node| node.text,
-            else => return null,
+    /// A type alias is recorded as written: the nominal is the alias
+    /// declaration itself, because the alias spelling is what reaches the C
+    /// and LLVM type emitters today. Its resolved target is kept beside it
+    /// (`Resolved.alias_targets`) so a later pass can collapse the alias
+    /// without re-resolving it.
+    fn resolveDeclaredType(self: *Checker, resolved: *sema_types.Resolved, declared: ast.TypeExpr, ctx: Context, depth: usize) ?sema_types.TypeId {
+        if (depth > 64) return null;
+        switch (declared.kind) {
+            .name => |node| return self.resolveTypeName(resolved, node.text, ctx, depth),
+            .nullable => |child| {
+                const child_id = self.resolveDeclaredType(resolved, child.*, ctx, depth + 1) orelse return null;
+                return switch (resolved.table.get(child_id)) {
+                    // A nullable pointer is a niche in the pointer, not an
+                    // optional wrapped around one.
+                    .pointer => |pointer| if (pointer.nullable)
+                        null
+                    else
+                        self.internResolved(resolved, .{ .pointer = .{ .kind = pointer.kind, .mutability = pointer.mutability, .nullable = true, .child = pointer.child } }),
+                    else => self.internResolved(resolved, .{ .optional = child_id }),
+                };
+            },
+            .qualified => |node| {
+                const child_id = self.resolveDeclaredType(resolved, node.child.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .qualified = .{ .mutability = sema_types.Mutability.fromSyntax(node.mutability), .child = child_id } });
+            },
+            .pointer => |node| {
+                const child_id = self.resolveDeclaredType(resolved, node.child.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .pointer = .{ .kind = .single, .mutability = sema_types.Mutability.fromSyntax(node.mutability), .nullable = false, .child = child_id } });
+            },
+            .raw_many_pointer => |node| {
+                const child_id = self.resolveDeclaredType(resolved, node.child.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .pointer = .{ .kind = .raw_many, .mutability = sema_types.Mutability.fromSyntax(node.mutability), .nullable = false, .child = child_id } });
+            },
+            .slice => |node| {
+                const child_id = self.resolveDeclaredType(resolved, node.child.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .slice = .{ .mutability = sema_types.Mutability.fromSyntax(node.mutability), .child = child_id } });
+            },
+            .array => |node| {
+                const len = array_len.parseArrayLen(node.len, ctx.const_fns, ctx.const_globals) orelse return null;
+                const child_id = self.resolveDeclaredType(resolved, node.child.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .array = .{ .len = len, .child = child_id } });
+            },
+            .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
+                    const ok = self.resolveDeclaredType(resolved, node.args[0], ctx, depth + 1) orelse return null;
+                    const err = self.resolveDeclaredType(resolved, node.args[1], ctx, depth + 1) orelse return null;
+                    return self.internResolved(resolved, .{ .result = .{ .ok = ok, .err = err } });
+                }
+                const base: sema_types.GenericBase = if (sema_types.BuiltinGeneric.fromName(node.base.text)) |builtin|
+                    .{ .builtin = builtin }
+                else blk: {
+                    const defs = self.defs orelse return null;
+                    const def_id = defs.typeDef(node.base.text) orelse return null;
+                    resolved.nameDecl(def_id, node.base.text) catch {
+                        self.oom = true;
+                        return null;
+                    };
+                    break :blk .{ .decl = def_id };
+                };
+                const args = self.resolveDeclaredTypeList(resolved, node.args, ctx, depth) orelse return null;
+                return self.internResolved(resolved, .{ .generic = .{ .base = base, .args = args } });
+            },
+            .fn_pointer => |node| {
+                const params = self.resolveDeclaredTypeList(resolved, node.params, ctx, depth) orelse return null;
+                const ret = self.resolveDeclaredType(resolved, node.ret.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .signature = .{ .kind = .fn_pointer, .params = params, .ret = ret } });
+            },
+            .closure_type => |node| {
+                const params = self.resolveDeclaredTypeList(resolved, node.params, ctx, depth) orelse return null;
+                const ret = self.resolveDeclaredType(resolved, node.ret.*, ctx, depth + 1) orelse return null;
+                return self.internResolved(resolved, .{ .signature = .{ .kind = .closure, .params = params, .ret = ret } });
+            },
+            .dyn_trait => |node| {
+                const defs = self.defs orelse return null;
+                const def_id = defs.typeDef(node.trait_name.text) orelse return null;
+                resolved.nameDecl(def_id, node.trait_name.text) catch {
+                    self.oom = true;
+                    return null;
+                };
+                return self.internResolved(resolved, .{ .dyn_trait = .{ .mutability = sema_types.Mutability.fromSyntax(node.mutability), .trait = def_id } });
+            },
+            .enum_literal, .member => return null,
+        }
+    }
+
+    fn resolveDeclaredTypeList(self: *Checker, resolved: *sema_types.Resolved, items: []const ast.TypeExpr, ctx: Context, depth: usize) ?sema_types.TypeList {
+        const ids = resolved.allocator.alloc(sema_types.TypeId, items.len) catch {
+            self.oom = true;
+            return null;
         };
-        if (sema_types.scalarByName(name)) |scalar| return scalar;
-        if (!isNominalTypeName(name, ctx)) return null;
+        defer resolved.allocator.free(ids);
+        for (items, 0..) |item, index| {
+            ids[index] = self.resolveDeclaredType(resolved, item, ctx, depth + 1) orelse return null;
+        }
+        return resolved.internList(ids) catch {
+            self.oom = true;
+            return null;
+        };
+    }
+
+    /// A simple type name: a builtin scalar, a builtin type, or a declared
+    /// type. A generic type parameter is not a type this table can name.
+    fn resolveTypeName(self: *Checker, resolved: *sema_types.Resolved, name: []const u8, ctx: Context, depth: usize) ?sema_types.TypeId {
+        if (sema_types.scalarByName(name)) |scalar| return self.internResolved(resolved, scalar);
+        if (sema_types.Builtin.fromName(name)) |builtin| return self.internResolved(resolved, .{ .builtin = builtin });
+        if (ctx.type_params) |params| {
+            if (params.contains(name)) return null;
+        }
         // The nominal type is the declaration, not its spelling. The spelling
         // travels alongside, for the emitters that still take type names from
         // syntax; it is no longer what the type is made of.
         const defs = self.defs orelse return null;
         const def_id = defs.typeDef(name) orelse return null;
-        return resolved.nominal(def_id, name) catch {
+        const def = defs.get(def_id) orelse return null;
+        const kind = nominalKindOf(def.kind) orelse return null;
+        const id = resolved.nominal(def_id, kind, name) catch {
             self.oom = true;
             return null;
         };
+        if (kind == .alias and resolved.aliasTarget(def_id) == null) {
+            if (ctx.type_aliases) |aliases| {
+                if (aliases.get(name)) |target| {
+                    if (self.resolveDeclaredType(resolved, target, ctx, depth + 1)) |target_id| {
+                        resolved.recordAliasTarget(def_id, target_id) catch {
+                            self.oom = true;
+                        };
+                    }
+                }
+            }
+        }
+        return id;
     }
 
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
@@ -9944,22 +10067,20 @@ fn identDeclaredType(name: []const u8, ctx: Context) ?ast.TypeExpr {
     return globalType(name, ctx);
 }
 
-/// Whether a simple type name denotes a declaration this table can refer to by
-/// identity: a struct, enum, tagged union, or type alias.
-fn isNominalTypeName(name: []const u8, ctx: Context) bool {
-    if (ctx.structs) |structs| {
-        if (structs.contains(name)) return true;
-    }
-    if (ctx.enums) |enums| {
-        if (enums.contains(name)) return true;
-    }
-    if (ctx.tagged_unions) |unions| {
-        if (unions.contains(name)) return true;
-    }
-    if (ctx.type_aliases) |aliases| {
-        if (aliases.contains(name)) return true;
-    }
-    return false;
+/// The nominal-type kind of a declaration, or null for a declaration that
+/// is not a type.
+fn nominalKindOf(kind: sema_symbols.DefKind) ?sema_types.NominalKind {
+    return switch (kind) {
+        .struct_ => .struct_,
+        .enum_ => .enum_,
+        .tagged_union => .tagged_union,
+        .overlay_union => .overlay_union,
+        .packed_bits => .packed_bits,
+        .type_alias => .alias,
+        .opaque_type => .opaque_type,
+        .trait => .trait,
+        .function, .extern_fn, .global, .impl_trait, .param, .local => null,
+    };
 }
 
 fn globalType(name: []const u8, ctx: Context) ?ast.TypeExpr {

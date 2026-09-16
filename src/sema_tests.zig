@@ -3644,11 +3644,110 @@ test "sema records identifier types for scalars and nominal declarations" {
     try std.testing.expect(saw_word);
     try std.testing.expect(saw_bool);
 
-    // A pointer type is not a shape this table models, so nothing is recorded
-    // for it and its consumers keep their existing path.
+    // `ptr: *const u32` is a composite built out of resolved types: a single
+    // pointer whose child is the interned `u32`, not the spelling `*const u32`.
+    const u32_id = try resolved.intern(.{ .integer = .{ .signed = false, .width = .w32 } });
+    var saw_ptr = false;
     for (resolved.table.types.items) |ty| {
-        try std.testing.expect(ty != .nominal or !std.mem.eql(u8, resolved.spelling(ty).?, "ptr"));
+        if (ty == .pointer and ty.pointer.kind == .single and ty.pointer.mutability == .constant and
+            !ty.pointer.nullable and ty.pointer.child.eql(u32_id)) saw_ptr = true;
     }
+    try std.testing.expect(saw_ptr);
+}
+
+test "sema records composite types structurally and keeps alias targets" {
+    const source =
+        \\struct Point { x: u32, y: u32 }
+        \\type Word = u32;
+        \\type Words = [4]Word;
+        \\fn callback(n: u32) -> bool { return n == 0_u32; }
+        \\fn use(p: *mut Point, s: []const u8, ws: Words, r: Result<u32, u8>, cb: fn(u32) -> bool, maybe: ?*Point, opt: ?Word) -> Result<u32, u8> {
+        \\    let x = p.x;
+        \\    let first = s[0_usize];
+        \\    let derefed = *p;
+        \\    let widened = x as u64;
+        \\    let count = ws.len;
+        \\    let rv = r?;
+        \\    let f = cb;
+        \\    let m = maybe;
+        \\    let o = opt;
+        \\    return ok(x);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "resolved_composites.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var resolved = sema_types.Resolved.init(std.testing.allocator);
+    defer resolved.deinit();
+
+    var checker = sema.Checker.init(&reporter);
+    checker.resolved_types = &resolved;
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!checker.oom);
+
+    const u8_id = try resolved.intern(.{ .integer = .{ .signed = false, .width = .w8 } });
+    const u32_id = try resolved.intern(.{ .integer = .{ .signed = false, .width = .w32 } });
+    const bool_id = try resolved.intern(.boolean);
+
+    // Every parameter's declared type is in the table, built out of ids.
+    const p_ty = resolved.lookup(identOccurrenceSpan(source, "let derefed = *p;", "p")).?;
+    try std.testing.expect(p_ty == .pointer and p_ty.pointer.mutability == .mut and !p_ty.pointer.nullable);
+    const point = resolved.table.get(p_ty.pointer.child);
+    try std.testing.expect(point == .nominal and point.nominal.kind == .struct_);
+    try std.testing.expectEqualStrings("Point", resolved.spelling(point).?);
+
+    const s_ty = resolved.lookup(identOccurrenceSpan(source, "s[0_usize];", "s")).?;
+    try std.testing.expect(s_ty == .slice and s_ty.slice.mutability == .constant and s_ty.slice.child.eql(u8_id));
+
+    // `Words` is an alias, recorded as written with its target kept beside it:
+    // `[4]Word`, whose element is itself the alias `Word` over `u32`.
+    const ws_ty = resolved.lookup(identOccurrenceSpan(source, "let count = ws.len;", "ws")).?;
+    try std.testing.expect(ws_ty == .nominal and ws_ty.nominal.kind == .alias);
+    const words_target = resolved.table.get(resolved.aliasTarget(ws_ty.nominal.def_id).?);
+    try std.testing.expect(words_target == .array and words_target.array.len == 4);
+    const word = resolved.table.get(words_target.array.child);
+    try std.testing.expect(word == .nominal and word.nominal.kind == .alias);
+    try std.testing.expect(resolved.aliasTarget(word.nominal.def_id).?.eql(u32_id));
+
+    // The two declared type expressions `Result<u32, u8>` and `fn(u32) -> bool`
+    // resolve structurally, and the parameter run is interned.
+    const r_ty = resolved.lookup(identOccurrenceSpan(source, "= r?;", "r")).?;
+    try std.testing.expect(r_ty == .result and r_ty.result.ok.eql(u32_id) and r_ty.result.err.eql(u8_id));
+    // `r?` is recorded at its own span with the payload type.
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "= r?;", "r?")).?.eql(.{ .integer = .{ .signed = false, .width = .w32 } }));
+    const cb_ty = resolved.lookup(identOccurrenceSpan(source, "= cb;", "cb")).?;
+    try std.testing.expect(cb_ty == .signature and cb_ty.signature.kind == .fn_pointer and cb_ty.signature.ret.eql(bool_id));
+    const cb_params = resolved.table.list(cb_ty.signature.params);
+    try std.testing.expect(cb_params.len == 1 and cb_params[0].eql(u32_id));
+
+    // Nullability of a pointer is in the pointer; `?Word` over a value alias
+    // is an optional.
+    var saw_nullable_ptr = false;
+    var saw_optional = false;
+    for (resolved.table.types.items) |ty| {
+        if (ty == .pointer and ty.pointer.nullable) saw_nullable_ptr = true;
+        if (ty == .optional) saw_optional = true;
+    }
+    try std.testing.expect(saw_nullable_ptr);
+    try std.testing.expect(saw_optional);
+
+    // Member access, index, deref, and cast expressions are recorded at their
+    // own spans with sema's result type.
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "let x = p.x;", "p.x")).?.eql(.{ .integer = .{ .signed = false, .width = .w32 } }));
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "let first = s[0_usize];", "s[0_usize]")).?.eql(.{ .integer = .{ .signed = false, .width = .w8 } }));
+    const derefed = resolved.lookup(identOccurrenceSpan(source, "let derefed = *p;", "*p")).?;
+    try std.testing.expect(derefed == .nominal and derefed.nominal.kind == .struct_);
+    try std.testing.expect(resolved.lookup(identOccurrenceSpan(source, "let widened = x as u64;", "x as u64")).?.eql(.{ .integer = .{ .signed = false, .width = .w64 } }));
 }
 
 test "sema records boolean operator results and direct call return types" {

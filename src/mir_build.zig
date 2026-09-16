@@ -5018,6 +5018,10 @@ pub const FunctionBuilder = struct {
     // Types sema already resolved for this compilation; set from BuildOptions.
     // Where this answers, it is the authority and the builder does not infer.
     resolved_types: ?*const sema_types.Resolved = null,
+    /// Syntax rendered from `resolved_types` for the consumers that still
+    /// take `ast.TypeExpr`. Rendered nodes are builder-local scaffolding like
+    /// `generated_type_expr_nodes`, and are released with them.
+    rendered_types: std.heap.ArenaAllocator,
     // Identity counter for emitted instructions. Per-instruction facts join on
     // this rather than on the source span, which is not unique: the async
     // transform stamps one function-name span onto every node it synthesizes.
@@ -5098,6 +5102,7 @@ pub const FunctionBuilder = struct {
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
             .generated_type_expr_args = .empty,
+            .rendered_types = std.heap.ArenaAllocator.init(allocator),
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -5298,6 +5303,7 @@ pub const FunctionBuilder = struct {
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
             .generated_type_expr_args = .empty,
+            .rendered_types = std.heap.ArenaAllocator.init(allocator),
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -5360,6 +5366,7 @@ pub const FunctionBuilder = struct {
     }
 
     fn deinit(self: *FunctionBuilder) void {
+        defer self.rendered_types.deinit();
         for (self.blocks.items) |*block| {
             block.instructions.deinit(self.allocator);
             block.successors.deinit(self.allocator);
@@ -5615,6 +5622,7 @@ pub const FunctionBuilder = struct {
     }
 
     fn freeGeneratedTypeExprs(self: *FunctionBuilder) void {
+        _ = self.rendered_types.reset(.free_all);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
         self.generated_type_expr_nodes.deinit(self.allocator);
         self.generated_type_expr_nodes = .empty;
@@ -12197,7 +12205,7 @@ pub const FunctionBuilder = struct {
     fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(initializer)) |ty| return ty;
         return switch (initializer.kind) {
-            .call => |node| self.inferredLocalCallType(node),
+            .call => |node| self.inferredLocalCallType(initializer.span, node),
             .int_literal => |literal| integerLiteralTypeExpr(literal, initializer.span),
             .bool_literal => ast_query.simpleNameType("bool", initializer.span),
             .unary => |node| if (node.op == .logical_not)
@@ -12258,21 +12266,13 @@ pub const FunctionBuilder = struct {
     /// This sits after every intrinsic branch in `inferredLocalCallType`, the
     /// same place sema's own chain falls through to its direct-call rule, so
     /// the two layers cannot land on different rules for one call.
-    fn directCallReturnTypeExpr(self: *FunctionBuilder, callee_expr: ast.Expr, callee: []const u8) ?ast.TypeExpr {
+    fn directCallReturnTypeExpr(self: *FunctionBuilder, call_span: ast.Span, callee: []const u8) ?ast.TypeExpr {
         const summary = self.summaries.get(callee);
         const declared = if (summary) |found| found.return_type_expr else null;
-        const table = self.resolved_types orelse return declared;
-        const recorded = table.lookup(callee_expr.span) orelse return declared;
-        // A nominal whose spelling the table never recorded cannot be
-        // rendered back to syntax here; fall back rather than emit a guess.
-        const spelling = table.spelling(recorded) orelse return declared;
-        if (declared) |own| {
-            if (ast_query.typeName(own)) |own_name| std.debug.assert(std.mem.eql(u8, own_name, spelling));
-        }
-        return ast_query.simpleNameType(spelling, callee_expr.span);
+        return self.fromTable(call_span, declared);
     }
 
-    fn inferredLocalCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+    fn inferredLocalCallType(self: *FunctionBuilder, span: ast.Span, call: anytype) ?ast.TypeExpr {
         if (self.qualifiedUnionConstructorTypeExpr(call)) |ty| return ty;
         if (self.dynDispatchCallTarget(call)) |target| return target.result_type_expr;
         if (self.isDynDispatchMember(call.callee.*)) return null;
@@ -12299,7 +12299,7 @@ pub const FunctionBuilder = struct {
             else => unreachable,
         };
         if (directCalleeName(call.callee.*)) |callee| {
-            if (self.directCallReturnTypeExpr(call.callee.*, callee)) |ty| return ty;
+            if (self.directCallReturnTypeExpr(span, callee)) |ty| return ty;
         }
         const target = self.indirectCallTarget(call) orelse return null;
         return target.result_type_expr;
@@ -15205,6 +15205,32 @@ pub const FunctionBuilder = struct {
         return ast_query.simpleNameType(resolved.scalarSpelling().?, expr.span);
     }
 
+    /// The type sema recorded for the expression at `span`, rendered to the
+    /// syntax the builder still passes around, or null when the table has
+    /// no answer (no table, an unmodelled shape, or a span that resolved two
+    /// ways). Rendering allocates builder-local scaffolding; an allocation
+    /// failure reads as "no answer", and the caller's own path then produces
+    /// the same type or fails on the same exhaustion.
+    fn recordedTypeExpr(self: *FunctionBuilder, span: ast.Span) ?ast.TypeExpr {
+        const table = self.resolved_types orelse return null;
+        const id = table.lookupId(span) orelse return null;
+        return (table.toTypeExpr(self.rendered_types.allocator(), id, span) catch null);
+    }
+
+    /// Sema's recorded type for the expression at `span` where the table
+    /// answers, otherwise the builder's own answer.
+    ///
+    /// Where both answer they are one judgement reached twice, and in debug
+    /// builds the two are held to agree: a disagreement on a shape the table
+    /// models is a bug in the handoff, not a tie to break silently. The
+    /// comparison is structural, alias spellings as written on both sides.
+    fn fromTable(self: *FunctionBuilder, span: ast.Span, own: ?ast.TypeExpr) ?ast.TypeExpr {
+        const table = self.resolved_types orelse return own;
+        const id = table.lookupId(span) orelse return own;
+        if (own) |own_ty| std.debug.assert(table.agreesWithSyntax(id, own_ty));
+        return (table.toTypeExpr(self.rendered_types.allocator(), id, span) catch null) orelse own;
+    }
+
     fn resolvedScalarType(self: *FunctionBuilder, expr: ast.Expr) ?sema_types.ResolvedType {
         const shared = sema_types.scalarOfLiteral(expr);
         const table = self.resolved_types orelse return shared;
@@ -15235,7 +15261,7 @@ pub const FunctionBuilder = struct {
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
-            .call => |call| self.inferredLocalCallType(call),
+            .call => |call| self.inferredLocalCallType(expr.span, call),
             // Scalar literal results come from sema's resolved-type table, not
             // from a second inference here.
             .int_literal, .bool_literal, .void_literal => self.scalarLiteralTypeExpr(expr),
@@ -18232,13 +18258,13 @@ pub const FunctionBuilder = struct {
                     self.typeExprForExpr(node.right.*) orelse
                     try self.explicitCastSourceTypeExpr(node.left.*, target_ty),
             .address_of => (try self.expressionResultTypeExpr(expr)) orelse return error.UnsupportedMirConstruction,
-            .call => |call| self.explicitCastCallSourceTypeExpr(call, target_ty) orelse return error.UnsupportedMirConstruction,
+            .call => |call| self.explicitCastCallSourceTypeExpr(expr.span, call, target_ty) orelse return error.UnsupportedMirConstruction,
             else => return error.UnsupportedMirConstruction,
         };
     }
 
-    fn explicitCastCallSourceTypeExpr(self: *FunctionBuilder, call: anytype, target_ty: ast.TypeExpr) ?ast.TypeExpr {
-        if (self.inferredLocalCallType(call)) |ty| return ty;
+    fn explicitCastCallSourceTypeExpr(self: *FunctionBuilder, span: ast.Span, call: anytype, target_ty: ast.TypeExpr) ?ast.TypeExpr {
+        if (self.inferredLocalCallType(span, call)) |ty| return ty;
         if (isMirBitcastCallee(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
         if (self.conversionCallFactInfo(call)) |conversion| return conversion.target_ty;
         if (reflectionCallTargetKind(call) != null) return ast_query.simpleNameType("usize", call.callee.*.span);
@@ -18418,33 +18444,33 @@ pub const FunctionBuilder = struct {
     /// authority, and the builder does not consult its own name maps for the
     /// type.
     ///
-    /// Those maps remain because the table models only builtin scalars and
-    /// simple nominal names; pointers, slices, arrays, optionals, generics
-    /// and qualified types are still answered here. In debug builds the two
-    /// are cross-checked wherever both answer.
+    /// The name maps remain for MIR built without a preceding check (unit
+    /// tests, `dump-mir` on unchecked input) and for the shapes the table does
+    /// not model (a generic type parameter, an unfoldable array length, a
+    /// `Type.member` path). In debug builds the two are cross-checked wherever
+    /// both answer.
     fn identTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         const ident = switch (expr.kind) {
             .ident => |node| node,
             else => return null,
         };
         const declared = self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text);
-        const table = self.resolved_types orelse return declared;
-        const recorded = table.lookup(expr.span) orelse return declared;
-        // A nominal whose spelling the table never recorded cannot be
-        // rendered back to syntax here; fall back rather than emit a guess.
-        const spelling = table.spelling(recorded) orelse return declared;
-        if (declared) |own| {
-            // A disagreement on a shape the table models is a bug in the
-            // handoff, not a tie to break silently.
-            if (ast_query.typeName(own)) |own_name| std.debug.assert(std.mem.eql(u8, own_name, spelling));
-        }
-        return ast_query.simpleNameType(spelling, expr.span);
+        return self.fromTable(expr.span, declared);
     }
 
+    /// The declared type of an expression, as syntax.
+    ///
+    /// Where sema recorded the expression's type -- identifiers, member
+    /// access, index, slice, deref, cast, `?`, and ordinary direct calls --
+    /// that recording is the authority and the builder's own derivation is
+    /// only a debug cross-check and the fallback for MIR built without a
+    /// preceding check. The intrinsic call forms keep their own rules on both
+    /// sides, and the table is consulted for a call only at the direct-call
+    /// fallback, the position where sema's own chain lands.
     fn typeExprForExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => self.identTypeExpr(expr),
-            .member => |node| self.memberTypeExpr(node, expr.span),
+            .member => |node| self.fromTable(expr.span, self.memberTypeExpr(node, expr.span)),
             .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
                 self.reflectionOrByteViewCallTypeExpr(node) orelse
                 (if (self.enumRawCallTarget(node)) |target| target.result_type_expr else null) orelse
@@ -18470,13 +18496,13 @@ pub const FunctionBuilder = struct {
                 // A `*dyn Trait` method call dispatches virtually to the trait method; its return
                 // type is the trait's, which the verifier does not carry. Resolve to `null`
                 // (unknown) rather than a same-named free function's summary return type.
-                (if (self.isDynDispatchMember(node.callee.*)) null else if (self.summaries.get(self.calleeName(node.callee.*))) |summary| summary.return_type_expr else null),
-            .deref => |inner| if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
-            .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
-            .slice => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null,
-            .grouped => |inner| self.typeExprForExpr(inner.*),
-            .cast => |node| node.ty.*,
-            .try_expr => |inner| if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty| ty else if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
+                (if (self.isDynDispatchMember(node.callee.*)) null else self.directCallReturnTypeExpr(expr.span, self.calleeName(node.callee.*))),
+            .deref => |inner| self.fromTable(expr.span, if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null),
+            .index => |node| self.fromTable(expr.span, if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null),
+            .slice => |node| self.fromTable(expr.span, if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null),
+            .grouped => |inner| self.fromTable(expr.span, self.typeExprForExpr(inner.*)),
+            .cast => |node| self.fromTable(expr.span, node.ty.*),
+            .try_expr => |inner| self.fromTable(expr.span, if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty| ty else if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null),
             else => null,
         };
     }
@@ -19034,7 +19060,7 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         .ident => true,
         .cast => true,
         .int_literal, .bool_literal => true,
-        .call => |node| builder.inferredLocalCallType(node) != null,
+        .call => |node| builder.inferredLocalCallType(initializer.span, node) != null,
         // These are direct storage reads whose complete type is already resolved by
         // typeExprForExpr. Record the inferred-local type so neither backend needs
         // to make that result type authoritative while allocating the binding.

@@ -68,26 +68,48 @@ implementations, free to drift.
 
 `src/sema_types.zig` is the replacement: a structurally interned
 `ResolvedType` table (an integer is a signedness plus a width, not the string
-`"u32"`), plus an expression → `TypeId` side table the checker fills during its
-walk. `CompilationSession` owns it for a request and hands it to the builder
-through `BuildOptions.resolved_types`. Where it answers, it is the authority;
-the builder does not infer.
+`"u32"`; a pointer is a kind, a mutability, a nullability and a child type id;
+a signature is an interned run of parameter ids and a return id), plus an
+expression → `TypeId` side table the checker fills during its walk.
+`CompilationSession` owns it for a request and hands it to the builder through
+`BuildOptions.resolved_types`. Where it answers, it is the authority; the
+builder's own derivation is a debug cross-check (`FunctionBuilder.fromTable`
+asserts `Resolved.agreesWithSyntax`) and the fallback for MIR built without a
+preceding check.
+
+`Resolved.toTypeExpr` is the one place syntax is produced from a resolved
+type. It serves the consumers that still take `ast.TypeExpr` — today the
+builder's type-expression plumbing; the signature materializer and the
+emitter boundary are the next in line — and is a rendering of the fact, not a
+second source of it.
 
 | Expression form | Type authority | Notes |
 |---|---|---|
 | `int_literal`, `bool_literal`, `void_literal` | sema table | The literal→scalar rule has one implementation, in `sema_types.zig`. |
-| identifier (local, param, global) | sema table | Only when the declared type is a builtin scalar or a simple nominal name. |
+| identifier (local, param, global) | sema table | The declared type, whatever its shape, as long as the table models it (see below). |
 | comparison / `&&` / `\|\|` / `!` | sema table | Always `bool`; four restatements in `mir_build.zig` were deleted. |
-| direct call return | sema table | Bare-identifier callee, no type args, declared function; read at the same fallback position where sema's own chain lands. |
+| direct call return | sema table | Bare-identifier callee, no type args, declared function; keyed on the call expression's span and read at the same fallback position where sema's own chain lands. |
+| member, index, slice, deref, cast, `try`, grouped, `move` | sema table | Sema's `exprResultType` rule, recorded at the expression's own span. |
 | arithmetic / bitwise binary, unary `-` | builder | Result is an operand's type; sema and the builder consult different fallbacks when neither operand carries one. |
-| member, index, slice, deref, cast, `try`, `address_of` | builder | Not modelled by the table yet. |
+| `address_of`, `borrow` | builder | Sema computes no type for these; the builder's bounded place-and-mutability rule is the only one. |
 | intrinsic calls (atomic, MMIO, DMA, reflection, bitcast, conversion, `const_get`, dyn dispatch) | builder | Each has its own rule on both sides; the table must not answer where the chains could diverge. |
-| pointer, slice, array, optional, generic, qualified types | builder | `ResolvedType` models scalars and nominal identities only. |
+| `.len` on a slice or array, struct-literal / array-literal / enum-literal results | builder | Sema types these from context rather than from the expression. |
+
+What `ResolvedType` models: `void`, `bool`, the integers, `f32`/`f64`, the
+builtin names (`never`, `Order`, `cstr`, `PAddr`, `VAddr`, `DmaAddr`,
+`c_void`, `va_list`), nominal declarations by `DefId`, single and raw-many
+pointers (nullability on the pointer), slices, arrays with an evaluated length,
+`?T` value optionals, `Result<T, E>`, `fn`/`closure` signatures, generics over
+a declaration or a builtin generic (`atomic`, `sat`, `wrap`, `Secret`, …),
+`const`/`mut` qualifiers, and `*dyn Trait`. Not modelled, so not recorded: a
+generic type parameter inside a template, an array whose length does not fold,
+a generic with a non-type argument (`DmaBuf<T, .noncoherent>`), and a
+`Type.member` path.
 
 Two limitations worth naming:
 
-- **Nominal types are declarations, but a type alias is still recorded as
-  written.** `src/sema_symbols.zig` gives every declaration — function, global,
+- **Nominal types are declarations; a type alias is recorded as written, with
+  its target beside it.** `src/sema_symbols.zig` gives every declaration — function, global,
   struct, enum, tagged union, overlay union, packed bits, alias, trait,
   parameter, local — a `DefId` at the start of checking, and
   `ResolvedType.nominal` is that id. Top-level ids are numbered by the same
@@ -97,9 +119,13 @@ Two limitations worth naming:
   (`semantic_ids.local_ordinal_base`). Sema's registries stay name-keyed for
   the shape questions they answer, and name lookup is a thin layer over the id
   table (`Table.typeDef` / `Table.valueDef`, first-wins, exactly as the
-  registries always resolved a name). What is still a stopgap is aliases: an
-  alias is recorded as the alias declaration, not resolved to its target,
-  because the alias spelling is what reaches the C and LLVM type emitters.
+  registries always resolved a name). An alias is recorded as
+  `ResolvedType.nominal` with kind `.alias` — the alias declaration, not its
+  target — because the alias spelling is what reaches the C and LLVM type
+  emitters today. Its resolved target is kept in `Resolved.alias_targets`
+  (`aliasTarget(def_id)`), so the pass that collapses aliases can flip the
+  recording without re-resolving anything. Until then `?Alias` over a pointer
+  alias is an `optional` of the alias, not a nullable pointer.
 - **Expression identity is the source span.** `ast.Expr` carries no node id.
   Giving it one is not cheap: `parser.zig` alone produces expressions at ~69
   anonymous literal sites with no constructor to funnel through, and
