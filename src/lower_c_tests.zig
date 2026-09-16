@@ -1304,6 +1304,50 @@ test "lower-c rebuilds slice const narrowing as the target slice struct" {
     try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
 }
 
+test "lower-c spells a reserved-word union case tag the way the type definition does" {
+    // `TokenTag_int` is one identifier and not a C reserved word; only the
+    // standalone payload member `int` needs the `_` suffix. The constructor
+    // and the enum definition must agree.
+    const source =
+        \\union Token {
+        \\    int: i64,
+        \\    eof,
+        \\}
+        \\fn make(v: i64) -> Token { return int(v); }
+        \\fn make_eof() -> Token { return eof(); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_union_reserved_case.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        &module_mir,
+        &output,
+        .kernel,
+        "c_union_reserved_case.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "TokenTag_int = 0,");
+    try expectContains(output.items, ".tag = TokenTag_int, .payload.int_ = ");
+    try expectContains(output.items, ".tag = TokenTag_eof }");
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "union_reserved_case.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "union_reserved_case.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", generated_c },
+    });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+}
+
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";
@@ -10313,6 +10357,31 @@ test "lower-c inferred local raw result calls require MIR types" {
 }
 
 // DIAGNOSTIC_UNIT: E_EXPERIMENTAL_DYN_CODEGEN
+test "lower-c rejects a struct storing a dynamic trait object even with no dispatch" {
+    // No signature, body or global mentions the dyn object; only a struct
+    // field does. Emitting the struct would name the `mc_dyn_Shape` typedef
+    // that qualified backends never define, so admission refuses it for the
+    // same reason as dispatch.
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side * self.side; } }
+        \\struct Holder { inner: *dyn Shape }
+        \\fn side(square: Square) -> u32 { return square.side; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_dyn_struct_field_only.mc", source);
+    defer parsed.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_dyn_struct_field_only.mc", source);
+    defer reporter.deinit();
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_dyn_struct_field_only.mc", .{}, false, &reporter));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_EXPERIMENTAL_DYN_CODEGEN") != null);
+}
+
 test "lower-c rejects experimental dynamic trait dispatch at codegen admission" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }

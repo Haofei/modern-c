@@ -62,6 +62,18 @@ pub fn rejectExperimentalDynamicTraits(
             return error.ExperimentalDynamicTraitCodegen;
         }
     }
+    // A struct that stores a `*dyn Trait` field is a dynamic trait
+    // representation too, even when no function touches it: emitting the
+    // struct names the fat-pointer typedef that qualified backends never
+    // define, so the artifact would not compile.
+    for (program.typed_mir.structs) |struct_fact| {
+        for (struct_fact.fields) |field| {
+            if (signatureTypeContainsDynamicTrait(program.checked.signature_types, field.type_id)) {
+                reportExperimentalDynamicTrait(reporter);
+                return error.ExperimentalDynamicTraitCodegen;
+            }
+        }
+    }
 }
 
 /// The signature graph is validated by `CheckedProgram` before it reaches this

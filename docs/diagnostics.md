@@ -104,7 +104,7 @@ Total codes: **277**.
 | `E_ENUM_CASE_VALUE_OUT_OF_RANGE` | enum case value is outside the representation type range | `src/sema.zig:1352` |
 | `E_ENUM_LITERAL_REQUIRES_TARGET` | enum literal requires an explicit enum target type | `src/sema.zig:7616` |
 | `E_ENUM_REPR_NOT_INTEGER` | enum representation type must be an integer type | `src/sema.zig:1322` |
-| `E_EXPERIMENTAL_DYN_CODEGEN` | dynamic trait objects are experimental and are not admitted by qualified backends | `src/codegen_request.zig:101` |
+| `E_EXPERIMENTAL_DYN_CODEGEN` | dynamic trait objects are experimental and are not admitted by qualified backends | `src/codegen_request.zig:113` |
 | `E_EXPERIMENTAL_OWNERSHIP_REQUIRED` | \`borrow(source)\` impl method return contracts are experimental; add #[experimental_ownership] to the method to opt in<br>\`borrow(source)\` return contracts are experimental; add #[experimental_ownership] to opt in while ownership cleanup authority is moving to MIR<br>\`borrow(source)\` trait method return contracts are experimental; add #[experimental_ownership] to the trait or method to opt in<br>_+1 more_ | `src/sema.zig:1248`<br>`src/sema.zig:1269`<br>`src/sema.zig:8071`<br>`src/sema.zig:8153` |
 | `E_EXPLICIT_MOVE_REQUIRED` | _see source_ | `src/sema.zig:3751` |
 | `E_EXTERN_STRUCT_BY_VALUE` | C variadic tail arguments must be classified scalar or pointer values<br>explicit C ABI functions cannot pass this unclassified value type by value; use a pointer or mark an MC-only export #[mc_abi]<br>explicit C ABI functions cannot return this unclassified value type by value; use an out pointer or mark an MC-only export #[mc_abi]<br>_+1 more_ | `src/sema.zig:2445`<br>`src/sema.zig:2450`<br>`src/sema.zig:2454`<br>`src/sema.zig:4517` |

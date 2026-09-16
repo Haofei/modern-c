@@ -1231,8 +1231,13 @@ fn emitExpressionOperation(
             try appendCType(allocator, out, body, shape.ty);
             try out.appendSlice(allocator, "){ .tag = ");
             try appendIdent(allocator, out, shape.ty.tagged_union);
+            // The tag constant is one identifier, `<Union>Tag_<case>`, spelled
+            // by the type definition with the raw case name: a case called
+            // `int` yields `TokenTag_int`, which is not a reserved word. Only
+            // the standalone payload member below needs the reserved-word
+            // suffix.
             try out.appendSlice(allocator, "Tag_");
-            try appendIdent(allocator, out, case.spelling);
+            try out.appendSlice(allocator, case.spelling);
             if (case.has_payload) {
                 const payload = operation.payload orelse return error.InvalidExpression;
                 try out.appendSlice(allocator, ", .payload.");
