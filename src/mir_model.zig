@@ -4532,6 +4532,10 @@ pub const AggregateInitializerPlan = union(enum) {
     /// scalar. Backends fold it into the repr scalar through the
     /// PackedBitsFact bit layout; see `packedBitsInitializerPlanValue`.
     packed_bits: PackedBitsInitializerPlan,
+    /// `null` as an element or field of a nullable-pointer type. The
+    /// top-level `GlobalInitializerPlan.nullable_null` covers a whole global;
+    /// this is the same leaf nested inside an aggregate.
+    null_pointer,
     zero,
     enum_case: EnumInitializerPlan,
     string_bytes: StringBytesInitializerPlan,
@@ -4539,7 +4543,7 @@ pub const AggregateInitializerPlan = union(enum) {
 
     pub fn deinit(self: AggregateInitializerPlan, allocator: std.mem.Allocator) void {
         switch (self) {
-            .scalar, .function_symbol, .zero, .enum_case, .global_address => {},
+            .scalar, .function_symbol, .zero, .enum_case, .global_address, .null_pointer => {},
             .array => |items| {
                 for (items) |item| item.deinit(allocator);
                 if (items.len != 0) allocator.free(items);
@@ -4561,6 +4565,7 @@ pub const AggregateInitializerPlan = union(enum) {
             .scalar => |value| .{ .scalar = value },
             .function_symbol => |value| .{ .function_symbol = value },
             .zero => .zero,
+            .null_pointer => .null_pointer,
             .enum_case => |value| .{ .enum_case = value },
             .string_bytes => |value| .{ .string_bytes = try value.clone(allocator) },
             .global_address => |value| .{ .global_address = value },
@@ -4697,8 +4702,20 @@ pub fn aggregateInitializerPlanMatchesType(
             .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
             else => false,
         },
-        .string_bytes, .global_address => switch (shape) {
+        .string_bytes => switch (shape) {
             .name, .pointer, .raw_many_pointer, .slice => true,
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
+            else => false,
+        },
+        .global_address => switch (shape) {
+            .name, .pointer, .raw_many_pointer, .slice, .nullable => true,
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
+            else => false,
+        },
+        // A bare name may be an alias of a nullable pointer; Module
+        // admission resolves it.
+        .null_pointer => switch (shape) {
+            .nullable, .name => true,
             .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
             else => false,
         },
@@ -5046,6 +5063,10 @@ fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module:
         },
         .struct_ => |struct_plan| structInitializerPlanMatchesType(struct_plan, module, owner_global, type_id),
         .packed_bits => |packed_plan| packedBitsInitializerPlanMatchesType(packed_plan, module, type_id),
+        .null_pointer => switch (transparentSignatureShape(module, type_id) orelse return false) {
+            .nullable => true,
+            else => false,
+        },
         // Aggregate leaves never use implicit zeroing: a missing top-level
         // initializer has its own GlobalInitializerPlan.zero, while an
         // explicit `uninit` nested in a static aggregate is rejected by sema.
@@ -5244,7 +5265,12 @@ fn globalAddressInitializerPlanMatchesGlobalForType(plan: GlobalAddressInitializ
         module.checkedGlobalInitializer(target.global) == null)
         return false;
     const shape = transparentSignatureShape(module, type_id) orelse return false;
-    const pointee = switch (shape) {
+    // `?*T` holds an address the same way `*T` does; unwrap one level.
+    const pointer_shape = switch (shape) {
+        .nullable => |child| transparentSignatureShape(module, child) orelse return false,
+        else => shape,
+    };
+    const pointee = switch (pointer_shape) {
         .pointer => |value| value.child,
         else => return false,
     };

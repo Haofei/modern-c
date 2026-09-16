@@ -1024,6 +1024,7 @@ pub const CEmitter = struct {
                 const value = mir.packedBitsInitializerPlanValue(packed_plan, fact) orelse return error.UnsupportedCEmission;
                 break :blk try std.fmt.allocPrint(self.scratch.allocator(), "(({s}){d})", .{ try self.cSignatureType(id), value });
             },
+            .null_pointer => "NULL",
             .zero => "{ 0 }",
             .enum_case => |value| blk: {
                 const enum_fact = self.enumFact(value.enum_symbol_id) orelse return error.UnsupportedCEmission;

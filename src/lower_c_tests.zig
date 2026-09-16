@@ -1234,6 +1234,33 @@ test "lower-c folds packed-bits global literals into the repr scalar" {
     try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
 }
 
+test "lower-c renders null and global-address leaves inside a nullable-pointer aggregate" {
+    const source =
+        \\struct MaybeBox { ptr: ?*mut u32 }
+        \\global seed: u32 = 1;
+        \\global maybe_ptrs: [2]?*mut u32 = .{ null, &seed };
+        \\global maybe_box: MaybeBox = .{ .ptr = &seed };
+    ;
+    var parsed = try test_support.parseCheckedModule("c_nullable_aggregate_leaves.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        &module_mir,
+        &output,
+        .kernel,
+        "c_nullable_aggregate_leaves.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "maybe_ptrs = { .elems = { NULL, &seed } };");
+    try expectContains(output.items, "maybe_box = { .ptr = &seed };");
+}
+
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";

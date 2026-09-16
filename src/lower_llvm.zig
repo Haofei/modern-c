@@ -464,6 +464,7 @@ const LlvmEmitter = struct {
                 const value = mir.packedBitsInitializerPlanValue(packed_plan, fact) orelse return error.UnsupportedLlvmEmission;
                 break :blk try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
             },
+            .null_pointer => "null",
             .zero => "zeroinitializer",
             .enum_case => |value| blk: {
                 const enum_fact = self.enumFact(value.enum_symbol_id) orelse return error.UnsupportedLlvmEmission;

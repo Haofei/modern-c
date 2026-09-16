@@ -5,8 +5,8 @@
   "emit_c": [
     {
       "fixture": "tests/c_emit/global_initializers.mc",
-      "reason": "InvalidMirGlobalInitializerFacts",
-      "note": "A non-extern global whose initializer shape has no admitted syntax-free plan; MIR admission fails closed rather than letting codegen re-read the AST."
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "Every global now has an admitted plan (null and &global leaves inside a nullable-pointer aggregate included). The fixture still declines in the emitter: indexing an array of nullable pointers (`maybe_ptrs[1]` with `maybe_ptrs: [2]?*mut u32`) is typed as the non-null pointer by the index type inference, so the `?*mut u32` return does not match. Same for a parameter or local array; a nullable struct field and a scalar nullable global read emit."
     },
     {
       "fixture": "tests/c_emit/pointer_field_addr.mc",
@@ -61,12 +61,6 @@
       "stage": "EMIT",
       "reason": "E_UNKNOWN_TYPE",
       "note": "Stripping the fixture's EXPECT_ERROR declarations removes a generic type the kept chunk still names, so the chunk does not resolve on its own."
-    },
-    {
-      "fixture": "global_initializers.mc",
-      "stage": "EMIT",
-      "reason": "InvalidMirGlobalInitializerFacts",
-      "note": "A non-extern global whose initializer shape has no admitted syntax-free plan. The remaining case is `null` as an element of a nullable-pointer aggregate (`[2]?*mut u32 = .{ null, &seed }`): the aggregate plan has no null leaf, only the top-level nullable_null plan."
     },
     {
       "fixture": "hosted_io.mc",

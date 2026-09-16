@@ -1995,6 +1995,12 @@ fn buildGlobalAggregateInitializerPlan(
     }) |aggregate| return aggregate;
 
     if (!allow_leaf) return null;
+    if (ungrouped.kind == .null_literal) {
+        return switch (signature_types.get(canonical_id) orelse return null) {
+            .nullable => .null_pointer,
+            else => null,
+        };
+    }
     if (try directEnumGlobalInitializerPlan(ungrouped, type_id, signature_types, type_aliases, symbol_ids, enum_facts, const_fns, const_globals)) |plan| return .{ .enum_case = plan };
     if (try directStringBytesAggregateInitializerPlan(allocator, ungrouped, type_id, prior_initializer_facts, signature_types, type_aliases, symbol_ids, owner_global_symbol_id, next_string_backing_ordinal)) |plan| return .{ .string_bytes = plan };
     if (try directGlobalAddressInitializerPlanForType(allocator, prior_initializer_facts, const_fns, const_globals, ungrouped, type_id, prior_globals, signature_types, type_aliases, symbol_ids, struct_facts)) |plan| return .{ .global_address = plan };
@@ -2400,7 +2406,13 @@ fn directGlobalAddressInitializerPlanForType(
     const target_type = (try buildGlobalAddressPlace(allocator, initializers, const_fns, const_globals, operand, prior_globals, signature_types, type_aliases, symbol_ids, structs, &plan)) orelse return null;
 
     const global_shape_id = transparentSignatureTypeIdForBuild(type_id, signature_types, type_aliases, symbol_ids) orelse return null;
-    const pointee_id = switch (signature_types.get(global_shape_id) orelse return null) {
+    // A nullable pointer (`?*mut T`) holds an address the same way its
+    // non-null form does; unwrap that one level before asking for the pointee.
+    const pointer_shape_id = switch (signature_types.get(global_shape_id) orelse return null) {
+        .nullable => |child| transparentSignatureTypeIdForBuild(child, signature_types, type_aliases, symbol_ids) orelse return null,
+        else => global_shape_id,
+    };
+    const pointee_id = switch (signature_types.get(pointer_shape_id) orelse return null) {
         .pointer => |pointer| pointer.child,
         else => return null,
     };

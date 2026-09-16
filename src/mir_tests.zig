@@ -3431,6 +3431,48 @@ test "cpu.pause is admitted outside an unsafe region" {
     try mir.validateLoweringAdmission(module_mir);
 }
 
+test "MIR plans null and global-address leaves inside a nullable-pointer aggregate" {
+    const source =
+        \\struct MaybeBox { ptr: ?*mut u32 }
+        \\global seed: u32 = 1;
+        \\global maybe_ptrs: [2]?*mut u32 = .{ null, &seed };
+        \\global maybe_box: MaybeBox = .{ .ptr = &seed };
+        \\global values: [2]u32 = .{ 7, 8 };
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_nullable_aggregate_leaves.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    try std.testing.expectEqual(@as(usize, 4), module_mir.global_initializer_facts.len);
+
+    const ptrs = switch (module_mir.global_initializer_facts[1].plan) {
+        .aggregate => |aggregate| switch (aggregate) {
+            .array => |items| items,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 2), ptrs.len);
+    try std.testing.expect(ptrs[0] == .null_pointer);
+    try std.testing.expect(ptrs[1] == .global_address);
+    const box_fields = switch (module_mir.global_initializer_facts[2].plan) {
+        .aggregate => |aggregate| switch (aggregate) {
+            .struct_ => |plan| plan.fields,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 1), box_fields.len);
+    try std.testing.expect(box_fields[0].value == .global_address);
+
+    // A null leaf under a non-nullable element type does not describe the
+    // type, and admission fails closed on it.
+    const value_items = @constCast(module_mir.global_initializer_facts[3].plan.aggregate.array);
+    value_items[0] = .null_pointer;
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "MIR exposes generic typed span identity matching for codegen facts" {
     const source =
         \\extern fn close_a(value: u32) -> void;
