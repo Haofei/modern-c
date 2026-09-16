@@ -231,8 +231,6 @@ const Inspector = struct {
 
     fn inspectExpr(self: *Inspector, expr: ast.Expr, ctx: *FnContext) anyerror!void {
         switch (expr.kind) {
-            // The async transform eliminates every `await_expr` pre-sema.
-            .await_expr => unreachable,
             .ident => |ident| {
                 if (!ctx.locals.contains(ident.text)) {
                     if (self.globals.get(ident.text)) |global| {

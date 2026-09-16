@@ -674,7 +674,6 @@ fn exprMentionsIdent(expr: ast.Expr, name: []const u8) bool {
         .borrow_expr => |node| exprMentionsIdent(node.value.*, name),
         .try_expr => |inner| exprMentionsIdent(inner.operand.*, name) or
             if (inner.mapped) |mapped| exprMentionsIdent(mapped.*, name) else false,
-        .await_expr => |inner| exprMentionsIdent(inner.*, name),
         .unary => |n| exprMentionsIdent(n.expr.*, name),
         .binary => |n| exprMentionsIdent(n.left.*, name) or exprMentionsIdent(n.right.*, name),
         .index => |n| exprMentionsIdent(n.base.*, name) or exprMentionsIdent(n.index.*, name),
@@ -780,7 +779,6 @@ fn exprTypeMentions(expr: ast.Expr, name: []const u8) bool {
         .grouped, .address_of, .deref, .move_expr => |inner| exprTypeMentions(inner.*, name),
         .borrow_expr => |node| exprTypeMentions(node.value.*, name),
         .try_expr => |inner| exprTypeMentions(inner.operand.*, name) or if (inner.mapped) |mapped| exprTypeMentions(mapped.*, name) else false,
-        .await_expr => |inner| exprTypeMentions(inner.*, name),
         .unary => |node| exprTypeMentions(node.expr.*, name),
         .binary => |node| exprTypeMentions(node.left.*, name) or exprTypeMentions(node.right.*, name),
         .index => |node| exprTypeMentions(node.base.*, name) or exprTypeMentions(node.index.*, name),
@@ -852,7 +850,6 @@ fn cloneFnDeclSignatureCtx(ctx: *const CloneCtx, fn_decl: ast.FnDecl) !ast.FnDec
         // is_variadic silently turned `snprintf(..., ...)` into a fixed-arity function.
         .is_variadic = fn_decl.is_variadic,
         .bounds = fn_decl.bounds,
-        .is_async = fn_decl.is_async,
     };
 }
 
@@ -887,7 +884,6 @@ fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
         .try_expr => |inner| .{ .try_expr = .{ .operand = try clonePtr(ctx, inner.operand.*), .mapped = if (inner.mapped) |m| try clonePtr(ctx, m.*) else null } },
         // `await` is normally eliminated by the async transform before monomorphize; clone it
         // total-ly anyway so the cloner stays correct if the ordering ever changes.
-        .await_expr => |inner| .{ .await_expr = try clonePtr(ctx, inner.*) },
         .member => |node| .{ .member = .{ .base = try clonePtr(ctx, node.base.*), .name = node.name } },
         .index => |node| .{ .index = .{ .base = try clonePtr(ctx, node.base.*), .index = try clonePtr(ctx, node.index.*) } },
         .slice => |node| .{ .slice = .{ .base = try clonePtr(ctx, node.base.*), .start = try clonePtr(ctx, node.start.*), .end = try clonePtr(ctx, node.end.*) } },

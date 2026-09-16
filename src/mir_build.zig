@@ -569,7 +569,7 @@ const BodySignatureTypeCollector = struct {
                 try self.visitExpr(node.callee.*);
                 for (node.args) |arg| try self.visitExpr(arg);
             },
-            .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| try self.visitExpr(inner.*),
+            .grouped, .move_expr, .address_of, .deref => |inner| try self.visitExpr(inner.*),
             .borrow_expr => |node| try self.visitExpr(node.value.*),
             .try_expr => |node| {
                 try self.visitExpr(node.operand.*);
@@ -3812,7 +3812,7 @@ fn aggregateReturnContractPrefixExprHasCallOrExit(expr: ast.Expr) bool {
             }
             return false;
         },
-        .block, .try_expr, .await_expr, .unreachable_expr => true,
+        .block, .try_expr, .unreachable_expr => true,
         .array_literal => |items| for (items) |item| {
             if (aggregateReturnContractPrefixExprHasCallOrExit(item)) break true;
         } else false,
@@ -3964,7 +3964,7 @@ fn aggregateReturnLiteralValueAtPath(fields: []ast.StructLiteralField, field_nam
 
 fn aggregateReturnLoopExprMayCarryPointerProvenance(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .address_of, .deref, .call, .try_expr, .await_expr, .unreachable_expr => true,
+        .address_of, .deref, .call, .try_expr, .unreachable_expr => true,
         .grouped => |inner| aggregateReturnLoopExprMayCarryPointerProvenance(inner.*),
         .cast => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.value.*),
         .unary => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.expr.*),
@@ -4448,7 +4448,7 @@ fn structLiteralFieldsForAggregateReturn(expr: ast.Expr) ?[]ast.StructLiteralFie
 
 fn aggregateReturnPrefixExprHasCallOrExit(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .call, .block, .try_expr, .await_expr, .unreachable_expr => true,
+        .call, .block, .try_expr, .unreachable_expr => true,
         .array_literal => |items| for (items) |item| {
             if (aggregateReturnPrefixExprHasCallOrExit(item)) break true;
         } else false,
@@ -4468,7 +4468,7 @@ fn aggregateReturnPrefixExprHasCallOrExit(expr: ast.Expr) bool {
 
 fn aggregateReturnPrefixExprHasExit(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .block, .try_expr, .await_expr, .unreachable_expr => true,
+        .block, .try_expr, .unreachable_expr => true,
         .call => |call| {
             if (aggregateReturnPrefixExprHasExit(call.callee.*)) return true;
             for (call.args) |arg| {
@@ -9378,7 +9378,6 @@ pub const FunctionBuilder = struct {
             },
             .block => self.unsupportedExecutableExpression(.unsupported_block_expression),
             .unreachable_expr => self.unsupportedExecutableExpression(.unsupported_unreachable_expression),
-            .await_expr => self.unsupportedExecutableExpression(.unsupported_await),
             .grouped, .move_expr => unreachable,
         };
         const id = ExprId.fromIndex(self.executable_expressions.items.len);
@@ -11007,7 +11006,7 @@ pub const FunctionBuilder = struct {
                 if (identBaseName(inner.*)) |name| try self.address_taken.put(name, {});
                 try self.collectAddressTakenExpr(inner.*);
             },
-            .grouped, .deref, .await_expr => |inner| try self.collectAddressTakenExpr(inner.*),
+            .grouped, .deref => |inner| try self.collectAddressTakenExpr(inner.*),
             .unary => |node| try self.collectAddressTakenExpr(node.expr.*),
             .cast => |node| try self.collectAddressTakenExpr(node.value.*),
             .binary => |node| {
@@ -13001,8 +13000,6 @@ pub const FunctionBuilder = struct {
         try self.addExpressionResultFact(expr);
 
         switch (expr.kind) {
-            // The async transform eliminates every `await_expr` pre-sema.
-            .await_expr => unreachable,
             .ident => {
                 const ty = self.exprType(expr);
                 if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {

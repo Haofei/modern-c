@@ -422,7 +422,6 @@ const Walker = struct {
                 try self.walkExpr(t.operand);
                 if (t.mapped) |m| try self.walkExpr(m);
             },
-            .await_expr => |e| try self.walkExpr(e),
             .int_literal,
             .float_literal,
             .string_literal,

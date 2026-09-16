@@ -4070,8 +4070,6 @@ pub const Checker = struct {
         self.recordResolvedType(expr, ctx);
         self.recordResolvedCallReturnType(expr, ctx);
         return switch (expr.kind) {
-            // The async transform eliminates every `await_expr` pre-sema.
-            .await_expr => unreachable,
             .ident => |ident| self.checkIdentExpr(ident, ctx),
             .int_literal => |literal| if (integerLiteralTypeExpr(literal, expr.span)) |ty|
                 classifyTypeCtx(ty, ctx)
@@ -6014,7 +6012,7 @@ pub const Checker = struct {
                 for (node.args) |arg| self.collectBoundedDirectCallsExpr(owner, arg, functions, edges);
             },
             .block => |b| self.collectBoundedDirectCallsBlock(owner, b, functions, edges),
-            .grouped, .address_of, .deref, .await_expr => |inner| self.collectBoundedDirectCallsExpr(owner, inner.*, functions, edges),
+            .grouped, .address_of, .deref => |inner| self.collectBoundedDirectCallsExpr(owner, inner.*, functions, edges),
             .unary => |u| self.collectBoundedDirectCallsExpr(owner, u.expr.*, functions, edges),
             .binary => |b| {
                 self.collectBoundedDirectCallsExpr(owner, b.left.*, functions, edges);
@@ -9192,7 +9190,7 @@ fn asmStmtHasScopedBorrow(stmt: ast.AsmStmt) bool {
 fn exprHasScopedBorrow(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .borrow_expr => true,
-        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprHasScopedBorrow(inner.*),
+        .grouped, .address_of, .deref, .move_expr => |inner| exprHasScopedBorrow(inner.*),
         .unary => |node| exprHasScopedBorrow(node.expr.*),
         .binary => |node| exprHasScopedBorrow(node.left.*) or exprHasScopedBorrow(node.right.*),
         .cast => |node| exprHasScopedBorrow(node.value.*),
@@ -9221,7 +9219,7 @@ fn exprHasScopedBorrow(expr: ast.Expr) bool {
 fn exprMentionsAnyName(expr: ast.Expr, names: *const std.StringHashMap(void)) bool {
     return switch (expr.kind) {
         .ident => |ident| names.contains(ident.text),
-        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprMentionsAnyName(inner.*, names),
+        .grouped, .address_of, .deref, .move_expr => |inner| exprMentionsAnyName(inner.*, names),
         .borrow_expr => |node| exprMentionsAnyName(node.value.*, names),
         .try_expr => |inner| exprMentionsAnyName(inner.operand.*, names) or if (inner.mapped) |mapped| exprMentionsAnyName(mapped.*, names) else false,
         .unary => |node| exprMentionsAnyName(node.expr.*, names),
@@ -9261,7 +9259,7 @@ fn exprMentionsAnyName(expr: ast.Expr, names: *const std.StringHashMap(void)) bo
 fn exprMentionsName(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprMentionsName(inner.*, name),
+        .grouped, .address_of, .deref, .move_expr => |inner| exprMentionsName(inner.*, name),
         .borrow_expr => |node| exprMentionsName(node.value.*, name),
         .try_expr => |inner| exprMentionsName(inner.operand.*, name) or if (inner.mapped) |mapped| exprMentionsName(mapped.*, name) else false,
         .unary => |node| exprMentionsName(node.expr.*, name),
@@ -9369,7 +9367,7 @@ fn exprMentionsOtherParameter(expr: ast.Expr, source: []const u8, ctx: Context) 
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             break :blk if (binding) |entry| entry.origin == .param else false;
         },
-        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprMentionsOtherParameter(inner.*, source, ctx),
+        .grouped, .address_of, .deref, .move_expr => |inner| exprMentionsOtherParameter(inner.*, source, ctx),
         .borrow_expr => |node| exprMentionsOtherParameter(node.value.*, source, ctx),
         .try_expr => |inner| exprMentionsOtherParameter(inner.operand.*, source, ctx) or if (inner.mapped) |mapped| exprMentionsOtherParameter(mapped.*, source, ctx) else false,
         .unary => |node| exprMentionsOtherParameter(node.expr.*, source, ctx),
@@ -10804,7 +10802,7 @@ fn localAddressInEscapingValue(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     if (closureLocalAddressRoot(expr, ctx)) |borrow| return borrow;
     if (aggregateLocalAddressRoot(expr, ctx)) |borrow| return borrow;
     return switch (expr.kind) {
-        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| localAddressInEscapingValue(inner.*, ctx),
+        .grouped, .address_of, .deref, .move_expr => |inner| localAddressInEscapingValue(inner.*, ctx),
         .unary => |node| localAddressInEscapingValue(node.expr.*, ctx),
         .binary => |node| localAddressInEscapingValue(node.left.*, ctx) orelse localAddressInEscapingValue(node.right.*, ctx),
         .cast => |node| localAddressInEscapingValue(node.value.*, ctx),
